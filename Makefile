@@ -71,7 +71,7 @@ test-scripts: ## Test the CI helper scripts
 
 licenses: web-install ## Enforce the licence policy for Go and runtime npm dependencies
 	$(GO_LICENSES) check ./... --allowed_licenses='$(GO_LICENSES_ALLOWED)'
-	cd web && npx --yes license-checker-rseidelsohn@5.0.1 --production --excludePrivatePackages --onlyAllow '$(NPM_LICENSES_ALLOWED)'
+	cd web && npm exec --no -- license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow '$(NPM_LICENSES_ALLOWED)'
 
 actionlint: ## Lint GitHub Actions workflows
 	$(ACTIONLINT)
