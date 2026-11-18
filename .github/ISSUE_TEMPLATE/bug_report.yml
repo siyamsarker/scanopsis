@@ -46,7 +46,7 @@ body:
     id: sonarqube-version
     attributes:
       label: SonarQube edition and version
-      description: The SonarQube edition (for example Community, Developer or Enterprise) and version, if relevant.
+      description: The SonarQube edition (for example Community Build, or Developer or Enterprise edition of SonarQube Server) and version, if relevant.
     validations:
       required: false
   - type: input
