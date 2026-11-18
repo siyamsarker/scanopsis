@@ -6,8 +6,11 @@
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.10.0
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+# Restrict VCS-derived values to a safe character set: tag names may contain
+# shell metacharacters, and these values are spliced into command lines.
+SAFE    := tr -cd 'A-Za-z0-9._+-'
+VERSION ?= $(shell (git describe --tags --always --dirty 2>/dev/null || echo dev) | $(SAFE))
+COMMIT  ?= $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | $(SAFE))
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 IMAGE   ?= scanopsis:dev
 
@@ -51,7 +54,7 @@ web-build: web-install ## Build the web interface into web/dist/app
 web: web-build ## Alias for web-build
 
 image: ## Build the container image
-	docker build --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) -t $(IMAGE) .
+	docker build --build-arg VERSION='$(VERSION)' --build-arg COMMIT='$(COMMIT)' -t '$(IMAGE)' .
 
 clean: ## Remove build output
 	rm -rf bin web/dist/app
