@@ -18,15 +18,19 @@ ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 WORKDIR /src
-# go.sum is optional (the glob matches nothing when it is absent); copying the
-# module files first keeps the download layer cached across source changes.
+# go.sum is optional only until the module has its first dependency (the glob
+# matches nothing when it is absent); copying the module files first keeps the
+# download layer cached across source changes.
 COPY go.mod go.su[m] ./
-RUN go mod download
+RUN go mod download && go mod verify
 COPY . .
 # The embedded web interface must be in place before the binary is compiled.
 COPY --from=web /src/web/dist/app web/dist/app
-# Static, stripped binary with the version stamped in.
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+# Static, stripped binary with the version stamped in. VERSION and COMMIT are
+# restricted to a safe character set so they cannot add extra linker flags.
+RUN case "${VERSION}${COMMIT}" in *[!A-Za-z0-9._+-]*) \
+      echo "VERSION and COMMIT may only contain A-Z a-z 0-9 . _ + -" >&2; exit 1;; esac; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
     -o /out/scanopsis ./cmd/scanopsis
 
