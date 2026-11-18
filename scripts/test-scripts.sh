@@ -57,4 +57,28 @@ git commit -q -m "wrong email
 Signed-off-by: Test Author <other@example.com>"
 expect fail "dco: sign-off with different e-mail" bash "$here/check-dco.sh" "$base" HEAD
 
+git reset -q --hard HEAD~1
+echo four >f4
+git add f4
+git commit -q -m "sign-off quoted in the body only
+
+Signed-off-by: Test Author <author@example.com>
+
+Reviewed-by: Someone Else <someone@example.com>"
+expect fail "dco: sign-off outside the trailer block" bash "$here/check-dco.sh" "$base" HEAD
+
+git reset -q --hard HEAD~1
+# A different author uses .mailmap to pose as the signer.
+printf 'Test Author <author@example.com> Other Person <other@example.com>\n' >.mailmap
+git add .mailmap
+git commit -q --author "Other Person <other@example.com>" -m "mailmap rewrites the author
+
+Signed-off-by: Test Author <author@example.com>"
+expect fail "dco: .mailmap cannot change the author" bash "$here/check-dco.sh" "$base" HEAD
+
+git reset -q --hard HEAD~1
+expect fail "dco: empty range" bash "$here/check-dco.sh" HEAD HEAD
+expect fail "dco: unknown revision" bash "$here/check-dco.sh" "$base" does-not-exist
+expect fail "dco: empty argument" bash "$here/check-dco.sh" "" HEAD
+
 exit "$fails"
