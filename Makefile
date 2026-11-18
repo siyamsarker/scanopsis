@@ -5,6 +5,13 @@
 # globally and every contributor and CI job uses the same version.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.10.0
+GO_LICENSES   := go run github.com/google/go-licenses/v2@v2.0.1
+ACTIONLINT    := go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+# Licence policy: only these licences may appear in distributed dependencies.
+# go-licenses takes a comma-separated list, license-checker a semicolon-separated one.
+GO_LICENSES_ALLOWED  := Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC
+NPM_LICENSES_ALLOWED := Apache-2.0;MIT;BSD-2-Clause;BSD-3-Clause;ISC;OFL-1.1
 
 # Restrict VCS-derived values to a safe character set: tag names may contain
 # shell metacharacters, and these values are spliced into command lines.
@@ -14,12 +21,12 @@ COMMIT  ?= $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | $(
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 IMAGE   ?= scanopsis:dev
 
-.PHONY: help check fmt fmt-check lint test vuln build web-install web-lint web-test web-build web image clean
+.PHONY: help check fmt fmt-check lint test vuln build web-install web-lint web-test web-build web image clean headers test-scripts licenses actionlint
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
-check: fmt-check lint test vuln web-lint web-test build ## Run every check that CI runs, except the image build
+check: fmt-check lint test vuln web-lint web-test build headers test-scripts licenses actionlint ## Run every check that CI runs, except the image build
 
 fmt: ## Format Go code
 	$(GOLANGCI_LINT) fmt
@@ -55,6 +62,19 @@ web: web-build ## Alias for web-build
 
 image: ## Build the container image
 	docker build --build-arg VERSION='$(VERSION)' --build-arg COMMIT='$(COMMIT)' -t '$(IMAGE)' .
+
+headers: ## Fail if a source file lacks the SPDX licence header
+	bash scripts/check-headers.sh
+
+test-scripts: ## Test the CI helper scripts
+	bash scripts/test-scripts.sh
+
+licenses: web-install ## Enforce the licence policy for Go and runtime npm dependencies
+	$(GO_LICENSES) check ./... --allowed_licenses='$(GO_LICENSES_ALLOWED)'
+	cd web && npx --yes license-checker-rseidelsohn@5.0.1 --production --excludePrivatePackages --onlyAllow '$(NPM_LICENSES_ALLOWED)'
+
+actionlint: ## Lint GitHub Actions workflows
+	$(ACTIONLINT)
 
 clean: ## Remove build output
 	rm -rf bin web/dist/app
