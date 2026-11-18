@@ -16,8 +16,10 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
 
@@ -99,7 +101,38 @@ func newHandler(assets fs.FS, ok bool) http.Handler {
 			http.Error(w, "The web interface is not included in this build.", http.StatusServiceUnavailable)
 		})
 	}
-	return http.FileServerFS(assets)
+	files := http.FileServerFS(assets)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !servablePath(assets, r.URL.Path) {
+			http.NotFound(w, r)
+			return
+		}
+		files.ServeHTTP(w, r)
+	})
+}
+
+// servablePath rejects hidden files and directory listings, so only regular
+// build output is ever served. A directory is servable only when it contains
+// an index.html.
+func servablePath(assets fs.FS, urlPath string) bool {
+	name := strings.Trim(path.Clean("/"+urlPath), "/")
+	for _, seg := range strings.Split(name, "/") {
+		if strings.HasPrefix(seg, ".") {
+			return false
+		}
+	}
+	if name == "" {
+		name = "."
+	}
+	info, err := fs.Stat(assets, name)
+	if err != nil {
+		return true // let the file server answer 404
+	}
+	if info.IsDir() {
+		_, err := fs.Stat(assets, path.Join(name, "index.html"))
+		return err == nil
+	}
+	return true
 }
 
 // serve runs an HTTP server on ln until ctx is cancelled, then shuts it down

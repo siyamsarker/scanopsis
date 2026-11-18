@@ -77,6 +77,36 @@ func TestNewHandler(t *testing.T) {
 	})
 }
 
+func TestNewHandlerHidesNonBuildFiles(t *testing.T) {
+	assets := fstest.MapFS{
+		"index.html":       {Data: []byte("<!doctype html>")},
+		"assets/app.js":    {Data: []byte("x")},
+		".env":             {Data: []byte("SECRET=1")},
+		".hidden/file.txt": {Data: []byte("x")},
+		"assets/.keep":     {Data: []byte("")},
+	}
+	h := newHandler(assets, true)
+	tests := []struct {
+		path string
+		want int
+	}{
+		{"/", http.StatusOK},
+		{"/assets/app.js", http.StatusOK},
+		{"/.env", http.StatusNotFound},
+		{"/.hidden/file.txt", http.StatusNotFound},
+		{"/assets/.keep", http.StatusNotFound},
+		{"/assets/", http.StatusNotFound}, // no directory listings
+		{"/missing.js", http.StatusNotFound},
+	}
+	for _, tt := range tests {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, nil))
+		if rec.Code != tt.want {
+			t.Errorf("GET %s: status = %d, want %d", tt.path, rec.Code, tt.want)
+		}
+	}
+}
+
 func TestServeShutsDownOnCancel(t *testing.T) {
 	var lc net.ListenConfig
 	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
