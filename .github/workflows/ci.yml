@@ -17,7 +17,11 @@ concurrency:
 
 env:
   GO_VERSION: "1.27.4"
+  # Update both values together. The digest is the SHA-256 of
+  # trivy_<version>_Linux-64bit.tar.gz, committed here so the download is
+  # checked against a value that does not come from the same release.
   TRIVY_VERSION: "0.76.2"
+  TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
 
 jobs:
   go:
@@ -71,13 +75,16 @@ jobs:
           archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
           cd "$RUNNER_TEMP"
           curl -fsSLO "${base}/${archive}"
-          curl -fsSLO "${base}/trivy_${TRIVY_VERSION}_checksums.txt"
-          grep " ${archive}\$" "trivy_${TRIVY_VERSION}_checksums.txt" | sha256sum -c -
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum -c -
           mkdir trivy
           tar -xzf "$archive" -C trivy trivy
           sudo install -m 0755 trivy/trivy /usr/local/bin/trivy
-      - name: Scan image
-        run: trivy image --scanners vuln,secret --severity HIGH,CRITICAL --exit-code 1 scanopsis:ci
+      # Two runs: the severity filter applies to secrets too, and every
+      # secret finding must fail the job, whatever its severity.
+      - name: Scan image for vulnerabilities
+        run: trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 scanopsis:ci
+      - name: Scan image for secrets
+        run: trivy image --scanners secret --exit-code 1 scanopsis:ci
 
   licenses:
     name: Licences
