@@ -13,7 +13,7 @@ while IFS= read -r -d '' file; do
     echo "missing SPDX header: $file"
     bad=1
   fi
-done < <(git ls-files -z -- '*.go' '*.ts' '*.tsx' '*.mjs' '*.js' '*.css' '*.sh' 'Makefile' '**/Makefile')
+done < <(git ls-files -z -- '*.go' '*.ts' '*.tsx' '*.mjs' '*.js' '*.css' '*.sh' 'Makefile' '**/Makefile' 'Dockerfile')
 
 if [ "$bad" -ne 0 ]; then
   echo "Add 'SPDX-License-Identifier: Apache-2.0' within the first 5 lines of each file listed above." >&2
