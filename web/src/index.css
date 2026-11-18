@@ -1,0 +1,87 @@
+/* Copyright 2026 The Scanopsis Authors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+@import 'tailwindcss';
+
+/* Dark is the default theme; light follows the system preference. */
+:root {
+  color-scheme: dark;
+
+  --brand: #7c83ff;
+  --bg: #0b1020;
+  --surface: #131a2e;
+  --surface-raised: #1b2440;
+  --border: #273152;
+  --text: #e6eaf2;
+  --text-muted: #9aa4bf;
+
+  --sev-critical: #e5484d;
+  --sev-high: #f76b15;
+  --sev-medium: #f5b700;
+  --sev-low: #3e9bff;
+  --sev-unknown: #8b93a7;
+  --pass: #30a46c;
+  --fail: #e5484d;
+  --warn: #f5b700;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+
+    --brand: #4f46e5;
+    --bg: #f7f8fb;
+    --surface: #ffffff;
+    --surface-raised: #ffffff;
+    --border: #e2e6ef;
+    --text: #111827;
+    --text-muted: #5b6478;
+  }
+}
+
+@theme inline {
+  --color-brand: var(--brand);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-text-muted: var(--text-muted);
+
+  --color-sev-critical: var(--sev-critical);
+  --color-sev-high: var(--sev-high);
+  --color-sev-medium: var(--sev-medium);
+  --color-sev-low: var(--sev-low);
+  --color-sev-unknown: var(--sev-unknown);
+  --color-pass: var(--pass);
+  --color-fail: var(--fail);
+  --color-warn: var(--warn);
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+}
+
+html {
+  font-size: 14px;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
