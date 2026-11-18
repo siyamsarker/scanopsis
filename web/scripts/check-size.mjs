@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { gzipSync } from 'node:zlib';
 
@@ -30,6 +30,19 @@ export function extractScriptPaths(html) {
 }
 
 /**
+ * Resolves an asset path from index.html inside distDir. Returns null when the
+ * path would escape distDir, so the check never reads files outside the build.
+ * @param {string} distDir absolute path of the build directory
+ * @param {string} assetPath
+ * @returns {string | null}
+ */
+export function resolveAsset(distDir, assetPath) {
+  const root = resolve(distDir);
+  const abs = resolve(root, assetPath.replace(/^\/+/, ''));
+  return abs.startsWith(root + sep) ? abs : null;
+}
+
+/**
  * @param {number} totalBytes
  * @param {number} [budgetKb]
  * @returns {{ ok: boolean, totalKb: number, budgetKb: number }}
@@ -49,7 +62,12 @@ function main() {
   }
   let total = 0;
   for (const path of paths) {
-    total += gzipSync(readFileSync(join(distDir, path.replace(/^\//, '')))).length;
+    const file = resolveAsset(distDir, path);
+    if (!file) {
+      console.error(`check-size: refusing to read a path outside dist/app: ${path}`);
+      process.exit(1);
+    }
+    total += gzipSync(readFileSync(file)).length;
   }
   const { ok, totalKb, budgetKb } = checkBudget(total);
   console.log(`Initial JavaScript: ${totalKb.toFixed(1)} KB gzipped (budget ${budgetKb} KB)`);

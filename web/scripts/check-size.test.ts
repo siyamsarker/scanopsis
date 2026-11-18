@@ -1,7 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { BUDGET_KB, checkBudget, extractScriptPaths } from './check-size.mjs';
+import { BUDGET_KB, checkBudget, extractScriptPaths, resolveAsset } from './check-size.mjs';
 
 const html = `<!doctype html>
 <html><head>
@@ -37,4 +37,21 @@ describe('checkBudget', () => {
     expect(result.ok).toBe(false);
     expect(result.totalKb).toBeCloseTo(BUDGET_KB + 1);
   });
+});
+
+describe('resolveAsset', () => {
+  const dist = '/srv/build/dist/app';
+
+  it('resolves root-relative asset paths inside the build directory', () => {
+    expect(resolveAsset(dist, '/assets/index-abc.js')).toBe(
+      '/srv/build/dist/app/assets/index-abc.js',
+    );
+  });
+
+  it.each(['/../../etc/passwd', '../secret.js', '/assets/../../app.js', '/'])(
+    'refuses %s',
+    (path) => {
+      expect(resolveAsset(dist, path)).toBeNull();
+    },
+  );
 });
