@@ -1,10 +1,12 @@
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Allow-list: send only what the build needs.
 *
 !go.mod
 !go.sum
 !cmd/
 !internal/
-!pkg/
 !web/
 web/node_modules
 web/dist/app

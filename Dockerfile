@@ -1,4 +1,5 @@
-# syntax=docker/dockerfile:1
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
 
 # Web build. The output is architecture-independent, so it always runs on the
 # build host's platform instead of being emulated for each target.
@@ -24,7 +25,7 @@ RUN go mod download
 COPY . .
 # The embedded web interface must be in place before the binary is compiled.
 COPY --from=web /src/web/dist/app web/dist/app
-# Static, stripped, reproducible binary with the version stamped in.
+# Static, stripped binary with the version stamped in.
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT}" \
     -o /out/scanopsis ./cmd/scanopsis
@@ -40,7 +41,7 @@ LABEL org.opencontainers.image.title="scanopsis" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.revision="${COMMIT}"
 COPY --from=build /out/scanopsis /scanopsis
-# Explicit numeric nonroot user, so Kubernetes can verify it is not root.
+# Numeric nonroot user, so container runtimes can verify it is not root.
 USER 65532:65532
 # Unprivileged port; the binary writes nothing, so a read-only root filesystem works.
 EXPOSE 8080
