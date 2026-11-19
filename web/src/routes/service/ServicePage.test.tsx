@@ -75,6 +75,7 @@ const overview = {
       kind: 'secret-fs',
       artifact_name: '.',
       counts: counts(0, 0, 0, 0, 0),
+      secrets: 2,
       scanned_at: '2026-11-18T09:00:00Z',
     }),
   ],
@@ -220,6 +221,13 @@ beforeEach(() => {
 });
 
 describe('service dashboard', () => {
+  it('counts secrets, not vulnerabilities, for a secret scan artifact', async () => {
+    setup();
+    const row = await screen.findByRole('link', { name: /Source tree/ });
+    expect(row).toHaveTextContent('2 secrets');
+    expect(row).not.toHaveTextContent('0 vulnerabilities');
+  });
+
   it('shows API numbers and links every tile, package and artifact to its findings', async () => {
     setup();
     expect(await screen.findByRole('heading', { name: 'Payments API', level: 1 })).toBeVisible();

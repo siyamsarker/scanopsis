@@ -233,17 +233,27 @@ export function TrivyPosture({ serviceId, gitRef }: { serviceId: number; gitRef?
                   </span>
                 </span>
                 <span className="flex flex-col justify-center gap-1">
-                  <SeverityBar counts={scan.counts} size="sm" />
-                  <span className="text-sm tabular-nums text-text-muted">
-                    {countOf(
-                      scan.counts.critical +
-                        scan.counts.high +
-                        scan.counts.medium +
-                        scan.counts.low +
-                        scan.counts.unknown,
-                      'finding',
-                    )}
-                  </span>
+                  {scan.kind === 'secret-fs' ? (
+                    // A secret scan reports secrets, not vulnerabilities.
+                    <span className="text-sm tabular-nums text-text-muted">
+                      {countOf(scan.secrets, 'secret')}
+                    </span>
+                  ) : (
+                    <>
+                      <SeverityBar counts={scan.counts} size="sm" />
+                      <span className="text-sm tabular-nums text-text-muted">
+                        {countOf(
+                          scan.counts.critical +
+                            scan.counts.high +
+                            scan.counts.medium +
+                            scan.counts.low +
+                            scan.counts.unknown,
+                          'vulnerability',
+                          'vulnerabilities',
+                        )}
+                      </span>
+                    </>
+                  )}
                 </span>
               </Link>
             </li>
