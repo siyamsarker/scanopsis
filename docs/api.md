@@ -230,6 +230,7 @@ Responses:
 | 400 | Malformed request. | `application/json` [Error](#error) |
 | 401 | Wrong or reused code (code invalid_code) | `application/json` [Error](#error) |
 | 409 | Two-factor authentication is not enrolled yet (code mfa_enrollment_required). | `application/json` [Error](#error) |
+| 423 | Ten wrong codes in a row locked two-factor sign-in for this user (code mfa_locked). Every code is refused until an administrator resets two-factor authentication or the password; the user's sessions were ended. | `application/json` [Error](#error) |
 | 429 | Too many attempts. Retry-After gives seconds. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/hooks/sonarqube`
@@ -259,7 +260,7 @@ Responses:
 
 Upload one Trivy JSON report from a GitLab CI job.
 
-Authenticated with the job's GitLab CI/CD ID token (`Authorization: Bearer <token>`), whose audience must be the Scanopsis public URL. The project, pipeline, job, ref and commit come from the verified token, never from the report. The body is the raw report (`Content-Type: application/json`), optionally gzip-compressed (`Content-Encoding: gzip`). A repeated upload for the same job, artifact and kind replaces the earlier one. Every rejection is written to the audit log.
+Authenticated with the job's GitLab CI/CD ID token (`Authorization: Bearer <token>`), whose audience must be the Scanopsis public URL. The project, pipeline, job, ref and commit come from the verified token, never from the report. The body is the raw report (`Content-Type: application/json`), optionally gzip-compressed (`Content-Encoding: gzip`). A repeated upload for the same job, artifact and kind replaces the earlier one. Rejections are written to the audit log, except rate-limited requests (429), and at most a bounded number per client address for rejections before the namespace and protected-ref checks.
 
 - Operation ID: `ingestTrivy`
 - Authentication: CI ID token
@@ -1355,7 +1356,7 @@ Type: object
 | `configured` | boolean | yes | The GitLab URL is set |
 | `last_upload_at` | string or null (date-time) | yes |  |
 | `recent_rejections` | array of object | yes |  |
-| `rejections_24h` | integer | yes |  |
+| `rejections_24h` | integer | yes | Recorded rejections in the last 24 hours. Rate-limited requests are not recorded and the number of recorded rejections per client address is bounded for rejections before the namespace and protected-ref checks. |
 | `uploads_24h` | integer | yes |  |
 
 ### User
