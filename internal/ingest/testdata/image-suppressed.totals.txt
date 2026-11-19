@@ -1,0 +1,4 @@
+Total: 124 (UNKNOWN: 3, LOW: 29, MEDIUM: 51, HIGH: 40, CRITICAL: 1)
+Suppressed Vulnerabilities (Total: 1)
+Total: 11 (UNKNOWN: 0, LOW: 2, MEDIUM: 6, HIGH: 3, CRITICAL: 0)
+Suppressed Vulnerabilities (Total: 2)
