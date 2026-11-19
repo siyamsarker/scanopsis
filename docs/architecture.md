@@ -48,7 +48,8 @@ flowchart LR
 
 Every user, local or GitLab, passes two factors. A session starts after the
 first factor but cannot use the application until the second factor is
-verified.
+verified. When the second factor passes, the session gets a new token, so a
+token captured earlier is useless.
 
 ```mermaid
 sequenceDiagram
@@ -76,7 +77,8 @@ sequenceDiagram
     else User has enrolled
         B->>S: POST /api/v1/auth/mfa/verify (code)
     end
-    S->>D: Mark the session as two-factor verified
+    S->>D: Mark the session as two-factor verified and replace its token
+    S-->>B: New session cookie
 ```
 
 Local sign-in replaces the first half with `POST /api/v1/auth/local/login`
@@ -95,7 +97,7 @@ sequenceDiagram
     participant D as PostgreSQL
     Note over J,G: GitLab creates the ID token for the job (id_tokens, aud = Scanopsis URL)
     J->>S: POST /api/v1/ingest/trivy?kind=image (Bearer token, gzip JSON)
-    S->>S: Rate limit per client address
+    S->>S: Rate limit per client address, wait for one of four upload slots
     S->>G: Fetch signing keys (cached), only when needed
     S->>S: Check signature, issuer, audience, expiry, claims
     S->>S: Check allowed namespaces and protected refs
@@ -176,7 +178,7 @@ starts (`internal/store/migrations`). The tables:
 
 | Table | What it holds |
 |---|---|
-| `users` | One row per person. `source` is `local` or `gitlab`. Local users have an Argon2id `password_hash`. GitLab users have a `gitlab_user_id`. `role` is `admin` or `viewer`. Two-factor state: the encrypted secret, when it was enabled, the last accepted time step, and a flag that forces a password change after a reset. |
+| `users` | One row per person. `source` is `local` or `gitlab`. Local users have an Argon2id `password_hash`. GitLab users have a `gitlab_user_id`. `role` is `admin` or `viewer`. Two-factor state: the encrypted secret, when it was enabled, the last accepted time step, the number of wrong codes in a row (ten lock the second factor), and a flag that forces a password change after a reset. |
 | `sessions` | One row per sign-in. The key is the SHA-256 of the session token, never the token. Holds the user, the creation, last-seen and expiry times, and whether the second factor was verified. |
 | `recovery_codes` | The SHA-256 of each recovery code of a user and when it was used. |
 | `settings` | The runtime settings. Plain values are JSON. Secret values are stored encrypted. Each row records whether the value came from the environment or from the Settings page, who changed it and when. |
@@ -200,7 +202,7 @@ All jobs run inside the Scanopsis process. There is no separate worker.
 | Session clean-up | Every hour | Deletes sessions that passed their absolute or idle expiry. |
 | SonarQube worker | Continuously | Processes queued webhook deliveries. |
 | SonarQube sync | Every sync interval, checked every 10 seconds; default 15 minutes, minimum 1 minute | Reads the newest analysis of every linked project, and marks deliveries that stayed pending for more than 10 minutes as interrupted. Runs under an advisory lock. |
-| Retention | One minute after start, then every 24 hours | Deletes scan history older than the retention period, keeping the latest scan per ref and artifact. See [data retention](operations.md#data-retention). |
+| Retention | One minute after start, then every 24 hours | Deletes scan history older than the retention period, keeping the latest scan per ref and artifact. A run that deletes anything writes an audit event. See [data retention](operations.md#data-retention). |
 
 ## What "current" means
 
