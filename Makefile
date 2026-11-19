@@ -100,3 +100,19 @@ e2e: ## Run the end-to-end tests in a browser against a Docker Compose stack
 
 e2e-down: ## Stop the end-to-end stack that E2E_KEEP=1 left running
 	docker compose -p scanopsis-e2e -f test/e2e/compose.yaml down -v --remove-orphans
+
+.PHONY: coverage go-coverage web-coverage
+
+# Go coverage is measured once, across unit and integration tests, over every
+# internal and cmd package. The profile lands in coverage/, which is ignored.
+COVER_PROFILE := coverage/go.out
+
+coverage: go-coverage web-coverage ## Enforce the coverage thresholds for Go and the web interface (needs Docker)
+
+go-coverage: ## Measure Go coverage with unit and integration tests and enforce the thresholds
+	mkdir -p coverage
+	go test -count=1 -tags integration -coverpkg=./internal/...,./cmd/... -coverprofile=$(COVER_PROFILE) ./...
+	go run ./scripts/covercheck $(COVER_PROFILE)
+
+web-coverage: web-install ## Measure web coverage of the logic modules and enforce the thresholds
+	cd web && npm run coverage
