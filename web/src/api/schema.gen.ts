@@ -1858,7 +1858,7 @@ export interface operations {
                     "application/json": components["schemas"]["IngestResult"];
                 };
             };
-            /** @description Malformed body or gzip stream (code invalid_report). */
+            /** @description Malformed body or gzip stream (code invalid_report) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1885,7 +1885,16 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Report larger than the limit (code report_too_large). */
+            /** @description The project's service is archived (code service_archived) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Report larger than the limit or with too many findings (code report_too_large). */
             413: {
                 headers: {
                     [name: string]: unknown;
@@ -1921,7 +1930,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The GitLab URL is not configured (code ingest_not_configured). */
+            /** @description The GitLab URL is not configured (code ingest_not_configured) */
             503: {
                 headers: {
                     [name: string]: unknown;

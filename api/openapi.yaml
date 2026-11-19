@@ -397,14 +397,15 @@ paths:
             schema: { type: object, description: A Trivy JSON report (SchemaVersion 2). }
       responses:
         "201": { description: Stored., content: { application/json: { schema: { $ref: "#/components/schemas/IngestResult" } } } }
-        "400": { description: Malformed body or gzip stream (code invalid_report)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { description: Malformed body or gzip stream (code invalid_report), or an unknown kind (code invalid_parameter)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: Missing or invalid ID token (code invalid_token; the message names the failed check)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: Project namespace not allowed (code namespace_not_allowed) or ref not protected (code ref_not_protected)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "413": { description: Report larger than the limit (code report_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: The project's service is archived (code service_archived), or its path belongs to another service (code service_conflict)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "413": { description: Report larger than the limit or with too many findings (code report_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "415": { description: Unsupported content type or encoding (code unsupported_media_type)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { description: Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many uploads from this address. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { description: The GitLab URL is not configured (code ingest_not_configured)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: The GitLab URL is not configured (code ingest_not_configured), or GitLab's signing keys could not be fetched (code gitlab_unavailable)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/hooks/sonarqube:
     post:
