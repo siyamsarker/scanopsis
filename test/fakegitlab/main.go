@@ -47,6 +47,8 @@ func run() error {
 	clientSecret := flag.String("client-secret", os.Getenv("FAKEGITLAB_CLIENT_SECRET"), "OAuth client secret")
 	redirectURI := flag.String("redirect-uri", os.Getenv("FAKEGITLAB_REDIRECT_URI"), "OAuth redirect URI")
 	usersFile := flag.String("users", os.Getenv("FAKEGITLAB_USERS"), "JSON file with an array of users")
+	testEndpoints := flag.Bool("test-endpoints", os.Getenv("FAKEGITLAB_TEST_ENDPOINTS") == "1",
+		"enable POST /test/ci-token, which signs CI ID tokens for posted claims")
 	flag.Parse()
 
 	if *clientID == "" || *clientSecret == "" || *redirectURI == "" {
@@ -55,6 +57,10 @@ func run() error {
 	srv, err := fakegitlab.New(*issuer)
 	if err != nil {
 		return err
+	}
+	if *testEndpoints {
+		srv.EnableTestEndpoints()
+		log.Info("test endpoints enabled")
 	}
 	srv.AddClient(*clientID, *clientSecret, *redirectURI)
 

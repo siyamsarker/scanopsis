@@ -77,6 +77,7 @@ type Server struct {
 	audience *string
 	foreign  jose.Signer
 	userinfo int
+	testAPI  bool
 }
 
 // New returns a Server whose issuer is issuerURL (no trailing slash). It
@@ -197,6 +198,15 @@ func (s *Server) UserinfoCalls() int {
 	return s.userinfo
 }
 
+// EnableTestEndpoints turns on POST /test/ci-token, which signs the posted
+// claims as a CI ID token. It is off by default so that the fake never hands
+// out tokens unless the test run asks for it.
+func (s *Server) EnableTestEndpoints() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.testAPI = true
+}
+
 // Handler serves the provider's endpoints.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -206,6 +216,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /oauth/token", s.token)
 	mux.HandleFunc("GET /oauth/userinfo", s.userInfo)
 	mux.HandleFunc("POST /oauth/userinfo", s.userInfo)
+	mux.HandleFunc("POST /test/ci-token", s.ciToken)
 	return mux
 }
 
@@ -457,4 +468,37 @@ func (s *Server) userInfo(w http.ResponseWriter, r *http.Request) {
 		"sub": strconv.FormatInt(u.ID, 10), "name": u.Name, "nickname": u.Username,
 		"preferred_username": u.Username, "email": u.Email, "groups": groupsOrEmpty(u.Groups),
 	})
+}
+
+// ciToken signs the posted JSON claims. iss defaults to the issuer, iat to
+// now and exp to ten minutes from now; every other claim is taken as posted.
+func (s *Server) ciToken(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	enabled, now := s.testAPI, s.now()
+	s.mu.Unlock()
+	if !enabled {
+		http.NotFound(w, r)
+		return
+	}
+	var claims map[string]any
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err := dec.Decode(&claims); err != nil || claims == nil {
+		oauthError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if _, ok := claims["iss"]; !ok {
+		claims["iss"] = s.issuer
+	}
+	if _, ok := claims["iat"]; !ok {
+		claims["iat"] = now.Unix()
+	}
+	if _, ok := claims["exp"]; !ok {
+		claims["exp"] = now.Add(idTokenLife).Unix()
+	}
+	tok, err := s.SignJWT(claims)
+	if err != nil {
+		oauthError(w, http.StatusInternalServerError, "server_error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"token": tok})
 }
