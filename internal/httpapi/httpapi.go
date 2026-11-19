@@ -60,6 +60,10 @@ type Deps struct {
 	LocalLogin     http.Handler // nil when local sign-in is disabled
 	GitLabLogin    http.Handler // nil when GitLab sign-in is not configured
 	GitLabCallback http.Handler
+	// Methods, when set, reports which sign-in methods are currently
+	// enabled; it overrides the nil checks above for GET
+	// /api/v1/auth/methods, so settings changed at run time are reflected.
+	Methods func() (gitlab, local bool)
 
 	// Handlers provided by other packages. All but Setup may be nil when the
 	// feature is unavailable; the routes then answer 404 not_enabled. They

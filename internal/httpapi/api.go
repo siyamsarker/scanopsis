@@ -113,9 +113,18 @@ func (s *server) version(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *server) authMethods(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{
-		"gitlab": s.GitLabLogin != nil,
-		"local":  s.LocalLogin != nil,
+	gitlab, local := s.GitLabLogin != nil, s.LocalLogin != nil
+	if s.Methods != nil {
+		gitlab, local = s.Methods()
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"gitlab": gitlab, "local": local})
+}
+
+// NotEnabled answers 404 not_enabled, naming the feature. Handlers that can
+// be switched off at run time use it when they are off.
+func NotEnabled(what string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, http.StatusNotFound, "not_enabled", what+" is not enabled on this server.")
 	})
 }
 
@@ -124,9 +133,7 @@ func (s *server) optional(h http.Handler, what string) http.Handler {
 	if h != nil {
 		return h
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotFound, "not_enabled", what+" is not enabled on this server.")
-	})
+	return NotEnabled(what)
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {

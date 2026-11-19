@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -422,5 +423,29 @@ func TestJSONResponsesAreNotStored(t *testing.T) {
 		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 			t.Errorf("GET %s as %q: Cache-Control = %q, want no-store", tc.path, tc.user, got)
 		}
+	}
+}
+
+func TestAuthMethodsFollowsRuntimeSettings(t *testing.T) {
+	gitlab, local := false, true
+	e := newEnv(t, func(d *Deps) { d.Methods = func() (bool, bool) { return gitlab, local } })
+	check := func(want string) {
+		t.Helper()
+		rec := e.do("GET", "/api/v1/auth/methods", "", "")
+		if got := strings.TrimSpace(rec.Body.String()); got != want {
+			t.Fatalf("methods = %s, want %s", got, want)
+		}
+	}
+	check(`{"gitlab":false,"local":true}`)
+	gitlab, local = true, false
+	check(`{"gitlab":true,"local":false}`)
+}
+
+func TestNotEnabled(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NotEnabled("GitLab sign-in").ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), "GET", "/", nil))
+	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":"not_enabled"`) ||
+		!strings.Contains(rec.Body.String(), "GitLab sign-in is not enabled on this server.") {
+		t.Fatalf("NotEnabled = %d %s", rec.Code, rec.Body.String())
 	}
 }
