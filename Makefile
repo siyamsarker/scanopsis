@@ -59,7 +59,7 @@ build: web-build ## Build bin/scanopsis with the web interface embedded
 	CGO_ENABLED=0 go build -trimpath -ldflags '$(LDFLAGS)' -o bin/scanopsis ./cmd/scanopsis
 
 web-install: ## Install web dependencies exactly as locked
-	cd web && npm ci
+	cd web && npm ci --ignore-scripts
 
 web-lint: web-install ## Lint and type-check the web interface
 	cd web && npm run lint
@@ -94,7 +94,7 @@ clean: ## Remove build output
 .PHONY: e2e e2e-down
 
 e2e: ## Run the end-to-end tests in a browser against a Docker Compose stack
-	cd test/e2e && npm ci
+	cd test/e2e && npm ci --ignore-scripts
 	cd test/e2e && if [ -n "$$CI" ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
 	cd test/e2e && npx playwright test
 

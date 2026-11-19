@@ -7,7 +7,8 @@ FROM --platform=$BUILDPLATFORM node:26.13.1-alpine3.24@sha256:6bd9ab43c0ec0190ca
 WORKDIR /src/web
 # Manifests first, so the dependency layer is reused until they change.
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+# Dependency install scripts are not run: none is needed to build.
+RUN npm ci --ignore-scripts
 COPY web/ ./
 RUN npm run build
 
