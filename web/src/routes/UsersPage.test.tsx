@@ -5,7 +5,13 @@ import { fireEvent, screen, within } from '@testing-library/react';
 import { formatRelative } from './UsersPage';
 import { apiError, json, makeUser, mockFetch, renderApp, type Handler } from '../test-utils';
 
-const admin = makeUser({ id: 1, username: 'ada', role: 'admin' });
+// Relative to the clock, so the rendered text does not change with the date.
+const admin = makeUser({
+  id: 1,
+  username: 'ada',
+  role: 'admin',
+  last_login_at: new Date(Date.now() - 3 * 3600_000).toISOString(),
+});
 const grace = makeUser({
   id: 2,
   username: 'grace',
@@ -45,7 +51,7 @@ describe('users page', () => {
     expect(within(row).getByText('Never')).toBeInTheDocument();
     const adminRow = within(table).getByRole('row', { name: /ada/ });
     expect(within(adminRow).getByText('GitLab')).toBeInTheDocument();
-    expect(within(adminRow).getByText(/ago$/)).toHaveAttribute(
+    expect(within(adminRow).getByText('3 hours ago')).toHaveAttribute(
       'title',
       new Date(admin.last_login_at!).toLocaleString(),
     );
