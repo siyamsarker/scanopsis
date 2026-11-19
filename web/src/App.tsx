@@ -6,6 +6,7 @@ import { HomePage } from './routes/HomePage';
 import { LoginPage } from './routes/LoginPage';
 import { NotFoundPage } from './routes/NotFoundPage';
 import { ProtectedLayout } from './routes/ProtectedLayout';
+import { UsersPage } from './routes/UsersPage';
 
 export function App() {
   return (
@@ -13,6 +14,7 @@ export function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedLayout />}>
         <Route index element={<HomePage />} />
+        <Route path="admin/users" element={<UsersPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
