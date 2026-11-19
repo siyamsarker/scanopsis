@@ -40,7 +40,7 @@ type Config struct {
 	// Seeds holds the operational settings given through environment
 	// variables, keyed by setting key (for example "gitlab.url"). Only
 	// variables that are set appear. Values are string (string, url and
-	// secret settings), bool, []string or time.Duration. The settings
+	// secret settings), bool, []string, time.Duration or int. The settings
 	// package stores them on first start; afterwards the database wins.
 	Seeds map[string]any
 }
@@ -174,6 +174,21 @@ func (l *loader) duration(name string, def time.Duration) time.Duration {
 	return d
 }
 
+// integer parses an optional whole number in [lo, hi]; ok is false when the
+// variable is unset or invalid (invalid values are reported).
+func (l *loader) integer(name string, lo, hi int) (n int, ok bool) {
+	v := l.str(name, "")
+	if v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < lo || n > hi {
+		l.fail(name, fmt.Sprintf("must be a whole number from %d to %d, got %q", lo, hi, v))
+		return 0, false
+	}
+	return n, true
+}
+
 func (l *loader) logLevel(name string) slog.Level {
 	var lvl slog.Level
 	v := l.str(name, "info")
@@ -298,6 +313,9 @@ func (l *loader) seeds(m map[string]any) {
 	}
 	if l.str("INGEST_PROTECTED_REFS_ONLY", "") != "" {
 		m["ingest.protected_refs_only"] = l.boolean("INGEST_PROTECTED_REFS_ONLY", false)
+	}
+	if n, ok := l.integer("RETENTION_DAYS", 7, 3650); ok {
+		m["retention.days"] = n
 	}
 
 	// The GitLab URL alone is enough to verify CI job tokens; GitLab sign-in

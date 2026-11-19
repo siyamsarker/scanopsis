@@ -103,3 +103,42 @@ func TestIntegrationSettingsLifecycle(t *testing.T) {
 		t.Errorf("wrong key err = %v", err)
 	}
 }
+
+func TestIntegrationRetentionDaysSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	pool := storetest.New(t)
+	q := store.New(pool)
+	tx := func(ctx context.Context, fn func(Store) error) error {
+		return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fn(q.WithTx(tx)) })
+	}
+	box, err := secretbox.New(bytes.Repeat([]byte{7}, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := New(ctx, q, tx, box, map[string]any{"retention.days": 30}, &fakeAudit{}, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Current().RetentionDays; got != 30 {
+		t.Fatalf("seeded RetentionDays = %d", got)
+	}
+	if fields, err := svc.update(ctx, map[string]any{"retention.days": float64(365)}, "local:root"); err != nil || len(fields) != 0 {
+		t.Fatalf("update: %v, %v", fields, err)
+	}
+	rows, err := q.ListSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.Key == "retention.days" && string(r.Value) != "365" {
+			t.Errorf("stored value = %s, want the JSON number 365", r.Value)
+		}
+	}
+	again, err := New(ctx, q, tx, box, map[string]any{"retention.days": 30}, &fakeAudit{}, discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Current().RetentionDays; got != 365 {
+		t.Errorf("after restart RetentionDays = %d, want 365", got)
+	}
+}

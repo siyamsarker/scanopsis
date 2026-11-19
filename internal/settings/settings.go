@@ -45,6 +45,9 @@ type Snapshot struct {
 
 	IngestAllowedNamespaces []string
 	IngestProtectedRefsOnly bool
+
+	// RetentionDays is how many days scan history is kept.
+	RetentionDays int
 }
 
 // SonarEnabled reports whether SonarQube results can be read (URL and token set).
@@ -259,6 +262,7 @@ func snapshotOf(e map[string]entry) Snapshot {
 
 		IngestAllowedNamespaces: e[KeyIngestAllowedNamespaces].value.([]string),
 		IngestProtectedRefsOnly: e[KeyIngestProtectedRefsOnly].value.(bool),
+		RetentionDays:           e[KeyRetentionDays].value.(int),
 	}
 }
 

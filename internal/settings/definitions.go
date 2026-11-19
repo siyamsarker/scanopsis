@@ -9,6 +9,7 @@ package settings
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode"
@@ -26,6 +27,7 @@ const (
 	TypeBoolean    Type = "boolean"
 	TypeDuration   Type = "duration"
 	TypeStringList Type = "string_list"
+	TypeInteger    Type = "integer"
 )
 
 // Setting keys.
@@ -44,10 +46,18 @@ const (
 	KeySonarSyncInterval       = "sonar.sync_interval"
 	KeyIngestAllowedNamespaces = "ingest.allowed_namespaces"
 	KeyIngestProtectedRefsOnly = "ingest.protected_refs_only"
+	KeyRetentionDays           = "retention.days"
 )
 
 // MinSonarSyncInterval is the shortest allowed SonarQube reconciliation interval.
 const MinSonarSyncInterval = time.Minute
+
+// Bounds of retention.days, in days.
+const (
+	DefaultRetentionDays = 90
+	MinRetentionDays     = 7
+	MaxRetentionDays     = 3650
+)
 
 // MinIdleTimeout is the shortest allowed idle session timeout.
 const MinIdleTimeout = 5 * time.Minute
@@ -61,6 +71,8 @@ type Definition struct {
 	// Secret values are encrypted at rest and never returned by the API.
 	Secret  bool
 	Default any
+	// Min and Max bound an integer setting, inclusive.
+	Min, Max int
 }
 
 // Definitions lists every setting in display order.
@@ -91,6 +103,8 @@ var Definitions = []Definition{
 		Description: "GitLab groups, by full path, whose projects may upload scan reports; leave empty to accept every project."},
 	{Key: KeyIngestProtectedRefsOnly, EnvVar: "SCANOPSIS_INGEST_PROTECTED_REFS_ONLY", Type: TypeBoolean, Default: false,
 		Description: "Accept scan reports only from pipelines on protected branches and tags."},
+	{Key: KeyRetentionDays, EnvVar: "SCANOPSIS_RETENTION_DAYS", Type: TypeInteger, Default: DefaultRetentionDays, Min: MinRetentionDays, Max: MaxRetentionDays,
+		Description: "How many days scan history is kept, from 7 to 3650. The latest scan of every service, ref, artifact and kind is always kept, however old."},
 }
 
 var definitionByKey = func() map[string]Definition {
@@ -119,6 +133,8 @@ func coerce(d Definition, raw any) (any, error) {
 		return b, nil
 	case TypeStringList:
 		return coerceList(d, raw)
+	case TypeInteger:
+		return coerceInteger(d, raw)
 	case TypeDuration:
 		if v, ok := raw.(time.Duration); ok {
 			return formatDuration(v), nil
@@ -153,6 +169,33 @@ func coerce(d Definition, raw any) (any, error) {
 		return s, nil
 	}
 	return strings.TrimSpace(s), nil
+}
+
+// coerceInteger accepts a JSON number (float64) or a Go integer with no
+// fractional part, within the definition's range, and returns an int.
+func coerceInteger(d Definition, raw any) (any, error) {
+	bad := problem(fmt.Sprintf("Must be a whole number from %d to %d.", d.Min, d.Max))
+	var n int
+	switch v := raw.(type) {
+	case int:
+		n = v
+	case int64:
+		if v < math.MinInt32 || v > math.MaxInt32 {
+			return nil, bad
+		}
+		n = int(v)
+	case float64:
+		if v != math.Trunc(v) || v < float64(d.Min) || v > float64(d.Max) {
+			return nil, bad
+		}
+		n = int(v)
+	default:
+		return nil, bad
+	}
+	if n < d.Min || n > d.Max {
+		return nil, bad
+	}
+	return n, nil
 }
 
 func coerceList(d Definition, raw any) (any, error) {

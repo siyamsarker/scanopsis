@@ -91,6 +91,7 @@ func TestLoadFull(t *testing.T) {
 		"SCANOPSIS_GITLAB_CLIENT_SECRET_FILE", "/run/secrets/gitlab",
 		"SCANOPSIS_GITLAB_ALLOWED_GROUPS", "platform, security/appsec",
 		"SCANOPSIS_LOCAL_LOGIN_ENABLED", "false",
+		"SCANOPSIS_RETENTION_DAYS", " 180 ",
 	)
 	files := map[string]string{"/run/secrets/gitlab": "s3cret\n"}
 	c, err := load(t, env, files)
@@ -124,6 +125,7 @@ func TestLoadFull(t *testing.T) {
 		"auth.local_login_enabled": false,
 		"session.idle_timeout":     30 * time.Minute,
 		"session.absolute_timeout": 12 * time.Hour,
+		"retention.days":           180,
 	}
 	if !reflect.DeepEqual(c.Seeds, want) {
 		t.Errorf("Seeds = %#v, want %#v", c.Seeds, want)
@@ -183,6 +185,14 @@ func TestLoadErrors(t *testing.T) {
 			[]string{"SCANOPSIS_SESSION_IDLE_TIMEOUT must be at least 5m"}},
 		{"absolute shorter than idle", with(minimal(), "SCANOPSIS_SESSION_IDLE_TIMEOUT", "2h", "SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT", "1h"), nil,
 			[]string{"SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT must not be shorter"}},
+		{"retention days not a number", with(minimal(), "SCANOPSIS_RETENTION_DAYS", "ninety"), nil,
+			[]string{`SCANOPSIS_RETENTION_DAYS must be a whole number from 7 to 3650, got "ninety"`}},
+		{"retention days fraction", with(minimal(), "SCANOPSIS_RETENTION_DAYS", "90.5"), nil,
+			[]string{"SCANOPSIS_RETENTION_DAYS must be a whole number from 7 to 3650"}},
+		{"retention days too small", with(minimal(), "SCANOPSIS_RETENTION_DAYS", "6"), nil,
+			[]string{"SCANOPSIS_RETENTION_DAYS must be a whole number from 7 to 3650"}},
+		{"retention days too large", with(minimal(), "SCANOPSIS_RETENTION_DAYS", "3651"), nil,
+			[]string{"SCANOPSIS_RETENTION_DAYS must be a whole number from 7 to 3650"}},
 		{"bad log level", with(minimal(), "SCANOPSIS_LOG_LEVEL", "loud"), nil,
 			[]string{"SCANOPSIS_LOG_LEVEL must be debug, info, warn or error"}},
 		{"bad proxy", with(minimal(), "SCANOPSIS_TRUSTED_PROXIES", "10.0.0.0/8,proxy.local"), nil,

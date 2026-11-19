@@ -202,7 +202,7 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	want := Snapshot{
 		GitLabAllowedGroups: []string{}, LocalLoginEnabled: true,
-		SessionIdleTimeout: 8 * time.Hour, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{},
+		SessionIdleTimeout: 8 * time.Hour, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -254,7 +254,7 @@ func TestSeedingFillsOnlyMissingKeys(t *testing.T) {
 	want := Snapshot{
 		GitLabURL: "https://gitlab.example.com", GitLabClientID: "from-ui", GitLabClientSecret: "s3cret-value",
 		GitLabAllowedGroups: []string{"platform", "sec/appsec"}, LocalLoginEnabled: true,
-		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{},
+		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -333,7 +333,7 @@ func TestUpdateAppliesAndAudits(t *testing.T) {
 	want := Snapshot{
 		GitLabURL: "https://gitlab.example.com", GitLabClientID: "cid", GitLabClientSecret: "topsecret-xyz",
 		GitLabAllowedGroups: []string{"a", "b/c"}, LocalLoginEnabled: false,
-		SessionIdleTimeout: 90 * time.Minute, SessionAbsoluteTimeout: 36 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{},
+		SessionIdleTimeout: 90 * time.Minute, SessionAbsoluteTimeout: 36 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
 	}
 	if cur := e.svc.Current(); !reflect.DeepEqual(cur, want) {
 		t.Errorf("Current = %+v", cur)
@@ -617,7 +617,7 @@ func TestFormatDuration(t *testing.T) {
 
 func TestDefinitions(t *testing.T) {
 	want := []string{"gitlab.url", "gitlab.client_id", "gitlab.client_secret", "gitlab.allowed_groups", "auth.local_login_enabled", "session.idle_timeout", "session.absolute_timeout",
-		"sonar.url", "sonar.token", "sonar.webhook_secret", "sonar.sync_interval", "ingest.allowed_namespaces", "ingest.protected_refs_only"}
+		"sonar.url", "sonar.token", "sonar.webhook_secret", "sonar.sync_interval", "ingest.allowed_namespaces", "ingest.protected_refs_only", "retention.days"}
 	var got []string
 	for _, d := range Definitions {
 		got = append(got, d.Key)
@@ -724,5 +724,103 @@ func TestSonarSettings(t *testing.T) {
 		if strings.Contains(string(row.SecretEnc), "squ_abc") || strings.Contains(string(row.Value), "squ_abc") {
 			t.Fatal("SonarQube token stored in plain text")
 		}
+	}
+}
+
+func TestRetentionDaysSetting(t *testing.T) {
+	e := newEnv(t, map[string]any{"retention.days": 30})
+	if got := e.svc.Current().RetentionDays; got != 30 {
+		t.Fatalf("seeded RetentionDays = %d, want 30", got)
+	}
+	item := e.items(t)["retention.days"]
+	if item["type"] != "integer" || item["value"] != float64(30) || item["source"] != "env" || item["is_set"] != true {
+		t.Fatalf("item = %v", item)
+	}
+	if code, body := e.patch(t, `{"retention.days":365}`); code != 200 {
+		t.Fatalf("status = %d, body %v", code, body)
+	}
+	if got := e.svc.Current().RetentionDays; got != 365 {
+		t.Fatalf("RetentionDays = %d, want 365", got)
+	}
+	if r := e.st.rows["retention.days"]; string(r.Value) != "365" || r.Source != "ui" {
+		t.Fatalf("stored row = %+v, want the JSON number 365", r)
+	}
+	if code, body := e.patch(t, `{"retention.days":null}`); code != 200 {
+		t.Fatalf("reset: status = %d, body %v", code, body)
+	}
+	// Reset falls back to the environment seed.
+	if got := e.svc.Current().RetentionDays; got != 30 {
+		t.Fatalf("after reset RetentionDays = %d, want 30", got)
+	}
+}
+
+func TestRetentionDaysDefault(t *testing.T) {
+	e := newEnv(t, nil)
+	item := e.items(t)["retention.days"]
+	if item["value"] != float64(90) || item["source"] != "default" {
+		t.Fatalf("item = %v", item)
+	}
+}
+
+func TestRetentionDaysValidation(t *testing.T) {
+	const msg = "Must be a whole number from 7 to 3650."
+	for name, body := range map[string]string{
+		"below minimum": `{"retention.days":6}`,
+		"above maximum": `{"retention.days":3651}`,
+		"zero":          `{"retention.days":0}`,
+		"negative":      `{"retention.days":-90}`,
+		"fraction":      `{"retention.days":90.5}`,
+		"string":        `{"retention.days":"90"}`,
+		"boolean":       `{"retention.days":true}`,
+		"list":          `{"retention.days":[90]}`,
+		"huge":          `{"retention.days":1e300}`,
+		"tiny fraction": `{"retention.days":90.0000001}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, nil)
+			code, resp := e.patch(t, body)
+			if code != 400 {
+				t.Fatalf("status = %d, body %v", code, resp)
+			}
+			fields := resp["error"].(map[string]any)["fields"].(map[string]any)
+			if fields["retention.days"] != msg {
+				t.Errorf("fields = %v", fields)
+			}
+			if got := e.svc.Current().RetentionDays; got != 90 {
+				t.Errorf("RetentionDays changed to %d", got)
+			}
+		})
+	}
+	for _, body := range []string{`{"retention.days":7}`, `{"retention.days":3650}`, `{"retention.days":90.0}`} {
+		e := newEnv(t, nil)
+		if code, resp := e.patch(t, body); code != 200 {
+			t.Errorf("%s: status = %d, body %v", body, code, resp)
+		}
+	}
+}
+
+func TestCoerceInteger(t *testing.T) {
+	d := definitionByKey[KeyRetentionDays]
+	for _, tc := range []struct {
+		in   any
+		want int
+		ok   bool
+	}{
+		{90, 90, true}, {int64(30), 30, true}, {float64(7), 7, true}, {float64(3650), 3650, true},
+		{6, 0, false}, {3651, 0, false}, {int64(1) << 40, 0, false}, {-int64(1) << 40, 0, false},
+		{7.5, 0, false}, {"90", 0, false}, {nil, 0, false}, {true, 0, false},
+	} {
+		got, err := coerce(d, tc.in)
+		if (err == nil) != tc.ok || (tc.ok && got != tc.want) {
+			t.Errorf("coerce(%#v) = %v, %v; want %d, ok=%v", tc.in, got, err, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestNewRejectsInvalidIntegerSeed(t *testing.T) {
+	st := newFakeStore()
+	_, err := New(context.Background(), st, st.tx, testBox(t, 1), map[string]any{"retention.days": 3}, &fakeAudit{}, discard)
+	if err == nil || !strings.Contains(err.Error(), "SCANOPSIS_RETENTION_DAYS") {
+		t.Fatalf("err = %v", err)
 	}
 }
