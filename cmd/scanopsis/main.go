@@ -37,6 +37,7 @@ import (
 	"github.com/siyamsarker/scanopsis/internal/findings"
 	"github.com/siyamsarker/scanopsis/internal/httpapi"
 	"github.com/siyamsarker/scanopsis/internal/ingest"
+	"github.com/siyamsarker/scanopsis/internal/retention"
 	"github.com/siyamsarker/scanopsis/internal/secretbox"
 	"github.com/siyamsarker/scanopsis/internal/settings"
 	"github.com/siyamsarker/scanopsis/internal/sonar"
@@ -241,6 +242,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 	go removeExpiredSessions(ctx, sessions, log)
 	go sonarQube.Run(ctx)
+	go retention.New(pool, conf, log).Run(ctx)
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)
