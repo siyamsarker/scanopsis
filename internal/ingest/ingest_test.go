@@ -631,3 +631,21 @@ func TestIngestLongRefIsClipped(t *testing.T) {
 		t.Errorf("not logged: %s", e.logs)
 	}
 }
+
+func TestIngestArchivedService(t *testing.T) {
+	e := newHEnv(t, nil)
+	e.save.err = errServiceArchived
+	w := e.do(req{body: []byte(`{"SchemaVersion":2,"ArtifactName":"a"}`)})
+	var b struct {
+		Error struct{ Code, Message string }
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &b)
+	if w.Code != 409 || b.Error.Code != "service_archived" ||
+		b.Error.Message != "The service for this project is archived. Ask an administrator to unarchive it." {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if ev := e.audit.list(); len(ev) != 1 || ev[0].action != audit.ActionIngestRejected || ev[0].detail["reason"] != "service_archived" ||
+		ev[0].actor != "ci:platform/payments-api" {
+		t.Fatalf("audit = %+v", ev)
+	}
+}

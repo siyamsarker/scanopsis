@@ -13,7 +13,7 @@ import (
 
 const adoptServiceByPath = `-- name: AdoptServiceByPath :one
 UPDATE services SET gitlab_project_id = $1
-WHERE gitlab_project_path = $2 AND gitlab_project_id IS NULL
+WHERE gitlab_project_path = $2 AND gitlab_project_id IS NULL AND NOT archived
 RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at
 `
 
@@ -23,7 +23,7 @@ type AdoptServiceByPathParams struct {
 }
 
 // A service added by an administrator learns its project ID from the first
-// upload whose token names its path.
+// upload whose token names its path. Archived services are left alone.
 func (q *Queries) AdoptServiceByPath(ctx context.Context, arg AdoptServiceByPathParams) (Service, error) {
 	row := q.db.QueryRow(ctx, adoptServiceByPath, arg.ProjectID, arg.ProjectPath)
 	var i Service
@@ -63,6 +63,26 @@ func (q *Queries) DeleteScanForJob(ctx context.Context, arg DeleteScanForJobPara
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const getServiceByPath = `-- name: GetServiceByPath :one
+SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at FROM services WHERE gitlab_project_path = $1
+`
+
+func (q *Queries) GetServiceByPath(ctx context.Context, gitlabProjectPath string) (Service, error) {
+	row := q.db.QueryRow(ctx, getServiceByPath, gitlabProjectPath)
+	var i Service
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.GitlabProjectID,
+		&i.GitlabProjectPath,
+		&i.SonarProjectKey,
+		&i.CreatedVia,
+		&i.Archived,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const getServiceByProjectID = `-- name: GetServiceByProjectID :one

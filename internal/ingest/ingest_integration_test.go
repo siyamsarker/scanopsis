@@ -352,6 +352,25 @@ func TestIntegrationManualServiceAdopted(t *testing.T) {
 	if name != "Payments" || pid != 42 || via != "manual" || e.count("services") != 1 {
 		t.Errorf("service = %s %d %s, %d services", name, pid, via, e.count("services"))
 	}
+	// The adoption is audited, in the same transaction.
+	var actor, detail string
+	if err := e.pool.QueryRow(context.Background(), `SELECT actor, detail::text FROM audit_log WHERE action='service.updated'`).Scan(&actor, &detail); err != nil {
+		t.Fatal(err)
+	}
+	var d map[string]any
+	_ = json.Unmarshal([]byte(detail), &d)
+	want := map[string]any{"id": float64(id), "gitlab_project_path": "platform/payments-api", "fields": []any{"gitlab_project_id"},
+		"gitlab_project_id": 42.0, "reason": "adopted by the first verified upload"}
+	if actor != "ci:platform/payments-api" || !jsonEqual(d, want) {
+		t.Errorf("audit = %s %s", actor, detail)
+	}
+	// A later upload is not an adoption: no second event.
+	e.mustUpload(upload{body: []byte(`{"SchemaVersion":2,"ArtifactName":"b"}`)})
+	var n int
+	_ = e.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE action='service.updated'`).Scan(&n)
+	if n != 1 {
+		t.Errorf("%d service.updated events", n)
+	}
 }
 
 func TestIntegrationRename(t *testing.T) {
@@ -658,4 +677,75 @@ func TestIntegrationLongIndexedValues(t *testing.T) {
 	if again := e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["ref"] = ref }}); !again.Replaced {
 		t.Error("second upload did not replace the first")
 	}
+}
+
+func TestIntegrationArchivedServices(t *testing.T) {
+	body := []byte(`{"SchemaVersion":2,"ArtifactName":"a"}`)
+	reasons := func(e *iEnv) []string {
+		rows, err := e.pool.Query(context.Background(), `SELECT detail->>'reason' FROM audit_log WHERE action='ingest.rejected' ORDER BY id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var r string
+			_ = rows.Scan(&r)
+			out = append(out, r)
+		}
+		return out
+	}
+
+	t.Run("manual service not adopted", func(t *testing.T) {
+		e := newIEnv(t, nil)
+		if _, err := e.pool.Exec(context.Background(), `INSERT INTO services (name, gitlab_project_path, created_via, archived)
+			VALUES ('Payments', 'platform/payments-api', 'manual', true)`); err != nil {
+			t.Fatal(err)
+		}
+		code, b := e.upload(upload{body: body})
+		if code != http.StatusConflict || !strings.Contains(string(b), `"service_archived"`) ||
+			!strings.Contains(string(b), "Ask an administrator to unarchive it.") {
+			t.Fatalf("%d %s", code, b)
+		}
+		var pid *int64
+		_ = e.pool.QueryRow(context.Background(), `SELECT gitlab_project_id FROM services`).Scan(&pid)
+		if pid != nil || e.count("services") != 1 || e.count("scans") != 0 {
+			t.Errorf("project id %v, %d services, %d scans", pid, e.count("services"), e.count("scans"))
+		}
+		var n int
+		_ = e.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE action='service.updated'`).Scan(&n)
+		if n != 0 || strings.Join(reasons(e), ",") != "service_archived" {
+			t.Errorf("service.updated events %d, rejections %v", n, reasons(e))
+		}
+	})
+
+	t.Run("service with the project id", func(t *testing.T) {
+		e := newIEnv(t, nil)
+		first := e.mustUpload(upload{body: body})
+		if _, err := e.pool.Exec(context.Background(), `UPDATE services SET archived = true WHERE id=$1`, first.ServiceID); err != nil {
+			t.Fatal(err)
+		}
+		code, b := e.upload(upload{body: body, claims: func(c map[string]any) { c["job_id"] = "3003" }})
+		if code != http.StatusConflict || !strings.Contains(string(b), `"service_archived"`) {
+			t.Fatalf("%d %s", code, b)
+		}
+		if e.count("scans") != 1 {
+			t.Errorf("scans = %d: an archived service received data", e.count("scans"))
+		}
+		if strings.Join(reasons(e), ",") != "service_archived" {
+			t.Errorf("rejections %v", reasons(e))
+		}
+	})
+
+	t.Run("path held by another project is still a conflict", func(t *testing.T) {
+		e := newIEnv(t, nil)
+		if _, err := e.pool.Exec(context.Background(), `INSERT INTO services (name, gitlab_project_path, gitlab_project_id, created_via, archived)
+			VALUES ('old', 'platform/payments-api', 7, 'ingest', true)`); err != nil {
+			t.Fatal(err)
+		}
+		code, b := e.upload(upload{body: body})
+		if code != http.StatusConflict || !strings.Contains(string(b), `"service_conflict"`) {
+			t.Fatalf("%d %s", code, b)
+		}
+	})
 }

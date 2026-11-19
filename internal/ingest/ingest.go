@@ -51,6 +51,7 @@ const (
 	codeRateLimited   = "too_many_requests"
 	codeInvalidParam  = "invalid_parameter"
 	codeConflict      = "service_conflict"
+	codeArchived      = "service_archived"
 )
 
 // Options configure an Ingest.
@@ -224,6 +225,9 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := i.store.save(ctx, &saveInput{claims: claims, kind: kind, report: rep, raw: raw, scanTime: scanned})
 	switch {
+	case errors.Is(err, errServiceArchived):
+		reject(http.StatusConflict, codeArchived, "The service for this project is archived. Ask an administrator to unarchive it.")
+		return
 	case errors.Is(err, errPathTaken):
 		reject(http.StatusConflict, codeConflict,
 			"A different service already uses the project path "+claims.ProjectPath+". Archive or delete it in Scanopsis.")

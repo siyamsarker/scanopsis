@@ -5,6 +5,7 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
@@ -24,6 +26,10 @@ const (
 	KindImage    = "image"
 	KindSecretFS = "secret-fs"
 )
+
+// errServiceArchived means the project's service is archived, and archived
+// services receive no new data.
+var errServiceArchived = errors.New("the service is archived")
 
 // errPathTaken means a new service cannot be created because another
 // service already uses the project path.
@@ -172,6 +178,9 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 	svc, err = q.GetServiceByProjectID(ctx, projectID)
 	switch {
 	case err == nil:
+		if svc.Archived {
+			return svc, false, errServiceArchived
+		}
 		if svc.GitlabProjectPath != c.ProjectPath {
 			n, err := q.RenameServicePath(ctx, store.RenameServicePathParams{ID: svc.ID, ProjectPath: c.ProjectPath})
 			if err != nil {
@@ -190,6 +199,16 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 	svc, err = q.AdoptServiceByPath(ctx, store.AdoptServiceByPathParams{ProjectID: projectID, ProjectPath: c.ProjectPath})
 	switch {
 	case err == nil:
+		detail, err := json.Marshal(map[string]any{
+			"id": svc.ID, "gitlab_project_path": svc.GitlabProjectPath, "fields": []string{"gitlab_project_id"},
+			"gitlab_project_id": c.ProjectID, "reason": "adopted by the first verified upload",
+		})
+		if err == nil {
+			err = q.InsertAudit(ctx, store.InsertAuditParams{Actor: "ci:" + c.ProjectPath, Action: audit.ActionServiceUpdated, Detail: detail})
+		}
+		if err != nil {
+			return svc, false, fmt.Errorf("audit adoption: %w", err)
+		}
 		return svc, false, nil
 	case !errors.Is(err, pgx.ErrNoRows):
 		return svc, false, fmt.Errorf("adopt service: %w", err)
@@ -202,6 +221,12 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 	case err == nil:
 		return svc, true, nil
 	case errors.Is(err, pgx.ErrNoRows):
+		// An archived service an administrator added by this path, which was
+		// therefore not adopted, is the one case worth naming.
+		holder, gerr := q.GetServiceByPath(ctx, c.ProjectPath)
+		if gerr == nil && holder.Archived && !holder.GitlabProjectID.Valid {
+			return svc, false, errServiceArchived
+		}
 		return svc, false, errPathTaken
 	}
 	return svc, false, fmt.Errorf("create service: %w", err)

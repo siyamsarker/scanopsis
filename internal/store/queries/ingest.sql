@@ -9,11 +9,14 @@ SELECT pg_advisory_xact_lock(hashtextextended('scanopsis.ingest:' || sqlc.arg(pr
 -- name: GetServiceByProjectID :one
 SELECT * FROM services WHERE gitlab_project_id = $1;
 
+-- name: GetServiceByPath :one
+SELECT * FROM services WHERE gitlab_project_path = $1;
+
 -- name: AdoptServiceByPath :one
 -- A service added by an administrator learns its project ID from the first
--- upload whose token names its path.
+-- upload whose token names its path. Archived services are left alone.
 UPDATE services SET gitlab_project_id = @project_id
-WHERE gitlab_project_path = @project_path AND gitlab_project_id IS NULL
+WHERE gitlab_project_path = @project_path AND gitlab_project_id IS NULL AND NOT archived
 RETURNING *;
 
 -- name: RenameServicePath :execrows
