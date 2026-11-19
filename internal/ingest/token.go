@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -67,7 +68,7 @@ func (v *verifier) forURL(gitlabURL string) *oidc.IDTokenVerifier {
 		// The key set keeps this context for its HTTP client only, so it
 		// must outlive any request.
 		ctx := oidc.ClientContext(context.Background(), v.client)
-		keys := oidc.NewRemoteKeySet(ctx, gitlabURL+"/oauth/discovery/keys")
+		keys := fetchProbe{oidc.NewRemoteKeySet(ctx, gitlabURL+"/oauth/discovery/keys")}
 		v.v = oidc.NewVerifier(gitlabURL, keys, &oidc.Config{ClientID: v.audience, Now: v.now})
 		v.url = gitlabURL
 	}
@@ -82,8 +83,12 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 	}
 	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
 	defer cancel()
-	tok, err := v.forURL(gitlabURL).Verify(ctx, raw)
+	fetchFailed := new(atomic.Bool)
+	tok, err := v.forURL(gitlabURL).Verify(context.WithValue(ctx, fetchFailedKey{}, fetchFailed), raw)
 	if err != nil {
+		if fetchFailed.Load() {
+			return nil, &tokenError{unavailable: true, msg: "The signature could not be checked: Scanopsis could not fetch the signing keys from " + gitlabURL + "/oauth/discovery/keys."}
+		}
 		return nil, v.explain(err, gitlabURL)
 	}
 	var wire struct {
@@ -155,6 +160,28 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 	return c, nil
 }
 
+// fetchFailedKey carries, per verification, a flag that fetchProbe sets when
+// the signing keys could not be fetched. go-oidc reports that failure only as
+// text (it does not wrap the error), and other messages can contain values
+// from the token, so the failure is marked where it happens instead.
+type fetchFailedKey struct{}
+
+// fetchProbe is a key set that marks failures to fetch the keys.
+type fetchProbe struct{ inner *oidc.RemoteKeySet }
+
+// VerifySignature implements oidc.KeySet.
+func (p fetchProbe) VerifySignature(ctx context.Context, jwt string) ([]byte, error) {
+	payload, err := p.inner.VerifySignature(ctx, jwt)
+	// RemoteKeySet's own fetch error, produced before any token content is
+	// involved.
+	if err != nil && strings.HasPrefix(err.Error(), "fetching keys") {
+		if f, ok := ctx.Value(fetchFailedKey{}).(*atomic.Bool); ok {
+			f.Store(true)
+		}
+	}
+	return payload, err
+}
+
 // explain turns a go-oidc error into a message that names the failed check.
 // go-oidc has typed errors only for expiry, so the others are recognised by
 // the text of the pinned library version; tests cover every case.
@@ -169,8 +196,6 @@ func (v *verifier) explain(err error, gitlabURL string) *tokenError {
 	case strings.HasPrefix(msg, "oidc: malformed jwt"), strings.HasPrefix(msg, "oidc: id token not signed"),
 		strings.HasPrefix(msg, "oidc: multiple signatures"), strings.HasPrefix(msg, "oidc: failed to unmarshal claims"):
 		return &tokenError{msg: "The token is malformed: it is not a signed JWT (RS256)."}
-	case strings.Contains(msg, "fetching keys"):
-		return &tokenError{unavailable: true, msg: "The signature could not be checked: Scanopsis could not fetch the signing keys from " + gitlabURL + "/oauth/discovery/keys."}
 	case strings.HasPrefix(msg, "failed to verify signature"):
 		return &tokenError{msg: "The token signature is not valid for the signing keys published by " + gitlabURL + "."}
 	case strings.HasPrefix(msg, "oidc: id token issued by a different provider"):

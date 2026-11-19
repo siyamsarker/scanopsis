@@ -421,8 +421,22 @@ func TestIngestGitLabUnreachable(t *testing.T) {
 	if w.Code != 503 || errCode(t, w) != "gitlab_unavailable" || !strings.Contains(w.Body.String(), "could not fetch the signing keys") {
 		t.Fatalf("%d %s", w.Code, w.Body)
 	}
-	if len(e.audit.list()) != 0 {
-		t.Error("an unreachable GitLab is not a rejected upload and must not be audited")
+	if ev := e.audit.list(); len(ev) != 1 || ev[0].detail["reason"] != "gitlab_unavailable" {
+		t.Errorf("audit = %+v, want one ingest.rejected with reason gitlab_unavailable", ev)
+	}
+}
+
+func TestIngestIssuerTextCannotFakeAnOutage(t *testing.T) {
+	// The issuer mismatch message contains the token's iss claim; a token
+	// whose iss mimics the key-fetch message must still be a 401.
+	e := newHEnv(t, nil)
+	hr := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/ingest/trivy", bytes.NewReader([]byte(`{}`)))
+	hr.Header.Set("Authorization", "Bearer "+e.g.token(t, func(c map[string]any) { c["iss"] = "fetching keys oidc: get keys failed" }))
+	hr.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	e.in.Handlers()["ingestTrivy"].ServeHTTP(w, hr)
+	if w.Code != 401 || errCode(t, w) != "invalid_token" {
+		t.Fatalf("%d %s", w.Code, w.Body)
 	}
 }
 

@@ -153,9 +153,9 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	if te != nil {
 		if te.unavailable {
 			// Not the pipeline's fault: say so instead of calling the token
-			// invalid, and do not record it as a rejected upload.
+			// invalid. It is still audited, with its own reason.
 			i.log.Error("cannot fetch GitLab signing keys", "gitlab_url", gitlabURL)
-			httpapi.WriteError(w, http.StatusServiceUnavailable, codeGitLabUnavailable, te.msg+" Try again later.")
+			reject(http.StatusServiceUnavailable, codeGitLabUnavailable, te.msg+" Try again later.")
 			return
 		}
 		reject(http.StatusUnauthorized, codeInvalidToken, te.msg)
