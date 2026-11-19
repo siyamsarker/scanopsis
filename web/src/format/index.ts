@@ -113,6 +113,21 @@ export function formatShortDate(value: Date | string | number, timeZone?: string
   );
 }
 
+/**
+ * The URL itself when it is a well-formed http or https URL, otherwise undefined.
+ * Use it for every link built from data (GitLab URLs, advisory links from uploaded
+ * reports) so `javascript:`, `data:` and other schemes never become an anchor.
+ */
+export function safeExternalUrl(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The leading characters of a commit hash, eight by default. */
 export function shortSha(sha: string, length = 8) {
   return sha.slice(0, length);

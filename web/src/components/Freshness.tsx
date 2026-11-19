@@ -4,7 +4,7 @@
 import { Clock, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, type To } from 'react-router';
-import { formatExactTime, relativeTime } from '../format';
+import { formatExactTime, relativeTime, safeExternalUrl } from '../format';
 
 /** A link either inside the app (`to`) or out to GitLab (`href`, opens in a new tab). */
 export interface LinkTarget {
@@ -46,8 +46,11 @@ export function TargetLink({ target, className }: { target: LinkTarget; classNam
       </Link>
     );
   }
+  // Only http(s) URLs become anchors; anything else (javascript:, data:, junk) is plain text.
+  const href = safeExternalUrl(target.href);
+  if (!href) return <span className={className}>{target.label}</span>;
   return (
-    <a href={target.href} target="_blank" rel="noopener noreferrer" className={className}>
+    <a href={href} target="_blank" rel="noopener noreferrer" className={className}>
       {target.label}
     </a>
   );
@@ -68,7 +71,9 @@ export function Freshness({
 }: FreshnessProps) {
   const current = useNow(now);
   const date = new Date(at);
-  const stale = staleAfterMs !== undefined && current.getTime() - date.getTime() > staleAfterMs;
+  const valid = !Number.isNaN(date.getTime());
+  const stale =
+    valid && staleAfterMs !== undefined && current.getTime() - date.getTime() > staleAfterMs;
   const Icon = stale ? TriangleAlert : Clock;
 
   return (
@@ -81,12 +86,16 @@ export function Freshness({
         aria-hidden="true"
         className={stale ? 'text-warn' : undefined}
       />
-      <span>
-        {prefix}{' '}
-        <time dateTime={date.toISOString()} title={formatExactTime(date)} className="text-text">
-          {relativeTime(date, current)}
-        </time>
-      </span>
+      {valid ? (
+        <span>
+          {prefix}{' '}
+          <time dateTime={date.toISOString()} title={formatExactTime(date)} className="text-text">
+            {relativeTime(date, current)}
+          </time>
+        </span>
+      ) : (
+        <span>Not available</span>
+      )}
       {stale ? <span className="chip tone-warn">Stale</span> : null}
       {link ? (
         <TargetLink

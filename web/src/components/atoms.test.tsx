@@ -218,6 +218,25 @@ describe('Freshness', () => {
     expect(external).toHaveAttribute('rel', 'noopener noreferrer');
   });
 
+  it.each(['', 'not a date', 'undefined'])('does not throw on the invalid date "%s"', (bad) => {
+    render(<Freshness at={bad} now={now} staleAfterMs={1000} />);
+    expect(screen.getByText('Not available')).toBeInTheDocument();
+    expect(screen.queryByText('Stale')).toBeNull();
+    expect(document.querySelector('time')).toBeNull();
+  });
+
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'not a url',
+    '//evil.example/x',
+    '',
+  ])('renders the label as plain text for the unsafe link "%s"', (href) => {
+    render(<Freshness at={now} now={now} link={{ label: 'Pipeline #42', href }} />);
+    expect(screen.getByText('Pipeline #42')).toBeInTheDocument();
+    expect(screen.queryByRole('link')).toBeNull();
+  });
+
   it('keeps time moving when no fixed clock is given', () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);

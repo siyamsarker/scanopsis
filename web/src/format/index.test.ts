@@ -9,6 +9,7 @@ import {
   formatShortDate,
   plural,
   relativeTime,
+  safeExternalUrl,
   shortSha,
 } from '.';
 
@@ -97,6 +98,29 @@ describe('formatExactTime and shortSha', () => {
     expect(formatExactTime('2026-11-19T14:03:00Z', 'UTC')).toBe('19 Nov 2026, 14:03 UTC');
     expect(formatExactTime('bad')).toBe('–');
     expect(formatShortDate('2026-11-19T14:03:00Z', 'UTC')).toBe('19 Nov');
+  });
+
+  it('allows only http and https URLs as links', () => {
+    expect(safeExternalUrl('https://avd.aquasec.com/nvd/cve-2026-1')).toBe(
+      'https://avd.aquasec.com/nvd/cve-2026-1',
+    );
+    expect(safeExternalUrl('http://example.com/a')).toBe('http://example.com/a');
+    for (const bad of [
+      'javascript:alert(1)',
+      ' javascript:alert(1)',
+      'JAVASCRIPT:alert(1)',
+      'data:text/html,x',
+      'vbscript:x',
+      'ftp://example.com',
+      '//example.com',
+      '/relative',
+      'nonsense',
+      '',
+      null,
+      undefined,
+    ]) {
+      expect(safeExternalUrl(bad)).toBeUndefined();
+    }
   });
 
   it('shortens commit hashes', () => {
