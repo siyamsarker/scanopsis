@@ -183,7 +183,7 @@ test('4. settings: GitLab sign-in is configured and the secret stays hidden', as
   await expect(root.getByRole('heading', { name: 'Settings' })).toBeVisible();
 
   // Local sign-in cannot be turned off while GitLab is not configured.
-  const local = root.getByRole('switch');
+  const local = root.getByRole('switch', { name: /sign in with a local username and password/ });
   await expect(local).toBeChecked();
   await local.uncheck();
   await root.getByRole('button', { name: 'Save changes' }).click();
@@ -192,7 +192,7 @@ test('4. settings: GitLab sign-in is configured and the secret stays hidden', as
     root.getByText('Local sign-in can be disabled only when GitLab sign-in is fully configured.'),
   ).toBeVisible();
   await root.reload();
-  await expect(root.getByRole('switch')).toBeChecked();
+  await expect(local).toBeChecked();
 
   // Configure GitLab against the fake provider.
   await root.getByLabel('Base URL of the GitLab instance').fill('http://fake-gitlab:19000');
@@ -252,7 +252,7 @@ test('6. an administrator promotes a viewer', async () => {
 
 test('7. the group allow-list admits subgroups and refuses others', async ({ browser }) => {
   await root.goto('/settings');
-  await root.getByLabel('GitLab groups, by full path').fill('platform');
+  await root.getByLabel(/whose members may sign in/).fill('platform');
   await root.getByRole('button', { name: 'Save changes' }).click();
   await expect(root.getByText('Settings saved. Changes apply now.')).toBeVisible();
 
