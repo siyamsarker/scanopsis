@@ -64,7 +64,7 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	sessions := NewSessions(q, SessionOptions{Idle: testIdle, Absolute: testAbsolute, Secure: true, Now: clk.Now})
 	rec := audit.New(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	resolver := clientip.New(nil)
-	login := NewLocalLogin(q, sessions, rec, resolver.IP, NewRateLimiter(12*time.Second, 10, nil))
+	login := NewLocalLogin(q, sessions, rec, resolver.IP, NewRateLimiter(12*time.Second, 10, nil), nil)
 	return &integrationEnv{pool: pool, q: q, sessions: sessions, clock: clk, login: login}
 }
 
@@ -329,7 +329,7 @@ func TestIntegrationBootstrapCreatesOneAdminAndIsIdempotent(t *testing.T) {
 func TestIntegrationLoginRateLimitUsesClientIP(t *testing.T) {
 	e := newIntegrationEnv(t)
 	ip := func(*http.Request) netip.Addr { return netip.MustParseAddr("198.51.100.1") }
-	h := NewLocalLogin(e.q, e.sessions, audit.New(e.q, slog.New(slog.NewTextHandler(io.Discard, nil))), ip, NewRateLimiter(time.Hour, 1, nil))
+	h := NewLocalLogin(e.q, e.sessions, audit.New(e.q, slog.New(slog.NewTextHandler(io.Discard, nil))), ip, NewRateLimiter(time.Hour, 1, nil), nil)
 	for i, want := range []int{http.StatusUnauthorized, http.StatusTooManyRequests} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, newRequest(http.MethodPost, "/", strings.NewReader(creds("ghost", "x"))))

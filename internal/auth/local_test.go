@@ -4,9 +4,11 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -113,7 +115,7 @@ func newLoginFixture(t *testing.T, every time.Duration, burst int) *loginFixture
 	}
 	f.limit = NewRateLimiter(every, burst, f.clock.Now)
 	ip := func(r *http.Request) netip.Addr { return netip.MustParseAddrPort(r.RemoteAddr).Addr() }
-	f.h = NewLocalLogin(f.users, f.start, f.audit, ip, f.limit)
+	f.h = NewLocalLogin(f.users, f.start, f.audit, ip, f.limit, nil)
 
 	orig := verifyPassword
 	verifyPassword = func(encoded, password string) (bool, error) {
@@ -175,7 +177,7 @@ func TestLocalLoginSuccess(t *testing.T) {
 		t.Fatal("the session cookie was not passed through to the response")
 	}
 	want := []auditEvent{{
-		Actor: "local:admin", Action: "login.succeeded",
+		Actor: "admin", Action: "login.succeeded",
 		Detail: map[string]any{"method": "local", "username": "admin", "ip": "192.0.2.1"},
 	}}
 	if !reflect.DeepEqual(f.audit.events, want) {
@@ -428,5 +430,22 @@ func TestLocalLoginNeverRecordsThePassword(t *testing.T) {
 		if strings.Contains(w.Body.String(), secret) || strings.Contains(w.Header().Get("Set-Cookie"), secret) {
 			t.Errorf("response %d contains the password", i)
 		}
+	}
+}
+
+func TestLocalLoginLogsServerErrors(t *testing.T) {
+	f := newLoginFixture(t, 12*time.Second, 10)
+	var buf bytes.Buffer
+	f.users.lookupErr = errors.New("database is down")
+	f.h = NewLocalLogin(f.users, f.start, f.audit, func(*http.Request) netip.Addr { return netip.MustParseAddr("192.0.2.1") },
+		f.limit, slog.New(slog.NewTextHandler(&buf, nil)))
+	if w := f.post(creds(goodUser, goodPass)); w.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d", w.Code)
+	}
+	if !strings.Contains(buf.String(), "cannot look up user") || !strings.Contains(buf.String(), "database is down") {
+		t.Fatalf("server error not logged: %q", buf.String())
+	}
+	if strings.Contains(buf.String(), goodPass) {
+		t.Fatal("password written to the log")
 	}
 }

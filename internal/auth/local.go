@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"net/netip"
@@ -46,13 +47,18 @@ type localLogin struct {
 	audit    AuditRecorder
 	clientIP func(*http.Request) netip.Addr
 	limiter  *RateLimiter
+	log      *slog.Logger
 }
 
 // NewLocalLogin returns the handler for POST /api/v1/auth/local/login.
 // Callers should use NewRateLimiter(12*time.Second, 10, nil) as limiter: ten
 // attempts per client address, then five per minute.
-func NewLocalLogin(users LocalUserStore, sessions SessionStarter, audit AuditRecorder, clientIP func(*http.Request) netip.Addr, limiter *RateLimiter) http.Handler {
-	return &localLogin{users: users, sessions: sessions, audit: audit, clientIP: clientIP, limiter: limiter}
+// Server-side failures are logged to log (nil discards them).
+func NewLocalLogin(users LocalUserStore, sessions SessionStarter, audit AuditRecorder, clientIP func(*http.Request) netip.Addr, limiter *RateLimiter, log *slog.Logger) http.Handler {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	return &localLogin{users: users, sessions: sessions, audit: audit, clientIP: clientIP, limiter: limiter, log: log}
 }
 
 type loginRequest struct {
@@ -84,6 +90,7 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	user, err := h.users.GetLocalUserByUsername(r.Context(), username)
 	found := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, store.ErrNotFound) {
+		h.log.ErrorContext(r.Context(), "local sign-in: cannot look up user", "error", err)
 		writeInternalError(w)
 		return
 	}
@@ -95,20 +102,22 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	match, verr := verifyPassword(hash, password)
 	if !found || !user.PasswordHash.Valid || verr != nil || !match {
-		h.audit.Record(r.Context(), "local:"+username, audit.ActionLoginFailed, h.detail(username, ip))
+		h.audit.Record(r.Context(), username, audit.ActionLoginFailed, h.detail(username, ip))
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Wrong username or password.")
 		return
 	}
 
 	if err := h.users.TouchLastLogin(r.Context(), user.ID); err != nil {
+		h.log.ErrorContext(r.Context(), "local sign-in: cannot record sign-in time", "error", err)
 		writeInternalError(w)
 		return
 	}
 	if err := h.sessions.Start(w, r, user.ID); err != nil {
+		h.log.ErrorContext(r.Context(), "local sign-in: cannot start session", "error", err)
 		writeInternalError(w)
 		return
 	}
-	h.audit.Record(r.Context(), "local:"+username, audit.ActionLoginSucceeded, h.detail(username, ip))
+	h.audit.Record(r.Context(), username, audit.ActionLoginSucceeded, h.detail(username, ip))
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
 }

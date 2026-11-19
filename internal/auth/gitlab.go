@@ -192,20 +192,13 @@ func sanitizeReturnTo(p string) string {
 	return p
 }
 
-func writeAuthError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": message}})
-}
-
 // LoginHandler starts sign-in: GET /api/v1/auth/gitlab/login.
 func (g *GitLab) LoginHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, err := g.discover(r.Context())
 		if err != nil {
 			g.log.WarnContext(r.Context(), "GitLab discovery failed", "error", err)
-			writeAuthError(w, http.StatusServiceUnavailable, "gitlab_unavailable",
+			writeError(w, http.StatusServiceUnavailable, "gitlab_unavailable",
 				"GitLab could not be reached. Try again in a few seconds, or sign in as the local administrator.")
 			return
 		}
@@ -213,13 +206,13 @@ func (g *GitLab) LoginHandler() http.Handler {
 		nonce, err2 := randomToken()
 		if err := errors.Join(err1, err2); err != nil {
 			g.log.ErrorContext(r.Context(), "cannot generate sign-in secrets", "error", err)
-			writeAuthError(w, http.StatusInternalServerError, "internal", "Sign-in failed. Try again.")
+			writeError(w, http.StatusInternalServerError, "internal_error", "Sign-in failed. Try again.")
 			return
 		}
 		verifier := oauth2.GenerateVerifier()
 		raw, err := json.Marshal(oidcCookie{State: state, Nonce: nonce, Verifier: verifier, ReturnTo: sanitizeReturnTo(r.URL.Query().Get("return_to"))})
 		if err != nil {
-			writeAuthError(w, http.StatusInternalServerError, "internal", "Sign-in failed. Try again.")
+			writeError(w, http.StatusInternalServerError, "internal_error", "Sign-in failed. Try again.")
 			return
 		}
 		http.SetCookie(w, g.cookie(base64.RawURLEncoding.EncodeToString(raw), oidcCookieMaxAge))
