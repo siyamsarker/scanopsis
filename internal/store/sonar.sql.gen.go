@@ -94,8 +94,11 @@ INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail
 VALUES ($1, $2, $3, 'pending', '')
 ON CONFLICT (task_id) DO UPDATE
 SET outcome = 'pending', detail = '', service_id = NULL,
-    project_key = EXCLUDED.project_key, received_at = EXCLUDED.received_at
+    received_at = EXCLUDED.received_at, attempts = sonar_deliveries.attempts + 1
 WHERE sonar_deliveries.outcome = 'failed'
+  AND sonar_deliveries.project_key = EXCLUDED.project_key
+  AND sonar_deliveries.attempts < 5
+  AND sonar_deliveries.received_at < EXCLUDED.received_at - interval '1 minute'
 `
 
 type InsertSonarDeliveryParams struct {
@@ -108,8 +111,10 @@ type InsertSonarDeliveryParams struct {
 // ID was delivered before.
 // InsertSonarDelivery records a delivery as pending. A redelivery of a task
 // whose earlier processing failed is accepted again (an administrator can
-// redeliver it from SonarQube); any other duplicate changes nothing and
-// affects no row.
+// redeliver it from SonarQube), but only for the same project, at least a
+// minute after the previous attempt and at most 5 attempts in all, so a
+// captured delivery cannot be replayed without bound. Any other duplicate
+// changes nothing and affects no row.
 func (q *Queries) InsertSonarDelivery(ctx context.Context, arg InsertSonarDeliveryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSonarDelivery, arg.TaskID, arg.ProjectKey, arg.ReceivedAt)
 	if err != nil {

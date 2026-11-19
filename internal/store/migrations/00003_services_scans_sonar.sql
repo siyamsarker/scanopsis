@@ -130,7 +130,9 @@ CREATE TABLE sonar_deliveries (
     -- 'pending' from receipt until the delivery has been processed.
     outcome     text        NOT NULL CHECK (outcome IN ('pending', 'linked', 'unlinked', 'failed')),
     service_id  bigint      REFERENCES services (id) ON DELETE SET NULL,
-    detail      text        NOT NULL DEFAULT ''
+    detail      text        NOT NULL DEFAULT '',
+    -- Processing attempts; a failed delivery may be redelivered a few times.
+    attempts    integer     NOT NULL DEFAULT 1
 );
 
 CREATE INDEX sonar_deliveries_received_idx ON sonar_deliveries (received_at DESC);

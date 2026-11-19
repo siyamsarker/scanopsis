@@ -118,6 +118,7 @@ type SonarDelivery struct {
 	Outcome    string
 	ServiceID  pgtype.Int8
 	Detail     string
+	Attempts   int32
 }
 
 type User struct {

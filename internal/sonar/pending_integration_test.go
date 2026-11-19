@@ -47,6 +47,10 @@ func TestWebhookRecordedPendingThenInterrupted(t *testing.T) {
 
 	// A redelivery of the failed task is accepted again and queued; a
 	// redelivery of a task that is not failed changes nothing.
+	wantStatus(t, e, hook("old", "other-project", nil), 202)
+	if d := e.delivery(t, "old"); d.Outcome != "failed" {
+		t.Errorf("redelivery for another project was accepted: %+v", d)
+	}
 	wantStatus(t, e, hook("old", "k", nil), 202)
 	if d := e.delivery(t, "old"); d.Outcome != "pending" || d.Detail != "" {
 		t.Errorf("redelivered failed task: %+v", d)
@@ -54,10 +58,24 @@ func TestWebhookRecordedPendingThenInterrupted(t *testing.T) {
 	if len(e.s.queue) != 1 {
 		t.Errorf("redelivered failed task queued %d times, want 1", len(e.s.queue))
 	}
-	before := e.delivery(t, "recent")
+	// Bounded: at most 5 attempts, and not more often than once a minute.
+	for i := 0; i < 6; i++ {
+		_, _ = e.pool.Exec(context.Background(), "UPDATE sonar_deliveries SET outcome = 'failed' WHERE task_id = 'old'")
+		wantStatus(t, e, hook("old", "k", nil), 202)
+		now = now.Add(2 * time.Minute)
+	}
+	if d := e.delivery(t, "old"); d.Outcome != "failed" {
+		t.Errorf("a sixth attempt was accepted: %+v", d)
+	}
+	var attempts int
+	if err := e.pool.QueryRow(context.Background(), "SELECT attempts FROM sonar_deliveries WHERE task_id = 'old'").Scan(&attempts); err != nil || attempts != 5 {
+		t.Errorf("attempts = %d, %v; want 5", attempts, err)
+	}
+
+	before, queued := e.delivery(t, "recent"), len(e.s.queue)
 	wantStatus(t, e, hook("recent", "k", nil), 202)
-	if after := e.delivery(t, "recent"); after != before || len(e.s.queue) != 1 {
-		t.Errorf("redelivery of a pending task changed it: %+v -> %+v (queue %d)", before, after, len(e.s.queue))
+	if after := e.delivery(t, "recent"); after != before || len(e.s.queue) != queued {
+		t.Errorf("redelivery of a pending task changed it: %+v -> %+v (queue %d -> %d)", before, after, queued, len(e.s.queue))
 	}
 }
 
