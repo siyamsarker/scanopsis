@@ -89,7 +89,7 @@ docker compose logs scanopsis | grep 'scanopsis starting' | tail -1
 | What you see | Cause | Fix |
 |---|---|---|
 | "Wrong username or password." (`invalid_credentials`, 401) | The user does not exist, or the password is wrong. Both give the same answer on purpose. A GitLab user has no local password. | Check the spelling. Reset the password with `scanopsis admin reset-password`. |
-| `too_many_attempts`, 429, "Too many sign-in attempts. Wait N seconds and try again." | A rate limit was reached. See [rate limits](configuration.md#rate-limits). Behind a proxy without `SCANOPSIS_TRUSTED_PROXIES`, all users share one address and one limit. | Wait the number of seconds in `Retry-After`. Set `SCANOPSIS_TRUSTED_PROXIES`. |
+| `too_many_attempts`, 429, "Too many sign-in attempts. Wait N seconds and try again." | A rate limit was reached. See [rate limits](configuration.md#rate-limits). After repeated failed passwords for one user name, every password for it is refused for a short time, the correct one too. Behind a proxy without `SCANOPSIS_TRUSTED_PROXIES`, all users share one address and one limit. | Wait the number of seconds in `Retry-After`. Set `SCANOPSIS_TRUSTED_PROXIES`. |
 | `busy`, 503, "The server is busy. Try again in a moment." | Many password checks run at once. | Try again. |
 | `not_enabled`, 404, "Local sign-in is not enabled on this server." | Local sign-in is turned off. | Sign in with GitLab, or [turn it on again](operations.md#turn-local-sign-in-on-again). |
 | `invalid_request`: "Send a JSON object with only \"username\" and \"password\" (at most 8 KiB)." and similar | A client sent a malformed request. | Fix the client. The web page never does this. |
@@ -115,6 +115,7 @@ After a failure, the browser opens `/login?error=<code>`.
 | "That code is not correct. Wait for a new one in the app and try again." (`invalid_code`, 401: "That code is wrong or has already been used.") | The code expired, was typed wrongly, was already used, or the clock is wrong. A code is accepted for 30 seconds before and after the current time, once. | Wait for the next code. Check the time of the server and of the phone. |
 | "That recovery code is not correct, or it was already used." | Wrong code, or used before. Each works once. | Use another code. If none is left, ask an administrator to reset your two-factor authentication. |
 | `too_many_attempts`, 429, on the code page | More than 5 code attempts at once for this user, then one every 30 seconds. | Wait. |
+| `mfa_locked`, 423: "Too many wrong codes. Ask an administrator to reset two-factor authentication." | Ten wrong codes in a row. The second factor of the user is locked, every code is refused, and the user's sessions were ended. The audit log has `mfa.locked`. | An administrator selects **Reset two-factor** next to the user on the **Users** page, or runs `scanopsis admin reset-2fa local:<user>`. A password reset from the command line also clears the lock. The user enrols again. |
 | `mfa_enrollment_required`, 403: "Set up two-factor authentication to continue." | The user has not enrolled. | Open the page, scan the code, confirm. |
 | `mfa_required`, 403: "Enter your two-factor authentication code to continue." | The session passed the first factor only. | Enter the code. |
 | `password_change_required`, 403: "Change your password to continue." | An administrator reset the password from the command line. | Change it on the page that opens. |
@@ -158,12 +159,13 @@ all, or an unexpected one.
 | `curl: (60) SSL certificate problem` | The runner does not trust the certificate of the proxy. | Add the CA to the runner image. Do not use `curl -k`. |
 | `HTTP 413` and an HTML page that names `nginx` | The proxy refuses the body. nginx accepts 1 MB by default. | Set `client_max_body_size 100m;`, see [deployment](deployment.md#option-2-nginx). |
 | `HTTP 502` or `HTTP 504` and an HTML page | The proxy cannot reach Scanopsis, or waited too long. | `docker compose ps`. Check the upstream address. nginx: use the `resolver` form in [deployment](deployment.md#option-2-nginx), or restart nginx after recreating Scanopsis. |
-| `HTTP 503`, code `gitlab_unavailable`: "The signature could not be checked: Scanopsis could not fetch the signing keys from ..." | Scanopsis could not download the signing keys from your GitLab (network or an untrusted certificate). This is not the fault of the token. The log line is `cannot fetch GitLab signing keys` and gives no reason. | Make the request from a throwaway container on the same Docker network to see the reason, see [internal certificate authority](deployment.md#internal-certificate-authority). Add the CA with `SCANOPSIS_CA_FILE`. |
+| `HTTP 503`, code `gitlab_unavailable`: "The signature could not be checked: Scanopsis could not fetch the signing keys from GitLab. Try again later." | Scanopsis could not download the signing keys from your GitLab (network or an untrusted certificate). This is not the fault of the token. The answer does not name the URL or the cause. The log line `upload rejected` has `reason` `gitlab_unavailable` and the fields `gitlab_url` and `cause`. | Read `cause` in the log. To test the connection yourself, make the request from a throwaway container on the same Docker network, see [internal certificate authority](deployment.md#internal-certificate-authority). Add the CA with `SCANOPSIS_CA_FILE`. |
+| `HTTP 503`, code `busy`: "The server is processing other uploads. Retry later." and a `Retry-After` header | Four uploads are already being processed (all addresses together) and this request waited for a slot until the client gave up. | Retry after the number of seconds in `Retry-After`. Spread out large uploads. |
 | `HTTP 503`, code `ingest_not_configured` | "Uploads are not enabled: the GitLab URL is not configured in Scanopsis." or "...: the Scanopsis public URL is not configured." | Set the GitLab URL (the public URL is required at start). |
 | `HTTP 429`, code `too_many_requests` for many jobs at once | Runners behind one NAT address share the limit: 60 at once, then one a second. | Spread the uploads or retry. The script retries twice. |
 | The upload hangs, then fails | The link is slower than the read timeout of 30 seconds. | Upload a smaller report, or from a faster network. |
 | `HTTP 201` but nothing in the dashboard | The service was created for the project, but the dashboard shows another ref, or the portfolio is filtered. | See [web interface](#web-interface). |
-| Rejected uploads that you cannot see in the job log | The job ignores the answer on purpose. | The **Integrations** page lists recent rejections with the reason. The audit log has the action `ingest.rejected`. |
+| Rejected uploads that you cannot see in the job log | The job ignores the answer on purpose. | The **Integrations** page lists recent rejections with the reason. The audit log has the action `ingest.rejected`. Rejections that happen before the project has passed the allowed-namespaces check (or always, while no namespace is allowed) are recorded at most 10 at once per client address and then one a minute, and rate-limited requests are not recorded. The server log shows `upload rejected` for them. |
 
 ## SonarQube
 
@@ -223,6 +225,13 @@ See [private addresses](integrations/sonarqube.md#private-addresses).
 A failed delivery can be redelivered from SonarQube. Scanopsis accepts it again
 for the same project, at least a minute after the last attempt, at most five
 times.
+
+## Settings page
+
+| What you see | Cause | Fix |
+|---|---|---|
+| "Enter this value again when you change the URL, so the stored one is never sent to a new address." next to the client secret or the SonarQube token | You changed the GitLab URL or the SonarQube URL without entering the secret that is sent there. | Enter the secret again in the same save. |
+| "Required when other GitLab sign-in settings are set." / "Required when other SonarQube settings are set." / "Must be at least 1m." / "Must be at least 5m." / "Must not be shorter than the idle timeout." / "Local sign-in can be disabled only when GitLab sign-in is fully configured." | A rule that spans several settings, see [configuration](configuration.md#rules-that-span-several-settings). | Fix the field the message sits next to. Nothing is saved until every field is valid. |
 
 ## Web interface
 
