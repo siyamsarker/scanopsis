@@ -24,7 +24,7 @@ function Delta({ delta }: { delta: StatDelta }) {
   const good = value !== 0 && value < 0 === (better === 'down');
   const tone = value === 0 ? 'text-text-muted' : good ? 'text-pass' : 'text-sev-high';
   return (
-    <span className="inline-flex items-center gap-1 text-sm text-text-muted">
+    <span className="inline-flex items-center gap-1 whitespace-nowrap text-sm text-text-muted">
       <Icon size={14} strokeWidth={1.5} aria-hidden="true" className={tone} />
       <span className="font-medium tabular-nums text-text">
         {value > 0 ? '+' : value < 0 ? '−' : ''}

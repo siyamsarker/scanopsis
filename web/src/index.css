@@ -286,6 +286,38 @@ body {
   outline-offset: 2px;
 }
 
+/*
+ * Scoped themes for the development showcase: shows a component in both themes
+ * side by side. These repeat the palette values above on purpose and are used
+ * nowhere else; the app itself themes through :root only.
+ */
+[data-theme-scope='dark'] {
+  color-scheme: dark;
+  --brand: #7c83ff;
+  --bg: #0b1020;
+  --surface: #131a2e;
+  --surface-raised: #1b2440;
+  --border: #273152;
+  --border-strong: #6b769c;
+  --text: #e6eaf2;
+  --text-muted: #9aa4bf;
+}
+[data-theme-scope='light'] {
+  color-scheme: light;
+  --brand: #4f46e5;
+  --bg: #f7f8fb;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --border: #e2e6ef;
+  --border-strong: #7b8499;
+  --text: #111827;
+  --text-muted: #5b6478;
+}
+[data-theme-scope] {
+  background-color: var(--bg);
+  color: var(--text);
+}
+
 [data-roving='row']:focus-visible {
   outline-offset: -2px;
 }
