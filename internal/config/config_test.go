@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -25,11 +26,22 @@ func load(t *testing.T, env map[string]string, files map[string]string) (*Config
 	return Load(getenv, readFile)
 }
 
+const testKey = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+
 func minimal() map[string]string {
 	return map[string]string{
 		"SCANOPSIS_PUBLIC_URL":   "https://scanopsis.example.com",
 		"SCANOPSIS_DATABASE_URL": "postgres://u:p@db/scanopsis",
+		"SCANOPSIS_SECRET_KEY":   testKey,
 	}
+}
+
+func without(base map[string]string, keys ...string) map[string]string {
+	out := with(base)
+	for _, k := range keys {
+		delete(out, k)
+	}
+	return out
 }
 
 func with(base map[string]string, kv ...string) map[string]string {
@@ -57,14 +69,11 @@ func TestLoadDefaults(t *testing.T) {
 	if c.LogLevel != slog.LevelInfo {
 		t.Errorf("LogLevel = %v", c.LogLevel)
 	}
-	if c.SessionIdleTimeout != 8*time.Hour || c.SessionAbsoluteTimeout != 24*time.Hour {
-		t.Errorf("session timeouts = %v / %v", c.SessionIdleTimeout, c.SessionAbsoluteTimeout)
+	if len(c.Seeds) != 0 {
+		t.Errorf("Seeds = %v, want empty", c.Seeds)
 	}
-	if !c.LocalLogin || c.LocalAdminUsername != "admin" || c.LocalAdminPassword != "" {
-		t.Errorf("local login = %v %q %q", c.LocalLogin, c.LocalAdminUsername, c.LocalAdminPassword)
-	}
-	if c.GitLab != nil {
-		t.Errorf("GitLab = %+v, want nil", c.GitLab)
+	if len(c.SecretKey) != 32 || c.SecretKey[1] != 1 {
+		t.Errorf("SecretKey = %v", c.SecretKey)
 	}
 }
 
@@ -82,10 +91,8 @@ func TestLoadFull(t *testing.T) {
 		"SCANOPSIS_GITLAB_CLIENT_SECRET_FILE", "/run/secrets/gitlab",
 		"SCANOPSIS_GITLAB_ALLOWED_GROUPS", "platform, security/appsec",
 		"SCANOPSIS_LOCAL_LOGIN_ENABLED", "false",
-		"SCANOPSIS_LOCAL_ADMIN_USERNAME", "root",
-		"SCANOPSIS_LOCAL_ADMIN_PASSWORD_FILE", "/run/secrets/admin",
 	)
-	files := map[string]string{"/run/secrets/gitlab": "s3cret\n", "/run/secrets/admin": "correct horse battery\n"}
+	files := map[string]string{"/run/secrets/gitlab": "s3cret\n"}
 	c, err := load(t, env, files)
 	if err != nil {
 		t.Fatal(err)
@@ -109,21 +116,35 @@ func TestLoadFull(t *testing.T) {
 			t.Errorf("TrustedProxies[%d] = %v, want %v", i, c.TrustedProxies[i], wantProxies[i])
 		}
 	}
-	if c.SessionIdleTimeout != 30*time.Minute || c.SessionAbsoluteTimeout != 12*time.Hour {
-		t.Errorf("session timeouts = %v / %v", c.SessionIdleTimeout, c.SessionAbsoluteTimeout)
+	want := map[string]any{
+		"gitlab.url":               "https://gitlab.example.com",
+		"gitlab.client_id":         "client",
+		"gitlab.client_secret":     "s3cret",
+		"gitlab.allowed_groups":    []string{"platform", "security/appsec"},
+		"auth.local_login_enabled": false,
+		"session.idle_timeout":     30 * time.Minute,
+		"session.absolute_timeout": 12 * time.Hour,
 	}
-	g := c.GitLab
-	if g == nil {
-		t.Fatal("GitLab is nil")
+	if !reflect.DeepEqual(c.Seeds, want) {
+		t.Errorf("Seeds = %#v, want %#v", c.Seeds, want)
 	}
-	if g.URL != "https://gitlab.example.com" || g.ClientID != "client" || g.ClientSecret != "s3cret" {
-		t.Errorf("GitLab = %+v", g)
+}
+
+func TestSecretKeyFile(t *testing.T) {
+	env := with(minimal(), "SCANOPSIS_SECRET_KEY", "", "SCANOPSIS_SECRET_KEY_FILE", "/k")
+	c, err := load(t, env, map[string]string{"/k": testKey + "\n"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Join(g.AllowedGroups, "|") != "platform|security/appsec" {
-		t.Errorf("GitLab AllowedGroups = %v", g.AllowedGroups)
+	if len(c.SecretKey) != 32 {
+		t.Errorf("SecretKey length = %d", len(c.SecretKey))
 	}
-	if c.LocalLogin || c.LocalAdminUsername != "root" || c.LocalAdminPassword != "correct horse battery" {
-		t.Errorf("local = %v %q %q", c.LocalLogin, c.LocalAdminUsername, c.LocalAdminPassword)
+}
+
+func TestParseBaseURL(t *testing.T) {
+	u, err := ParseBaseURL(" https://gitlab.example.com/ ")
+	if err != nil || u.String() != "https://gitlab.example.com" {
+		t.Errorf("got %v, %v", u, err)
 	}
 }
 
@@ -142,12 +163,18 @@ func TestLoadErrors(t *testing.T) {
 			[]string{"SCANOPSIS_PUBLIC_URL must be an absolute http or https URL"}},
 		{"public url with credentials", with(minimal(), "SCANOPSIS_PUBLIC_URL", "https://u:p@example.com"), nil,
 			[]string{"SCANOPSIS_PUBLIC_URL must not contain"}},
-		{"secret and file both set", with(minimal(), "SCANOPSIS_LOCAL_ADMIN_PASSWORD", "x", "SCANOPSIS_LOCAL_ADMIN_PASSWORD_FILE", "/f"), nil,
-			[]string{"SCANOPSIS_LOCAL_ADMIN_PASSWORD and SCANOPSIS_LOCAL_ADMIN_PASSWORD_FILE are both set"}},
-		{"secret file missing", with(minimal(), "SCANOPSIS_LOCAL_ADMIN_PASSWORD_FILE", "/missing"), nil,
-			[]string{"SCANOPSIS_LOCAL_ADMIN_PASSWORD_FILE cannot be read"}},
-		{"short password", with(minimal(), "SCANOPSIS_LOCAL_ADMIN_PASSWORD", "short"), nil,
-			[]string{"SCANOPSIS_LOCAL_ADMIN_PASSWORD must be at least 12 characters"}},
+		{"secret key missing", without(minimal(), "SCANOPSIS_SECRET_KEY"), nil,
+			[]string{"SCANOPSIS_SECRET_KEY is required; generate one with: openssl rand -base64 32"}},
+		{"secret key short", with(minimal(), "SCANOPSIS_SECRET_KEY", "AAEC"), nil,
+			[]string{"SCANOPSIS_SECRET_KEY is not valid (key must be 32 bytes, got 3)", "openssl rand -base64 32"}},
+		{"secret key not base64", with(minimal(), "SCANOPSIS_SECRET_KEY", "!!!"), nil,
+			[]string{"SCANOPSIS_SECRET_KEY is not valid (key is not valid base64)"}},
+		{"secret key file missing", with(without(minimal(), "SCANOPSIS_SECRET_KEY"), "SCANOPSIS_SECRET_KEY_FILE", "/missing"), nil,
+			[]string{"SCANOPSIS_SECRET_KEY_FILE cannot be read"}},
+		{"secret and file both set", with(minimal(), "SCANOPSIS_SECRET_KEY_FILE", "/f"), nil,
+			[]string{"SCANOPSIS_SECRET_KEY and SCANOPSIS_SECRET_KEY_FILE are both set"}},
+		{"gitlab secret file missing", with(minimal(), "SCANOPSIS_GITLAB_CLIENT_SECRET_FILE", "/missing"), nil,
+			[]string{"SCANOPSIS_GITLAB_CLIENT_SECRET_FILE cannot be read"}},
 		{"bad bool", with(minimal(), "SCANOPSIS_LOCAL_LOGIN_ENABLED", "maybe"), nil,
 			[]string{"SCANOPSIS_LOCAL_LOGIN_ENABLED must be true or false"}},
 		{"bad duration", with(minimal(), "SCANOPSIS_SESSION_IDLE_TIMEOUT", "soon"), nil,
@@ -164,8 +191,6 @@ func TestLoadErrors(t *testing.T) {
 			[]string{"SCANOPSIS_GITLAB_CLIENT_ID is required", "SCANOPSIS_GITLAB_CLIENT_SECRET is required"}},
 		{"gitlab settings without url", with(minimal(), "SCANOPSIS_GITLAB_CLIENT_ID", "x"), nil,
 			[]string{"SCANOPSIS_GITLAB_URL is required when other GitLab settings are set"}},
-		{"no sign-in method", with(minimal(), "SCANOPSIS_LOCAL_LOGIN_ENABLED", "false"), nil,
-			[]string{"no sign-in method is enabled"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -185,7 +210,6 @@ func TestLoadErrors(t *testing.T) {
 func TestLogValueOmitsSecrets(t *testing.T) {
 	env := with(minimal(),
 		"SCANOPSIS_DATABASE_URL", "postgres://user:dbpassword@db/x",
-		"SCANOPSIS_LOCAL_ADMIN_PASSWORD", "adminpassword123",
 		"SCANOPSIS_GITLAB_URL", "https://gitlab.example.com",
 		"SCANOPSIS_GITLAB_CLIENT_ID", "id",
 		"SCANOPSIS_GITLAB_CLIENT_SECRET", "gitlabsecret",
@@ -196,12 +220,12 @@ func TestLogValueOmitsSecrets(t *testing.T) {
 	}
 	var sb strings.Builder
 	slog.New(slog.NewTextHandler(&sb, nil)).Info("config", "config", c)
-	for _, secret := range []string{"dbpassword", "adminpassword123", "gitlabsecret"} {
+	for _, secret := range []string{"dbpassword", "gitlabsecret", testKey} {
 		if strings.Contains(sb.String(), secret) {
 			t.Errorf("log output contains secret %q: %s", secret, sb.String())
 		}
 	}
-	if !strings.Contains(sb.String(), "gitlab_login=true") {
+	if !strings.Contains(sb.String(), "seeded_settings=3") {
 		t.Errorf("log output lacks summary: %s", sb.String())
 	}
 }

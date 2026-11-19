@@ -14,13 +14,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/siyamsarker/scanopsis/internal/secretbox"
 )
 
 // Prefix is the prefix of every environment variable read by Scanopsis.
 const Prefix = "SCANOPSIS_"
-
-// MinPasswordLength is the minimum length of the local administrator password.
-const MinPasswordLength = 12
 
 // Config is the validated server configuration.
 type Config struct {
@@ -34,28 +33,16 @@ type Config struct {
 	// CAFile is an optional PEM bundle trusted in addition to the system
 	// roots for outgoing TLS connections (GitLab, SonarQube).
 	CAFile string
+	// SecretKey is the 32-byte key that encrypts secrets stored in the
+	// database (see package secretbox).
+	SecretKey []byte
 
-	SessionIdleTimeout     time.Duration
-	SessionAbsoluteTimeout time.Duration
-
-	// GitLab is nil when GitLab sign-in is not configured.
-	GitLab *GitLab
-
-	LocalLogin         bool
-	LocalAdminUsername string
-	// LocalAdminPassword is used only to create the local administrator on
-	// a start where no administrator exists. It may be empty.
-	LocalAdminPassword string
-}
-
-// GitLab holds the GitLab OpenID Connect settings.
-type GitLab struct {
-	// URL is the GitLab base URL without a trailing slash. It is also the
-	// OpenID Connect issuer.
-	URL           string
-	ClientID      string
-	ClientSecret  string
-	AllowedGroups []string
+	// Seeds holds the operational settings given through environment
+	// variables, keyed by setting key (for example "gitlab.url"). Only
+	// variables that are set appear. Values are string (string, url and
+	// secret settings), bool, []string or time.Duration. The settings
+	// package stores them on first start; afterwards the database wins.
+	Seeds map[string]any
 }
 
 // Secure reports whether Scanopsis is served over HTTPS, which decides the
@@ -67,8 +54,7 @@ func (c *Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.String("listen_addr", c.ListenAddr),
 		slog.String("public_url", c.PublicURL.String()),
-		slog.Bool("gitlab_login", c.GitLab != nil),
-		slog.Bool("local_login", c.LocalLogin),
+		slog.Int("seeded_settings", len(c.Seeds)),
 		slog.Int("trusted_proxies", len(c.TrustedProxies)),
 		slog.Bool("custom_ca", c.CAFile != ""),
 	)
@@ -79,42 +65,39 @@ func (c *Config) LogValue() slog.Value {
 func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*Config, error) {
 	l := loader{getenv: getenv, readFile: readFile}
 	c := &Config{
-		ListenAddr:         l.str("LISTEN_ADDR", ":8080"),
-		DatabaseURL:        l.secret("DATABASE_URL"),
-		CAFile:             l.str("CA_FILE", ""),
-		LocalLogin:         l.boolean("LOCAL_LOGIN_ENABLED", true),
-		LocalAdminUsername: l.str("LOCAL_ADMIN_USERNAME", "admin"),
-		LocalAdminPassword: l.secret("LOCAL_ADMIN_PASSWORD"),
+		ListenAddr:  l.str("LISTEN_ADDR", ":8080"),
+		DatabaseURL: l.secret("DATABASE_URL"),
+		CAFile:      l.str("CA_FILE", ""),
 	}
 	c.PublicURL = l.publicURL("PUBLIC_URL")
 	c.LogLevel = l.logLevel("LOG_LEVEL")
 	c.TrustedProxies = l.prefixes("TRUSTED_PROXIES")
-	c.SessionIdleTimeout = l.duration("SESSION_IDLE_TIMEOUT", 8*time.Hour)
-	c.SessionAbsoluteTimeout = l.duration("SESSION_ABSOLUTE_TIMEOUT", 24*time.Hour)
-	c.GitLab = l.gitlab()
+	c.SecretKey = l.secretKey("SECRET_KEY")
+	c.Seeds = map[string]any{}
+	l.seeds(c.Seeds)
 
 	if c.DatabaseURL == "" {
 		l.fail("DATABASE_URL", "is required")
-	}
-	if c.SessionIdleTimeout < 5*time.Minute {
-		l.fail("SESSION_IDLE_TIMEOUT", "must be at least 5m")
-	}
-	if c.SessionAbsoluteTimeout < c.SessionIdleTimeout {
-		l.fail("SESSION_ABSOLUTE_TIMEOUT", "must not be shorter than "+Prefix+"SESSION_IDLE_TIMEOUT")
-	}
-	if c.LocalAdminUsername == "" {
-		l.fail("LOCAL_ADMIN_USERNAME", "must not be empty")
-	}
-	if c.LocalAdminPassword != "" && len(c.LocalAdminPassword) < MinPasswordLength {
-		l.fail("LOCAL_ADMIN_PASSWORD", fmt.Sprintf("must be at least %d characters", MinPasswordLength))
-	}
-	if !c.LocalLogin && c.GitLab == nil {
-		l.errs = append(l.errs, errors.New("no sign-in method is enabled: configure GitLab sign-in or set "+Prefix+"LOCAL_LOGIN_ENABLED=true"))
 	}
 	if err := errors.Join(l.errs...); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// ParseBaseURL checks an absolute http(s) URL without path, query, fragment
+// or credentials and returns it without a trailing slash. The Settings page
+// applies the same rules as the environment.
+func ParseBaseURL(v string) (*url.URL, error) {
+	v = strings.TrimSuffix(strings.TrimSpace(v), "/")
+	u, err := url.Parse(v)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, fmt.Errorf("must be an absolute http or https URL, got %q", v)
+	}
+	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return nil, fmt.Errorf("must not contain a path, query, fragment or credentials, got %q", v)
+	}
+	return u, nil
 }
 
 type loader struct {
@@ -223,20 +206,16 @@ func (l *loader) prefixes(name string) []netip.Prefix {
 	return out
 }
 
-// baseURL parses an absolute http(s) URL without path, query or fragment and
-// returns it without a trailing slash.
+// baseURL parses the variable name as a base URL; nil when unset or invalid
+// (invalid values are reported).
 func (l *loader) baseURL(name string) *url.URL {
-	v := strings.TrimSuffix(l.str(name, ""), "/")
+	v := l.str(name, "")
 	if v == "" {
 		return nil
 	}
-	u, err := url.Parse(v)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		l.fail(name, fmt.Sprintf("must be an absolute http or https URL, got %q", v))
-		return nil
-	}
-	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
-		l.fail(name, fmt.Sprintf("must not contain a path, query, fragment or credentials, got %q", v))
+	u, err := ParseBaseURL(v)
+	if err != nil {
+		l.fail(name, err.Error())
 		return nil
 	}
 	return u
@@ -252,28 +231,82 @@ func (l *loader) publicURL(name string) *url.URL {
 	return &url.URL{Scheme: "http", Host: "invalid"}
 }
 
-func (l *loader) gitlab() *GitLab {
-	u := l.baseURL("GITLAB_URL")
-	g := &GitLab{
-		ClientID:      l.str("GITLAB_CLIENT_ID", ""),
-		ClientSecret:  l.secret("GITLAB_CLIENT_SECRET"),
-		AllowedGroups: l.list("GITLAB_ALLOWED_GROUPS"),
-	}
-	if u == nil && l.str("GITLAB_URL", "") == "" {
-		if g.ClientID != "" || g.ClientSecret != "" || len(g.AllowedGroups) > 0 {
-			l.fail("GITLAB_URL", "is required when other GitLab settings are set")
+// secretKey reads the encryption key from NAME or NAME_FILE.
+func (l *loader) secretKey(name string) []byte {
+	v := l.secret(name)
+	if v == "" {
+		if len(l.errs) == 0 || !l.hasErr(name) {
+			l.fail(name, "is required; generate one with: openssl rand -base64 32")
 		}
 		return nil
 	}
-	if u == nil {
-		return nil // invalid URL, already reported
+	k, err := secretbox.ParseKey(v)
+	if err != nil {
+		l.fail(name, fmt.Sprintf("is not valid (%v); generate one with: openssl rand -base64 32", err))
+		return nil
 	}
-	g.URL = u.String()
-	if g.ClientID == "" {
-		l.fail("GITLAB_CLIENT_ID", "is required when "+Prefix+"GITLAB_URL is set")
+	return k
+}
+
+func (l *loader) hasErr(name string) bool {
+	for _, e := range l.errs {
+		if strings.HasPrefix(e.Error(), Prefix+name) {
+			return true
+		}
 	}
-	if g.ClientSecret == "" {
-		l.fail("GITLAB_CLIENT_SECRET", "is required when "+Prefix+"GITLAB_URL is set")
+	return false
+}
+
+// seeds reads the operational variables that seed the settings table.
+func (l *loader) seeds(m map[string]any) {
+	if u := l.baseURL("GITLAB_URL"); u != nil {
+		m["gitlab.url"] = u.String()
 	}
-	return g
+	if v := l.str("GITLAB_CLIENT_ID", ""); v != "" {
+		m["gitlab.client_id"] = v
+	}
+	if v := l.secret("GITLAB_CLIENT_SECRET"); v != "" {
+		m["gitlab.client_secret"] = v
+	}
+	if g := l.list("GITLAB_ALLOWED_GROUPS"); len(g) > 0 {
+		m["gitlab.allowed_groups"] = g
+	}
+	if l.str("LOCAL_LOGIN_ENABLED", "") != "" {
+		m["auth.local_login_enabled"] = l.boolean("LOCAL_LOGIN_ENABLED", true)
+	}
+	if l.str("SESSION_IDLE_TIMEOUT", "") != "" {
+		m["session.idle_timeout"] = l.duration("SESSION_IDLE_TIMEOUT", 8*time.Hour)
+	}
+	if l.str("SESSION_ABSOLUTE_TIMEOUT", "") != "" {
+		m["session.absolute_timeout"] = l.duration("SESSION_ABSOLUTE_TIMEOUT", 24*time.Hour)
+	}
+
+	// All-or-nothing GitLab settings, checked on the effective values.
+	_, hasURL := m["gitlab.url"]
+	if !hasURL && l.str("GITLAB_URL", "") == "" {
+		if m["gitlab.client_id"] != nil || m["gitlab.client_secret"] != nil || m["gitlab.allowed_groups"] != nil {
+			l.fail("GITLAB_URL", "is required when other GitLab settings are set")
+		}
+	} else if hasURL {
+		if m["gitlab.client_id"] == nil {
+			l.fail("GITLAB_CLIENT_ID", "is required when "+Prefix+"GITLAB_URL is set")
+		}
+		if m["gitlab.client_secret"] == nil {
+			l.fail("GITLAB_CLIENT_SECRET", "is required when "+Prefix+"GITLAB_URL is set")
+		}
+	}
+
+	idle, abs := 8*time.Hour, 24*time.Hour
+	if d, ok := m["session.idle_timeout"].(time.Duration); ok {
+		idle = d
+	}
+	if d, ok := m["session.absolute_timeout"].(time.Duration); ok {
+		abs = d
+	}
+	if idle < 5*time.Minute {
+		l.fail("SESSION_IDLE_TIMEOUT", "must be at least 5m")
+	}
+	if abs < idle {
+		l.fail("SESSION_ABSOLUTE_TIMEOUT", "must not be shorter than "+Prefix+"SESSION_IDLE_TIMEOUT")
+	}
 }
