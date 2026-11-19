@@ -1014,7 +1014,7 @@ export interface components {
                 /** Format: date-time */
                 received_at: string;
                 /** @enum {string} */
-                outcome: "linked" | "unlinked" | "failed";
+                outcome: "pending" | "linked" | "unlinked" | "failed";
                 /** Format: int64 */
                 service_id: number | null;
                 detail: string;

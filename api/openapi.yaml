@@ -1049,7 +1049,7 @@ components:
               task_id: { type: string }
               project_key: { type: string }
               received_at: { type: string, format: date-time }
-              outcome: { type: string, enum: [linked, unlinked, failed] }
+              outcome: { type: string, enum: [pending, linked, unlinked, failed] }
               service_id: { type: [integer, "null"], format: int64 }
               detail: { type: string }
     Me:

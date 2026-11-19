@@ -127,7 +127,8 @@ CREATE TABLE sonar_deliveries (
     task_id     text        NOT NULL UNIQUE,
     project_key text        NOT NULL,
     received_at timestamptz NOT NULL DEFAULT now(),
-    outcome     text        NOT NULL CHECK (outcome IN ('linked', 'unlinked', 'failed')),
+    -- 'pending' from receipt until the delivery has been processed.
+    outcome     text        NOT NULL CHECK (outcome IN ('pending', 'linked', 'unlinked', 'failed')),
     service_id  bigint      REFERENCES services (id) ON DELETE SET NULL,
     detail      text        NOT NULL DEFAULT ''
 );
