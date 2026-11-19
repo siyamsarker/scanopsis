@@ -76,13 +76,19 @@ invalid.
 
 | Key | Seeding variable | Type | Default | Example | Effect and validation |
 |---|---|---|---|---|---|
-| `gitlab.url` | `SCANOPSIS_GITLAB_URL` | URL | empty | `https://gitlab.example.com` | Base URL of the GitLab instance. Also the OpenID Connect issuer. Same rules as the public URL: absolute `http` or `https`, no path, query, fragment or credentials. |
+| `gitlab.url` | `SCANOPSIS_GITLAB_URL` | URL | empty | `https://gitlab.example.com` | Base URL of the GitLab instance. Also the OpenID Connect issuer and the issuer of CI job tokens: set it to accept scan uploads, even without GitLab sign-in. Same rules as the public URL: absolute `http` or `https`, no path, query, fragment or credentials. |
 | `gitlab.client_id` | `SCANOPSIS_GITLAB_CLIENT_ID` | text | empty | `d4c3...` | Application ID of the GitLab OAuth application. |
 | `gitlab.client_secret` | `SCANOPSIS_GITLAB_CLIENT_SECRET` | secret | not set | | Secret of the GitLab OAuth application. Stored encrypted and never shown again. It cannot be empty; reset it instead. |
 | `gitlab.allowed_groups` | `SCANOPSIS_GITLAB_ALLOWED_GROUPS` | list | empty | `platform,security/appsec` | GitLab groups, by full path, whose members may sign in. Empty allows every GitLab user. Each path must not be empty, must not start or end with `/` and must not contain spaces. In the environment, separate entries with commas. On the Settings page, write one entry per line. See the [GitLab sign-in guide](integrations/gitlab-sso.md#allowed-groups). |
 | `auth.local_login_enabled` | `SCANOPSIS_LOCAL_LOGIN_ENABLED` | boolean | `true` | `false` | Whether users can sign in with a local username and password. In the environment, use `true`, `false`, `1` or `0`. |
 | `session.idle_timeout` | `SCANOPSIS_SESSION_IDLE_TIMEOUT` | duration | `8h` | `30m` | How long a session may stay unused before the user must sign in again. At least `5m`. |
 | `session.absolute_timeout` | `SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT` | duration | `24h` | `12h` | Maximum lifetime of a session, however active. Not shorter than the idle timeout. |
+| `ingest.allowed_namespaces` | `SCANOPSIS_INGEST_ALLOWED_NAMESPACES` | list | empty | `platform,security` | GitLab groups, by full path, whose projects may upload scan reports; projects in subgroups are included. Empty accepts every project whose CI job token is valid. Same path rules as the allowed groups. See the [GitLab CI guide](integrations/gitlab-ci.md). |
+| `ingest.protected_refs_only` | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | boolean | `false` | `true` | Accept scan reports only from pipelines on protected branches and tags (the token's `ref_protected` claim). |
+| `sonar.url` | `SCANOPSIS_SONAR_URL` | URL | empty | `https://sonarqube.example.com` | Base URL of the SonarQube server. Same rules as the GitLab URL. Prefer `https`: the token is sent with every request. See the [SonarQube guide](integrations/sonarqube.md). |
+| `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | secret | not set | | Token of a SonarQube user with Browse permission on the projects. Stored encrypted and never shown again. |
+| `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | secret | not set | | Secret of the SonarQube webhook. Deliveries without a valid signature are rejected. Stored encrypted and never shown again. |
+| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | duration | `15m` | `5m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. |
 
 Durations are written with units, such as `30m`, `8h` or `1h30m`.
 
@@ -93,10 +99,15 @@ start it checks only the GitLab rule and the two session rules, and only for
 values that come from the environment. It does not check the local sign-in
 rule at start. See the warning below.
 
-- GitLab sign-in is configured only when the URL, the client ID and the client
-  secret are all set. If you set one of them, you must set all three.
-  Otherwise the page shows "Required when other GitLab settings are set." next
-  to the missing field.
+- The GitLab URL alone is valid: it is enough to accept scan uploads. GitLab
+  sign-in additionally needs the client ID and the client secret; if you set
+  one of these two, you must set the URL and the other one. Otherwise the page
+  shows "Required when other GitLab sign-in settings are set." next to the
+  missing field.
+- The SonarQube integration needs the URL and the token together; the
+  webhook secret needs both. Otherwise the page shows "Required when other
+  SonarQube settings are set." The sync interval is at least one minute
+  ("Must be at least 1m.").
 - Local sign-in cannot be disabled unless GitLab sign-in is fully configured.
   The page shows "Local sign-in can be disabled only when GitLab sign-in is
   fully configured." This rule prevents you from locking everyone out.
@@ -138,6 +149,8 @@ whose content is the value:
 | `SCANOPSIS_DATABASE_URL` | `SCANOPSIS_DATABASE_URL_FILE` |
 | `SCANOPSIS_SECRET_KEY` | `SCANOPSIS_SECRET_KEY_FILE` |
 | `SCANOPSIS_GITLAB_CLIENT_SECRET` | `SCANOPSIS_GITLAB_CLIENT_SECRET_FILE` |
+| `SCANOPSIS_SONAR_TOKEN` | `SCANOPSIS_SONAR_TOKEN_FILE` |
+| `SCANOPSIS_SONAR_WEBHOOK_SECRET` | `SCANOPSIS_SONAR_WEBHOOK_SECRET_FILE` |
 
 Rules:
 

@@ -17,5 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Administration commands `scanopsis admin reset-password` and `scanopsis admin reset-2fa` for recovering access.
 - Docker health check, using the new `scanopsis healthcheck` command, so the image works without a shell or curl.
 - Docker Compose deployment in `deploy/compose`, with documentation for installation, configuration, GitLab sign-in, operations, backup and restore.
+- Upload of Trivy JSON reports (image vulnerabilities and secrets) from GitLab CI jobs, authenticated with GitLab CI/CD ID tokens instead of a shared secret. Services are created by the first upload or by an administrator; uploads can be limited to GitLab groups and protected refs.
+- Read API for the portfolio, per-service overview, scans, new and fixed findings between scans, vulnerabilities, secret findings, trends and a cross-service vulnerability search.
+- SonarQube integration: signed webhooks, quality gate, ratings, coverage and duplication read with a read-only token, a periodic reconciliation, support for MQR and Standard modes, and integration health pages for administrators.
+- Guides for uploading from GitLab CI (including a scan script that keeps an existing pipeline gate) and for connecting SonarQube.
 
 [Unreleased]: https://github.com/siyamsarker/scanopsis/commits/main

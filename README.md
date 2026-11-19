@@ -3,11 +3,11 @@
 Scanopsis is a small, self-hosted dashboard that shows SonarQube and Trivy
 results from your GitLab CI/CD pipelines in one view.
 
-> **Status:** early development. Sign-in with GitLab or a local account,
-> two-factor authentication, first-run setup, user management and the
-> settings page work, and you can run them with Docker Compose. Scanopsis does
-> not ingest or display scan results yet, so do not rely on it for production
-> data.
+> **Status:** early development. Sign-in with two-factor authentication,
+> first-run setup, user management, the settings page, Trivy uploads from
+> GitLab CI and the SonarQube integration work, and the API serves the
+> results. The web pages that display scan results are not built yet, so do
+> not rely on it for production use.
 
 ## Planned features
 
@@ -55,6 +55,8 @@ For operators:
 - [Getting started](docs/getting-started.md)
 - [Configuration reference](docs/configuration.md)
 - [Sign in with GitLab](docs/integrations/gitlab-sso.md)
+- [Upload Trivy reports from GitLab CI](docs/integrations/gitlab-ci.md)
+- [Connect SonarQube](docs/integrations/sonarqube.md)
 - [Operations](docs/operations.md): health checks, logs, administration
   commands, recovering access, backup and restore
 - [Docker Compose files](deploy/compose/README.md)
