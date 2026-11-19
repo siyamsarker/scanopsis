@@ -8,6 +8,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -88,10 +89,14 @@ func TestMigrateIdempotent(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM goose_db_version WHERE version_id > 0`).Scan(&versions); err != nil {
 		t.Fatal(err)
 	}
-	if versions != 1 {
-		t.Errorf("applied migrations = %d, want 1", versions)
+	files, err := filepath.Glob("migrations/*.sql")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tbl := range []string{"users", "sessions", "audit_log"} {
+	if versions != len(files) || len(files) < 2 {
+		t.Errorf("applied migrations = %d, want one per embedded file (%d)", versions, len(files))
+	}
+	for _, tbl := range []string{"users", "sessions", "audit_log", "recovery_codes", "settings"} {
 		var ok bool
 		if err := pool.QueryRow(ctx, `SELECT to_regclass('public.' || $1) IS NOT NULL`, tbl).Scan(&ok); err != nil {
 			t.Fatal(err)

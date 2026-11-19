@@ -25,7 +25,7 @@ func (q *Queries) CountAdmins(ctx context.Context) (int64, error) {
 const createLocalUser = `-- name: CreateLocalUser :one
 INSERT INTO users (source, username, role, password_hash)
 VALUES ('local', $1, $2, $3)
-RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at
+RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step
 `
 
 type CreateLocalUserParams struct {
@@ -48,12 +48,31 @@ func (q *Queries) CreateLocalUser(ctx context.Context, arg CreateLocalUserParams
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.LastLoginAt,
+		&i.MustChangePassword,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
 
+const enableTOTP = `-- name: EnableTOTP :exec
+UPDATE users SET totp_enabled_at = now(), totp_last_step = $1
+WHERE id = $2 AND totp_secret_enc IS NOT NULL
+`
+
+type EnableTOTPParams struct {
+	LastStep int64
+	ID       int64
+}
+
+func (q *Queries) EnableTOTP(ctx context.Context, arg EnableTOTPParams) error {
+	_, err := q.db.Exec(ctx, enableTOTP, arg.LastStep, arg.ID)
+	return err
+}
+
 const getLocalUserByUsername = `-- name: GetLocalUserByUsername :one
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at FROM users WHERE source = 'local' AND username = $1
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step FROM users WHERE source = 'local' AND username = $1
 `
 
 func (q *Queries) GetLocalUserByUsername(ctx context.Context, username string) (User, error) {
@@ -70,13 +89,17 @@ func (q *Queries) GetLocalUserByUsername(ctx context.Context, username string) (
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.LastLoginAt,
+		&i.MustChangePassword,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
 
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at FROM users WHERE id = $1
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step FROM users WHERE id = $1
 `
 
 // Copyright 2026 The Scanopsis Authors
@@ -95,12 +118,16 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.LastLoginAt,
+		&i.MustChangePassword,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at FROM users
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step FROM users
 WHERE id > $1
 ORDER BY id
 LIMIT $2
@@ -131,6 +158,10 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]User, e
 			&i.PasswordHash,
 			&i.CreatedAt,
 			&i.LastLoginAt,
+			&i.MustChangePassword,
+			&i.TotpSecretEnc,
+			&i.TotpEnabledAt,
+			&i.TotpLastStep,
 		); err != nil {
 			return nil, err
 		}
@@ -166,8 +197,49 @@ func (q *Queries) LockAdmins(ctx context.Context) ([]int64, error) {
 	return items, nil
 }
 
+const resetTOTP = `-- name: ResetTOTP :exec
+UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = 0
+WHERE id = $1
+`
+
+func (q *Queries) ResetTOTP(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, resetTOTP, id)
+	return err
+}
+
+const setPassword = `-- name: SetPassword :exec
+UPDATE users SET password_hash = $1, must_change_password = $2
+WHERE id = $3 AND source = 'local'
+`
+
+type SetPasswordParams struct {
+	PasswordHash pgtype.Text
+	MustChange   bool
+	ID           int64
+}
+
+func (q *Queries) SetPassword(ctx context.Context, arg SetPasswordParams) error {
+	_, err := q.db.Exec(ctx, setPassword, arg.PasswordHash, arg.MustChange, arg.ID)
+	return err
+}
+
+const setPendingTOTP = `-- name: SetPendingTOTP :exec
+UPDATE users SET totp_secret_enc = $1, totp_enabled_at = NULL, totp_last_step = 0
+WHERE id = $2
+`
+
+type SetPendingTOTPParams struct {
+	SecretEnc []byte
+	ID        int64
+}
+
+func (q *Queries) SetPendingTOTP(ctx context.Context, arg SetPendingTOTPParams) error {
+	_, err := q.db.Exec(ctx, setPendingTOTP, arg.SecretEnc, arg.ID)
+	return err
+}
+
 const setUserRole = `-- name: SetUserRole :one
-UPDATE users SET role = $1 WHERE id = $2 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at
+UPDATE users SET role = $1 WHERE id = $2 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step
 `
 
 type SetUserRoleParams struct {
@@ -189,6 +261,10 @@ func (q *Queries) SetUserRole(ctx context.Context, arg SetUserRoleParams) (User,
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.LastLoginAt,
+		&i.MustChangePassword,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
 }
@@ -211,7 +287,7 @@ SET username      = EXCLUDED.username,
     name          = EXCLUDED.name,
     email         = EXCLUDED.email,
     last_login_at = now()
-RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at
+RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step
 `
 
 type UpsertGitLabUserParams struct {
@@ -242,6 +318,30 @@ func (q *Queries) UpsertGitLabUser(ctx context.Context, arg UpsertGitLabUserPara
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.LastLoginAt,
+		&i.MustChangePassword,
+		&i.TotpSecretEnc,
+		&i.TotpEnabledAt,
+		&i.TotpLastStep,
 	)
 	return i, err
+}
+
+const useTOTPStep = `-- name: UseTOTPStep :one
+UPDATE users SET totp_last_step = $1
+WHERE id = $2 AND totp_last_step < $1
+RETURNING id
+`
+
+type UseTOTPStepParams struct {
+	Step int64
+	ID   int64
+}
+
+// UseTOTPStep records an accepted TOTP time step. It updates nothing (and
+// returns no row) if the step is not newer than the last accepted one.
+func (q *Queries) UseTOTPStep(ctx context.Context, arg UseTOTPStepParams) (int64, error) {
+	row := q.db.QueryRow(ctx, useTOTPStep, arg.Step, arg.ID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
 }

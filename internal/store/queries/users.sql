@@ -42,3 +42,26 @@ SELECT id FROM users WHERE role = 'admin' FOR UPDATE;
 
 -- name: SetUserRole :one
 UPDATE users SET role = @role WHERE id = @id RETURNING *;
+
+-- name: SetPassword :exec
+UPDATE users SET password_hash = @password_hash, must_change_password = @must_change
+WHERE id = @id AND source = 'local';
+
+-- name: SetPendingTOTP :exec
+UPDATE users SET totp_secret_enc = @secret_enc, totp_enabled_at = NULL, totp_last_step = 0
+WHERE id = @id;
+
+-- name: EnableTOTP :exec
+UPDATE users SET totp_enabled_at = now(), totp_last_step = @last_step
+WHERE id = @id AND totp_secret_enc IS NOT NULL;
+
+-- UseTOTPStep records an accepted TOTP time step. It updates nothing (and
+-- returns no row) if the step is not newer than the last accepted one.
+-- name: UseTOTPStep :one
+UPDATE users SET totp_last_step = @step
+WHERE id = @id AND totp_last_step < @step
+RETURNING id;
+
+-- name: ResetTOTP :exec
+UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = 0
+WHERE id = @id;

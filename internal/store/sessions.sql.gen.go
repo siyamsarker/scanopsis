@@ -46,6 +46,20 @@ func (q *Queries) DeleteExpiredSessions(ctx context.Context, arg DeleteExpiredSe
 	return result.RowsAffected(), nil
 }
 
+const deleteOtherUserSessions = `-- name: DeleteOtherUserSessions :exec
+DELETE FROM sessions WHERE user_id = $1 AND id_hash <> $2
+`
+
+type DeleteOtherUserSessionsParams struct {
+	UserID     int64
+	KeepIDHash []byte
+}
+
+func (q *Queries) DeleteOtherUserSessions(ctx context.Context, arg DeleteOtherUserSessionsParams) error {
+	_, err := q.db.Exec(ctx, deleteOtherUserSessions, arg.UserID, arg.KeepIDHash)
+	return err
+}
+
 const deleteSession = `-- name: DeleteSession :exec
 DELETE FROM sessions WHERE id_hash = $1
 `
@@ -55,8 +69,17 @@ func (q *Queries) DeleteSession(ctx context.Context, idHash []byte) error {
 	return err
 }
 
+const deleteUserSessions = `-- name: DeleteUserSessions :exec
+DELETE FROM sessions WHERE user_id = $1
+`
+
+func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
+	_, err := q.db.Exec(ctx, deleteUserSessions, userID)
+	return err
+}
+
 const getSession = `-- name: GetSession :one
-SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at
+SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, sessions.mfa_verified, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at, users.must_change_password, users.totp_secret_enc, users.totp_enabled_at, users.totp_last_step
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id_hash = $1
@@ -86,6 +109,7 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.Session.CreatedAt,
 		&i.Session.LastSeenAt,
 		&i.Session.ExpiresAt,
+		&i.Session.MfaVerified,
 		&i.User.ID,
 		&i.User.Source,
 		&i.User.GitlabUserID,
@@ -96,8 +120,21 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.User.PasswordHash,
 		&i.User.CreatedAt,
 		&i.User.LastLoginAt,
+		&i.User.MustChangePassword,
+		&i.User.TotpSecretEnc,
+		&i.User.TotpEnabledAt,
+		&i.User.TotpLastStep,
 	)
 	return i, err
+}
+
+const markSessionMFAVerified = `-- name: MarkSessionMFAVerified :exec
+UPDATE sessions SET mfa_verified = true WHERE id_hash = $1
+`
+
+func (q *Queries) MarkSessionMFAVerified(ctx context.Context, idHash []byte) error {
+	_, err := q.db.Exec(ctx, markSessionMFAVerified, idHash)
+	return err
 }
 
 const touchSession = `-- name: TouchSession :exec

@@ -16,23 +16,43 @@ type AuditLog struct {
 	Detail []byte
 }
 
+type RecoveryCode struct {
+	UserID   int64
+	CodeHash []byte
+	UsedAt   pgtype.Timestamptz
+}
+
 type Session struct {
-	IDHash     []byte
-	UserID     int64
-	CreatedAt  pgtype.Timestamptz
-	LastSeenAt pgtype.Timestamptz
-	ExpiresAt  pgtype.Timestamptz
+	IDHash      []byte
+	UserID      int64
+	CreatedAt   pgtype.Timestamptz
+	LastSeenAt  pgtype.Timestamptz
+	ExpiresAt   pgtype.Timestamptz
+	MfaVerified bool
+}
+
+type Setting struct {
+	Key       string
+	Value     []byte
+	SecretEnc []byte
+	Source    string
+	UpdatedBy string
+	UpdatedAt pgtype.Timestamptz
 }
 
 type User struct {
-	ID           int64
-	Source       string
-	GitlabUserID pgtype.Int8
-	Username     string
-	Name         string
-	Email        string
-	Role         string
-	PasswordHash pgtype.Text
-	CreatedAt    pgtype.Timestamptz
-	LastLoginAt  pgtype.Timestamptz
+	ID                 int64
+	Source             string
+	GitlabUserID       pgtype.Int8
+	Username           string
+	Name               string
+	Email              string
+	Role               string
+	PasswordHash       pgtype.Text
+	CreatedAt          pgtype.Timestamptz
+	LastLoginAt        pgtype.Timestamptz
+	MustChangePassword bool
+	TotpSecretEnc      []byte
+	TotpEnabledAt      pgtype.Timestamptz
+	TotpLastStep       int64
 }
