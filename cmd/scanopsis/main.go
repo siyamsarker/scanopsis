@@ -30,11 +30,15 @@ import (
 
 	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/auth"
+	"github.com/siyamsarker/scanopsis/internal/catalog"
 	"github.com/siyamsarker/scanopsis/internal/clientip"
 	"github.com/siyamsarker/scanopsis/internal/config"
+	"github.com/siyamsarker/scanopsis/internal/findings"
 	"github.com/siyamsarker/scanopsis/internal/httpapi"
+	"github.com/siyamsarker/scanopsis/internal/ingest"
 	"github.com/siyamsarker/scanopsis/internal/secretbox"
 	"github.com/siyamsarker/scanopsis/internal/settings"
+	"github.com/siyamsarker/scanopsis/internal/sonar"
 	"github.com/siyamsarker/scanopsis/internal/store"
 	"github.com/siyamsarker/scanopsis/web"
 )
@@ -209,6 +213,24 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Build:                httpapi.BuildInfo{Version: version, Commit: resolveCommit(), Go: runtime.Version()},
 		Secure:               cfg.Secure(),
 	}
+	sonarQube := sonar.New(pool, conf, sonar.Options{HTTPClient: httpClient, Logger: log})
+	features, err := mergeFeatures(
+		ingest.New(pool, conf, rec, ingest.Options{
+			Audience:   cfg.PublicURL.String(),
+			HTTPClient: httpClient,
+			Limiter:    auth.NewRateLimiter(time.Second, 60, nil),
+			ClientIP:   resolver.IP,
+			Logger:     log,
+		}).Handlers(),
+		catalog.New(pool, conf, rec, log).Handlers(),
+		findings.New(pool, conf, log).Handlers(),
+		sonarQube.Handlers(),
+	)
+	if err != nil {
+		return err
+	}
+	deps.Features = features
+
 	if assets, ok := web.Assets(); ok {
 		deps.Assets = assets
 	} else {
@@ -216,6 +238,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 
 	go removeExpiredSessions(ctx, sessions, log)
+	go sonarQube.Run(ctx)
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)
@@ -224,6 +247,22 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	log.Info("scanopsis listening", "addr", ln.Addr().String())
 	return serve(ctx, ln, httpapi.New(deps))
+}
+
+// mergeFeatures combines the handlers of the feature packages, keyed by
+// OpenAPI operation ID. Two packages claiming one operation is a wiring
+// mistake and stops the server.
+func mergeFeatures(sets ...map[string]http.Handler) (map[string]http.Handler, error) {
+	out := map[string]http.Handler{}
+	for _, set := range sets {
+		for id, h := range set {
+			if _, dup := out[id]; dup {
+				return nil, fmt.Errorf("operation %s is handled twice", id)
+			}
+			out[id] = h
+		}
+	}
+	return out, nil
 }
 
 // settingsTx runs fn with queries bound to one database transaction.

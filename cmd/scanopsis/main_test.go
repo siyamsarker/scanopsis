@@ -219,3 +219,14 @@ func TestServeShutsDownOnCancel(t *testing.T) {
 		t.Fatal("serve did not return after context cancellation")
 	}
 }
+
+func TestMergeFeatures(t *testing.T) {
+	h := http.NotFoundHandler()
+	got, err := mergeFeatures(map[string]http.Handler{"a": h}, map[string]http.Handler{"b": h})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("merge = %v, %v", got, err)
+	}
+	if _, err := mergeFeatures(map[string]http.Handler{"a": h}, map[string]http.Handler{"a": h}); err == nil || !strings.Contains(err.Error(), "operation a is handled twice") {
+		t.Fatalf("duplicate: %v", err)
+	}
+}
