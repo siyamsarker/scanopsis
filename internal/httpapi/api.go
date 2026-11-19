@@ -68,8 +68,11 @@ func toUser(u store.User) userJSON {
 	return out
 }
 
+// writeJSON writes v as JSON. API responses can carry user data and depend
+// on the session, so no browser or proxy may store them.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }

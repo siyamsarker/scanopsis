@@ -353,3 +353,18 @@ func TestBodyLimit(t *testing.T) {
 		t.Fatal("body over 1 MiB should be rejected")
 	}
 }
+
+func TestJSONResponsesAreNotStored(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, tc := range []struct{ path, user string }{
+		{"/api/v1/me", "viewer"},
+		{"/api/v1/users", "admin"},
+		{"/api/v1/me", ""}, // error responses too
+		{"/healthz", ""},
+	} {
+		rec := e.do("GET", tc.path, tc.user, "")
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("GET %s as %q: Cache-Control = %q, want no-store", tc.path, tc.user, got)
+		}
+	}
+}
