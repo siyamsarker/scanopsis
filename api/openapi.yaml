@@ -18,6 +18,8 @@ tags:
   - name: ops
   - name: auth
   - name: users
+  - name: setup
+  - name: settings
 
 paths:
   /healthz:
@@ -139,14 +141,20 @@ paths:
   /api/v1/me:
     get:
       tags: [auth]
-      summary: The signed-in user.
+      summary: The signed-in user and the state of the session.
+      description: |
+        Also answers for a session that still has to complete two-factor
+        authentication or a password change, so the web interface can guide
+        the user. Every other endpoint that needs a session answers 403 with
+        code mfa_required, mfa_enrollment_required or password_change_required
+        until the session is complete.
       operationId: getMe
       responses:
         "200":
           description: Current user.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/User" }
+              schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
 
   /api/v1/users:
@@ -194,6 +202,168 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: The change would leave no administrator (code last_admin)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/setup:
+    get:
+      tags: [setup]
+      summary: Whether the first-run setup is still required (no administrator exists).
+      operationId: getSetupStatus
+      security: []
+      responses:
+        "200":
+          description: Setup status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SetupStatus" }
+    post:
+      tags: [setup]
+      summary: Create the first administrator (local account) with the one-time setup token.
+      description: |
+        The token is printed to the server log at start while no administrator
+        exists. On success the session cookie is set; the new administrator must
+        enrol two-factor authentication before the session is fully usable.
+      operationId: completeSetup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetupRequest" }
+      responses:
+        "204": { description: Administrator created and signed in (two-factor enrolment pending). }
+        "400": { description: Invalid request or password does not meet the rules (code invalid_request or weak_password)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Wrong setup token (code invalid_setup_token)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Setup is already complete (code setup_complete)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Too many attempts. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/auth/mfa/verify:
+    post:
+      tags: [auth]
+      summary: Complete sign-in with a TOTP code or a recovery code.
+      description: Allowed for a session that has passed the first factor and whose user has enrolled.
+      operationId: verifyMFA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MFACode" }
+      responses:
+        "204": { description: Second factor accepted; the session is fully usable. }
+        "400": { description: Malformed request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Wrong or reused code (code invalid_code), or no session., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Two-factor authentication is not enrolled yet (code mfa_enrollment_required)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Too many attempts. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/auth/mfa/enrollment:
+    post:
+      tags: [auth]
+      summary: Start TOTP enrolment and get the secret to add to an authenticator app.
+      description: |
+        Allowed for a session whose user has not enrolled (first sign-in or
+        after a reset). Calling it again replaces the pending secret.
+      operationId: startMFAEnrollment
+      responses:
+        "200":
+          description: Pending enrolment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MFAEnrollment" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "409": { description: Already enrolled (code mfa_already_enrolled)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/auth/mfa/enrollment/confirm:
+    post:
+      tags: [auth]
+      summary: Confirm enrolment with a code from the app and receive recovery codes.
+      operationId: confirmMFAEnrollment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MFACode" }
+      responses:
+        "200":
+          description: Enrolled. The recovery codes are shown only this once; the session is fully usable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecoveryCodes" }
+        "400": { description: Malformed request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Wrong code (code invalid_code), or no session., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: No pending enrolment (code mfa_enrollment_not_started) or already enrolled., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Too many attempts., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/me/password:
+    post:
+      tags: [auth]
+      summary: Change the password of the signed-in local user.
+      description: |
+        Required after a password reset from the command line. Allowed for a
+        session whose second factor is verified. Other sessions of the user are
+        signed out.
+      operationId: changePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PasswordChange" }
+      responses:
+        "204": { description: Password changed. }
+        "400": { description: Invalid request or weak password (code weak_password)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Wrong current password (code invalid_credentials), or no session., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Not a local account (code not_local) or second factor not verified., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/users/{id}/mfa:
+    delete:
+      tags: [users]
+      summary: Reset a user's two-factor authentication (admin only).
+      description: Removes the TOTP secret and recovery codes and signs the user out everywhere; the user enrols again at the next sign-in.
+      operationId: resetUserMFA
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "204": { description: Reset. }
+        "400": { description: Invalid id., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/settings:
+    get:
+      tags: [settings]
+      summary: List all runtime settings (admin only). Secret values are never returned.
+      operationId: listSettings
+      responses:
+        "200":
+          description: Settings.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingList" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    patch:
+      tags: [settings]
+      summary: Change runtime settings (admin only). Changes apply immediately.
+      description: |
+        The body maps setting keys to new values. A null value resets the key to
+        its environment or default value. All changes are validated together and
+        applied atomically.
+      operationId: updateSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingUpdate" }
+      responses:
+        "200":
+          description: Settings after the change.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingList" }
+        "400":
+          description: Validation failed (code invalid_settings); details name each key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SettingsError" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
 components:
   securitySchemes:
@@ -278,5 +448,104 @@ components:
     Role:
       type: string
       enum: [admin, viewer]
+    Me:
+      allOf:
+        - $ref: "#/components/schemas/User"
+        - type: object
+          required: [mfa_enrolled, mfa_verified, must_change_password]
+          properties:
+            mfa_enrolled: { type: boolean, description: The user has a confirmed TOTP enrolment. }
+            mfa_verified: { type: boolean, description: This session has passed the second factor. }
+            must_change_password: { type: boolean }
+    SetupStatus:
+      type: object
+      required: [required]
+      properties:
+        required: { type: boolean }
+    SetupRequest:
+      type: object
+      required: [token, username, password]
+      additionalProperties: false
+      properties:
+        token: { type: string, maxLength: 200 }
+        username: { type: string, minLength: 1, maxLength: 200 }
+        password: { type: string, minLength: 12, maxLength: 1024 }
+    MFACode:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code: { type: string, maxLength: 64, description: "A 6-digit TOTP code or a recovery code (xxxxx-xxxxx)." }
+    MFAEnrollment:
+      type: object
+      required: [secret, otpauth_uri]
+      properties:
+        secret: { type: string, description: Base32 secret for manual entry. }
+        otpauth_uri: { type: string, description: otpauth://totp/... URI for a QR code. }
+    RecoveryCodes:
+      type: object
+      required: [recovery_codes]
+      properties:
+        recovery_codes:
+          type: array
+          minItems: 10
+          maxItems: 10
+          items: { type: string }
+    PasswordChange:
+      type: object
+      required: [current_password, new_password]
+      additionalProperties: false
+      properties:
+        current_password: { type: string, minLength: 1, maxLength: 1024 }
+        new_password: { type: string, minLength: 12, maxLength: 1024 }
+    Setting:
+      type: object
+      required: [key, type, secret, source, value, is_set, env_var, description]
+      properties:
+        key: { type: string, example: gitlab.allowed_groups }
+        type: { type: string, enum: [string, url, boolean, duration, string_list] }
+        secret: { type: boolean }
+        source: { type: string, enum: [default, env, ui] }
+        value:
+          description: Current value; always null for secrets.
+          oneOf:
+            - { type: "null" }
+            - { type: string }
+            - { type: boolean }
+            - { type: array, items: { type: string } }
+        is_set: { type: boolean, description: For secrets, whether a value exists. }
+        env_var: { type: string, description: Environment variable that seeds this setting. }
+        description: { type: string }
+        updated_by: { type: [string, "null"] }
+        updated_at: { type: [string, "null"], format: date-time }
+    SettingList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Setting" }
+    SettingUpdate:
+      type: object
+      additionalProperties:
+        oneOf:
+          - { type: "null" }
+          - { type: string }
+          - { type: boolean }
+          - { type: array, items: { type: string } }
+    SettingsError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, fields]
+          properties:
+            code: { type: string, example: invalid_settings }
+            message: { type: string }
+            fields:
+              type: object
+              additionalProperties: { type: string }
+              description: Problem per setting key.
 security:
   - session: []

@@ -33,10 +33,26 @@ type Principal struct {
 	Name     string
 	Email    string
 	Role     Role
+
+	// SessionID is the SHA-256 of the session token; it identifies the
+	// session server-side.
+	SessionID []byte
+	// MFAEnrolled reports a confirmed TOTP enrolment; MFAVerified that this
+	// session has passed the second factor.
+	MFAEnrolled        bool
+	MFAVerified        bool
+	MustChangePassword bool
 }
 
-// IsAdmin reports whether the principal has the admin role.
-func (p *Principal) IsAdmin() bool { return p != nil && p.Role == RoleAdmin }
+// Complete reports whether the session may use the application: the second
+// factor is verified and no password change is pending.
+func (p *Principal) Complete() bool {
+	return p != nil && p.MFAVerified && !p.MustChangePassword
+}
+
+// IsAdmin reports whether the principal has the admin role and a complete
+// session.
+func (p *Principal) IsAdmin() bool { return p.Complete() && p.Role == RoleAdmin }
 
 type principalKey struct{}
 

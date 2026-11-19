@@ -93,3 +93,24 @@ func SetUserRole(ctx context.Context, pool *pgxpool.Pool, id int64, role string)
 	})
 	return out, err
 }
+
+// ResetMFA removes a user's TOTP enrolment and recovery codes and ends all
+// of the user's sessions, in one transaction. The user enrols again at the
+// next sign-in. It returns ErrNotFound for an unknown user.
+func ResetMFA(ctx context.Context, pool *pgxpool.Pool, userID int64) error {
+	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		q := New(tx)
+		if _, err := q.GetUser(ctx, userID); errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		} else if err != nil {
+			return err
+		}
+		if err := q.ResetTOTP(ctx, userID); err != nil {
+			return err
+		}
+		if err := q.DeleteRecoveryCodes(ctx, userID); err != nil {
+			return err
+		}
+		return q.DeleteUserSessions(ctx, userID)
+	})
+}
