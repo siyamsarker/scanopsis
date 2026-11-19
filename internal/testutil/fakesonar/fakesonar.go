@@ -56,6 +56,8 @@ type Server struct {
 	version  string
 	failures map[string]int
 	delay    time.Duration
+	strict   string
+	strictSt int
 	requests []string
 }
 
@@ -96,6 +98,16 @@ func (s *Server) Fail(endpoint string, status int) {
 		return
 	}
 	s.failures[endpoint] = status
+}
+
+// RejectUnknownMetrics makes api/measures/component answer with status (for
+// example 400 or 404) when a request names a metric key that the server of
+// the given mode does not know: with "mqr" the Standard-only keys are unknown,
+// with "standard" the MQR-only keys. An empty mode accepts every key.
+func (s *Server) RejectUnknownMetrics(mode string, status int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.strict, s.strictSt = mode, status
 }
 
 // SetDelay makes every answer wait this long before it is sent.
@@ -195,6 +207,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = w.Write([]byte(v))
 	case "api/measures/component":
+		if s.unknownMetric(q.Get("metricKeys")) {
+			writeError(w, s.strictSt, "Metric(s) not found: "+q.Get("metricKeys"))
+			return
+		}
 		s.measures(w, q.Get("component"), q.Get("metricKeys"))
 	case "api/qualitygates/project_status":
 		s.projectStatus(w, q.Get("projectKey"))
@@ -203,6 +219,27 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "Unknown endpoint")
 	}
+}
+
+func (s *Server) unknownMetric(metricKeys string) bool {
+	s.mu.Lock()
+	mode := s.strict
+	s.mu.Unlock()
+	if mode == "" {
+		return false
+	}
+	for _, k := range strings.Split(metricKeys, ",") {
+		mqrOnly := strings.HasPrefix(k, "software_quality_")
+		standardOnly := false
+		switch k {
+		case "reliability_rating", "security_rating", "sqale_rating", "bugs", "vulnerabilities", "code_smells":
+			standardOnly = true
+		}
+		if (mode == "mqr" && standardOnly) || (mode == "standard" && mqrOnly) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) project(w http.ResponseWriter, key string) (Project, bool) {

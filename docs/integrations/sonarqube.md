@@ -154,6 +154,12 @@ In both modes Scanopsis also reads `security_review_rating`, `coverage`,
 Every measure SonarQube returns is kept as reported. Ratings `1.0` to `5.0`
 are shown as A to E. The mode is shown with each analysis.
 
+Scanopsis adapts to the server's mode automatically; there is nothing to
+configure. It asks for the keys of both modes in one request. If a server
+rejects metric keys it does not know (HTTP 400 or 404), Scanopsis asks again
+with only the MQR keys, then with only the Standard keys, and remembers which
+set worked until the SonarQube URL or token is changed.
+
 ## 6. Coverage of 0% after a failing test step
 
 If a test step fails but still writes an empty coverage report, SonarQube

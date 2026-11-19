@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,17 +24,60 @@ const (
 	maxResponse    = 4 << 20
 )
 
-// metricKeys lists every metric requested in one call: the MQR and Standard
-// mode keys, and the keys both modes share.
-var metricKeys = []string{
-	"software_quality_reliability_rating", "software_quality_security_rating",
-	"software_quality_maintainability_rating",
-	"software_quality_reliability_issues", "software_quality_security_issues",
-	"software_quality_maintainability_issues",
-	"reliability_rating", "security_rating", "sqale_rating",
-	"bugs", "vulnerabilities", "code_smells",
+// sharedMetricKeys are reported in both modes.
+var sharedMetricKeys = []string{
 	"security_review_rating", "security_hotspots", "security_hotspots_reviewed",
 	"coverage", "new_coverage", "duplicated_lines_density", "ncloc", "alert_status",
+}
+
+var (
+	mqrMetricKeys = []string{
+		"software_quality_reliability_rating", "software_quality_security_rating",
+		"software_quality_maintainability_rating",
+		"software_quality_reliability_issues", "software_quality_security_issues",
+		"software_quality_maintainability_issues",
+	}
+	standardMetricKeys = []string{
+		"reliability_rating", "security_rating", "sqale_rating",
+		"bugs", "vulnerabilities", "code_smells",
+	}
+	// metricKeySets are tried in order: every key in one call, then only the
+	// MQR keys, then only the Standard keys. A server that rejects metric keys
+	// it does not know is thereby served the keys of its own mode.
+	metricKeySets = [][]string{
+		append(append(append([]string{}, mqrMetricKeys...), standardMetricKeys...), sharedMetricKeys...),
+		append(append([]string{}, mqrMetricKeys...), sharedMetricKeys...),
+		append(append([]string{}, standardMetricKeys...), sharedMetricKeys...),
+	}
+)
+
+// keySetCache remembers which metric key set a SonarQube configuration
+// accepts. It is reset when the URL or token changes.
+type keySetCache struct {
+	mu  sync.Mutex
+	cfg string
+	set int
+}
+
+// forConfig resets the cache when the configuration differs from the last.
+func (k *keySetCache) forConfig(url, token string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if cfg := url + "\x00" + token; cfg != k.cfg {
+		k.cfg, k.set = cfg, 0
+	}
+}
+
+func (k *keySetCache) get() int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.set
+}
+
+func (k *keySetCache) put(i int) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.set = i
 }
 
 // apiError is a failed Web API call. It carries only the endpoint and the
@@ -51,6 +95,8 @@ type client struct {
 	http  *http.Client
 	base  string
 	token string
+	// keys remembers the working metric key set; nil means no memory.
+	keys *keySetCache
 }
 
 func (c *client) get(ctx context.Context, endpoint string, q url.Values) ([]byte, error) {
@@ -88,9 +134,31 @@ func (c *client) get(ctx context.Context, endpoint string, q url.Values) ([]byte
 // measures returns every measure SonarQube reports for the project, by
 // metric key. Metrics without a value are absent.
 func (c *client) measures(ctx context.Context, key string) (map[string]string, error) {
+	start := 0
+	if c.keys != nil {
+		start = c.keys.get()
+	}
+	for i := start; ; i++ {
+		m, err := c.measuresFor(ctx, key, metricKeySets[i])
+		if err == nil {
+			if c.keys != nil {
+				c.keys.put(i)
+			}
+			return m, nil
+		}
+		// SonarQube may answer 400 or 404 for metric keys it does not know.
+		var ae *apiError
+		if i+1 < len(metricKeySets) && errors.As(err, &ae) && (ae.Status == http.StatusBadRequest || ae.Status == http.StatusNotFound) {
+			continue
+		}
+		return nil, err
+	}
+}
+
+func (c *client) measuresFor(ctx context.Context, key string, keys []string) (map[string]string, error) {
 	const endpoint = "api/measures/component"
 	b, err := c.get(ctx, endpoint, url.Values{
-		"component": {key}, "metricKeys": {strings.Join(metricKeys, ",")},
+		"component": {key}, "metricKeys": {strings.Join(keys, ",")},
 	})
 	if err != nil {
 		return nil, err

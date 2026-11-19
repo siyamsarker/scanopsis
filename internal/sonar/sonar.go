@@ -52,6 +52,7 @@ type Sonar struct {
 	lastErr    string
 	// warnedPlain is the plain http URL the TLS warning was logged for.
 	warnedPlain string
+	keys        keySetCache
 }
 
 // New returns a Sonar that stores results in pool.
@@ -116,5 +117,6 @@ func (s *Sonar) client(snap settings.Snapshot) *client {
 		s.warnedPlain = ""
 	}
 	s.mu.Unlock()
-	return &client{http: s.hc, base: snap.SonarURL, token: snap.SonarToken}
+	s.keys.forConfig(snap.SonarURL, snap.SonarToken)
+	return &client{http: s.hc, base: snap.SonarURL, token: snap.SonarToken, keys: &s.keys}
 }
