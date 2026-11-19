@@ -256,11 +256,14 @@ which jobs are accepted. Set them in **Settings**, or with environment variables
 
 A rejected upload is answered with 403 and recorded in the audit log as
 `ingest.rejected`, with the reason and, when the token was valid, the project
-path. A request without a valid ID token needs no credentials, so the audit log
+path. Anyone who can get an ID token from your GitLab can cause a rejected upload
+before the allowed namespaces and protected refs are checked (an invalid token,
+GitLab unreachable, a namespace not allowed, a ref not protected). The audit log
 records at most 10 of those rejections per client address at once and then one
 more per minute; the others are answered the same way but appear only in the
-server log at debug level. Every rejection of a request with a valid token is
-recorded. A rate-limited request (`429`) is never recorded. The
+server log at debug level. Every later rejection (media type, kind, report too
+large or invalid, archived service, service conflict, busy) comes from a project
+the instance accepts and is always recorded. A rate-limited request (`429`) is never recorded. The
 "Recorded rejections" number on the Integrations page counts what was recorded.
 
 ## What the dashboard shows

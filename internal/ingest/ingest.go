@@ -184,9 +184,15 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	ip := i.clientIP(r)
 	var claims *Claims // nil until the token is verified
+	// admitted is set once the token, the namespace allow-list and the
+	// protected-ref check have passed: the project is one this instance
+	// accepts. Until then a rejection can be caused by anyone who can get an
+	// ID token from the GitLab instance, so its audit records are bounded per
+	// client address.
+	admitted := false
 
 	reject := func(status int, code, message string, extra ...any) {
-		i.reject(ctx, w, ip, claims, status, code, message, extra...)
+		i.reject(ctx, w, ip, claims, !admitted, status, code, message, extra...)
 	}
 
 	if l := i.opts.Limiter; l != nil {
@@ -244,6 +250,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 			"Only protected branches and tags may upload, and "+claims.Ref+" is not protected.")
 		return
 	}
+	admitted = true
 
 	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
 		reject(http.StatusUnsupportedMediaType, codeMediaType, "Content-Type must be application/json.")
@@ -334,11 +341,11 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 
 // reject answers with an error, writes the audit event and logs it. claims is
 // nil when the token was not valid. extra are log attributes for the server
-// log only. Rejections without a verified token are audited and logged as a
-// warning for at most a bounded number per client address, and logged at debug
-// level beyond that; rejections with verified claims are always recorded. The
-// response is the same either way.
-func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Addr, claims *Claims, status int, code, message string, extra ...any) {
+// log only. A bounded rejection (one before the project passed the allow-list
+// checks) is audited and logged as a warning for at most a bounded number per
+// client address, and logged at debug level beyond that; any other rejection
+// is always recorded. The response is the same either way.
+func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Addr, claims *Claims, bounded bool, status int, code, message string, extra ...any) {
 	httpapi.WriteError(w, status, code, message)
 	actor := "ci:unknown"
 	detail := map[string]any{"reason": code, "ip": ipString(ip)}
@@ -349,9 +356,7 @@ func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Add
 		attrs = append(attrs, "project", claims.ProjectPath, "job_id", claims.JobID)
 	}
 	attrs = append(attrs, extra...)
-	// Only a rejection without a verified token is free to cause. One with
-	// verified claims needed a valid GitLab ID token, so it is always recorded.
-	if claims == nil {
+	if bounded {
 		if ok, _ := i.auditLimit.Allow(limitKey(ip)); !ok {
 			i.log.DebugContext(ctx, "upload rejected; not recorded: too many rejections from this address", attrs...)
 			return
