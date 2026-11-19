@@ -1,0 +1,9 @@
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Used instead of the root .dockerignore when building test/fakegitlab/Dockerfile.
+*
+!go.mod
+!go.sum
+!internal/testutil/fakegitlab/
+!test/fakegitlab/
