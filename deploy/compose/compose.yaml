@@ -1,0 +1,74 @@
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Scanopsis and its PostgreSQL database.
+#
+# Run all commands in this directory. The guide is docs/getting-started.md.
+#
+# Image: no release image is published yet. Build one from the repository
+# root with `make image`, then set SCANOPSIS_IMAGE=scanopsis:dev in the file
+# named .env next to this one (.env.example already does). Compose reads
+# SCANOPSIS_IMAGE from there for this file.
+#
+# TLS: the port is published on the loopback interface only. Put a reverse
+# proxy in front of it that terminates TLS (see docs/configuration.md).
+#
+# Secrets: create the three files under ./secrets before `docker compose up`
+# (see docs/getting-started.md). They are mounted read-only under
+# /run/secrets and never appear in `docker inspect` or the environment.
+
+name: scanopsis
+
+services:
+  db:
+    image: postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scanopsis
+      POSTGRES_DB: scanopsis
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    volumes:
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scanopsis -d scanopsis"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  scanopsis:
+    image: ${SCANOPSIS_IMAGE:-ghcr.io/siyamsarker/scanopsis:latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    # The image declares its own health check (`/scanopsis healthcheck`).
+    # Do not redefine it here.
+    env_file:
+      - .env
+    environment:
+      SCANOPSIS_DATABASE_URL_FILE: /run/secrets/database_url
+      SCANOPSIS_SECRET_KEY_FILE: /run/secrets/secret_key
+    secrets:
+      - database_url
+      - secret_key
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+secrets:
+  database_url:
+    file: ./secrets/database_url
+  secret_key:
+    file: ./secrets/secret_key
+  postgres_password:
+    file: ./secrets/postgres_password
+
+volumes:
+  db-data:
