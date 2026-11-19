@@ -102,7 +102,7 @@ func (g *gen) render() {
 	info := obj(g.doc["info"])
 	g.p("# %s reference", str(info["title"]))
 	g.p("")
-	g.p("<!-- Generated from api/openapi.yaml by `go run ./scripts/apidocs > docs/api.md`. Do not edit by hand. -->")
+	g.p("<!-- Generated from api/openapi.yaml by `make generate`. Do not edit by hand. -->")
 	g.p("")
 	g.p("This page lists every endpoint of the HTTP API, generated from the OpenAPI")
 	g.p("document `api/openapi.yaml`. API version: %s.", str(info["version"]))

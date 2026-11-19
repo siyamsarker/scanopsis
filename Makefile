@@ -45,12 +45,13 @@ test: ## Run Go tests with the race detector
 test-integration: ## Run Go integration tests against PostgreSQL in Docker
 	go test -race -count=1 -tags integration ./...
 
-generate: web-install ## Regenerate Go code from SQL queries and web API types from the OpenAPI document
+generate: web-install ## Regenerate Go code from SQL queries, and web API types and docs/api.md from the OpenAPI document
 	cd internal/store && $(SQLC) generate
 	cd web && npm run generate
+	go run ./scripts/apidocs > docs/api.md
 
-generate-check: generate ## Fail if generated code is out of date
-	git diff --exit-code -- internal/store web/src/api
+generate-check: generate ## Fail if generated code or docs/api.md is out of date
+	git diff --exit-code -- internal/store web/src/api docs/api.md
 
 vuln: ## Check Go dependencies for known vulnerabilities
 	$(GOVULNCHECK) ./...

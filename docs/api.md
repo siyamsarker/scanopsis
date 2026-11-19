@@ -1,6 +1,6 @@
 # Scanopsis API reference
 
-<!-- Generated from api/openapi.yaml by `go run ./scripts/apidocs > docs/api.md`. Do not edit by hand. -->
+<!-- Generated from api/openapi.yaml by `make generate`. Do not edit by hand. -->
 
 This page lists every endpoint of the HTTP API, generated from the OpenAPI
 document `api/openapi.yaml`. API version: 0.1.0.
