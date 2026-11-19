@@ -88,9 +88,38 @@ describe('settings page', () => {
     );
     await screen.findByLabelText('GitLab address');
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
-      'GitLab sign-in',
+      'GitLab',
       'Sign-in',
       'Sessions',
+    ]);
+  });
+
+  it('groups SonarQube and scan upload settings separately', async () => {
+    const extra = [
+      ...initial,
+      setting({
+        key: 'ingest.protected_refs_only',
+        type: 'boolean',
+        value: false,
+        description: 'Protected refs only',
+      }),
+      setting({
+        key: 'sonar.url',
+        type: 'url',
+        value: '',
+        is_set: false,
+        description: 'SonarQube address',
+      }),
+    ];
+    mockFetch(settingsApi(undefined, extra));
+    renderApp('/settings');
+    await screen.findByLabelText('GitLab address');
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'GitLab',
+      'Sign-in',
+      'Sessions',
+      'Scan uploads',
+      'SonarQube',
     ]);
   });
 

@@ -24,11 +24,13 @@ import { formatRelative } from './UsersPage';
 
 type Draft = string | boolean;
 
-const groups = ['GitLab sign-in', 'Sign-in', 'Sessions'] as const;
+const groups = ['GitLab', 'Sign-in', 'Sessions', 'Scan uploads', 'SonarQube'] as const;
 
 function groupOf(key: string): (typeof groups)[number] {
-  if (key.startsWith('gitlab.')) return 'GitLab sign-in';
+  if (key.startsWith('gitlab.')) return 'GitLab';
   if (key.startsWith('session')) return 'Sessions';
+  if (key.startsWith('ingest.')) return 'Scan uploads';
+  if (key.startsWith('sonar.')) return 'SonarQube';
   return 'Sign-in';
 }
 
