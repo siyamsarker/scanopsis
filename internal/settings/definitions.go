@@ -37,7 +37,17 @@ const (
 	KeyLocalLoginEnabled   = "auth.local_login_enabled"
 	KeySessionIdleTimeout  = "session.idle_timeout"
 	KeySessionAbsTimeout   = "session.absolute_timeout"
+
+	KeySonarURL                = "sonar.url"
+	KeySonarToken              = "sonar.token"          //nolint:gosec // a setting key, not a credential
+	KeySonarWebhookSecret      = "sonar.webhook_secret" //nolint:gosec // a setting key, not a credential
+	KeySonarSyncInterval       = "sonar.sync_interval"
+	KeyIngestAllowedNamespaces = "ingest.allowed_namespaces"
+	KeyIngestProtectedRefsOnly = "ingest.protected_refs_only"
 )
+
+// MinSonarSyncInterval is the shortest allowed SonarQube reconciliation interval.
+const MinSonarSyncInterval = time.Minute
 
 // MinIdleTimeout is the shortest allowed idle session timeout.
 const MinIdleTimeout = 5 * time.Minute
@@ -56,7 +66,7 @@ type Definition struct {
 // Definitions lists every setting in display order.
 var Definitions = []Definition{
 	{Key: KeyGitLabURL, EnvVar: "SCANOPSIS_GITLAB_URL", Type: TypeURL, Default: "",
-		Description: "Base URL of the GitLab instance used for sign-in, for example https://gitlab.example.com."},
+		Description: "Base URL of the GitLab instance, for example https://gitlab.example.com. Needed to verify CI job tokens and for GitLab sign-in."},
 	{Key: KeyGitLabClientID, EnvVar: "SCANOPSIS_GITLAB_CLIENT_ID", Type: TypeString, Default: "",
 		Description: "Application ID of the GitLab OAuth application."},
 	{Key: KeyGitLabClientSecret, EnvVar: "SCANOPSIS_GITLAB_CLIENT_SECRET", Type: TypeString, Secret: true, Default: "",
@@ -69,6 +79,18 @@ var Definitions = []Definition{
 		Description: "How long a session may stay unused before the user must sign in again, at least 5m, for example 8h."},
 	{Key: KeySessionAbsTimeout, EnvVar: "SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT", Type: TypeDuration, Default: "24h",
 		Description: "Maximum lifetime of a session regardless of activity, not shorter than the idle timeout, for example 24h."},
+	{Key: KeySonarURL, EnvVar: "SCANOPSIS_SONAR_URL", Type: TypeURL, Default: "",
+		Description: "Base URL of the SonarQube server, for example https://sonarqube.example.com."},
+	{Key: KeySonarToken, EnvVar: "SCANOPSIS_SONAR_TOKEN", Type: TypeString, Secret: true, Default: "",
+		Description: "Token of a SonarQube user with Browse permission on the projects, stored encrypted."},
+	{Key: KeySonarWebhookSecret, EnvVar: "SCANOPSIS_SONAR_WEBHOOK_SECRET", Type: TypeString, Secret: true, Default: "",
+		Description: "Secret of the SonarQube webhook; deliveries without a valid signature are rejected. Stored encrypted."},
+	{Key: KeySonarSyncInterval, EnvVar: "SCANOPSIS_SONAR_SYNC_INTERVAL", Type: TypeDuration, Default: "15m",
+		Description: "How often linked SonarQube projects are refreshed in case a webhook was missed, at least 1m."},
+	{Key: KeyIngestAllowedNamespaces, EnvVar: "SCANOPSIS_INGEST_ALLOWED_NAMESPACES", Type: TypeStringList, Default: []string{},
+		Description: "GitLab groups, by full path, whose projects may upload scan reports; leave empty to accept every project."},
+	{Key: KeyIngestProtectedRefsOnly, EnvVar: "SCANOPSIS_INGEST_PROTECTED_REFS_ONLY", Type: TypeBoolean, Default: false,
+		Description: "Accept scan reports only from pipelines on protected branches and tags."},
 }
 
 var definitionByKey = func() map[string]Definition {
@@ -152,7 +174,7 @@ func coerceList(d Definition, raw any) (any, error) {
 	out := make([]string, 0, len(items))
 	for _, it := range items {
 		it = strings.TrimSpace(it)
-		if d.Key == KeyGitLabAllowedGroups {
+		if d.Key == KeyGitLabAllowedGroups || d.Key == KeyIngestAllowedNamespaces {
 			if err := checkGroup(it); err != nil {
 				return nil, err
 			}

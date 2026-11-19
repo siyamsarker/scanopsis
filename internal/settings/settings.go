@@ -37,7 +37,18 @@ type Snapshot struct {
 
 	SessionIdleTimeout     time.Duration
 	SessionAbsoluteTimeout time.Duration
+
+	SonarURL           string
+	SonarToken         string
+	SonarWebhookSecret string
+	SonarSyncInterval  time.Duration
+
+	IngestAllowedNamespaces []string
+	IngestProtectedRefsOnly bool
 }
+
+// SonarEnabled reports whether SonarQube results can be read (URL and token set).
+func (s Snapshot) SonarEnabled() bool { return s.SonarURL != "" && s.SonarToken != "" }
 
 // GitLabEnabled reports whether GitLab sign-in is fully configured.
 func (s Snapshot) GitLabEnabled() bool {
@@ -104,14 +115,22 @@ func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Sto
 	if err != nil {
 		return nil, fmt.Errorf("load settings: %w", err)
 	}
-	have := make(map[string]bool, len(rows))
-	for _, r := range rows {
-		have[r.Key] = true
+	// Check what the settings would be (saved rows, then environment values
+	// for keys without a row) before saving anything, so a value that would
+	// lock everyone out is never written.
+	stored, err := s.decodeAll(rows)
+	if err != nil {
+		return nil, err
 	}
+	stt := s.build(stored)
+	if err := signInPossible(stt); err != nil {
+		return nil, err
+	}
+
 	seeded := false
 	for _, d := range Definitions { // deterministic order
 		v, ok := s.seeds[d.Key]
-		if !ok || have[d.Key] {
+		if _, have := stored[d.Key]; !ok || have {
 			continue
 		}
 		p, err := s.encode(d, v)
@@ -127,13 +146,22 @@ func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Sto
 		if rows, err = st.ListSettings(ctx); err != nil {
 			return nil, fmt.Errorf("load settings: %w", err)
 		}
+		if stored, err = s.decodeAll(rows); err != nil {
+			return nil, err
+		}
+		stt = s.build(stored)
 	}
+	s.cur.Store(stt)
+	return s, nil
+}
 
+// decodeAll decodes the stored rows of known settings.
+func (s *Service) decodeAll(rows []store.Setting) (map[string]entry, error) {
 	stored := make(map[string]entry, len(rows))
 	for _, r := range rows {
 		d, ok := definitionByKey[r.Key]
 		if !ok {
-			log.Warn("ignoring unknown setting in the database", "key", r.Key)
+			s.log.Warn("ignoring unknown setting in the database", "key", r.Key)
 			continue
 		}
 		e, err := s.decode(d, r)
@@ -142,12 +170,7 @@ func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Sto
 		}
 		stored[r.Key] = e
 	}
-	stt := s.build(stored)
-	if err := signInPossible(stt); err != nil {
-		return nil, err
-	}
-	s.cur.Store(stt)
-	return s, nil
+	return stored, nil
 }
 
 type payload struct{ value, secret []byte }
@@ -228,6 +251,14 @@ func snapshotOf(e map[string]entry) Snapshot {
 		LocalLoginEnabled:      e[KeyLocalLoginEnabled].value.(bool),
 		SessionIdleTimeout:     dur(KeySessionIdleTimeout),
 		SessionAbsoluteTimeout: dur(KeySessionAbsTimeout),
+
+		SonarURL:           e[KeySonarURL].value.(string),
+		SonarToken:         e[KeySonarToken].value.(string),
+		SonarWebhookSecret: e[KeySonarWebhookSecret].value.(string),
+		SonarSyncInterval:  dur(KeySonarSyncInterval),
+
+		IngestAllowedNamespaces: e[KeyIngestAllowedNamespaces].value.([]string),
+		IngestProtectedRefsOnly: e[KeyIngestProtectedRefsOnly].value.(bool),
 	}
 }
 
@@ -241,8 +272,8 @@ func signInPossible(st *state) error {
 		return nil
 	}
 	fix := "remove SCANOPSIS_LOCAL_LOGIN_ENABLED=false from the environment"
-	if st.entries[KeyLocalLoginEnabled].source == SourceUI {
-		fix = "run DELETE FROM settings WHERE key = 'auth.local_login_enabled' in the database"
+	if st.entries[KeyLocalLoginEnabled].stored {
+		fix = "run DELETE FROM settings WHERE key = 'auth.local_login_enabled' in the database (and remove SCANOPSIS_LOCAL_LOGIN_ENABLED=false from the environment if it is set)"
 	}
 	return fmt.Errorf("local sign-in is disabled but GitLab sign-in is not fully configured, so nobody could sign in: %s, or configure GitLab sign-in, then start again", fix)
 }
@@ -266,17 +297,29 @@ func validate(snap Snapshot, fields map[string]string) {
 			fields[key] = msg
 		}
 	}
-	gl := map[string]bool{
-		KeyGitLabURL:          snap.GitLabURL != "",
-		KeyGitLabClientID:     snap.GitLabClientID != "",
-		KeyGitLabClientSecret: snap.GitLabClientSecret != "",
-	}
-	if gl[KeyGitLabURL] || gl[KeyGitLabClientID] || gl[KeyGitLabClientSecret] {
-		for _, key := range []string{KeyGitLabURL, KeyGitLabClientID, KeyGitLabClientSecret} {
-			if !gl[key] {
-				add(key, "Required when other GitLab settings are set.")
+	// The GitLab URL alone verifies CI job tokens; sign-in also needs the
+	// client ID and secret, which need each other and the URL.
+	if snap.GitLabClientID != "" || snap.GitLabClientSecret != "" {
+		for key, set := range map[string]bool{
+			KeyGitLabURL:          snap.GitLabURL != "",
+			KeyGitLabClientID:     snap.GitLabClientID != "",
+			KeyGitLabClientSecret: snap.GitLabClientSecret != "",
+		} {
+			if !set {
+				add(key, "Required when other GitLab sign-in settings are set.")
 			}
 		}
+	}
+	if snap.SonarURL != "" || snap.SonarToken != "" || snap.SonarWebhookSecret != "" {
+		if snap.SonarURL == "" {
+			add(KeySonarURL, "Required when other SonarQube settings are set.")
+		}
+		if snap.SonarToken == "" {
+			add(KeySonarToken, "Required when other SonarQube settings are set.")
+		}
+	}
+	if snap.SonarSyncInterval < MinSonarSyncInterval {
+		add(KeySonarSyncInterval, "Must be at least 1m.")
 	}
 	if !snap.LocalLoginEnabled && !snap.GitLabEnabled() {
 		add(KeyLocalLoginEnabled, "Local sign-in can be disabled only when GitLab sign-in is fully configured.")

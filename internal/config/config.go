@@ -281,19 +281,45 @@ func (l *loader) seeds(m map[string]any) {
 		m["session.absolute_timeout"] = l.duration("SESSION_ABSOLUTE_TIMEOUT", 24*time.Hour)
 	}
 
-	// All-or-nothing GitLab settings, checked on the effective values.
+	if u := l.baseURL("SONAR_URL"); u != nil {
+		m["sonar.url"] = u.String()
+	}
+	if v := l.secret("SONAR_TOKEN"); v != "" {
+		m["sonar.token"] = v
+	}
+	if v := l.secret("SONAR_WEBHOOK_SECRET"); v != "" {
+		m["sonar.webhook_secret"] = v
+	}
+	if l.str("SONAR_SYNC_INTERVAL", "") != "" {
+		m["sonar.sync_interval"] = l.duration("SONAR_SYNC_INTERVAL", 15*time.Minute)
+	}
+	if g := l.list("INGEST_ALLOWED_NAMESPACES"); len(g) > 0 {
+		m["ingest.allowed_namespaces"] = g
+	}
+	if l.str("INGEST_PROTECTED_REFS_ONLY", "") != "" {
+		m["ingest.protected_refs_only"] = l.boolean("INGEST_PROTECTED_REFS_ONLY", false)
+	}
+
+	// The GitLab URL alone is enough to verify CI job tokens; GitLab sign-in
+	// additionally needs the client ID and secret, both or neither.
 	_, hasURL := m["gitlab.url"]
-	if !hasURL && l.str("GITLAB_URL", "") == "" {
-		if m["gitlab.client_id"] != nil || m["gitlab.client_secret"] != nil || m["gitlab.allowed_groups"] != nil {
-			l.fail("GITLAB_URL", "is required when other GitLab settings are set")
+	_, hasID := m["gitlab.client_id"]
+	_, hasSecret := m["gitlab.client_secret"]
+	if !hasURL && l.str("GITLAB_URL", "") == "" && (hasID || hasSecret || m["gitlab.allowed_groups"] != nil) {
+		l.fail("GITLAB_URL", "is required when other GitLab settings are set")
+	}
+	if hasID != hasSecret {
+		if !hasID {
+			l.fail("GITLAB_CLIENT_ID", "is required when "+Prefix+"GITLAB_CLIENT_SECRET is set")
+		} else {
+			l.fail("GITLAB_CLIENT_SECRET", "is required when "+Prefix+"GITLAB_CLIENT_ID is set")
 		}
-	} else if hasURL {
-		if m["gitlab.client_id"] == nil {
-			l.fail("GITLAB_CLIENT_ID", "is required when "+Prefix+"GITLAB_URL is set")
-		}
-		if m["gitlab.client_secret"] == nil {
-			l.fail("GITLAB_CLIENT_SECRET", "is required when "+Prefix+"GITLAB_URL is set")
-		}
+	}
+	// SonarQube: the token is needed to read results once a URL is set.
+	_, hasSonarURL := m["sonar.url"]
+	_, hasSonarToken := m["sonar.token"]
+	if hasSonarURL != hasSonarToken && l.str("SONAR_URL", "") != "" || (!hasSonarURL && l.str("SONAR_URL", "") == "" && (hasSonarToken || m["sonar.webhook_secret"] != nil)) {
+		l.fail("SONAR_URL", "and "+Prefix+"SONAR_TOKEN must be set together (the webhook secret needs both)")
 	}
 
 	idle, abs := 8*time.Hour, 24*time.Hour

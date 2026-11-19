@@ -22,6 +22,55 @@ type RecoveryCode struct {
 	UsedAt   pgtype.Timestamptz
 }
 
+type Scan struct {
+	ID               int64
+	ServiceID        int64
+	Kind             string
+	ArtifactName     string
+	GitlabPipelineID int64
+	GitlabJobID      int64
+	Ref              string
+	RefProtected     bool
+	CommitSha        string
+	TrivyVersion     string
+	SchemaVersion    int32
+	ScannedAt        pgtype.Timestamptz
+	ReceivedAt       pgtype.Timestamptz
+	CountCritical    int32
+	CountHigh        int32
+	CountMedium      int32
+	CountLow         int32
+	CountUnknown     int32
+	CountFixable     int32
+	CountSecrets     int32
+	CountSuppressed  int32
+	RawReport        []byte
+}
+
+type SecretFinding struct {
+	ID         int64
+	ScanID     int64
+	Target     string
+	RuleID     string
+	Category   string
+	Severity   string
+	Title      string
+	StartLine  int32
+	EndLine    int32
+	Suppressed bool
+}
+
+type Service struct {
+	ID                int64
+	Name              string
+	GitlabProjectID   pgtype.Int8
+	GitlabProjectPath string
+	SonarProjectKey   pgtype.Text
+	CreatedVia        string
+	Archived          bool
+	CreatedAt         pgtype.Timestamptz
+}
+
 type Session struct {
 	IDHash      []byte
 	UserID      int64
@@ -40,6 +89,31 @@ type Setting struct {
 	UpdatedAt pgtype.Timestamptz
 }
 
+type SonarAnalysis struct {
+	ID                int64
+	ServiceID         int64
+	TaskID            string
+	AnalysisKey       string
+	AnalysedAt        pgtype.Timestamptz
+	Revision          string
+	QualityGateStatus string
+	GateConditions    []byte
+	Measures          []byte
+	Mode              string
+	GitlabPipelineID  pgtype.Int8
+	ReceivedAt        pgtype.Timestamptz
+}
+
+type SonarDelivery struct {
+	ID         int64
+	TaskID     string
+	ProjectKey string
+	ReceivedAt pgtype.Timestamptz
+	Outcome    string
+	ServiceID  pgtype.Int8
+	Detail     string
+}
+
 type User struct {
 	ID                 int64
 	Source             string
@@ -55,4 +129,23 @@ type User struct {
 	TotpSecretEnc      []byte
 	TotpEnabledAt      pgtype.Timestamptz
 	TotpLastStep       int64
+}
+
+type Vulnerability struct {
+	ID               int64
+	ScanID           int64
+	Target           string
+	Class            string
+	PkgType          string
+	PkgName          string
+	PkgPath          string
+	InstalledVersion string
+	FixedVersion     string
+	VulnID           string
+	Severity         string
+	Status           string
+	Title            string
+	PrimaryUrl       string
+	Suppressed       bool
+	Suppression      string
 }

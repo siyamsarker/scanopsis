@@ -202,7 +202,7 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	want := Snapshot{
 		GitLabAllowedGroups: []string{}, LocalLoginEnabled: true,
-		SessionIdleTimeout: 8 * time.Hour, SessionAbsoluteTimeout: 24 * time.Hour,
+		SessionIdleTimeout: 8 * time.Hour, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{},
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -254,7 +254,7 @@ func TestSeedingFillsOnlyMissingKeys(t *testing.T) {
 	want := Snapshot{
 		GitLabURL: "https://gitlab.example.com", GitLabClientID: "from-ui", GitLabClientSecret: "s3cret-value",
 		GitLabAllowedGroups: []string{"platform", "sec/appsec"}, LocalLoginEnabled: true,
-		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 24 * time.Hour,
+		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{},
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -333,7 +333,7 @@ func TestUpdateAppliesAndAudits(t *testing.T) {
 	want := Snapshot{
 		GitLabURL: "https://gitlab.example.com", GitLabClientID: "cid", GitLabClientSecret: "topsecret-xyz",
 		GitLabAllowedGroups: []string{"a", "b/c"}, LocalLoginEnabled: false,
-		SessionIdleTimeout: 90 * time.Minute, SessionAbsoluteTimeout: 36 * time.Hour,
+		SessionIdleTimeout: 90 * time.Minute, SessionAbsoluteTimeout: 36 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{},
 	}
 	if cur := e.svc.Current(); !reflect.DeepEqual(cur, want) {
 		t.Errorf("Current = %+v", cur)
@@ -438,12 +438,18 @@ func TestValidation(t *testing.T) {
 			map[string]string{"session.absolute_timeout": "Must not be shorter than the idle timeout."}},
 		{"absolute shorter than existing idle", nil, `{"session.absolute_timeout":"1h"}`,
 			map[string]string{"session.absolute_timeout": "Must not be shorter than the idle timeout."}},
-		{"gitlab url only", nil, `{"gitlab.url":"https://gitlab.example.com"}`, map[string]string{
-			"gitlab.client_id": "Required when other GitLab settings are set.", "gitlab.client_secret": "Required when other GitLab settings are set."}},
 		{"gitlab id only", nil, `{"gitlab.client_id":"x"}`, map[string]string{
-			"gitlab.url": "Required when other GitLab settings are set.", "gitlab.client_secret": "Required when other GitLab settings are set."}},
+			"gitlab.url": "Required when other GitLab sign-in settings are set.", "gitlab.client_secret": "Required when other GitLab sign-in settings are set."}},
 		{"reset url leaves partial gitlab", gitlabSeeds(), `{"gitlab.url":""}`, map[string]string{
-			"gitlab.url": "Required when other GitLab settings are set."}},
+			"gitlab.url": "Required when other GitLab sign-in settings are set."}},
+		{"sonar url without token", nil, `{"sonar.url":"https://sonarqube.example.com"}`, map[string]string{
+			"sonar.token": "Required when other SonarQube settings are set."}},
+		{"sonar webhook secret alone", nil, `{"sonar.webhook_secret":"x"}`, map[string]string{
+			"sonar.url": "Required when other SonarQube settings are set.", "sonar.token": "Required when other SonarQube settings are set."}},
+		{"sonar sync too short", nil, `{"sonar.sync_interval":"30s"}`, map[string]string{
+			"sonar.sync_interval": "Must be at least 1m."}},
+		{"ingest namespace with slash", nil, `{"ingest.allowed_namespaces":["/platform"]}`, map[string]string{
+			"ingest.allowed_namespaces": `Group path "/platform" must not start or end with a slash.`}},
 		{"local login off without gitlab", nil, `{"auth.local_login_enabled":false}`,
 			map[string]string{"auth.local_login_enabled": "Local sign-in can be disabled only when GitLab sign-in is fully configured."}},
 		{"all problems together", nil, `{"nope":1,"gitlab.client_id":3,"session.idle_timeout":"1m","auth.local_login_enabled":false}`, map[string]string{
@@ -610,7 +616,8 @@ func TestFormatDuration(t *testing.T) {
 }
 
 func TestDefinitions(t *testing.T) {
-	want := []string{"gitlab.url", "gitlab.client_id", "gitlab.client_secret", "gitlab.allowed_groups", "auth.local_login_enabled", "session.idle_timeout", "session.absolute_timeout"}
+	want := []string{"gitlab.url", "gitlab.client_id", "gitlab.client_secret", "gitlab.allowed_groups", "auth.local_login_enabled", "session.idle_timeout", "session.absolute_timeout",
+		"sonar.url", "sonar.token", "sonar.webhook_secret", "sonar.sync_interval", "ingest.allowed_namespaces", "ingest.protected_refs_only"}
 	var got []string
 	for _, d := range Definitions {
 		got = append(got, d.Key)
@@ -664,10 +671,14 @@ func TestConcurrentReadsDuringUpdates(t *testing.T) {
 func TestStartRefusesSettingsWithoutSignIn(t *testing.T) {
 	// An environment seed (not validated by the Settings page) disables local
 	// sign-in while GitLab is not configured: nobody could sign in.
-	_, err := New(context.Background(), newFakeStore(), newFakeStore().tx, testBox(t, 1),
+	fresh := newFakeStore()
+	_, err := New(context.Background(), fresh, fresh.tx, testBox(t, 1),
 		map[string]any{KeyLocalLoginEnabled: false}, &fakeAudit{}, discard)
 	if err == nil || !strings.Contains(err.Error(), "remove SCANOPSIS_LOCAL_LOGIN_ENABLED=false") {
 		t.Fatalf("env seed: err = %v", err)
+	}
+	if len(fresh.rows) != 0 {
+		t.Fatalf("the refused environment value was saved: %v", fresh.rows)
 	}
 
 	// The same combination saved in the database names the database fix.
@@ -683,5 +694,35 @@ func TestStartRefusesSettingsWithoutSignIn(t *testing.T) {
 	seeds[KeyLocalLoginEnabled] = false
 	if newEnv(t, seeds).svc.Current().LocalLoginEnabled {
 		t.Fatal("local sign-in enabled although it is off and GitLab sign-in is configured")
+	}
+}
+
+func TestGitLabURLAloneIsValid(t *testing.T) {
+	// Verifying CI job tokens needs only the GitLab URL; sign-in stays off.
+	e := newEnv(t, nil)
+	if code, body := e.patch(t, `{"gitlab.url":"https://gitlab.example.com"}`); code != 200 {
+		t.Fatalf("status = %d, body %v", code, body)
+	}
+	snap := e.svc.Current()
+	if snap.GitLabURL != "https://gitlab.example.com" || snap.GitLabEnabled() {
+		t.Fatalf("snapshot = %+v, GitLabEnabled = %v", snap, snap.GitLabEnabled())
+	}
+}
+
+func TestSonarSettings(t *testing.T) {
+	e := newEnv(t, nil)
+	code, body := e.patch(t, `{"sonar.url":"https://sonarqube.example.com/","sonar.token":"squ_abc","sonar.webhook_secret":"whsec","sonar.sync_interval":"5m"}`)
+	if code != 200 {
+		t.Fatalf("status = %d, body %v", code, body)
+	}
+	snap := e.svc.Current()
+	if !snap.SonarEnabled() || snap.SonarURL != "https://sonarqube.example.com" || snap.SonarToken != "squ_abc" ||
+		snap.SonarWebhookSecret != "whsec" || snap.SonarSyncInterval != 5*time.Minute {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	for _, row := range e.st.rows {
+		if strings.Contains(string(row.SecretEnc), "squ_abc") || strings.Contains(string(row.Value), "squ_abc") {
+			t.Fatal("SonarQube token stored in plain text")
+		}
 	}
 }
