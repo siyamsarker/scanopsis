@@ -27,11 +27,20 @@ describe('protected layout', () => {
       call.path === '/api/v1/me' ? json(200, makeUser({ role: 'admin' })) : undefined,
     );
     renderApp('/');
+    for (const [name, href] of [
+      ['Services', '/admin/services'],
+      ['Integrations', '/admin/integrations'],
+      ['Audit log', '/admin/audit'],
+      ['Settings', '/settings'],
+    ]) {
+      expect(await screen.findByRole('link', { name })).toHaveAttribute('href', href);
+    }
     expect(await screen.findByRole('link', { name: 'Users' })).toHaveAttribute(
       'href',
       '/admin/users',
     );
-    expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Portfolio' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Search' })).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText('Admin')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Services' })).toBeInTheDocument();

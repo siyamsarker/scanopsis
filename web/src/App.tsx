@@ -3,7 +3,6 @@
 
 import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router';
-import { HomePage } from './routes/HomePage';
 import { LoginPage } from './routes/LoginPage';
 import { NotFoundPage } from './routes/NotFoundPage';
 import { PasswordPage } from './routes/PasswordPage';
@@ -20,6 +19,28 @@ const EnrollPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('./routes/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
+
+// Screens load on demand so that the sign-in pages stay small.
+const PortfolioPage = lazy(() =>
+  import('./routes/PortfolioPage').then((m) => ({ default: m.PortfolioPage })),
+);
+const ServicePage = lazy(() =>
+  import('./routes/ServicePage').then((m) => ({ default: m.ServicePage })),
+);
+const FindingsPage = lazy(() =>
+  import('./routes/FindingsPage').then((m) => ({ default: m.FindingsPage })),
+);
+const ScanPage = lazy(() => import('./routes/ScanPage').then((m) => ({ default: m.ScanPage })));
+const SearchPage = lazy(() =>
+  import('./routes/SearchPage').then((m) => ({ default: m.SearchPage })),
+);
+const AdminServicesPage = lazy(() =>
+  import('./routes/AdminServicesPage').then((m) => ({ default: m.AdminServicesPage })),
+);
+const IntegrationsPage = lazy(() =>
+  import('./routes/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })),
+);
+const AuditPage = lazy(() => import('./routes/AuditPage').then((m) => ({ default: m.AuditPage })));
 
 const loading = (
   <p role="status" className="p-6 text-text-muted">
@@ -38,8 +59,15 @@ export function App() {
           <Route path="/2fa" element={<VerifyPage />} />
           <Route path="/password" element={<PasswordPage />} />
           <Route element={<ProtectedLayout />}>
-            <Route index element={<HomePage />} />
+            <Route index element={<PortfolioPage />} />
+            <Route path="services/:id" element={<ServicePage />} />
+            <Route path="services/:id/findings" element={<FindingsPage />} />
+            <Route path="scans/:id" element={<ScanPage />} />
+            <Route path="search" element={<SearchPage />} />
+            <Route path="admin/services" element={<AdminServicesPage />} />
             <Route path="admin/users" element={<UsersPage />} />
+            <Route path="admin/integrations" element={<IntegrationsPage />} />
+            <Route path="admin/audit" element={<AuditPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>

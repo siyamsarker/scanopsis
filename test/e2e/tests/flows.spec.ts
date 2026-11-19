@@ -225,7 +225,8 @@ test('5. a GitLab user enrols two-factor and lands as a viewer', async ({ browse
   await expect(header(alice).getByText('Alice Example')).toBeVisible();
   await expect(header(alice).getByText('Viewer')).toBeVisible();
   const nav = alice.getByRole('navigation', { name: 'Main' });
-  await expect(nav.getByRole('link', { name: 'Home' })).toBeVisible();
+  await expect(nav.getByRole('link', { name: 'Portfolio' })).toBeVisible();
+  await expect(nav.getByRole('link', { name: 'Integrations' })).toHaveCount(0);
   await expect(nav.getByRole('link', { name: 'Users' })).toHaveCount(0);
   await expect(nav.getByRole('link', { name: 'Settings' })).toHaveCount(0);
 

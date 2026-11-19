@@ -109,14 +109,29 @@ export function ProtectedLayout() {
           <Link to="/" className="rounded-control py-1 text-lg">
             <Wordmark />
           </Link>
-          <nav aria-label="Main" className="order-last flex w-full gap-1 sm:order-none sm:w-auto">
+          <nav
+            aria-label="Main"
+            className="order-last -mx-1 flex w-full gap-1 overflow-x-auto px-1 sm:order-none sm:w-auto"
+          >
             <NavLink to="/" end className={navLinkClass}>
-              Home
+              Portfolio
+            </NavLink>
+            <NavLink to="/search" className={navLinkClass}>
+              Search
             </NavLink>
             {user.role === 'admin' && (
               <>
+                <NavLink to="/admin/services" className={navLinkClass}>
+                  Services
+                </NavLink>
                 <NavLink to="/admin/users" className={navLinkClass}>
                   Users
+                </NavLink>
+                <NavLink to="/admin/integrations" className={navLinkClass}>
+                  Integrations
+                </NavLink>
+                <NavLink to="/admin/audit" className={navLinkClass}>
+                  Audit log
                 </NavLink>
                 <NavLink to="/settings" className={navLinkClass}>
                   Settings
