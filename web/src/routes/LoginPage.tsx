@@ -8,6 +8,7 @@ import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { useAuthMethods, useMe } from '../api/hooks';
 import { safeReturnTo } from '../auth/returnTo';
+import { Wordmark } from '../components/ApertureMark';
 import { ThemeSwitch } from '../components/ThemeSwitch';
 import { cardClass, headingClass, inputClass, primaryButtonClass } from '../ui';
 
@@ -163,16 +164,19 @@ export function LoginPage() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
-      <section className={`${cardClass} flex w-full max-w-md flex-col gap-6 p-8`}>
+    <main className="brand-glow flex min-h-screen flex-col items-center justify-center gap-6 px-4 py-10 sm:px-6">
+      <Wordmark size={28} className="text-xl" />
+      <section
+        className={`${cardClass} brand-edge rise flex w-full max-w-md flex-col gap-6 p-6 sm:p-8`}
+      >
         <div>
-          <p className="text-lg font-semibold tracking-tight text-text">scanopsis</p>
-          <h1 className={`${headingClass} mt-2`}>Sign in</h1>
+          <h1 className={headingClass}>Sign in</h1>
+          <p className="mt-1 text-text-muted">to see your SonarQube and Trivy results.</p>
         </div>
         {urlError && <ErrorNote>{urlError}</ErrorNote>}
-        {body}
-        <ThemeSwitch />
+        <div className="min-h-24">{body}</div>
       </section>
+      <ThemeSwitch />
     </main>
   );
 }

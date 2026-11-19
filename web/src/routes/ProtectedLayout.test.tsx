@@ -48,6 +48,14 @@ describe('protected layout', () => {
     expect(await screen.findByRole('group', { name: 'Theme' })).toBeInTheDocument();
   });
 
+  it('shows the mark with the wordmark in the header and the aperture in the empty state', async () => {
+    mockFetch((call) => (call.path === '/api/v1/me' ? json(200, makeUser()) : undefined));
+    const { container } = renderApp('/');
+    expect(await screen.findByRole('link', { name: 'scanopsis' })).toHaveAttribute('href', '/');
+    expect(container.querySelectorAll('header a svg path')).toHaveLength(2);
+    expect(container.querySelectorAll('main svg path')).toHaveLength(2);
+  });
+
   it('hides the Users link for viewers and falls back to the username', async () => {
     mockFetch((call) =>
       call.path === '/api/v1/me'

@@ -25,6 +25,7 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
 }
 
 const cell = 'px-4 py-3 text-left align-middle';
+const headCell = `${cell} text-xs font-medium uppercase tracking-wider`;
 
 function UserRow({ user }: { user: User }) {
   const update = useUpdateUserRole();
@@ -38,8 +39,8 @@ function UserRow({ user }: { user: User }) {
     status = `Role changed to ${update.data.role === 'admin' ? 'Admin' : 'Viewer'}.`;
 
   return (
-    <tr className="border-t border-border">
-      <td className={`${cell} font-mono`}>{user.username}</td>
+    <tr className="border-t border-border transition-colors duration-150 ease-out hover:bg-surface-raised">
+      <td className={`${cell} font-mono text-[13px]`}>{user.username}</td>
       <td className={cell}>{user.name}</td>
       <td className={cell}>{user.email}</td>
       <td className={cell}>{user.source === 'gitlab' ? 'GitLab' : 'Local'}</td>
@@ -110,25 +111,25 @@ function UsersTable() {
         tabIndex={0}
         className={`${cardClass} mt-6 overflow-x-auto`}
       >
-        <table className="w-full border-collapse">
+        <table className="w-full min-w-[46rem] border-collapse">
           <thead>
-            <tr className="text-text-muted">
-              <th scope="col" className={`${cell} font-medium`}>
+            <tr className="bg-bg/40 text-text-muted">
+              <th scope="col" className={headCell}>
                 Username
               </th>
-              <th scope="col" className={`${cell} font-medium`}>
+              <th scope="col" className={headCell}>
                 Name
               </th>
-              <th scope="col" className={`${cell} font-medium`}>
+              <th scope="col" className={headCell}>
                 E-mail
               </th>
-              <th scope="col" className={`${cell} font-medium`}>
+              <th scope="col" className={headCell}>
                 Sign-in
               </th>
-              <th scope="col" className={`${cell} font-medium`}>
+              <th scope="col" className={headCell}>
                 Role
               </th>
-              <th scope="col" className={`${cell} font-medium`}>
+              <th scope="col" className={headCell}>
                 Last sign-in
               </th>
             </tr>
@@ -159,6 +160,7 @@ export function UsersPage() {
   return (
     <>
       <h1 className={headingClass}>Users</h1>
+      <p className="mt-1 text-text-muted">Everyone who has signed in, and the role they hold.</p>
       {me.data?.role === 'admin' ? (
         <UsersTable />
       ) : (

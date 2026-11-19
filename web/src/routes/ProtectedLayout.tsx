@@ -7,12 +7,15 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { useMe } from '../api/hooks';
+import { Wordmark } from '../components/ApertureMark';
 import { ThemeSwitch } from '../components/ThemeSwitch';
 import { primaryButtonClass, secondaryButtonClass } from '../ui';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `rounded-control px-3 py-2 transition-colors duration-150 ease-out hover:bg-surface-raised ${
-    isActive ? 'bg-surface-raised text-text' : 'text-text-muted'
+    isActive
+      ? 'bg-surface-raised text-text shadow-[inset_0_-2px_0_var(--brand)]'
+      : 'text-text-muted'
   }`;
 
 /** Empties the query cache once, so data of an ended session is never kept. */
@@ -94,12 +97,12 @@ export function ProtectedLayout() {
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-border bg-surface">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3">
-          <Link to="/" className="text-lg font-semibold tracking-tight text-text">
-            scanopsis
+      <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:px-6">
+          <Link to="/" className="rounded-control py-1 text-lg">
+            <Wordmark />
           </Link>
-          <nav aria-label="Main" className="flex gap-1">
+          <nav aria-label="Main" className="order-last flex w-full gap-1 sm:order-none sm:w-auto">
             <NavLink to="/" end className={navLinkClass}>
               Home
             </NavLink>
@@ -109,27 +112,27 @@ export function ProtectedLayout() {
               </NavLink>
             )}
           </nav>
-          <div className="ml-auto flex items-center gap-3">
-            <span className="text-text">
+          <div className="ml-auto flex items-center gap-2 sm:gap-3">
+            <span className="sr-only min-w-0 max-w-48 truncate text-text sm:not-sr-only sm:block">
               {user.name || user.username}
-              <span className="ml-2 text-text-muted">
+              <span className="ml-2 rounded-control border border-border px-1.5 py-0.5 text-xs text-text-muted">
                 {user.role === 'admin' ? 'Admin' : 'Viewer'}
               </span>
             </span>
             <ThemeSwitch />
             <button type="button" className={secondaryButtonClass} onClick={() => void signOut()}>
               <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
-              Sign out
+              <span className="sr-only sm:not-sr-only">Sign out</span>
             </button>
           </div>
         </div>
         {signOutError && (
-          <p role="alert" className="mx-auto max-w-6xl px-6 pb-3 text-text">
+          <p role="alert" className="mx-auto max-w-6xl px-4 pb-3 text-text sm:px-6">
             {signOutError}
           </p>
         )}
       </header>
-      <main className="mx-auto max-w-6xl px-6 py-8">
+      <main className="rise mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
         <Outlet />
       </main>
     </div>
