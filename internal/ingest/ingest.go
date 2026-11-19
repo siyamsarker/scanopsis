@@ -16,6 +16,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -111,6 +112,10 @@ type Ingest struct {
 	auditLimit *auth.RateLimiter
 	// sem holds one entry per upload being processed.
 	sem chan struct{}
+	// openWarned is set while the open-to-everyone warning has been logged
+	// for the current settings, so it is logged once per change into that
+	// state.
+	openWarned atomic.Bool
 }
 
 // New returns an Ingest that stores uploads in pool.
@@ -133,12 +138,32 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	if opts.AuditLimiter == nil {
 		opts.AuditLimiter = auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, opts.Now)
 	}
-	return &Ingest{
+	i := &Ingest{
 		cfg: cfg, audit: audit, opts: opts, log: opts.Logger,
 		ver:        &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
 		store:      &pgSaver{pool: pool, log: opts.Logger},
 		auditLimit: opts.AuditLimiter,
 		sem:        make(chan struct{}, opts.MaxConcurrentUploads),
+	}
+	i.checkOpen(cfg.Current())
+	// The settings service calls back after every change; a source without
+	// OnChange is checked when an upload arrives instead.
+	if n, ok := cfg.(interface{ OnChange(func(settings.Snapshot)) }); ok {
+		n.OnChange(i.checkOpen)
+	}
+	return i
+}
+
+// checkOpen logs a warning when GitLab is configured and no namespace is
+// allowed, which lets every project of the GitLab instance upload. It warns
+// once for each time the settings change into that state.
+func (i *Ingest) checkOpen(snap settings.Snapshot) {
+	if snap.GitLabURL == "" || len(snap.IngestAllowedNamespaces) > 0 {
+		i.openWarned.Store(false)
+		return
+	}
+	if !i.openWarned.Swap(true) {
+		i.log.Warn("ingest accepts uploads from every project of the GitLab instance; set ingest.allowed_namespaces to restrict it")
 	}
 }
 
@@ -177,6 +202,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	snap := i.cfg.Current()
+	i.checkOpen(snap)
 	gitlabURL := strings.TrimRight(snap.GitLabURL, "/")
 	if gitlabURL == "" {
 		httpapi.WriteError(w, http.StatusServiceUnavailable, codeNotConfigured,

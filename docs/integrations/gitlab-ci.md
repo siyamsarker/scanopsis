@@ -237,6 +237,14 @@ Trivy wrote it, and Trivy masks the secret in it.)
 
 ## Restrict who may upload
 
+> **Set the allowed namespaces on a shared or public GitLab instance.** With the
+> list empty, every project of the GitLab instance can upload: a token is valid
+> for Scanopsis whenever the instance that signed it is the configured one. On
+> a shared or public instance (gitlab.com, for example) that means any project
+> of any user on it. Scanopsis logs a warning ("ingest accepts uploads from
+> every project of the GitLab instance; set ingest.allowed_namespaces to
+> restrict it") at start-up, and whenever the settings change into that state.
+
 Anyone who can run a job on your GitLab instance can get a token, and the token
 is valid for Scanopsis, because it is signed by your GitLab. Two settings limit
 which jobs are accepted. Set them in **Settings**, or with environment variables.

@@ -47,8 +47,27 @@ func (r *recorder) list() []auditEvent {
 }
 
 type fakeSettings struct {
-	mu   sync.Mutex
-	snap settings.Snapshot
+	mu        sync.Mutex
+	snap      settings.Snapshot
+	callbacks []func(settings.Snapshot)
+}
+
+// OnChange registers fn like settings.Service does.
+func (f *fakeSettings) OnChange(fn func(settings.Snapshot)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.callbacks = append(f.callbacks, fn)
+}
+
+// change updates the snapshot and calls the registered callbacks.
+func (f *fakeSettings) change(fn func(*settings.Snapshot)) {
+	f.set(fn)
+	f.mu.Lock()
+	cbs := append([]func(settings.Snapshot){}, f.callbacks...)
+	f.mu.Unlock()
+	for _, cb := range cbs {
+		cb(f.Current())
+	}
 }
 
 func (f *fakeSettings) Current() settings.Snapshot {
@@ -110,6 +129,8 @@ func newHEnv(t *testing.T, mutate func(*Options)) *hEnv {
 	}
 	e.in = New(nil, e.cfg, e.audit, opts)
 	e.in.store = e.save
+	// The start-up warning about open uploads has its own tests.
+	e.logs.Reset()
 	return e
 }
 
