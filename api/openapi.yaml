@@ -1,0 +1,281 @@
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
+openapi: 3.1.0
+info:
+  title: Scanopsis API
+  version: 0.1.0
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  description: |
+    JSON API of Scanopsis. Every endpoint under /api/v1 except the
+    authentication endpoints requires a session cookie. State-changing
+    requests from browsers must be same-origin (checked with the
+    Sec-Fetch-Site and Origin headers).
+servers:
+  - url: /
+tags:
+  - name: ops
+  - name: auth
+  - name: users
+
+paths:
+  /healthz:
+    get:
+      tags: [ops]
+      summary: Liveness probe. Does not check dependencies.
+      operationId: healthz
+      security: []
+      responses:
+        "200":
+          description: The process is running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+  /readyz:
+    get:
+      tags: [ops]
+      summary: Readiness probe. Checks the database connection.
+      operationId: readyz
+      security: []
+      responses:
+        "200":
+          description: Ready to serve requests.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+        "503":
+          description: Not ready. The reason names the failing dependency without secrets.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+
+  /api/v1/version:
+    get:
+      tags: [ops]
+      operationId: getVersion
+      security: []
+      responses:
+        "200":
+          description: Build information.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Version" }
+
+  /api/v1/auth/methods:
+    get:
+      tags: [auth]
+      summary: Sign-in methods enabled on this server.
+      operationId: getAuthMethods
+      security: []
+      responses:
+        "200":
+          description: Enabled methods.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthMethods" }
+
+  /api/v1/auth/gitlab/login:
+    get:
+      tags: [auth]
+      summary: Start GitLab sign-in.
+      description: |
+        Redirects the browser to GitLab (authorization code flow with PKCE,
+        state and nonce). return_to must be a local path starting with a
+        single "/"; anything else is replaced by "/".
+      operationId: gitlabLogin
+      security: []
+      parameters:
+        - name: return_to
+          in: query
+          schema: { type: string, example: /services }
+      responses:
+        "302": { description: Redirect to the GitLab authorization endpoint. }
+        "404": { description: GitLab sign-in is not configured., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: GitLab could not be reached., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/auth/gitlab/callback:
+    get:
+      tags: [auth]
+      summary: GitLab redirect target. Completes sign-in.
+      description: |
+        On success, sets the session cookie and redirects to return_to. On
+        failure, redirects to /login?error=<code> where code is one of
+        access_denied, group_not_allowed, login_expired, login_failed.
+      operationId: gitlabCallback
+      security: []
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        "302": { description: Redirect to the application or to the sign-in page with an error code. }
+
+  /api/v1/auth/local/login:
+    post:
+      tags: [auth]
+      summary: Sign in as the local administrator.
+      operationId: localLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LocalLoginRequest" }
+      responses:
+        "204": { description: Signed in. The session cookie is set. }
+        "400": { description: Malformed request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Wrong username or password., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "404": { description: Local sign-in is disabled., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Too many attempts from this address. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      responses:
+        "204": { description: Signed out. The session is deleted and the cookie cleared. }
+
+  /api/v1/me:
+    get:
+      tags: [auth]
+      summary: The signed-in user.
+      operationId: getMe
+      responses:
+        "200":
+          description: Current user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+
+  /api/v1/users:
+    get:
+      tags: [users]
+      summary: List users (admin only), ordered by id.
+      operationId: listUsers
+      parameters:
+        - name: after
+          in: query
+          description: Return users with an id greater than this value.
+          schema: { type: integer, format: int64, minimum: 0, default: 0 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: One page of users.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserPage" }
+        "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/v1/users/{id}:
+    patch:
+      tags: [users]
+      summary: Change a user's role (admin only).
+      operationId: updateUser
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UserUpdate" }
+      responses:
+        "200":
+          description: Updated user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { description: Invalid request body., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: The change would leave no administrator (code last_admin)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: __Host-scanopsis_session
+      description: Named scanopsis_session when the public URL uses plain HTTP.
+  responses:
+    Unauthenticated:
+      description: No valid session.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: The signed-in user lacks the required role.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, description: Stable machine-readable code., example: unauthenticated }
+            message: { type: string, description: Human-readable explanation and next step. }
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, ready, not_ready] }
+        reason: { type: string }
+    Version:
+      type: object
+      required: [version, commit, go]
+      properties:
+        version: { type: string }
+        commit: { type: string }
+        go: { type: string }
+    AuthMethods:
+      type: object
+      required: [gitlab, local]
+      properties:
+        gitlab: { type: boolean }
+        local: { type: boolean }
+    LocalLoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username: { type: string, minLength: 1, maxLength: 200 }
+        password: { type: string, minLength: 1, maxLength: 1024 }
+    User:
+      type: object
+      required: [id, source, username, name, email, role, created_at, last_login_at]
+      properties:
+        id: { type: integer, format: int64 }
+        source: { type: string, enum: [gitlab, local] }
+        username: { type: string }
+        name: { type: string }
+        email: { type: string }
+        role: { $ref: "#/components/schemas/Role" }
+        created_at: { type: string, format: date-time }
+        last_login_at: { type: [string, "null"], format: date-time }
+    UserPage:
+      type: object
+      required: [items, next_after]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+        next_after:
+          type: [integer, "null"]
+          format: int64
+          description: Pass as `after` to get the next page; null on the last page.
+    UserUpdate:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role: { $ref: "#/components/schemas/Role" }
+    Role:
+      type: string
+      enum: [admin, viewer]
+security:
+  - session: []
