@@ -150,7 +150,7 @@ export function VulnerabilitiesTab({
     {
       key: 'versions',
       header: 'Installed → fixed',
-      width: 'w-96 shrink-0',
+      width: 'w-[28rem] shrink-0',
       cell: (v) => (
         <span
           className="flex min-w-0 items-center gap-1.5"
@@ -314,7 +314,7 @@ export function VulnerabilitiesTab({
         loading={loading}
         onRowActivate={setOpen}
         heightClass="h-[70vh]"
-        minWidthClass="min-w-[103rem]"
+        minWidthClass="min-w-[107rem]"
         empty={
           rows.length === 0 ? (
             <EmptyState
