@@ -114,9 +114,14 @@ export function ProtectedLayout() {
               Home
             </NavLink>
             {user.role === 'admin' && (
-              <NavLink to="/admin/users" className={navLinkClass}>
-                Users
-              </NavLink>
+              <>
+                <NavLink to="/admin/users" className={navLinkClass}>
+                  Users
+                </NavLink>
+                <NavLink to="/settings" className={navLinkClass}>
+                  Settings
+                </NavLink>
+              </>
             )}
           </nav>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">

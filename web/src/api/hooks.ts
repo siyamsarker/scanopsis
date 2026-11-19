@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, unwrap, type ApiError, type Me, type Role, type User } from './client';
+import type { components } from './schema.gen';
+import { api, ApiError, toApiError, unwrap, type Me, type Role, type User } from './client';
 
 export const meKey = ['me'] as const;
 const usersKey = ['users'] as const;
@@ -65,6 +66,49 @@ export function useResetUserMfa() {
   return useMutation<void, ApiError, number>({
     mutationFn: async (id) => {
       unwrap(await api.DELETE('/api/v1/users/{id}/mfa', { params: { path: { id } } }));
+    },
+  });
+}
+
+export type Setting = components['schemas']['Setting'];
+export type SettingValue = components['schemas']['SettingUpdate'][string];
+
+const settingsKey = ['settings'] as const;
+
+export function useSettings(enabled = true) {
+  return useQuery({
+    enabled,
+    queryKey: settingsKey,
+    queryFn: async () => unwrap(await api.GET('/api/v1/settings')).items,
+  });
+}
+
+/** A rejected settings change, with the problem found for each key. */
+export class SettingsValidationError extends ApiError {
+  readonly fields: Record<string, string>;
+
+  constructor(base: ApiError, fields: Record<string, string>) {
+    super(base.status, base.code, base.message, base.retryAfter);
+    this.name = 'SettingsValidationError';
+    this.fields = fields;
+  }
+}
+
+export function useUpdateSettings() {
+  const queryClient = useQueryClient();
+  return useMutation<Setting[], ApiError, Record<string, SettingValue>>({
+    mutationFn: async (changes) => {
+      const result = await api.PATCH('/api/v1/settings', { body: changes });
+      if (result.response.ok) return result.data!.items;
+      const error = toApiError(result.response, result.error);
+      const fields = (result.error as { error?: { fields?: unknown } } | undefined)?.error?.fields;
+      if (fields && typeof fields === 'object') {
+        throw new SettingsValidationError(error, fields as Record<string, string>);
+      }
+      throw error;
+    },
+    onSuccess: (items) => {
+      queryClient.setQueryData(settingsKey, items);
     },
   });
 }

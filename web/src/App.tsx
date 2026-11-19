@@ -13,9 +13,12 @@ import { SetupPage } from './routes/SetupPage';
 import { UsersPage } from './routes/UsersPage';
 import { VerifyPage } from './routes/VerifyPage';
 
-// The enrolment page and the QR code library it needs load on demand.
+// Rarely used pages, and the QR code library they need, load on demand.
 const EnrollPage = lazy(() =>
   import('./routes/EnrollPage').then((m) => ({ default: m.EnrollPage })),
+);
+const SettingsPage = lazy(() =>
+  import('./routes/SettingsPage').then((m) => ({ default: m.SettingsPage })),
 );
 
 const loading = (
@@ -33,10 +36,11 @@ export function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/2fa/setup" element={<EnrollPage />} />
           <Route path="/2fa" element={<VerifyPage />} />
-        <Route path="/password" element={<PasswordPage />} />
+          <Route path="/password" element={<PasswordPage />} />
           <Route element={<ProtectedLayout />}>
             <Route index element={<HomePage />} />
             <Route path="admin/users" element={<UsersPage />} />
+            <Route path="settings" element={<SettingsPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>
