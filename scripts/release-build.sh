@@ -12,6 +12,9 @@
 #   DRY_RUN=true   (default) builds each architecture into the local Docker
 #                  daemon, pushes nothing and needs no credentials.
 #
+# Both architectures must pass the vulnerability and secret gates of CI
+# before anything is pushed.
+#
 # Needs docker with buildx, jq, trivy and a clean checkout of the tag.
 # Usage: scripts/release-build.sh <x.y.z>
 set -euo pipefail
@@ -54,6 +57,23 @@ docker buildx create --name "$builder" --driver docker-container \
 common=(--builder "$builder" --provenance=false --sbom=false
   --build-arg "VERSION=$version" --build-arg "COMMIT=$commit")
 
+# Every architecture is built into the local daemon and must pass the same
+# Trivy gates as CI before anything is pushed: no HIGH or CRITICAL
+# vulnerability and no secret. The dry run keeps the SBOM of this build.
+echo "== scan ${platforms[*]} before publishing"
+for platform in "${platforms[@]}"; do
+  arch=${platform#linux/}
+  local_tag="scanopsis-release-check:$version-$arch"
+  docker buildx build "${common[@]}" --platform "$platform" --load --tag "$local_tag" .
+  trivy image --quiet --image-src docker --scanners vuln --severity HIGH,CRITICAL --exit-code 1 "$local_tag"
+  trivy image --quiet --image-src docker --scanners secret --exit-code 1 "$local_tag"
+  if [ "$dry_run" = true ]; then
+    trivy image --quiet --image-src docker \
+      --format cyclonedx --output "$out/scanopsis-$version-linux-$arch.cdx.json" "$local_tag"
+  fi
+  docker image rm -f "$local_tag" >/dev/null
+done
+
 if [ "$dry_run" = false ]; then
   tags=(--tag "$repo:$version")
   case $version in *-*) ;; *) tags+=(--tag "$repo:latest") ;; esac
@@ -73,12 +93,6 @@ for platform in "${platforms[@]}"; do
   if [ "$dry_run" = false ]; then
     trivy image --quiet --image-src remote --platform "$platform" \
       --format cyclonedx --output "$sbom" "$repo@$digest"
-  else
-    local_tag="scanopsis-release-dry:$version-$arch"
-    docker buildx build "${common[@]}" --platform "$platform" --load --tag "$local_tag" .
-    trivy image --quiet --image-src docker \
-      --format cyclonedx --output "$sbom" "$local_tag"
-    docker image rm -f "$local_tag" >/dev/null
   fi
   jq -e '.bomFormat == "CycloneDX" and (.components | length > 0)' "$sbom" >/dev/null ||
     { echo "release-build: $sbom is not a usable CycloneDX document" >&2; exit 1; }

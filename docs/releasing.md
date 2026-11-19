@@ -12,6 +12,7 @@ When the repository is published, the maintainer must enable these GitHub settin
 - **Tag protection.** Restrict who can create `v*` tags, for example with a repository ruleset, because a tag starts a publication.
 - **Private vulnerability reporting.** Enable it under Settings, Code security, so that reporters have the private channel that `SECURITY.md` describes.
 - **Dependabot alerts and security updates.** Enable both. Version updates are configured in `.github/dependabot.yml`.
+- **Release environment.** Create an environment named `release` under Settings, Environments. Add required reviewers and limit its deployment to tags matching `v*`. The publishing job runs in this environment, so it waits for an approval, and a workflow changed on another branch cannot publish.
 - **Workflow permissions.** Set the default `GITHUB_TOKEN` permission to read-only. The release workflow asks for write access in the one job that needs it.
 - **Package visibility.** The first push creates the package `scanopsis` on ghcr.io as private. Link it to the repository and make it public under the package settings if users should pull it without signing in.
 
@@ -47,13 +48,14 @@ The workflow has two jobs.
 - `CHANGELOG.md` has a non-empty section for the version.
 - `make check` and `make test-integration` pass.
 
-**Build and publish** is the only job with `contents: write` and `packages: write`. It runs `scripts/release-build.sh`, which:
+**Build and publish** is the only job with `contents: write` and `packages: write`, and it runs in the `release` environment. It runs `scripts/release-build.sh`, which:
 
 1. Builds `linux/amd64` and `linux/arm64` with `docker buildx`. The Dockerfile cross-compiles on the runner, so no emulation is involved. BuildKit comes from an image pinned by digest.
-2. Pushes `ghcr.io/siyamsarker/scanopsis:X.Y.Z`, and `:latest` for a final release, and reads the image digest from the build metadata.
-3. Writes a CycloneDX SBOM for each architecture from the pushed image, with the Trivy version pinned in the workflow and checked against a SHA-256 value.
-4. Appends the image digest to the release notes.
-5. Writes `checksums.txt` with the SHA-256 of the notes and of both SBOMs.
+2. Scans both images with the same Trivy gates as CI: any HIGH or CRITICAL vulnerability, or any secret, stops the release before anything is pushed.
+3. Pushes `ghcr.io/siyamsarker/scanopsis:X.Y.Z`, and `:latest` for a final release, and reads the image digest from the build metadata.
+4. Writes a CycloneDX SBOM for each architecture from the pushed image, with the Trivy version pinned in the workflow and checked against a SHA-256 value.
+5. Appends the image digest to the release notes.
+6. Writes `checksums.txt` with the SHA-256 of the notes and of both SBOMs.
 
 The workflow then creates the GitHub release with the `gh` CLI and attaches the SBOMs and `checksums.txt`. The registry login uses `GITHUB_TOKEN` through an environment variable and is removed at the end of the job. The workflow uses no third-party action: only `actions/checkout`, `actions/setup-go` and `actions/setup-node`, pinned by commit.
 
