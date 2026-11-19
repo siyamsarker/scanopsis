@@ -729,7 +729,7 @@ export interface components {
             /** Format: int64 */
             service_id: number;
             service_created: boolean;
-            /** @description An earlier upload for the same job */
+            /** @description An earlier upload for the same job, artifact and kind was replaced. */
             replaced: boolean;
             counts: components["schemas"]["SeverityCounts"];
             fixable: number;
@@ -830,7 +830,7 @@ export interface components {
             suppression: string;
             /**
              * Format: date-time
-             * @description Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id
+             * @description Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id, pkg_name, target).
              */
             first_seen_at: string;
         };
@@ -871,7 +871,7 @@ export interface components {
             service: components["schemas"]["Service"];
             /** @description null when the service has no scans yet. */
             ref: string | null;
-            /** @description Refs with scans */
+            /** @description Refs with scans, most recent first. */
             refs: string[];
             /** @description Latest scan per artifact and kind for the ref. */
             artifacts: components["schemas"]["ScanSummary"][];
@@ -959,7 +959,7 @@ export interface components {
         ServiceSonar: {
             sonar_project_key: string | null;
             latest: components["schemas"]["SonarAnalysis"] | null;
-            /** @description Newest first */
+            /** @description Newest first, including latest. */
             history: components["schemas"]["SonarAnalysis"][];
         };
         PortfolioItem: {
@@ -1024,7 +1024,7 @@ export interface components {
             next_before: number | null;
         };
         TrivyIntegration: {
-            /** @description The GitLab URL is set */
+            /** @description The GitLab URL is set, so ID tokens can be verified. */
             configured: boolean;
             /** Format: date-time */
             last_upload_at: string | null;
@@ -1100,7 +1100,7 @@ export interface components {
             source: "default" | "env" | "ui";
             /** @description Current value; always null for secrets. */
             value: null | string | boolean | number | string[];
-            /** @description For secrets */
+            /** @description For secrets, whether a value exists. */
             is_set: boolean;
             /** @description Environment variable that seeds this setting. */
             env_var: string;
@@ -1606,7 +1606,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Wrong or reused code (code invalid_code) */
+            /** @description Wrong or reused code (code invalid_code), or no session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1705,7 +1705,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Wrong code (code invalid_code) */
+            /** @description Wrong code (code invalid_code), or no session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1763,7 +1763,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Wrong current password (code invalid_credentials) */
+            /** @description Wrong current password (code invalid_credentials), or no session. */
             401: {
                 headers: {
                     [name: string]: unknown;
@@ -1905,7 +1905,7 @@ export interface operations {
                     "application/json": components["schemas"]["IngestResult"];
                 };
             };
-            /** @description Malformed body or gzip stream (code invalid_report) */
+            /** @description Malformed body or gzip stream (code invalid_report), or an unknown kind (code invalid_parameter). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -1932,7 +1932,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The project's service is archived (code service_archived) */
+            /** @description The project's service is archived (code service_archived), or its path belongs to another service (code service_conflict). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -1959,7 +1959,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Not a Trivy JSON report */
+            /** @description Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report). */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1977,7 +1977,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The GitLab URL is not configured (code ingest_not_configured) */
+            /** @description The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), or the server is processing other uploads and the request ended while waiting for a free slot (code busy; Retry-After gives seconds). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -2305,7 +2305,7 @@ export interface operations {
             query?: {
                 /** @description Git ref; defaults to the ref with the most recent scan. */
                 ref?: string;
-                /** @description Return the scans that come after the scan with this id in newest-first order (by scan time */
+                /** @description Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page. */
                 before?: number;
                 limit?: number;
             };
@@ -2421,7 +2421,7 @@ export interface operations {
                 fixable?: boolean;
                 /** @description Include suppressed findings. */
                 suppressed?: boolean;
-                /** @description Substring of package name */
+                /** @description Substring of package name, vulnerability ID or title. */
                 q?: string;
                 after?: number;
                 limit?: number;
@@ -2514,7 +2514,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Trend points */
+            /** @description Trend points, oldest first. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -2614,9 +2614,9 @@ export interface operations {
     listAuditEvents: {
         parameters: {
             query?: {
-                /** @description Exact action */
+                /** @description Exact action, for example login.failed. */
                 action?: string;
-                /** @description Substring of the actor */
+                /** @description Substring of the actor, case-insensitive. */
                 actor?: string;
                 /** @description Return events with an id lower than this value. */
                 before?: number;

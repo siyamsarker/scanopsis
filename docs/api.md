@@ -35,8 +35,8 @@ Parameters:
 
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
-| `action` | query | no | string (maxLength 100) | Exact action |
-| `actor` | query | no | string (maxLength 200) | Substring of the actor |
+| `action` | query | no | string (maxLength 100) | Exact action, for example login.failed. |
+| `actor` | query | no | string (maxLength 200) | Substring of the actor, case-insensitive. |
 | `before` | query | no | integer (int64, minimum 1) | Return events with an id lower than this value. |
 | `limit` | query | no | integer (minimum 1, maximum 200, default 50) |  |
 
@@ -205,7 +205,7 @@ Responses:
 |---|---|---|
 | 200 | Enrolled. The recovery codes are shown only this once; the session is fully usable. | `application/json` [RecoveryCodes](#recoverycodes) |
 | 400 | Malformed request. | `application/json` [Error](#error) |
-| 401 | Wrong code (code invalid_code) | `application/json` [Error](#error) |
+| 401 | Wrong code (code invalid_code), or no session. | `application/json` [Error](#error) |
 | 409 | No pending enrolment (code mfa_enrollment_not_started) or already enrolled. | `application/json` [Error](#error) |
 | 429 | Too many attempts. | `application/json` [Error](#error) |
 
@@ -228,7 +228,7 @@ Responses:
 |---|---|---|
 | 204 | Second factor accepted; the session is fully usable. | none |
 | 400 | Malformed request. | `application/json` [Error](#error) |
-| 401 | Wrong or reused code (code invalid_code) | `application/json` [Error](#error) |
+| 401 | Wrong or reused code (code invalid_code), or no session. | `application/json` [Error](#error) |
 | 409 | Two-factor authentication is not enrolled yet (code mfa_enrollment_required). | `application/json` [Error](#error) |
 | 423 | Ten wrong codes in a row locked two-factor sign-in for this user (code mfa_locked). Every code is refused until an administrator resets two-factor authentication or the password; the user's sessions were ended. | `application/json` [Error](#error) |
 | 429 | Too many attempts. Retry-After gives seconds. | `application/json` [Error](#error) |
@@ -280,15 +280,15 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 201 | Stored. | `application/json` [IngestResult](#ingestresult) |
-| 400 | Malformed body or gzip stream (code invalid_report) | `application/json` [Error](#error) |
+| 400 | Malformed body or gzip stream (code invalid_report), or an unknown kind (code invalid_parameter). | `application/json` [Error](#error) |
 | 401 | Missing or invalid ID token (code invalid_token; the message names the failed check). | `application/json` [Error](#error) |
 | 403 | Project namespace not allowed (code namespace_not_allowed) or ref not protected (code ref_not_protected). | `application/json` [Error](#error) |
-| 409 | The project's service is archived (code service_archived) | `application/json` [Error](#error) |
+| 409 | The project's service is archived (code service_archived), or its path belongs to another service (code service_conflict). | `application/json` [Error](#error) |
 | 413 | Report larger than the limit or with too many findings (code report_too_large). | `application/json` [Error](#error) |
 | 415 | Unsupported content type or encoding (code unsupported_media_type). | `application/json` [Error](#error) |
-| 422 | Not a Trivy JSON report | `application/json` [Error](#error) |
+| 422 | Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report). | `application/json` [Error](#error) |
 | 429 | Too many uploads from this address. Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | The GitLab URL is not configured (code ingest_not_configured) | `application/json` [Error](#error) |
+| 503 | The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), or the server is processing other uploads and the request ended while waiting for a free slot (code busy; Retry-After gives seconds). | `application/json` [Error](#error) |
 
 ### `GET /api/v1/me`
 
@@ -325,7 +325,7 @@ Responses:
 |---|---|---|
 | 204 | Password changed. | none |
 | 400 | Invalid request or weak password (code weak_password). | `application/json` [Error](#error) |
-| 401 | Wrong current password (code invalid_credentials) | `application/json` [Error](#error) |
+| 401 | Wrong current password (code invalid_credentials), or no session. | `application/json` [Error](#error) |
 | 403 | Not a local account (code not_local) or second factor not verified. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/portfolio`
@@ -549,7 +549,7 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
-| `before` | query | no | integer (int64) | Return the scans that come after the scan with this id in newest-first order (by scan time |
+| `before` | query | no | integer (int64) | Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page. |
 | `limit` | query | no | integer (minimum 1, maximum 200, default 50) |  |
 | `ref` | query | no | string | Git ref; defaults to the ref with the most recent scan. |
 
@@ -625,7 +625,7 @@ Responses:
 
 | Status | Description | Body |
 |---|---|---|
-| 200 | Trend points | `application/json` [Trends](#trends) |
+| 200 | Trend points, oldest first. | `application/json` [Trends](#trends) |
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
@@ -645,7 +645,7 @@ Parameters:
 | `after` | query | no | integer (int64, minimum 0, default 0) |  |
 | `fixable` | query | no | boolean |  |
 | `limit` | query | no | integer (minimum 1, maximum 500, default 100) |  |
-| `q` | query | no | string (maxLength 200) | Substring of package name |
+| `q` | query | no | string (maxLength 200) | Substring of package name, vulnerability ID or title. |
 | `ref` | query | no | string | Git ref; defaults to the ref with the most recent scan. |
 | `severity` | query | no | string | Comma-separated list. |
 | `suppressed` | query | no | boolean (default false) | Include suppressed findings. |
@@ -901,7 +901,7 @@ Type: object
 |---|---|---|---|
 | `counts` | [SeverityCounts](#severitycounts) | yes |  |
 | `fixable` | integer | yes |  |
-| `replaced` | boolean | yes | An earlier upload for the same job |
+| `replaced` | boolean | yes | An earlier upload for the same job, artifact and kind was replaced. |
 | `scan_id` | integer (int64) | yes |  |
 | `secrets` | integer | yes |  |
 | `service_created` | boolean | yes |  |
@@ -966,7 +966,7 @@ Type: object
 | `fixed_since_previous` | integer | yes |  |
 | `new_since_previous` | integer | yes |  |
 | `ref` | string or null | yes | null when the service has no scans yet. |
-| `refs` | array of string | yes | Refs with scans |
+| `refs` | array of string | yes | Refs with scans, most recent first. |
 | `secrets` | integer | yes |  |
 | `service` | [Service](#service) | yes |  |
 | `suppressed` | integer | yes |  |
@@ -1186,7 +1186,7 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `history` | array of [SonarAnalysis](#sonaranalysis) | yes | Newest first |
+| `history` | array of [SonarAnalysis](#sonaranalysis) | yes | Newest first, including latest. |
 | `latest` | [SonarAnalysis](#sonaranalysis) or null | yes |  |
 | `sonar_project_key` | string or null | yes |  |
 
@@ -1208,7 +1208,7 @@ Type: object
 |---|---|---|---|
 | `description` | string | yes |  |
 | `env_var` | string | yes | Environment variable that seeds this setting. |
-| `is_set` | boolean | yes | For secrets |
+| `is_set` | boolean | yes | For secrets, whether a value exists. |
 | `key` | string | yes |  |
 | `secret` | boolean | yes |  |
 | `source` | string (one of `default`, `env`, `ui`) | yes |  |
@@ -1353,7 +1353,7 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `configured` | boolean | yes | The GitLab URL is set |
+| `configured` | boolean | yes | The GitLab URL is set, so ID tokens can be verified. |
 | `last_upload_at` | string or null (date-time) | yes |  |
 | `recent_rejections` | array of object | yes |  |
 | `rejections_24h` | integer | yes | Recorded rejections in the last 24 hours. Rate-limited requests are not recorded and the number of recorded rejections per client address is bounded for rejections before the namespace and protected-ref checks. |
@@ -1409,7 +1409,7 @@ Type: object
 |---|---|---|---|
 | `artifact_name` | string | yes |  |
 | `class` | string | yes |  |
-| `first_seen_at` | string (date-time) | yes | Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id |
+| `first_seen_at` | string (date-time) | yes | Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id, pkg_name, target). |
 | `fixed_version` | string | yes | Empty when no fix is available. |
 | `id` | integer (int64) | yes |  |
 | `installed_version` | string | yes |  |

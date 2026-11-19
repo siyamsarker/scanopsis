@@ -256,7 +256,7 @@ paths:
       responses:
         "204": { description: Second factor accepted; the session is fully usable. }
         "400": { description: Malformed request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "401": { description: Wrong or reused code (code invalid_code), or no session., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: "Wrong or reused code (code invalid_code), or no session.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: Two-factor authentication is not enrolled yet (code mfa_enrollment_required)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "423": { description: Ten wrong codes in a row locked two-factor sign-in for this user (code mfa_locked). Every code is refused until an administrator resets two-factor authentication or the password; the user's sessions were ended., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many attempts. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -293,7 +293,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RecoveryCodes" }
         "400": { description: Malformed request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "401": { description: Wrong code (code invalid_code), or no session., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: "Wrong code (code invalid_code), or no session.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: No pending enrolment (code mfa_enrollment_not_started) or already enrolled., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many attempts., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
@@ -314,7 +314,7 @@ paths:
       responses:
         "204": { description: Password changed. }
         "400": { description: Invalid request or weak password (code weak_password)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "401": { description: Wrong current password (code invalid_credentials), or no session., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: "Wrong current password (code invalid_credentials), or no session.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: Not a local account (code not_local) or second factor not verified., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/users/{id}/mfa:
@@ -399,15 +399,15 @@ paths:
             schema: { type: object, description: A Trivy JSON report (SchemaVersion 2). }
       responses:
         "201": { description: Stored., content: { application/json: { schema: { $ref: "#/components/schemas/IngestResult" } } } }
-        "400": { description: Malformed body or gzip stream (code invalid_report), or an unknown kind (code invalid_parameter)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { description: "Malformed body or gzip stream (code invalid_report), or an unknown kind (code invalid_parameter).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: Missing or invalid ID token (code invalid_token; the message names the failed check)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: Project namespace not allowed (code namespace_not_allowed) or ref not protected (code ref_not_protected)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "409": { description: The project's service is archived (code service_archived), or its path belongs to another service (code service_conflict)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "The project's service is archived (code service_archived), or its path belongs to another service (code service_conflict).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "413": { description: Report larger than the limit or with too many findings (code report_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "415": { description: Unsupported content type or encoding (code unsupported_media_type)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "422": { description: Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many uploads from this address. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { description: The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), or the server is processing other uploads and the request ended while waiting for a free slot (code busy; Retry-After gives seconds)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: "The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), or the server is processing other uploads and the request ended while waiting for a free slot (code busy; Retry-After gives seconds).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/hooks/sonarqube:
     post:
@@ -523,7 +523,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
         - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
-        - { name: before, in: query, description: Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page., schema: { type: integer, format: int64 } }
+        - { name: before, in: query, description: "Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page.", schema: { type: integer, format: int64 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
         "200": { description: One page of scans., content: { application/json: { schema: { $ref: "#/components/schemas/ScanPage" } } } }
@@ -562,7 +562,7 @@ paths:
         - { name: severity, in: query, description: Comma-separated list., schema: { type: string, example: "CRITICAL,HIGH" } }
         - { name: fixable, in: query, schema: { type: boolean } }
         - { name: suppressed, in: query, description: Include suppressed findings., schema: { type: boolean, default: false } }
-        - { name: q, in: query, description: Substring of package name, vulnerability ID or title., schema: { type: string, maxLength: 200 } }
+        - { name: q, in: query, description: "Substring of package name, vulnerability ID or title.", schema: { type: string, maxLength: 200 } }
         - { name: after, in: query, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
       responses:
@@ -592,7 +592,7 @@ paths:
         - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
         - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 90 } }
       responses:
-        "200": { description: Trend points, oldest first., content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
+        "200": { description: "Trend points, oldest first.", content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -625,8 +625,8 @@ paths:
       summary: Audit log, newest first (admin only).
       operationId: listAuditEvents
       parameters:
-        - { name: action, in: query, description: Exact action, for example login.failed., schema: { type: string, maxLength: 100 } }
-        - { name: actor, in: query, description: Substring of the actor, case-insensitive., schema: { type: string, maxLength: 200 } }
+        - { name: action, in: query, description: "Exact action, for example login.failed.", schema: { type: string, maxLength: 100 } }
+        - { name: actor, in: query, description: "Substring of the actor, case-insensitive.", schema: { type: string, maxLength: 200 } }
         - { name: before, in: query, description: Return events with an id lower than this value., schema: { type: integer, format: int64, minimum: 1 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
@@ -761,7 +761,7 @@ components:
         scan_id: { type: integer, format: int64 }
         service_id: { type: integer, format: int64 }
         service_created: { type: boolean }
-        replaced: { type: boolean, description: An earlier upload for the same job, artifact and kind was replaced. }
+        replaced: { type: boolean, description: "An earlier upload for the same job, artifact and kind was replaced." }
         counts: { $ref: "#/components/schemas/SeverityCounts" }
         fixable: { type: integer }
         secrets: { type: integer }
@@ -856,7 +856,7 @@ components:
         primary_url: { type: string }
         suppressed: { type: boolean }
         suppression: { type: string, description: Reason recorded by Trivy for a suppressed finding. }
-        first_seen_at: { type: string, format: date-time, description: Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id, pkg_name, target). }
+        first_seen_at: { type: string, format: date-time, description: "Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id, pkg_name, target)." }
     VulnerabilityPage:
       type: object
       required: [items, next_after]
@@ -901,7 +901,7 @@ components:
       properties:
         service: { $ref: "#/components/schemas/Service" }
         ref: { type: [string, "null"], description: null when the service has no scans yet. }
-        refs: { type: array, items: { type: string }, description: Refs with scans, most recent first. }
+        refs: { type: array, items: { type: string }, description: "Refs with scans, most recent first." }
         artifacts: { type: array, items: { $ref: "#/components/schemas/ScanSummary" }, description: Latest scan per artifact and kind for the ref. }
         counts: { $ref: "#/components/schemas/SeverityCounts" }
         fixable: { type: integer }
@@ -984,7 +984,7 @@ components:
       properties:
         sonar_project_key: { type: [string, "null"] }
         latest: { oneOf: [ { $ref: "#/components/schemas/SonarAnalysis" }, { type: "null" } ] }
-        history: { type: array, items: { $ref: "#/components/schemas/SonarAnalysis" }, description: Newest first, including latest. }
+        history: { type: array, items: { $ref: "#/components/schemas/SonarAnalysis" }, description: "Newest first, including latest." }
     PortfolioItem:
       type: object
       required: [service, ref, counts, fixable, secrets, last_scan_at, quality_gate_status, reliability_rating, security_rating, maintainability_rating, coverage, last_analysis_at]
@@ -1054,7 +1054,7 @@ components:
       type: object
       required: [configured, last_upload_at, uploads_24h, rejections_24h, recent_rejections]
       properties:
-        configured: { type: boolean, description: The GitLab URL is set, so ID tokens can be verified. }
+        configured: { type: boolean, description: "The GitLab URL is set, so ID tokens can be verified." }
         last_upload_at: { type: [string, "null"], format: date-time }
         uploads_24h: { type: integer }
         rejections_24h: { type: integer, description: Recorded rejections in the last 24 hours. Rate-limited requests are not recorded and the number of recorded rejections per client address is bounded for rejections before the namespace and protected-ref checks. }
@@ -1123,7 +1123,7 @@ components:
       required: [secret, otpauth_uri]
       properties:
         secret: { type: string, description: Base32 secret for manual entry. }
-        otpauth_uri: { type: string, description: otpauth://totp/... URI for a QR code. }
+        otpauth_uri: { type: string, description: "otpauth://totp/... URI for a QR code." }
     RecoveryCodes:
       type: object
       required: [recovery_codes]
@@ -1156,7 +1156,7 @@ components:
             - { type: boolean }
             - { type: integer }
             - { type: array, items: { type: string } }
-        is_set: { type: boolean, description: For secrets, whether a value exists. }
+        is_set: { type: boolean, description: "For secrets, whether a value exists." }
         env_var: { type: string, description: Environment variable that seeds this setting. }
         description: { type: string }
         updated_by: { type: [string, "null"] }

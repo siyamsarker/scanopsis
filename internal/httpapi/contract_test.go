@@ -59,3 +59,32 @@ func difference(a, b map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestOpenAPIHasNoCutDescriptions catches a plain description in a flow
+// mapping ({ ... }) that contains a comma: YAML ends the value at the comma
+// and reads the rest of the sentence as a key without a value.
+func TestOpenAPIHasNoCutDescriptions(t *testing.T) {
+	raw, err := os.ReadFile("../../api/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(n *yaml.Node)
+	walk = func(n *yaml.Node) {
+		if n.Kind == yaml.MappingNode {
+			for i := 0; i+1 < len(n.Content); i += 2 {
+				k, v := n.Content[i], n.Content[i+1]
+				if v.Tag == "!!null" && v.Value == "" && n.Style&yaml.FlowStyle != 0 {
+					t.Errorf("line %d: %q is a key without a value; quote the description before it", k.Line, k.Value)
+				}
+			}
+		}
+		for _, c := range n.Content {
+			walk(c)
+		}
+	}
+	walk(&doc)
+}
