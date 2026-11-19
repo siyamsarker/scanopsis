@@ -58,9 +58,11 @@ it in the code.
 | Session lifetime | A session ends after the idle timeout (default 8 hours) or the absolute timeout (default 24 hours). A new sign-in replaces the old session. | `internal/auth/sessions.go`, [configuration](configuration.md#runtime-settings) |
 | Cross-site request protection | State-changing requests from a browser must be same-origin. The server checks `Sec-Fetch-Site` and `Origin` with the standard library's cross-origin protection and answers `403 cross_origin` otherwise. Requests without those headers (curl, CI jobs) are not browser requests and pass. | `internal/httpapi/httpapi.go` |
 | Mandatory two-factor authentication | Every user, local or GitLab, must enrol a TOTP app. A session that has not passed the second factor can call only the sign-in and enrolment endpoints. | `internal/httpapi/middleware.go`, `internal/auth/mfa.go` |
+| New session token after the second factor | When a correct code is accepted, the session gets a new random token and the old one stops working. A token captured between the password step and the code step never becomes a full session. | `internal/auth/sessions.go` |
+| Lock after ten wrong codes | Ten wrong codes in a row lock the second factor of that user. Every code, right or wrong, is then refused with `423 mfa_locked`, and all sessions of the user are ended. The lock stays until an administrator resets two-factor authentication or the password (**Reset two-factor** on the Users page, or the administration command). A correct code sets the count back to zero. | `internal/auth/mfa.go`, `internal/store/migrations/00005_mfa_lockout.sql` |
 | Code replay protection | Each accepted TOTP time step is recorded, and a code for the same or an older step is refused. A code is accepted one step (30 seconds) before or after the current one. | `internal/auth/mfa.go` |
 | Recovery codes | Ten single-use codes, stored as SHA-256 hashes, shown once. | `internal/auth/mfa.go` |
-| Rate limits | Local sign-in, setup, two-factor codes, password changes and uploads are limited per client address or per user. See [rate limits](configuration.md#rate-limits). The limit tables are bounded in memory. | `internal/auth/ratelimit.go` |
+| Rate limits | Local sign-in, setup, two-factor codes, password changes and uploads are limited per client address or per user. See [rate limits](configuration.md#rate-limits). Once the failure budget of a user name is spent, every password for it is refused until the budget refills, the correct one included, so the limit cannot be used to test guesses. The limit tables are bounded in memory. | `internal/auth/ratelimit.go`, `internal/auth/local.go` |
 | Argon2id passwords | Argon2id with 64 MiB, 3 passes and 4 lanes. At most two hashes are computed at once, so a flood cannot exhaust memory. An unknown user costs the same time as a known one. Passwords must have at least 12 characters. | `internal/auth/password.go`, `internal/auth/policy.go` |
 | GitLab sign-in | Authorization code flow with PKCE, a state value and a nonce, kept in a 10-minute cookie. The ID token is verified. `return_to` accepts only local paths. | `internal/auth/gitlab.go` |
 | Group allow-list | When allowed groups are set, the groups are read from GitLab during sign-in. Users in none of them are refused. | `internal/auth/gitlab.go` |
@@ -73,6 +75,7 @@ it in the code.
 |---|---|---|
 | AES-256-GCM, bound to the purpose | TOTP secrets and the secret settings are encrypted with the key. The purpose (for example `totp:42` or `setting:sonar.token`) is authenticated, so a ciphertext copied to another row or setting fails to decrypt. | `internal/secretbox/secretbox.go` |
 | Secrets are never returned | The API does not return secret settings. The Settings page can only replace or reset them. | `internal/settings` |
+| A new URL needs the secret again | When you change the GitLab URL or the SonarQube URL on the Settings page, you must enter the secret that is sent there (the application secret, or the token) again. A stored secret is never sent to a new address by a single edit of the URL. | `internal/settings/settings.go` |
 | File variants | The database URL, the key and the secrets can be read from files, so they stay out of the environment and out of `docker inspect`. | `internal/config/config.go` |
 | No secret values in scan data | A secret finding stores the rule and the location. The matched text is never read from the report or stored. The compressed original is kept as Trivy wrote it, and Trivy masks the value in it. | `internal/ingest/parse.go` |
 | Logs | The log never contains passwords, codes, cookies, headers, query strings, the database URL, the key or secret settings. The one exception is the setup token. | `internal/httpapi/middleware.go` |
@@ -90,8 +93,11 @@ it in the code.
 | Identity from the token | The project, job, ref and commit come from the token, never from the report. | `internal/ingest/ingest.go` |
 | Bounded input | A report may be 64 MiB decompressed and hold 200,000 findings. The body and the decompressed stream are limited separately. | `internal/ingest/ingest.go`, `internal/ingest/parse.go` |
 | Rate limit | 60 uploads at once per client address, then one per second. | `cmd/scanopsis/main.go` |
+| Bounded work | At most four uploads are read and stored at the same time, all addresses together, because each can hold a whole report in memory. Others wait while their request lasts, then get `503 busy`. | `internal/ingest/ingest.go` |
+| Messages without internals | The answers to the caller never contain the GitLab URL or the text of an upstream error. Both stay in the server log. | `internal/ingest/token.go`, `internal/ingest/ingest.go` |
 | Report time | A report time in the future is replaced by the server time, so an uploader cannot keep a scan "current" forever. | `internal/ingest/ingest.go` |
-| Every rejection is audited | Rejected uploads are written to the audit log with the reason. | `internal/ingest/ingest.go` |
+| Rejections are audited, with a bound | A rejected upload is written to the audit log with the reason. Rejections that anyone with an ID token from your GitLab can cause (before the project has passed the allowed-namespaces and protected-ref checks, and always while no namespace is allowed) are recorded at most 10 at once per client address and then one a minute, so they cannot fill the log. Rate-limited requests are not recorded. A rejection of a project that passed the allow-list is always recorded. | `internal/ingest/ingest.go` |
+| Warning when uploads are open | While GitLab is configured and no namespace is allowed, every project of the GitLab instance may upload. Scanopsis logs a warning once for each time the settings enter that state. | `internal/ingest/ingest.go` |
 
 ### SonarQube webhook
 
@@ -118,10 +124,13 @@ it in the code.
 
 ### Audit log
 
-Sign-ins, failed sign-ins, role changes, two-factor events, setting changes,
-service changes, rejected uploads, and the administration commands are written
-to the `audit_log` table, with the actor, the action and a detail that never
-contains a secret. Administrators read it on the **Audit** page. Writing an
+Sign-ins, failed sign-ins, role changes, two-factor events (including
+`mfa.locked`), setting changes, service changes, rejected uploads, every
+retention run that deleted data (`retention.deleted`), and the administration
+commands are written to the `audit_log` table, with the actor, the action and a detail that never
+contains a secret. A failed sign-in for a user name that matches no account is
+recorded as `local:unknown`, because it may be a password typed into the wrong
+field. Administrators read it on the **Audit** page. Writing an
 event never blocks the action: a failure is logged instead. Old events are
 removed by [data retention](operations.md#data-retention) after at least 365 days.
 
@@ -171,14 +180,15 @@ mitigation.
    analysis date. To capture a signed body, an attacker needs access to the
    delivery log of SonarQube or to the TLS path between the two servers.
 
-6. **Local sign-in is refused for a short time after repeated attempts.**
-   After many attempts from one address, local sign-in answers `429` for a
-   short time, even if the next password is correct. Failed passwords for one
-   account are counted separately and are limited the same way. This keeps
-   password guessing slow, and it also means that an attacker who knows a
-   username can make that user wait. GitLab sign-in and the
-   [administration commands](operations.md#administration-commands) stay
-   available while the limit applies.
+6. **Local sign-in and two-factor sign-in can be locked by repeated failures.**
+   After repeated failed passwords for an account, local sign-in for that
+   account is refused for a short time, even with the correct password. This
+   prevents the rate limit from revealing a correct guess. An attacker who
+   knows a user name can therefore make that user wait. Ten wrong two-factor
+   codes in a row lock the second factor until an administrator resets it; an
+   attacker needs the first factor to cause this. GitLab sign-in and the
+   [administration commands](operations.md#administration-commands) remain
+   available while a local sign-in limit applies.
 
 7. **Anyone who can run a job on your GitLab can obtain a token that Scanopsis
    accepts.** The token proves the job, not the intent. Restrict uploads with
