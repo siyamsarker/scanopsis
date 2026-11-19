@@ -105,13 +105,13 @@ export function ProtectedLayout() {
   return (
     <div className="min-h-screen">
       <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:px-6">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:px-6">
           <Link to="/" className="rounded-control py-1 text-lg">
             <Wordmark />
           </Link>
           <nav
             aria-label="Main"
-            className="order-last -mx-1 flex w-full gap-1 overflow-x-auto px-1 sm:order-none sm:w-auto"
+            className="order-last -mx-1 flex w-full gap-1 overflow-x-auto px-1 sm:order-none sm:w-auto sm:shrink-0"
           >
             <NavLink to="/" end className={navLinkClass}>
               Portfolio
@@ -140,26 +140,31 @@ export function ProtectedLayout() {
             )}
           </nav>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            <span className="sr-only min-w-0 max-w-48 truncate text-text sm:not-sr-only sm:block">
-              {user.name || user.username}
-              <span className="ml-2 rounded-control border border-border px-1.5 py-0.5 text-xs text-text-muted">
+            <span
+              title={`Signed in as ${user.name || user.username}`}
+              className="sr-only min-w-0 items-center gap-2 text-text sm:not-sr-only sm:flex"
+            >
+              <span className="sr-only max-w-48 truncate xl:not-sr-only xl:block">
+                {user.name || user.username}
+              </span>
+              <span className="rounded-control border border-border px-1.5 py-0.5 text-xs text-text-muted">
                 {user.role === 'admin' ? 'Admin' : 'Viewer'}
               </span>
             </span>
             <ThemeSwitch />
             <button type="button" className={secondaryButtonClass} onClick={() => void signOut()}>
               <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
-              <span className="sr-only sm:not-sr-only">Sign out</span>
+              <span className="sr-only xl:not-sr-only">Sign out</span>
             </button>
           </div>
         </div>
         {signOutError && (
-          <p role="alert" className="mx-auto max-w-6xl px-4 pb-3 text-text sm:px-6">
+          <p role="alert" className="mx-auto max-w-7xl px-4 pb-3 text-text sm:px-6">
             {signOutError}
           </p>
         )}
       </header>
-      <main className="rise mx-auto max-w-6xl px-4 py-8 sm:px-6 sm:py-10">
+      <main className="rise mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10">
         <Outlet />
       </main>
     </div>

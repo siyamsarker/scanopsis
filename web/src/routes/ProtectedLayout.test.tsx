@@ -54,6 +54,27 @@ describe('protected layout', () => {
     expect(await screen.findByText('No services yet')).toBeInTheDocument();
   });
 
+  it('keeps every link, an accessible user name and the sign-out name in the header', async () => {
+    mockFetch((call) => {
+      if (call.path === '/api/v1/portfolio') return json(200, emptyPortfolio);
+      return call.path === '/api/v1/me' ? json(200, makeUser({ role: 'admin' })) : undefined;
+    });
+    renderApp('/');
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    expect(Array.from(nav.querySelectorAll('a')).map((a) => a.textContent)).toEqual([
+      'Portfolio',
+      'Search',
+      'Services',
+      'Users',
+      'Integrations',
+      'Audit log',
+      'Settings',
+    ]);
+    expect(screen.getByTitle('Signed in as Ada Lovelace')).toHaveTextContent('Ada Lovelace');
+    expect(screen.getByTitle('Signed in as Ada Lovelace')).toHaveTextContent('Admin');
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+  });
+
   it('offers the theme switch in the header', async () => {
     mockFetch((call) => (call.path === '/api/v1/me' ? json(200, makeUser()) : undefined));
     renderApp('/');

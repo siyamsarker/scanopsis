@@ -34,7 +34,7 @@ export function ThemeSwitch() {
           aria-label={label}
           title={label}
           onClick={() => choose(value)}
-          className={`inline-flex size-9 items-center justify-center rounded-[6px] transition-colors duration-150 ease-out ${
+          className={`inline-flex size-8 items-center justify-center rounded-[6px] transition-colors duration-150 ease-out ${
             theme === value
               ? 'bg-surface-raised text-text shadow-sm ring-1 ring-border-strong'
               : 'text-text-muted hover:text-text'
