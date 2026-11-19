@@ -247,7 +247,7 @@ func TestLocalLoginUnknownUserDoesTheSameWork(t *testing.T) {
 	if len(f.start.started) != 0 || len(f.users.touched) != 0 {
 		t.Fatal("unknown user got a session")
 	}
-	if last := f.audit.events[len(f.audit.events)-1]; last.Action != "login.failed" || last.Detail["username"] != "nobody" {
+	if last := f.audit.events[len(f.audit.events)-1]; last.Action != "login.failed" || last.Detail["username"] != "unknown" || last.Actor != "local:unknown" {
 		t.Fatalf("audit %+v", last)
 	}
 }
@@ -452,11 +452,23 @@ func TestLocalLoginLogsServerErrors(t *testing.T) {
 	}
 }
 
-func TestLocalLoginAuditsUnknownUserUnderGivenName(t *testing.T) {
+func TestLocalLoginDoesNotRecordTypedUnknownNames(t *testing.T) {
 	f := newLoginFixture(t, 12*time.Second, 10)
-	f.post(creds("Ghost", "x"))
-	if len(f.audit.events) != 1 || f.audit.events[0].Actor != "local:Ghost" {
-		t.Fatalf("audit %+v; want actor local:Ghost", f.audit.events)
+	const typed = "Ghost-looks-like-a-password"
+	f.post(creds(typed, "x"))
+	f.post(creds("nohash", "x")) // an existing account is recorded by name
+	if len(f.audit.events) != 2 {
+		t.Fatalf("audit %+v", f.audit.events)
+	}
+	if e := f.audit.events[0]; e.Actor != "local:unknown" || e.Detail["username"] != "unknown" {
+		t.Fatalf("unknown name audited as %+v; want the fixed marker", e)
+	}
+	if e := f.audit.events[1]; e.Actor != "local:nohash" || e.Detail["username"] != "nohash" {
+		t.Fatalf("existing account audited as %+v", e)
+	}
+	events, _ := json.Marshal(f.audit.events)
+	if strings.Contains(string(events), typed) {
+		t.Fatalf("typed name found in audit events: %s", events)
 	}
 }
 
@@ -480,10 +492,23 @@ func TestLocalLoginRateLimitPerUsernameChargesOnlyFailures(t *testing.T) {
 	if len(f.start.started) != 0 {
 		t.Fatal("a wrong password started a session")
 	}
-	// ... but the correct password is never refused, so nobody can lock the
-	// real user out from outside.
+	// ... and so is the correct one, without any password check, so the
+	// limit cannot be used to find out whether a guess is right.
+	f.calls = nil
+	w = f.do(http.MethodPost, creds(goodUser, goodPass), addr(4))
+	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("correct password after the bucket was exhausted: status %d Retry-After %q; want 429 with Retry-After", w.Code, w.Header().Get("Retry-After"))
+	}
+	if len(f.calls) != 0 || len(f.start.started) != 0 {
+		t.Fatalf("blocked account: %d verifications, sessions %v; want none", len(f.calls), f.start.started)
+	}
+	if n := len(f.users.lookups); n != 2 {
+		t.Fatalf("%d user lookups; the blocked attempts must not reach the store", n)
+	}
+	// Once a token has refilled the correct password signs in.
+	f.clock.Advance(12 * time.Second)
 	if w := f.do(http.MethodPost, creds(goodUser, goodPass), addr(4)); w.Code != http.StatusNoContent {
-		t.Fatalf("correct password after the bucket was exhausted: status %d; want 204", w.Code)
+		t.Fatalf("correct password after refill: status %d; want 204", w.Code)
 	}
 	if !reflect.DeepEqual(f.start.started, []int64{42}) {
 		t.Fatalf("started %v", f.start.started)

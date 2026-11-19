@@ -189,3 +189,40 @@ func TestAddrKey(t *testing.T) {
 		}
 	}
 }
+
+func TestRateLimiterBlockedDoesNotConsume(t *testing.T) {
+	clk := newFakeClock()
+	l := NewRateLimiter(10*time.Second, 2, clk.Now)
+	if blocked, _ := l.Blocked("k"); blocked {
+		t.Fatal("unknown key is blocked")
+	}
+	if len(l.buckets) != 0 {
+		t.Fatal("Blocked created a bucket")
+	}
+	for range 5 {
+		if blocked, _ := l.Blocked("k"); blocked {
+			t.Fatal("Blocked consumed tokens")
+		}
+	}
+	l.Allow("k")
+	l.Allow("k")
+	blocked, wait := l.Blocked("k")
+	if !blocked || wait != 10*time.Second {
+		t.Fatalf("Blocked = %v, %v; want true, 10s", blocked, wait)
+	}
+	clk.Advance(4 * time.Second)
+	if blocked, wait := l.Blocked("k"); !blocked || wait != 6*time.Second {
+		t.Fatalf("Blocked = %v, %v; want true, 6s", blocked, wait)
+	}
+	// Checking again must not have spent or refilled anything.
+	clk.Advance(6 * time.Second)
+	if blocked, _ := l.Blocked("k"); blocked {
+		t.Fatal("still blocked after a full interval")
+	}
+	if ok, _ := l.Allow("k"); !ok {
+		t.Fatal("Allow refused after Blocked reported a free token")
+	}
+	if ok, _ := l.Allow("k"); ok {
+		t.Fatal("Blocked granted an extra token")
+	}
+}

@@ -92,6 +92,26 @@ func (l *RateLimiter) Allow(key string) (ok bool, retryAfter time.Duration) {
 	return false, time.Duration(math.Ceil((1 - b.tokens) * float64(l.every)))
 }
 
+// Blocked reports whether Allow would refuse key right now, and how long until
+// it would not, without consuming a token or creating a bucket.
+func (l *RateLimiter) Blocked(key string) (blocked bool, retryAfter time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	el := l.buckets[key]
+	if el == nil {
+		return false, 0
+	}
+	b := el.Value.(*bucket)
+	tokens := b.tokens
+	if elapsed := l.now().Sub(b.last); elapsed > 0 {
+		tokens = min(l.burst, tokens+float64(elapsed)/float64(l.every))
+	}
+	if tokens >= 1 {
+		return false, 0
+	}
+	return true, time.Duration(math.Ceil((1 - tokens) * float64(l.every)))
+}
+
 // sweep drops idle keys, at most once per limiterSweepInterval. Keys are
 // ordered by last use, so it stops at the first one that is not idle. The
 // caller holds l.mu.

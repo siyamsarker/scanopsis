@@ -32,6 +32,10 @@ const (
 // known users cost the same time. No password matches it.
 const dummyHash = "$argon2id$v=19$m=65536,t=3,p=4$c2Nhbm9wc2lzLWR1bW15IQ$AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
+// unknownUsername stands in for a typed name that matches no account in the
+// audit log.
+const unknownUsername = "unknown"
+
 // verifyPassword is a variable so tests can observe that it runs.
 var verifyPassword = VerifyPassword
 
@@ -56,8 +60,10 @@ type localLogin struct {
 // Callers should use NewRateLimiter(12*time.Second, 10, nil) for both
 // limiters: byAddr limits every attempt per client network (an IPv4 address or
 // an IPv6 /64) and byUser the failed password checks per username (as given),
-// each to ten attempts and then five per minute. A correct password is never
-// refused because of the byUser limit.
+// each to ten attempts and then five per minute. Once the byUser
+// budget of a name is spent, every password for it is refused until it
+// refills, the correct one included, so the limit cannot be used to test
+// guesses.
 // Server-side failures are logged to log (nil discards them).
 func NewLocalLogin(users LocalUserStore, sessions SessionStarter, audit AuditRecorder, clientIP func(*http.Request) netip.Addr, byAddr, byUser *RateLimiter, log *slog.Logger) http.Handler {
 	if log == nil {
@@ -89,6 +95,12 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// An account whose failure budget is spent is refused before any password
+	// is checked, so the answer never depends on whether the password is right.
+	if blocked, wait := h.byUser.Blocked(username); blocked {
+		tooManyAttempts(w, max(waitAddr, wait))
+		return
+	}
 	user, err := h.users.GetLocalUserByUsername(r.Context(), username)
 	found := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, store.ErrNotFound) {
@@ -109,11 +121,15 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !found || !user.PasswordHash.Valid || verr != nil || !match {
-		h.audit.Record(r.Context(), "local:"+username, audit.ActionLoginFailed, h.detail(username, ip))
-		// Only failed verifications are charged to the account, so that
-		// attempts from elsewhere can never lock the real user out: a
-		// correct password is not refused. The key is the exact name used
-		// for the lookup.
+		// A name that matches no account is not recorded: it may be a
+		// password typed into the wrong field.
+		recorded := unknownUsername
+		if found {
+			recorded = username
+		}
+		h.audit.Record(r.Context(), "local:"+recorded, audit.ActionLoginFailed, h.detail(recorded, ip))
+		// Only failed verifications are charged to the account. The key is
+		// the exact name used for the lookup.
 		if ok, wait := h.byUser.Allow(username); !ok {
 			tooManyAttempts(w, max(waitAddr, wait))
 			return
