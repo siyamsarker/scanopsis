@@ -9,6 +9,7 @@ import { GateBadge, RatingBadge } from '../../components/badges';
 import { Card, CardHeader } from '../../components/layout';
 import { EmptyState, Skeleton } from '../../components/states';
 import { formatPercent, safeExternalUrl } from '../../format';
+import { describeCondition, metricName } from './conditions';
 import { SectionError } from './parts';
 
 export const SONARQUBE_GUIDE =
@@ -18,22 +19,6 @@ const NOT_AVAILABLE = 'Not available';
 
 const percentOrNA = (value: number | null) =>
   value === null ? NOT_AVAILABLE : formatPercent(value);
-
-/** "fails when below 80" for the operator SonarQube reports (LT, GT, EQ, NE). */
-function failsWhen(operator: string, threshold: string): string {
-  switch (operator) {
-    case 'LT':
-      return `fails when below ${threshold}`;
-    case 'GT':
-      return `fails when above ${threshold}`;
-    case 'EQ':
-      return `fails when equal to ${threshold}`;
-    case 'NE':
-      return `fails when not equal to ${threshold}`;
-    default:
-      return `threshold ${operator} ${threshold}`;
-  }
-}
 
 function Measure({ label, value }: { label: string; value: string }) {
   return (
@@ -65,10 +50,12 @@ function Analysis({ latest }: { latest: SonarAnalysis }) {
                 key={c.metric}
                 className="rounded-control border border-border bg-bg px-3 py-2 text-sm"
               >
-                <span className="font-mono text-text">{c.metric}</span>
-                <span className="mt-0.5 block text-text-muted">
-                  Value {c.value ?? NOT_AVAILABLE}, {failsWhen(c.operator, c.threshold)}
-                </span>
+                {metricName(c.metric) ? (
+                  <span className="text-text">{metricName(c.metric)}</span>
+                ) : (
+                  <span className="font-mono text-text">{c.metric}</span>
+                )}
+                <span className="mt-0.5 block text-text-muted">{describeCondition(c)}</span>
               </li>
             ))}
           </ul>

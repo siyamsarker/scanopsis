@@ -335,8 +335,8 @@ describe('service dashboard', () => {
   it('shows SonarQube posture with failed conditions, ratings and Not available', async () => {
     setup();
     expect(await screen.findByText('Failed')).toBeVisible();
-    expect(screen.getByText('new_coverage')).toBeInTheDocument();
-    expect(screen.getByText(/Value 62.5, fails when below 80/)).toBeInTheDocument();
+    expect(screen.getByText('Coverage on new code')).toBeInTheDocument();
+    expect(screen.getByText('62.5% · must be at least 80%')).toBeInTheDocument();
     expect(screen.queryByText('new_bugs')).not.toBeInTheDocument();
     const posture = screen.getByRole('region', { name: 'SonarQube posture' });
     expect(posture).toHaveTextContent(/Reliability\s*Rating A/);
