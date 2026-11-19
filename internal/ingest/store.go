@@ -1,0 +1,215 @@
+// Copyright 2026 The Scanopsis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package ingest
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/siyamsarker/scanopsis/internal/store"
+)
+
+// Scan kinds, as stored in scans.kind.
+const (
+	KindImage    = "image"
+	KindSecretFS = "secret-fs"
+)
+
+// errPathTaken means a new service cannot be created because another
+// service already uses the project path.
+var errPathTaken = errors.New("another service already uses this project path")
+
+// saveInput is everything one upload stores.
+type saveInput struct {
+	claims   *Claims
+	kind     string
+	report   *Report
+	raw      []byte // gzip-compressed report
+	scanTime time.Time
+}
+
+// Result is the body of a successful upload (the IngestResult schema).
+type Result struct {
+	ScanID         int64          `json:"scan_id"`
+	ServiceID      int64          `json:"service_id"`
+	ServiceCreated bool           `json:"service_created"`
+	Replaced       bool           `json:"replaced"`
+	Counts         SeverityCounts `json:"counts"`
+	Fixable        int32          `json:"fixable"`
+	Secrets        int32          `json:"secrets"`
+	Suppressed     int32          `json:"suppressed"`
+}
+
+// SeverityCounts is the SeverityCounts schema.
+type SeverityCounts struct {
+	Critical int32 `json:"critical"`
+	High     int32 `json:"high"`
+	Medium   int32 `json:"medium"`
+	Low      int32 `json:"low"`
+	Unknown  int32 `json:"unknown"`
+}
+
+// saver stores an upload. The PostgreSQL implementation is pgSaver; tests of
+// the HTTP layer replace it.
+type saver interface {
+	save(ctx context.Context, in *saveInput) (Result, error)
+}
+
+type pgSaver struct {
+	pool *pgxpool.Pool
+	log  *slog.Logger
+}
+
+var (
+	vulnColumns = []string{
+		"scan_id", "target", "class", "pkg_type", "pkg_name", "pkg_path", "installed_version",
+		"fixed_version", "vuln_id", "severity", "status", "title", "primary_url", "suppressed", "suppression",
+	}
+	secretColumns = []string{
+		"scan_id", "target", "rule_id", "category", "severity", "title", "start_line", "end_line", "suppressed",
+	}
+)
+
+// save runs the whole upload in one transaction. Uploads for the same GitLab
+// project are serialised by an advisory lock, so two uploads of the same job
+// and artifact end with exactly one scan and two first uploads create one
+// service.
+func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
+	var res Result
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		q := store.New(tx)
+		c := in.claims
+		if err := q.LockIngestProject(ctx, strconv.FormatInt(c.ProjectID, 10)); err != nil {
+			return fmt.Errorf("lock project: %w", err)
+		}
+		svc, created, err := s.resolveService(ctx, q, c)
+		if err != nil {
+			return err
+		}
+		res.ServiceID, res.ServiceCreated = svc.ID, created
+
+		n, err := q.DeleteScanForJob(ctx, store.DeleteScanForJobParams{
+			ServiceID: svc.ID, GitlabJobID: c.JobID, ArtifactName: in.report.ArtifactName, Kind: in.kind,
+		})
+		if err != nil {
+			return fmt.Errorf("replace earlier scan: %w", err)
+		}
+		res.Replaced = n > 0
+
+		rep := in.report
+		cn := rep.Counts
+		res.ScanID, err = q.InsertScan(ctx, store.InsertScanParams{
+			ServiceID:        svc.ID,
+			Kind:             in.kind,
+			ArtifactName:     rep.ArtifactName,
+			GitlabPipelineID: c.PipelineID,
+			GitlabJobID:      c.JobID,
+			Ref:              c.Ref,
+			RefProtected:     c.RefProtected,
+			CommitSha:        c.SHA,
+			TrivyVersion:     rep.TrivyVersion,
+			SchemaVersion:    int32(rep.SchemaVersion),
+			ScannedAt:        pgtype.Timestamptz{Time: in.scanTime, Valid: true},
+			CountCritical:    cn.Critical,
+			CountHigh:        cn.High,
+			CountMedium:      cn.Medium,
+			CountLow:         cn.Low,
+			CountUnknown:     cn.Unknown,
+			CountFixable:     cn.Fixable,
+			CountSecrets:     cn.Secrets,
+			CountSuppressed:  cn.Suppressed,
+			RawReport:        in.raw,
+		})
+		if err != nil {
+			return fmt.Errorf("insert scan: %w", err)
+		}
+
+		if len(rep.Vulns) > 0 {
+			scanID := res.ScanID
+			_, err = tx.CopyFrom(ctx, pgx.Identifier{"vulnerabilities"}, vulnColumns,
+				pgx.CopyFromSlice(len(rep.Vulns), func(i int) ([]any, error) {
+					v := &rep.Vulns[i]
+					return []any{scanID, v.Target, v.Class, v.PkgType, v.PkgName, v.PkgPath, v.InstalledVersion,
+						v.FixedVersion, v.VulnID, v.Severity, v.Status, v.Title, v.PrimaryURL, v.Suppressed, v.Suppression}, nil
+				}))
+			if err != nil {
+				return fmt.Errorf("insert vulnerabilities: %w", err)
+			}
+		}
+		if len(rep.Secrets) > 0 {
+			scanID := res.ScanID
+			_, err = tx.CopyFrom(ctx, pgx.Identifier{"secret_findings"}, secretColumns,
+				pgx.CopyFromSlice(len(rep.Secrets), func(i int) ([]any, error) {
+					f := &rep.Secrets[i]
+					return []any{scanID, f.Target, f.RuleID, f.Category, f.Severity, f.Title, f.StartLine, f.EndLine, f.Suppressed}, nil
+				}))
+			if err != nil {
+				return fmt.Errorf("insert secret findings: %w", err)
+			}
+		}
+		res.Counts = SeverityCounts{Critical: cn.Critical, High: cn.High, Medium: cn.Medium, Low: cn.Low, Unknown: cn.Unknown}
+		res.Fixable, res.Secrets, res.Suppressed = cn.Fixable, cn.Secrets, cn.Suppressed
+		return nil
+	})
+	return res, err
+}
+
+// resolveService finds the service for the token's project: by project ID;
+// else a service an administrator added by the same path (which learns the
+// ID); else a new one. A renamed project updates the path of its service.
+func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claims) (svc store.Service, created bool, err error) {
+	projectID := pgtype.Int8{Int64: c.ProjectID, Valid: true}
+	svc, err = q.GetServiceByProjectID(ctx, projectID)
+	switch {
+	case err == nil:
+		if svc.GitlabProjectPath != c.ProjectPath {
+			n, err := q.RenameServicePath(ctx, store.RenameServicePathParams{ID: svc.ID, ProjectPath: c.ProjectPath})
+			if err != nil {
+				return svc, false, fmt.Errorf("rename service: %w", err)
+			}
+			if n == 0 {
+				s.log.Warn("project path not updated: another service uses it",
+					"service_id", svc.ID, "stored_path", svc.GitlabProjectPath, "token_path", c.ProjectPath)
+			}
+		}
+		return svc, false, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return svc, false, fmt.Errorf("find service: %w", err)
+	}
+
+	svc, err = q.AdoptServiceByPath(ctx, store.AdoptServiceByPathParams{ProjectID: projectID, ProjectPath: c.ProjectPath})
+	switch {
+	case err == nil:
+		return svc, false, nil
+	case !errors.Is(err, pgx.ErrNoRows):
+		return svc, false, fmt.Errorf("adopt service: %w", err)
+	}
+
+	svc, err = q.InsertIngestService(ctx, store.InsertIngestServiceParams{
+		Name: lastSegment(c.ProjectPath), ProjectID: projectID, ProjectPath: c.ProjectPath,
+	})
+	switch {
+	case err == nil:
+		return svc, true, nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return svc, false, errPathTaken
+	}
+	return svc, false, fmt.Errorf("create service: %w", err)
+}
+
+func lastSegment(path string) string {
+	if i := strings.LastIndexByte(path, '/'); i >= 0 && i < len(path)-1 {
+		return path[i+1:]
+	}
+	return path
+}
