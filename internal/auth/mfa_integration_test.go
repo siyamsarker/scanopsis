@@ -207,3 +207,86 @@ func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
 		t.Fatalf("enrol after reset: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestIntegrationMFALockout(t *testing.T) {
+	ctx := context.Background()
+	pool := storetest.New(t)
+	q := store.New(pool)
+	clk := &movingClock{}
+	sessions := NewSessions(q, SessionOptions{Idle: testIdle, Absolute: testAbsolute, Secure: true, Now: clk.Now})
+	box, err := secretbox.New(bytes.Repeat([]byte{3}, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := audit.New(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m := NewMFA(q, sessions, rec, clientip.New(nil).IP, MFAOptions{
+		Issuer: "Scanopsis", Box: box, Limiter: NewRateLimiter(time.Second, 1000, nil), Now: clk.Now,
+	})
+	user, err := q.CreateLocalUser(ctx, store.CreateLocalUserParams{Username: "root", Role: store.RoleAdmin, PasswordHash: pgtype.Text{String: "x", Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := box.Seal([]byte("JBSWY3DPEHPK3PXP"), totpPurpose(user.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SetPendingTOTP(ctx, store.SetPendingTOTPParams{SecretEnc: sealed, ID: user.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.EnableTOTP(ctx, store.EnableTOTPParams{ID: user.ID}); err != nil {
+		t.Fatal(err)
+	}
+	verify := func(body string) (int, string) {
+		w := httptest.NewRecorder()
+		if err := sessions.Start(w, newRequest(http.MethodPost, "/", nil), user.ID); err != nil {
+			t.Fatal(err)
+		}
+		r := newRequest(http.MethodPost, "/", strings.NewReader(body))
+		r.RemoteAddr = "203.0.113.9:1234"
+		r.AddCookie(w.Result().Cookies()[0])
+		p, err := sessions.Authenticate(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w = httptest.NewRecorder()
+		m.VerifyHandler().ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+		return w.Code, errCode(t, w)
+	}
+	counter := func() int {
+		var n int
+		if err := pool.QueryRow(ctx, "SELECT mfa_failed_attempts FROM users WHERE id = $1", user.ID).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	for i := 1; i < mfaMaxFailures; i++ {
+		if code, _ := verify(codeBody("000000")); code != http.StatusUnauthorized {
+			t.Fatalf("failure %d: %d", i, code)
+		}
+	}
+	if counter() != mfaMaxFailures-1 {
+		t.Fatalf("counter %d", counter())
+	}
+	if code, ec := verify(codeBody("000000")); code != http.StatusLocked || ec != "mfa_locked" {
+		t.Fatalf("tenth failure: %d %s", code, ec)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM sessions WHERE user_id = $1", user.ID).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d sessions left, %v", n, err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM audit_log WHERE action = 'mfa.locked'").Scan(&n); err != nil || n != 1 {
+		t.Fatalf("%d mfa.locked rows, %v", n, err)
+	}
+	if code, ec := verify(codeBody("000000")); code != http.StatusLocked || ec != "mfa_locked" {
+		t.Fatalf("while locked: %d %s", code, ec)
+	}
+
+	// Resetting two-factor authentication clears the lock.
+	if err := store.ResetMFA(ctx, pool, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	if counter() != 0 {
+		t.Fatalf("counter %d after ResetMFA", counter())
+	}
+}

@@ -42,6 +42,39 @@ type fakeMFAStore struct {
 	delErr   error
 	insErr   error
 	recErr   error
+
+	failErr    error
+	resetErr   error
+	delSessErr error
+	sessions   *fakeSessionStore // for DeleteUserSessions
+}
+
+func (f *fakeMFAStore) RecordMFAFailure(_ context.Context, id int64) (int32, error) {
+	if f.failErr != nil {
+		return 0, f.failErr
+	}
+	f.user.MfaFailedAttempts++
+	return f.user.MfaFailedAttempts, nil
+}
+
+func (f *fakeMFAStore) ResetMFAFailures(_ context.Context, id int64) error {
+	if f.resetErr != nil {
+		return f.resetErr
+	}
+	f.user.MfaFailedAttempts = 0
+	return nil
+}
+
+func (f *fakeMFAStore) DeleteUserSessions(_ context.Context, id int64) error {
+	if f.delSessErr != nil {
+		return f.delSessErr
+	}
+	for k, sess := range f.sessions.sessions {
+		if sess.UserID == id {
+			delete(f.sessions.sessions, k)
+		}
+	}
+	return nil
 }
 
 func (f *fakeMFAStore) GetUser(_ context.Context, id int64) (store.User, error) {
@@ -149,6 +182,7 @@ func newMFAFixture(t *testing.T) *mfaFixture {
 		logs:     &bytes.Buffer{},
 		limiter:  NewRateLimiter(30*time.Second, 5, clk.Now),
 	}
+	f.store.sessions = ss
 	f.mfa = NewMFA(f.store, s, f.audit, func(*http.Request) netip.Addr { return netip.MustParseAddr("203.0.113.9") }, MFAOptions{
 		Issuer:  "Scanopsis",
 		Box:     box,
@@ -811,4 +845,135 @@ func TestMFAWrongCodeKeepsTheSessionToken(t *testing.T) {
 	if f.cookie.Value != old.Value || f.verified(t) {
 		t.Fatal("a wrong code changed the session")
 	}
+}
+
+const lockedMessage = "Too many wrong codes. Ask an administrator to reset two-factor authentication."
+
+func (f *mfaFixture) wrongCode() string { return codeBody("000000") }
+
+func TestMFAVerifyCountsFailuresAndLocksAtTen(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	f.limiter = NewRateLimiter(time.Second, 1000, f.clock.Now)
+	f.mfa.opts.Limiter = f.limiter
+	otherSession := start(t, f.sessions, mfaUserID, nil)
+
+	for i := 1; i < mfaMaxFailures; i++ {
+		w := f.do(t, f.mfa.VerifyHandler(), f.wrongCode())
+		if w.Code != http.StatusUnauthorized || errCode(t, w) != "invalid_code" {
+			t.Fatalf("failure %d: %d %s", i, w.Code, w.Body)
+		}
+		if f.store.user.MfaFailedAttempts != int32(i) {
+			t.Fatalf("counter %d after %d failures", f.store.user.MfaFailedAttempts, i)
+		}
+	}
+	w := f.do(t, f.mfa.VerifyHandler(), f.wrongCode())
+	if w.Code != http.StatusLocked || errCode(t, w) != "mfa_locked" {
+		t.Fatalf("tenth failure: %d %s", w.Code, w.Body)
+	}
+	var e struct{ Error struct{ Message string } }
+	_ = json.Unmarshal(w.Body.Bytes(), &e)
+	if e.Error.Message != lockedMessage {
+		t.Fatalf("message %q", e.Error.Message)
+	}
+	last := f.audit.events[len(f.audit.events)-1]
+	if last.Action != audit.ActionMFALocked || last.Actor != "local:vic" {
+		t.Fatalf("last audit event %+v; want mfa.locked", last)
+	}
+	// Every session of the user is gone.
+	if len(f.sstore.sessions) != 0 {
+		t.Fatalf("%d sessions left", len(f.sstore.sessions))
+	}
+	if _, err := f.sessions.Authenticate(requestWith(otherSession)); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("other session: %v", err)
+	}
+
+	// After a new first-factor sign-in even the right code is refused,
+	// without being checked.
+	f.cookie = start(t, f.sessions, mfaUserID, nil)
+	events := len(f.audit.events)
+	w = f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusLocked || errCode(t, w) != "mfa_locked" {
+		t.Fatalf("right code while locked: %d %s", w.Code, w.Body)
+	}
+	if f.verified(t) || f.store.user.MfaFailedAttempts != mfaMaxFailures || len(f.audit.events) != events {
+		t.Fatal("a locked account checked the code")
+	}
+	// Recovery codes are refused too.
+	w = f.do(t, f.mfa.VerifyHandler(), codeBody("abcde-fghij"))
+	if w.Code != http.StatusLocked {
+		t.Fatalf("recovery code while locked: %d", w.Code)
+	}
+}
+
+func TestMFAVerifyLockedWithoutSpendingTheLimiter(t *testing.T) {
+	f := newMFAFixture(t)
+	f.enrolled(t)
+	f.store.user.MfaFailedAttempts = mfaMaxFailures
+	f.cookie = start(t, f.sessions, mfaUserID, nil)
+	for range 20 {
+		if w := f.do(t, f.mfa.VerifyHandler(), f.wrongCode()); w.Code != http.StatusLocked {
+			t.Fatalf("status %d; want 423 every time, not 429", w.Code)
+		}
+	}
+}
+
+func TestMFAVerifyRecoveryCodeFailuresCount(t *testing.T) {
+	f := newMFAFixture(t)
+	f.enrolled(t)
+	f.do(t, f.mfa.VerifyHandler(), codeBody("abcde-fghij"))
+	f.do(t, f.mfa.VerifyHandler(), codeBody("not a code at all"))
+	if f.store.user.MfaFailedAttempts != 2 {
+		t.Fatalf("counter %d; want 2", f.store.user.MfaFailedAttempts)
+	}
+}
+
+func TestMFAVerifySuccessResetsTheCounter(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	for range 3 {
+		f.do(t, f.mfa.VerifyHandler(), f.wrongCode())
+	}
+	if f.store.user.MfaFailedAttempts != 3 {
+		t.Fatalf("counter %d; want 3", f.store.user.MfaFailedAttempts)
+	}
+	f.clock.Advance(time.Minute) // let the limiter refill
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now()))); w.Code != http.StatusNoContent {
+		t.Fatalf("verify: %d %s", w.Code, w.Body)
+	}
+	if f.store.user.MfaFailedAttempts != 0 {
+		t.Fatalf("counter %d after a success; want 0", f.store.user.MfaFailedAttempts)
+	}
+}
+
+func TestMFAVerifyLockoutStoreErrors(t *testing.T) {
+	t.Run("count", func(t *testing.T) {
+		f := newMFAFixture(t)
+		f.enrolled(t)
+		f.store.failErr = errors.New("boom")
+		if w := f.do(t, f.mfa.VerifyHandler(), f.wrongCode()); w.Code != http.StatusInternalServerError {
+			t.Fatalf("status %d", w.Code)
+		}
+	})
+	t.Run("sessions", func(t *testing.T) {
+		f := newMFAFixture(t)
+		f.enrolled(t)
+		f.store.user.MfaFailedAttempts = mfaMaxFailures - 1
+		f.store.delSessErr = errors.New("boom")
+		if w := f.do(t, f.mfa.VerifyHandler(), f.wrongCode()); w.Code != http.StatusInternalServerError {
+			t.Fatalf("status %d", w.Code)
+		}
+	})
+	t.Run("reset", func(t *testing.T) {
+		f := newMFAFixture(t)
+		secret, _ := f.enrolled(t)
+		f.store.user.MfaFailedAttempts = 2
+		f.store.resetErr = errors.New("boom")
+		if w := f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now()))); w.Code != http.StatusInternalServerError {
+			t.Fatalf("status %d", w.Code)
+		}
+		if f.verified(t) {
+			t.Fatal("session verified although the reset failed")
+		}
+	})
 }

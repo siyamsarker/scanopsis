@@ -128,6 +128,9 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 				if err != nil {
 					return err
 				}
+				if err := tq.ResetMFAFailures(ctx, id); err != nil {
+					return err
+				}
 				return tq.DeleteUserSessions(ctx, id)
 			})
 		},

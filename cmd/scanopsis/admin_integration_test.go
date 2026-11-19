@@ -94,6 +94,11 @@ func TestIntegrationAdminResetPassword(t *testing.T) {
 	e.session(t, u.ID, 1)
 	e.session(t, u.ID, 2)
 	e.session(t, other.ID, 3)
+	for _, id := range []int64{u.ID, other.ID} {
+		if _, err := e.pool.Exec(ctx, "UPDATE users SET mfa_failed_attempts = 10 WHERE id = $1", id); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	code, out, errs := e.run("reset-password", "root")
 	if code != 0 {
@@ -127,8 +132,11 @@ func TestIntegrationAdminResetPassword(t *testing.T) {
 	if n := e.count(t, "SELECT count(*) FROM sessions WHERE user_id = $1", other.ID); n != 1 {
 		t.Fatalf("%d sessions of another user; want 1", n)
 	}
+	if got.MfaFailedAttempts != 0 {
+		t.Fatalf("failed-code count %d after a password reset; want 0", got.MfaFailedAttempts)
+	}
 	o, _ := e.q.GetLocalUserByUsername(ctx, "other")
-	if o.MustChangePassword || o.PasswordHash != other.PasswordHash {
+	if o.MustChangePassword || o.PasswordHash != other.PasswordHash || o.MfaFailedAttempts != 10 {
 		t.Fatal("another account was changed")
 	}
 	if n := e.count(t, "SELECT count(*) FROM audit_log WHERE action = 'user.password_reset' AND actor = 'cli' AND detail->>'username' = 'root'"); n != 1 {
@@ -166,7 +174,7 @@ func TestIntegrationAdminReset2FA(t *testing.T) {
 	e := newAdminEnv(t)
 	ctx := context.Background()
 	u := e.localUser(t, "root", "the old passphrase")
-	if _, err := e.pool.Exec(ctx, "UPDATE users SET totp_secret_enc = '\\x0102', totp_enabled_at = now(), totp_last_step = 5 WHERE id = $1", u.ID); err != nil {
+	if _, err := e.pool.Exec(ctx, "UPDATE users SET totp_secret_enc = '\\x0102', totp_enabled_at = now(), totp_last_step = 5, mfa_failed_attempts = 10 WHERE id = $1", u.ID); err != nil {
 		t.Fatal(err)
 	}
 	e.session(t, u.ID, 1)
@@ -182,7 +190,7 @@ func TestIntegrationAdminReset2FA(t *testing.T) {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errs)
 	}
 	got, _ := e.q.GetUser(ctx, u.ID)
-	if got.TotpSecretEnc != nil || got.TotpEnabledAt.Valid || got.TotpLastStep != 0 {
+	if got.TotpSecretEnc != nil || got.TotpEnabledAt.Valid || got.TotpLastStep != 0 || got.MfaFailedAttempts != 0 {
 		t.Fatalf("TOTP not reset: %+v", got)
 	}
 	if n := e.count(t, "SELECT count(*) FROM sessions WHERE user_id = $1", u.ID); n != 0 {

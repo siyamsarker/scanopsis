@@ -30,11 +30,13 @@ function VerifyForm() {
       await queryClient.invalidateQueries({ queryKey: meKey });
     } catch (err) {
       setError(
-        err instanceof ApiError && err.code === 'invalid_code'
-          ? recovery
-            ? 'That recovery code is not correct, or it was already used.'
-            : 'That code is not correct. Wait for a new one in the app and try again.'
-          : describeError(err),
+        err instanceof ApiError && err.code === 'mfa_locked'
+          ? 'Too many wrong codes. Ask an administrator to reset two-factor authentication.'
+          : err instanceof ApiError && err.code === 'invalid_code'
+            ? recovery
+              ? 'That recovery code is not correct, or it was already used.'
+              : 'That code is not correct. Wait for a new one in the app and try again.'
+            : describeError(err),
       );
       setPending(false);
     }

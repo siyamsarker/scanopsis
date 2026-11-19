@@ -1622,6 +1622,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description Ten wrong codes in a row locked two-factor sign-in for this user (code mfa_locked). Every code is refused until an administrator resets two-factor authentication or the password; the user's sessions were ended. */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Too many attempts. Retry-After gives seconds. */
             429: {
                 headers: {

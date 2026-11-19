@@ -125,6 +125,11 @@ If this fails, see [troubleshooting](#troubleshooting).
 - A user who loses the phone needs an administrator to reset their two-factor
   authentication on the **Users** page, or the
   [administration command](../operations.md#reset-two-factor-authentication).
+- Ten wrong two-factor codes in a row lock the account's two-factor sign-in,
+  and Scanopsis signs the user out everywhere. The user sees "Too many wrong
+  codes. Ask an administrator to reset two-factor authentication." and even the
+  correct code is refused until an administrator resets their two-factor
+  authentication, as above.
 
 ## Allowed groups
 

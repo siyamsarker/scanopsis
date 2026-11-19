@@ -79,7 +79,7 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, sessions.mfa_verified, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at, users.must_change_password, users.totp_secret_enc, users.totp_enabled_at, users.totp_last_step
+SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, sessions.mfa_verified, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at, users.must_change_password, users.totp_secret_enc, users.totp_enabled_at, users.totp_last_step, users.mfa_failed_attempts
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id_hash = $1
@@ -124,6 +124,7 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.User.TotpSecretEnc,
 		&i.User.TotpEnabledAt,
 		&i.User.TotpLastStep,
+		&i.User.MfaFailedAttempts,
 	)
 	return i, err
 }

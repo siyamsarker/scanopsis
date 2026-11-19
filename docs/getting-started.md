@@ -279,6 +279,7 @@ If this step fails:
 | "The password must be at least 12 characters long" or another password message | Choose a password that meets the rules in step 7. |
 | "Too many sign-in attempts. Wait N seconds" | The setup form allows 5 attempts at once, then one every 12 seconds, for each client address. Wait and try again. |
 | "That code is not correct" while confirming two-factor | The app code expired or the host clock is wrong. Wait for the next code. If it keeps failing, check the time on the host with `date` and on your phone. |
+| "Too many wrong codes. Ask an administrator to reset two-factor authentication." | Ten wrong codes in a row locked the account. Another administrator resets its two-factor authentication on the **Users** page, or you run `scanopsis admin reset-2fa local:<username>` on the host. See [operations](operations.md#reset-two-factor-authentication). |
 | You closed the browser before saving the recovery codes | Sign in again. Scanopsis asks you to enrol again only if you did not confirm a code. If you did confirm one, you can reset your own two-factor authentication on the **Users** page, or with the command in [operations](operations.md#reset-two-factor-authentication). |
 
 You can also complete the setup without a browser, which is useful for
@@ -297,6 +298,15 @@ Expected result: you see the home page again.
 
 If you lost the phone, select **Use a recovery code** and enter one of the
 codes you saved. A recovery code works once.
+
+Ten wrong codes in a row, authenticator or recovery codes together, lock
+two-factor sign-in for that account. Scanopsis then signs the account out
+everywhere and answers "Too many wrong codes. Ask an administrator to reset
+two-factor authentication." Even the correct code is refused until an
+administrator resets two-factor authentication on the **Users** page or with
+`scanopsis admin reset-2fa`. A password reset with `scanopsis admin
+reset-password` lifts the lock too. A correct code before the tenth wrong one
+sets the count back to zero.
 
 If sign-in fails, see [recovering access](operations.md#recovering-access-when-locked-out).
 

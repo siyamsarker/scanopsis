@@ -25,7 +25,7 @@ func (q *Queries) CountAdmins(ctx context.Context) (int64, error) {
 const createLocalUser = `-- name: CreateLocalUser :one
 INSERT INTO users (source, username, role, password_hash)
 VALUES ('local', $1, $2, $3)
-RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step
+RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts
 `
 
 type CreateLocalUserParams struct {
@@ -52,6 +52,7 @@ func (q *Queries) CreateLocalUser(ctx context.Context, arg CreateLocalUserParams
 		&i.TotpSecretEnc,
 		&i.TotpEnabledAt,
 		&i.TotpLastStep,
+		&i.MfaFailedAttempts,
 	)
 	return i, err
 }
@@ -72,7 +73,7 @@ func (q *Queries) EnableTOTP(ctx context.Context, arg EnableTOTPParams) error {
 }
 
 const getLocalUserByUsername = `-- name: GetLocalUserByUsername :one
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step FROM users WHERE source = 'local' AND username = $1
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts FROM users WHERE source = 'local' AND username = $1
 `
 
 func (q *Queries) GetLocalUserByUsername(ctx context.Context, username string) (User, error) {
@@ -93,13 +94,14 @@ func (q *Queries) GetLocalUserByUsername(ctx context.Context, username string) (
 		&i.TotpSecretEnc,
 		&i.TotpEnabledAt,
 		&i.TotpLastStep,
+		&i.MfaFailedAttempts,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
 
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step FROM users WHERE id = $1
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts FROM users WHERE id = $1
 `
 
 // Copyright 2026 The Scanopsis Authors
@@ -122,12 +124,13 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 		&i.TotpSecretEnc,
 		&i.TotpEnabledAt,
 		&i.TotpLastStep,
+		&i.MfaFailedAttempts,
 	)
 	return i, err
 }
 
 const listUsers = `-- name: ListUsers :many
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step FROM users
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts FROM users
 WHERE id > $1
 ORDER BY id
 LIMIT $2
@@ -162,6 +165,7 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]User, e
 			&i.TotpSecretEnc,
 			&i.TotpEnabledAt,
 			&i.TotpLastStep,
+			&i.MfaFailedAttempts,
 		); err != nil {
 			return nil, err
 		}
@@ -197,8 +201,33 @@ func (q *Queries) LockAdmins(ctx context.Context) ([]int64, error) {
 	return items, nil
 }
 
+const recordMFAFailure = `-- name: RecordMFAFailure :one
+UPDATE users SET mfa_failed_attempts = mfa_failed_attempts + 1
+WHERE id = $1
+RETURNING mfa_failed_attempts
+`
+
+// RecordMFAFailure counts one more wrong second-factor code in a single
+// statement and returns the new count.
+func (q *Queries) RecordMFAFailure(ctx context.Context, id int64) (int32, error) {
+	row := q.db.QueryRow(ctx, recordMFAFailure, id)
+	var mfa_failed_attempts int32
+	err := row.Scan(&mfa_failed_attempts)
+	return mfa_failed_attempts, err
+}
+
+const resetMFAFailures = `-- name: ResetMFAFailures :exec
+UPDATE users SET mfa_failed_attempts = 0 WHERE id = $1
+`
+
+func (q *Queries) ResetMFAFailures(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, resetMFAFailures, id)
+	return err
+}
+
 const resetTOTP = `-- name: ResetTOTP :exec
-UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = 0
+UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = 0,
+    mfa_failed_attempts = 0
 WHERE id = $1
 `
 
@@ -239,7 +268,7 @@ func (q *Queries) SetPendingTOTP(ctx context.Context, arg SetPendingTOTPParams) 
 }
 
 const setUserRole = `-- name: SetUserRole :one
-UPDATE users SET role = $1 WHERE id = $2 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step
+UPDATE users SET role = $1 WHERE id = $2 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts
 `
 
 type SetUserRoleParams struct {
@@ -265,6 +294,7 @@ func (q *Queries) SetUserRole(ctx context.Context, arg SetUserRoleParams) (User,
 		&i.TotpSecretEnc,
 		&i.TotpEnabledAt,
 		&i.TotpLastStep,
+		&i.MfaFailedAttempts,
 	)
 	return i, err
 }
@@ -287,7 +317,7 @@ SET username      = EXCLUDED.username,
     name          = EXCLUDED.name,
     email         = EXCLUDED.email,
     last_login_at = now()
-RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step
+RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts
 `
 
 type UpsertGitLabUserParams struct {
@@ -322,6 +352,7 @@ func (q *Queries) UpsertGitLabUser(ctx context.Context, arg UpsertGitLabUserPara
 		&i.TotpSecretEnc,
 		&i.TotpEnabledAt,
 		&i.TotpLastStep,
+		&i.MfaFailedAttempts,
 	)
 	return i, err
 }

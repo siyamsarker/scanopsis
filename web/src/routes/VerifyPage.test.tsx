@@ -76,6 +76,16 @@ describe('two-factor code page', () => {
     expect(screen.getByRole('button', { name: 'Verify' })).toBeEnabled();
   });
 
+  it('tells a locked user to ask an administrator', async () => {
+    mockFetch(verifyApi(() => apiError(423, 'mfa_locked', 'Server wording that is not shown.')));
+    renderApp('/2fa');
+    fireEvent.change(await screen.findByLabelText('6-digit code'), { target: { value: '000000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Too many wrong codes. Ask an administrator to reset two-factor authentication.',
+    );
+  });
+
   it('shows the wait from Retry-After on a 429', async () => {
     mockFetch(
       verifyApi(() => apiError(429, 'rate_limited', 'Slow down.', { 'Retry-After': '30' })),

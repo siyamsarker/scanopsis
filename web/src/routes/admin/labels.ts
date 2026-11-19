@@ -28,6 +28,7 @@ export const auditActions: Record<string, string> = {
   'mfa.enrolled': 'Two-factor set up',
   'mfa.verified': 'Two-factor verified',
   'mfa.failed': 'Two-factor failed',
+  'mfa.locked': 'Two-factor locked',
   'mfa.reset': 'Two-factor reset',
   'setup.completed': 'Setup completed',
   'settings.changed': 'Settings changed',

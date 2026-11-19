@@ -37,6 +37,10 @@ const (
 	totpSecretSize = 20
 	totpSkew       = 1
 
+	// mfaMaxFailures is how many wrong codes in a row lock an account's second
+	// factor. A correct code sets the count back to zero.
+	mfaMaxFailures = 10
+
 	recoveryCodeCount = 10
 	recoveryHalf      = 5
 	// recoveryAlphabet has no characters that are easily confused (0/o, 1/l/i).
@@ -52,6 +56,9 @@ type MFAStore interface {
 	DeleteRecoveryCodes(ctx context.Context, userID int64) error
 	InsertRecoveryCode(ctx context.Context, arg store.InsertRecoveryCodeParams) error
 	UseRecoveryCode(ctx context.Context, arg store.UseRecoveryCodeParams) (int64, error)
+	RecordMFAFailure(ctx context.Context, id int64) (int32, error)
+	ResetMFAFailures(ctx context.Context, id int64) error
+	DeleteUserSessions(ctx context.Context, userID int64) error
 }
 
 // MFAOptions configures MFA.
@@ -201,6 +208,12 @@ func (m *MFA) VerifyHandler() http.Handler {
 			writeError(w, http.StatusConflict, "mfa_enrollment_required", "Set up two-factor authentication first.")
 			return
 		}
+		// A locked account refuses every code, right or wrong, until an
+		// administrator resets two-factor authentication or the password.
+		if user.MfaFailedAttempts >= mfaMaxFailures {
+			writeLocked(w)
+			return
+		}
 		if !m.allow(w, user.ID) {
 			return
 		}
@@ -237,8 +250,14 @@ func (m *MFA) VerifyHandler() http.Handler {
 			accepted = used
 		}
 		if !accepted {
-			m.rejected(w, r, p, method)
+			m.rejectedVerify(w, r, p, user, method)
 			return
+		}
+		if user.MfaFailedAttempts > 0 {
+			if err := m.store.ResetMFAFailures(ctx, user.ID); err != nil {
+				m.fail(w, r, "cannot reset the failed-code count", err)
+				return
+			}
 		}
 		if err := m.sessions.PromoteMFAVerified(ctx, w, p.SessionID); err != nil {
 			m.fail(w, r, "cannot mark session verified", err)
@@ -292,6 +311,34 @@ func (m *MFA) decryptFailed(w http.ResponseWriter, r *http.Request, err error) {
 func (m *MFA) rejected(w http.ResponseWriter, r *http.Request, p *Principal, method string) {
 	m.audit.Record(r.Context(), actorOf(p), audit.ActionMFAFailed, m.detail(r, method))
 	writeError(w, http.StatusUnauthorized, "invalid_code", "That code is wrong or has already been used.")
+}
+
+// rejectedVerify answers a wrong code at sign-in and counts it against the
+// user. The failure that reaches mfaMaxFailures locks the account: all of its
+// sessions are deleted and the answer is 423.
+func (m *MFA) rejectedVerify(w http.ResponseWriter, r *http.Request, p *Principal, user store.User, method string) {
+	ctx := r.Context()
+	m.audit.Record(ctx, actorOf(p), audit.ActionMFAFailed, m.detail(r, method))
+	failures, err := m.store.RecordMFAFailure(ctx, user.ID)
+	if err != nil {
+		m.fail(w, r, "cannot count the failed code", err)
+		return
+	}
+	if failures < mfaMaxFailures {
+		writeError(w, http.StatusUnauthorized, "invalid_code", "That code is wrong or has already been used.")
+		return
+	}
+	m.audit.Record(ctx, actorOf(p), audit.ActionMFALocked, m.detail(r, method))
+	if err := m.store.DeleteUserSessions(ctx, user.ID); err != nil {
+		m.fail(w, r, "cannot end the sessions of a locked user", err)
+		return
+	}
+	writeLocked(w)
+}
+
+func writeLocked(w http.ResponseWriter) {
+	writeError(w, http.StatusLocked, "mfa_locked",
+		"Too many wrong codes. Ask an administrator to reset two-factor authentication.")
 }
 
 func (m *MFA) detail(r *http.Request, method string) map[string]any {

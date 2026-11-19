@@ -136,6 +136,7 @@ type User struct {
 	TotpSecretEnc      []byte
 	TotpEnabledAt      pgtype.Timestamptz
 	TotpLastStep       int64
+	MfaFailedAttempts  int32
 }
 
 type Vulnerability struct {

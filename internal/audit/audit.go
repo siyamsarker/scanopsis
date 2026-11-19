@@ -23,6 +23,7 @@ const (
 	ActionMFAVerified     = "mfa.verified"
 	ActionMFAFailed       = "mfa.failed"
 	ActionMFAReset        = "mfa.reset"
+	ActionMFALocked       = "mfa.locked"
 	ActionSettingsChanged = "settings.changed"
 	ActionSetupCompleted  = "setup.completed"
 	ActionPasswordChanged = "user.password_changed"

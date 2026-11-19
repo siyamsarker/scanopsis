@@ -63,5 +63,16 @@ WHERE id = @id AND totp_last_step < @step
 RETURNING id;
 
 -- name: ResetTOTP :exec
-UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = 0
+UPDATE users SET totp_secret_enc = NULL, totp_enabled_at = NULL, totp_last_step = 0,
+    mfa_failed_attempts = 0
 WHERE id = @id;
+
+-- RecordMFAFailure counts one more wrong second-factor code in a single
+-- statement and returns the new count.
+-- name: RecordMFAFailure :one
+UPDATE users SET mfa_failed_attempts = mfa_failed_attempts + 1
+WHERE id = @id
+RETURNING mfa_failed_attempts;
+
+-- name: ResetMFAFailures :exec
+UPDATE users SET mfa_failed_attempts = 0 WHERE id = @id;
