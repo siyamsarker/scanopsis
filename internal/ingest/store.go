@@ -118,7 +118,7 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 			RefProtected:     c.RefProtected,
 			CommitSha:        c.SHA,
 			TrivyVersion:     rep.TrivyVersion,
-			SchemaVersion:    int32(rep.SchemaVersion),
+			SchemaVersion:    SupportedSchemaVersion,
 			ScannedAt:        pgtype.Timestamptz{Time: in.scanTime, Valid: true},
 			CountCritical:    cn.Critical,
 			CountHigh:        cn.High,

@@ -125,7 +125,6 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 	}{
 		{"project_path", wire.ProjectPath, &c.ProjectPath},
 		{"namespace_path", wire.NamespacePath, &c.NamespacePath},
-		{"ref", wire.Ref, &c.Ref},
 		{"sha", wire.SHA, &c.SHA},
 	} {
 		if f.in == "" {
@@ -136,6 +135,11 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 		}
 		*f.out = string(f.in)
 	}
+	// A long ref is clipped by the caller, which logs it.
+	if wire.Ref == "" {
+		return nil, missing("ref")
+	}
+	c.Ref = string(wire.Ref)
 	if !isCommitSHA(c.SHA) {
 		return nil, invalid("sha", "a 40 or 64 character hexadecimal commit hash")
 	}

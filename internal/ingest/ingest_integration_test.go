@@ -8,6 +8,7 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -80,7 +81,7 @@ type upload struct {
 
 func (e *iEnv) upload(u upload) (int, []byte) {
 	e.t.Helper()
-	hr := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/trivy"+u.query, bytes.NewReader(u.body))
+	hr := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/ingest/trivy"+u.query, bytes.NewReader(u.body))
 	hr.Header.Set("Authorization", "Bearer "+e.g.token(e.t, u.claims))
 	hr.Header.Set("Content-Type", "application/json")
 	if u.gzip {
@@ -631,5 +632,30 @@ func TestIntegrationIngest20MB(t *testing.T) {
 				t.Error("stored report differs")
 			}
 		})
+	}
+}
+
+// Long artifact names and refs are clipped to fit their index instead of
+// failing the insert.
+func TestIntegrationLongIndexedValues(t *testing.T) {
+	e := newIEnv(t, nil)
+	// Incompressible, so PostgreSQL cannot shrink the index entry.
+	var long strings.Builder
+	for i := 0; long.Len() < 10_000; i++ {
+		fmt.Fprintf(&long, "%x", sha256.Sum256([]byte{byte(i), byte(i >> 8)}))
+	}
+	name, ref := long.String(), long.String()
+	body := []byte(`{"SchemaVersion":2,"ArtifactName":"` + name + `"}`)
+	res := e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["ref"] = ref }})
+	var gotName, gotRef string
+	if err := e.pool.QueryRow(context.Background(), `SELECT artifact_name, ref FROM scans WHERE id=$1`, res.ScanID).Scan(&gotName, &gotRef); err != nil {
+		t.Fatal(err)
+	}
+	if gotName != name[:maxArtifactLen] || gotRef != ref[:maxRefLen] {
+		t.Errorf("stored lengths %d and %d", len(gotName), len(gotRef))
+	}
+	// The same upload again replaces it: the clipped name is the key.
+	if again := e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["ref"] = ref }}); !again.Replaced {
+		t.Error("second upload did not replace the first")
 	}
 }

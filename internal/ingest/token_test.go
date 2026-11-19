@@ -129,7 +129,6 @@ func TestVerifyFailures(t *testing.T) {
 		{"sha short", "Bearer " + g.token(t, func(c map[string]any) { c["sha"] = "abc123" }), "sha must be"},
 		{"ref_protected junk", "Bearer " + g.token(t, func(c map[string]any) { c["ref_protected"] = "yes" }), `ref_protected must be "true" or "false"`},
 		{"claim of wrong type", "Bearer " + g.token(t, func(c map[string]any) { c["ref"] = []string{"a"} }), "claims are not"},
-		{"too long ref", "Bearer " + g.token(t, func(c map[string]any) { c["ref"] = strings.Repeat("r", 2000) }), "ref must be a string"},
 	}
 	v := newVerifier()
 	for _, tc := range tests {

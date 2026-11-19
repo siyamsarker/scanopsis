@@ -123,7 +123,7 @@ type req struct {
 
 func (e *hEnv) do(r req) *httptest.ResponseRecorder {
 	e.t.Helper()
-	hr := httptest.NewRequest(http.MethodPost, "/api/v1/ingest/trivy"+r.query, bytes.NewReader(r.body))
+	hr := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/ingest/trivy"+r.query, bytes.NewReader(r.body))
 	if !r.noAuth {
 		hr.Header.Set("Authorization", "Bearer "+e.g.token(e.t, nil))
 	}
@@ -505,7 +505,7 @@ func TestIngestStorageErrors(t *testing.T) {
 
 func TestIngestClientIPFallback(t *testing.T) {
 	e := newHEnv(t, func(o *Options) { o.ClientIP = nil })
-	hr := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("{}"))
+	hr := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/x", strings.NewReader("{}"))
 	hr.RemoteAddr = "198.51.100.7:4711"
 	if got := e.in.clientIP(hr); got != netip.MustParseAddr("198.51.100.7") {
 		t.Errorf("ip = %v", got)
@@ -555,5 +555,79 @@ func TestIngestNeverLogsReportContents(t *testing.T) {
 		if strings.Contains(s, "TOPSECRETVALUE") {
 			t.Error("report text in parsed secrets")
 		}
+	}
+}
+
+func TestIngestTooManyFindings(t *testing.T) {
+	e := newHEnv(t, nil)
+	body := `{"SchemaVersion":2,"ArtifactName":"a","Results":[{"Vulnerabilities":[` +
+		strings.TrimSuffix(strings.Repeat(`{"Severity":"LOW"},`, MaxFindings+1), ",") + `]}]}`
+	w := e.do(req{body: []byte(body)})
+	var b struct {
+		Error struct{ Code, Message string }
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &b)
+	if w.Code != 413 || b.Error.Code != "report_too_large" || !strings.Contains(b.Error.Message, "too many findings") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if len(e.save.calls) != 0 {
+		t.Error("stored")
+	}
+	if ev := e.audit.list(); len(ev) != 1 || ev[0].detail["reason"] != "report_too_large" {
+		t.Errorf("audit = %+v", ev)
+	}
+}
+
+func TestIngestScanTimeIsNeverInTheFuture(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	tests := []struct {
+		name, created string
+		want          time.Time
+		logged        string
+	}{
+		{"future", now.Add(time.Hour).Format(time.RFC3339), now, "in the future"},
+		{"just past the skew", now.Add(6 * time.Minute).Format(time.RFC3339), now, "in the future"},
+		{"within the skew", now.Add(4 * time.Minute).Format(time.RFC3339), now.Add(4 * time.Minute), ""},
+		{"past", now.Add(-48 * time.Hour).Format(time.RFC3339), now.Add(-48 * time.Hour), ""},
+		{"missing", "", now, "no usable CreatedAt"},
+		{"unparsable", "yesterday", now, "no usable CreatedAt"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newHEnv(t, func(o *Options) { o.Now = func() time.Time { return now } })
+			doc := `{"SchemaVersion":2,"ArtifactName":"a"`
+			if tc.created != "" {
+				doc += `,"CreatedAt":"` + tc.created + `"`
+			}
+			if w := e.do(req{body: []byte(doc + `}`)}); w.Code != 201 {
+				t.Fatalf("%d %s", w.Code, w.Body)
+			}
+			if got := e.save.calls[0].scanTime; !got.Equal(tc.want) {
+				t.Errorf("scanTime = %v, want %v", got, tc.want)
+			}
+			logs := e.logs.String()
+			if tc.logged == "" && strings.Contains(logs, "CreatedAt") {
+				t.Errorf("unexpected log: %s", logs)
+			}
+			if tc.logged != "" && (!strings.Contains(logs, tc.logged) || !strings.Contains(logs, "level=INFO")) {
+				t.Errorf("log %q missing: %s", tc.logged, logs)
+			}
+		})
+	}
+}
+
+func TestIngestLongRefIsClipped(t *testing.T) {
+	e := newHEnv(t, nil)
+	long := strings.Repeat("r", 5000)
+	tok := e.g.token(t, func(c map[string]any) { c["ref"] = long })
+	w := e.do(req{body: []byte(`{"SchemaVersion":2,"ArtifactName":"a"}`), noAuth: true, header: map[string]string{"Authorization": "Bearer " + tok}})
+	if w.Code != 201 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if got := e.save.calls[0].claims.Ref; got != long[:maxRefLen] {
+		t.Errorf("ref length %d", len(got))
+	}
+	if !strings.Contains(e.logs.String(), "ref clipped") {
+		t.Errorf("not logged: %s", e.logs)
 	}
 }

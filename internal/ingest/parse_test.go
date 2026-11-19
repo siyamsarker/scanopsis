@@ -594,3 +594,107 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+func TestParseFindingCap(t *testing.T) {
+	vulns := func(n int) string { return strings.TrimSuffix(strings.Repeat(`{"Severity":"LOW"},`, n), ",") }
+	doc := func(results string) string {
+		return `{"SchemaVersion":2,"ArtifactName":"a","Results":[` + results + `]}`
+	}
+	tests := []struct {
+		name string
+		in   string
+		max  int
+		ok   bool
+	}{
+		{"at the cap", doc(`{"Vulnerabilities":[` + vulns(5) + `]}`), 5, true},
+		{"one over", doc(`{"Vulnerabilities":[` + vulns(6) + `]}`), 5, false},
+		{"over across results", doc(`{"Vulnerabilities":[` + vulns(3) + `]},{"Vulnerabilities":[` + vulns(3) + `]}`), 5, false},
+		{"secrets count", doc(`{"Vulnerabilities":[` + vulns(3) + `],"Secrets":[{},{},{}]}`), 5, false},
+		{"suppressed count", doc(`{"Vulnerabilities":[` + vulns(3) + `],"ExperimentalModifiedFindings":[{"Type":"vulnerability"},{"Type":"secret"},{"Type":"vulnerability"}]}`), 5, false},
+		{"suppressed at the cap", doc(`{"Vulnerabilities":[` + vulns(3) + `],"ExperimentalModifiedFindings":[{"Type":"vulnerability"},{"Type":"secret"}]}`), 5, true},
+		{"other modified types do not count", doc(`{"Vulnerabilities":[` + vulns(5) + `],"ExperimentalModifiedFindings":[{"Type":"license"},{"Type":"misconfiguration"}]}`), 5, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rep, err := parse(strings.NewReader(tc.in), tc.max)
+			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrTooManyFindings)) {
+				t.Fatalf("rep %v err %v, want ok=%v", rep != nil, err, tc.ok)
+			}
+		})
+	}
+	// The real cap.
+	big := doc(`{"Vulnerabilities":[` + vulns(MaxFindings+1) + `]}`)
+	if _, err := Parse(strings.NewReader(big)); !errors.Is(err, ErrTooManyFindings) {
+		t.Fatalf("err = %v", err)
+	}
+	ok := doc(`{"Vulnerabilities":[` + vulns(MaxFindings) + `]}`)
+	if rep, err := Parse(strings.NewReader(ok)); err != nil || len(rep.Vulns) != MaxFindings {
+		t.Fatalf("at the cap: %v", err)
+	}
+}
+
+func TestParseOrderIndependent(t *testing.T) {
+	// Target, Class and Type may follow the findings.
+	rep, err := Parse(strings.NewReader(`{"Results":[{"Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH"}],
+	  "Type":"debian","Class":"os-pkgs","Target":"t"}],"ArtifactName":"a","SchemaVersion":2}`))
+	if err != nil || rep.Vulns[0].Target != "t" || rep.Vulns[0].Class != "os-pkgs" || rep.Vulns[0].PkgType != "debian" {
+		t.Fatalf("%+v %v", rep, err)
+	}
+}
+
+func TestParseWrongShapesAreNotTrivy(t *testing.T) {
+	for _, in := range []string{
+		`{"SchemaVersion":2,"Results":{"a":[1,{"b":2}]}}`,
+		`{"SchemaVersion":2,"Results":[5]}`,
+		`{"SchemaVersion":2,"Results":[[1,2]]}`,
+		`{"SchemaVersion":2,"Results":[{"Vulnerabilities":{"x":1}}]}`,
+		`{"SchemaVersion":2,"Results":[{"Secrets":"x"}]}`,
+		`{"SchemaVersion":2,"ArtifactName":"a","Trivy":[1]}`,
+	} {
+		if _, err := Parse(strings.NewReader(in)); !errors.Is(err, ErrNotTrivy) {
+			t.Errorf("%s: err = %v", in, err)
+		}
+	}
+	// A syntax error later in the body wins over an earlier wrong shape.
+	if _, err := Parse(strings.NewReader(`{"SchemaVersion":2,"Results":"x","Z":[}`)); !errors.Is(err, ErrInvalidJSON) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestClipControlCharacters(t *testing.T) {
+	tests := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"a\x00b", 10, "a�b"},
+		{"a\x01\x1fb", 10, "a��b"},
+		{"tab\tnl\ncr\r", 20, "tab\tnl\ncr\r"},
+		{"\x01\x01", 4, "�"},
+		{"\x00\x00\x00", 6, "��"},
+		{"a\x7fb", 10, "a\x7fb"},
+	}
+	for _, tc := range tests {
+		got := clip(tc.in, tc.max)
+		if got != tc.want || len(got) > tc.max {
+			t.Errorf("clip(%q, %d) = %q", tc.in, tc.max, got)
+		}
+	}
+	// Every stored field, in a report full of control characters, stays within its limit.
+	nul := strings.Repeat(`\u0000`, 3000)
+	rep, err := Parse(strings.NewReader(`{"SchemaVersion":2,"ArtifactName":"` + nul + `","Results":[{"Target":"` + nul + `","Vulnerabilities":[{"VulnerabilityID":"` + nul + `","Title":"` + nul + `"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := rep.Vulns[0]
+	if len(rep.ArtifactName) > maxArtifactLen || len(v.VulnID) > maxVulnIDLen || len(v.Title) > maxFieldLen || len(v.Target) > maxFieldLen {
+		t.Errorf("limits exceeded: %d %d %d %d", len(rep.ArtifactName), len(v.VulnID), len(v.Title), len(v.Target))
+	}
+}
+
+func TestParseArtifactNameBound(t *testing.T) {
+	rep, err := Parse(strings.NewReader(`{"SchemaVersion":2,"ArtifactName":"` + strings.Repeat("a", 10_000) + `"}`))
+	if err != nil || len(rep.ArtifactName) != maxArtifactLen {
+		t.Fatalf("%d %v", len(rep.ArtifactName), err)
+	}
+}

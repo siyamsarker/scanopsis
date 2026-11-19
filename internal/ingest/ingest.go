@@ -30,6 +30,14 @@ import (
 // Options.MaxReportBytes is 0.
 const DefaultMaxReportBytes = 64 << 20
 
+const (
+	// maxClockSkew is how far after the server's clock a report's CreatedAt
+	// may be before it is replaced by the server time.
+	maxClockSkew = 5 * time.Minute
+	// maxRefLen bounds ref, which is in an index (scans_current_idx).
+	maxRefLen = 1024
+)
+
 // Error codes of the ingestTrivy operation.
 const (
 	codeNotConfigured = "ingest_not_configured"
@@ -150,6 +158,11 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(claims.Ref) > maxRefLen || clip(claims.Ref, len(claims.Ref)) != claims.Ref {
+		i.log.InfoContext(ctx, "ref clipped for storage", "project", claims.ProjectPath, "job_id", claims.JobID, "length", len(claims.Ref))
+		claims.Ref = clip(claims.Ref, maxRefLen)
+	}
+
 	if len(snap.IngestAllowedNamespaces) > 0 && !namespaceAllowed(snap.IngestAllowedNamespaces, claims.NamespacePath) {
 		reject(http.StatusForbidden, codeNamespace,
 			"The project namespace "+claims.NamespacePath+" is not in the allowed namespaces of this Scanopsis.")
@@ -196,9 +209,18 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := i.opts.Now()
 	scanned := rep.CreatedAt
-	if scanned.IsZero() {
-		scanned = i.opts.Now()
+	// The uploader controls CreatedAt. A time in the past only makes the scan
+	// look older, but one in the future would keep it "current" for ever.
+	switch {
+	case scanned.IsZero():
+		scanned = now
+		i.log.InfoContext(ctx, "report has no usable CreatedAt; using the server time", "project", claims.ProjectPath, "job_id", claims.JobID)
+	case scanned.After(now.Add(maxClockSkew)):
+		i.log.InfoContext(ctx, "report CreatedAt is in the future; using the server time",
+			"project", claims.ProjectPath, "job_id", claims.JobID, "created_at", scanned.UTC().Format(time.RFC3339))
+		scanned = now
 	}
 	res, err := i.store.save(ctx, &saveInput{claims: claims, kind: kind, report: rep, raw: raw, scanTime: scanned})
 	switch {
@@ -298,6 +320,9 @@ func classifyRead(err error, gz bool, limit int64) rejection {
 	switch {
 	case errors.Is(err, errTooLarge), errors.As(err, &tooBig):
 		return rejection{http.StatusRequestEntityTooLarge, codeTooLarge, tooLargeMessage(limit)}
+	case errors.Is(err, ErrTooManyFindings):
+		return rejection{http.StatusRequestEntityTooLarge, codeTooLarge,
+			"The report has too many findings: at most " + strconv.Itoa(MaxFindings) + " vulnerabilities and secrets (suppressed ones included) are accepted."}
 	case errors.Is(err, ErrNotTrivy):
 		return rejection{http.StatusUnprocessableEntity, codeNotTrivy,
 			"This is not a Trivy JSON report (SchemaVersion 2): " + strings.TrimPrefix(err.Error(), ErrNotTrivy.Error()+": ")}
