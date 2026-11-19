@@ -37,7 +37,7 @@ func bootAdmin(t *testing.T) (*client, string) {
 	pool := storetest.New(t)
 	addr := freeAddr(t)
 	cfg, err := config.Load(env(map[string]string{
-		"SCANOPSIS_DATABASE_URL": pool.Config().ConnString(),
+		"SCANOPSIS_DATABASE_URL": dbURL(t, pool),
 		"SCANOPSIS_PUBLIC_URL":   "http://" + addr,
 		"SCANOPSIS_LISTEN_ADDR":  addr,
 		"SCANOPSIS_SECRET_KEY":   base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{9}, 32)),

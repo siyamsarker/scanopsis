@@ -15,11 +15,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pquerna/otp/totp"
 
 	"github.com/siyamsarker/scanopsis/internal/config"
@@ -42,6 +44,20 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// dbURL returns the connection URL of the test's own database. The pool's
+// ConnString is the base URL it was parsed from, which names the shared
+// database, not the per-test one.
+func dbURL(t *testing.T, pool interface{ Config() *pgxpool.Config }) string {
+	t.Helper()
+	cfg := pool.Config()
+	u, err := url.Parse(cfg.ConnString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path = "/" + cfg.ConnConfig.Database
+	return u.String()
 }
 
 func freeAddr(t *testing.T) string {
@@ -118,7 +134,7 @@ func TestIntegrationServerSetupAndTwoFactor(t *testing.T) {
 	addr := freeAddr(t)
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
 	cfg, err := config.Load(env(map[string]string{
-		"SCANOPSIS_DATABASE_URL": pool.Config().ConnString(),
+		"SCANOPSIS_DATABASE_URL": dbURL(t, pool),
 		"SCANOPSIS_PUBLIC_URL":   "http://" + addr,
 		"SCANOPSIS_LISTEN_ADDR":  addr,
 		"SCANOPSIS_SECRET_KEY":   key,
