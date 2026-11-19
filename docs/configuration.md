@@ -111,6 +111,12 @@ rule at start. See the warning below.
   webhook secret needs both. Otherwise the page shows "Required when other
   SonarQube settings are set." The sync interval is at least one minute
   ("Must be at least 1m.").
+- When you change the GitLab URL while a client secret is stored, or the
+  SonarQube URL while a token is stored, enter the client secret or the token
+  again in the same save. Scanopsis sends these values to the URL, so it never
+  sends a stored one to a new address. Otherwise the page shows "Enter this
+  value again when you change the URL, so the stored one is never sent to a
+  new address." next to the secret.
 - Local sign-in cannot be disabled unless GitLab sign-in is fully configured.
   The page shows "Local sign-in can be disabled only when GitLab sign-in is
   fully configured." This rule prevents you from locking everyone out.

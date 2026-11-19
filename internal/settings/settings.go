@@ -382,8 +382,39 @@ func (s *Service) plan(cur *state, patch map[string]any, actor string, now time.
 			next[c.key] = c.entry
 		}
 	}
-	validate(s.build(next).snap, fields)
+	nextState := s.build(next)
+	validate(nextState.snap, fields)
+	requireSecretWithNewURL(cur, nextState, patch, changes, fields)
 	return changes, fields
+}
+
+// urlSecrets maps a URL setting to the stored secret Scanopsis sends to it.
+var urlSecrets = map[string]string{
+	KeySonarURL:  KeySonarToken,
+	KeyGitLabURL: KeyGitLabClientSecret,
+}
+
+// requireSecretWithNewURL refuses a change of a URL unless the patch also
+// gives a new value for the secret that is sent to it, or leaves no secret,
+// so that changing an address never sends a stored secret to a new host. A
+// reset alone is not enough: it falls back to the value from the
+// environment.
+func requireSecretWithNewURL(cur, next *state, patch map[string]any, changes []change, fields map[string]string) {
+	for _, c := range changes {
+		secretKey, ok := urlSecrets[c.key]
+		if !ok || c.reset {
+			continue
+		}
+		newURL, _ := c.entry.value.(string)
+		oldURL, _ := cur.entries[c.key].value.(string)
+		secret, _ := next.entries[secretKey].value.(string)
+		if patch[secretKey] != nil || newURL == "" || newURL == oldURL || secret == "" {
+			continue
+		}
+		if _, taken := fields[secretKey]; !taken {
+			fields[secretKey] = "Enter this value again when you change the URL, so the stored one is never sent to a new address."
+		}
+	}
 }
 
 func compareKeys(a, b string) int {

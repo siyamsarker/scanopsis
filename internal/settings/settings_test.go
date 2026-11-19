@@ -450,6 +450,12 @@ func TestValidation(t *testing.T) {
 			"sonar.sync_interval": "Must be at least 1m."}},
 		{"ingest namespace with slash", nil, `{"ingest.allowed_namespaces":["/platform"]}`, map[string]string{
 			"ingest.allowed_namespaces": `Group path "/platform" must not start or end with a slash.`}},
+		{"new gitlab url keeps the stored client secret", gitlabSeeds(), `{"gitlab.url":"https://other.example.com"}`, map[string]string{
+			"gitlab.client_secret": "Enter this value again when you change the URL, so the stored one is never sent to a new address."}},
+		{"new sonar url keeps the stored token", sonarSeeds(), `{"sonar.url":"https://other.example.com"}`, map[string]string{
+			"sonar.token": "Enter this value again when you change the URL, so the stored one is never sent to a new address."}},
+		{"new sonar url with a reset token falls back to the env token", sonarSeeds(), `{"sonar.url":"https://other.example.com","sonar.token":null}`, map[string]string{
+			"sonar.token": "Enter this value again when you change the URL, so the stored one is never sent to a new address."}},
 		{"local login off without gitlab", nil, `{"auth.local_login_enabled":false}`,
 			map[string]string{"auth.local_login_enabled": "Local sign-in can be disabled only when GitLab sign-in is fully configured."}},
 		{"all problems together", nil, `{"nope":1,"gitlab.client_id":3,"session.idle_timeout":"1m","auth.local_login_enabled":false}`, map[string]string{
@@ -822,5 +828,42 @@ func TestNewRejectsInvalidIntegerSeed(t *testing.T) {
 	_, err := New(context.Background(), st, st.tx, testBox(t, 1), map[string]any{"retention.days": 3}, &fakeAudit{}, discard)
 	if err == nil || !strings.Contains(err.Error(), "SCANOPSIS_RETENTION_DAYS") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func sonarSeeds() map[string]any {
+	return map[string]any{KeySonarURL: "https://sonarqube.example.com", KeySonarToken: "squ_seed"}
+}
+
+func TestURLChangeWithItsSecret(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		seeds map[string]any
+		body  string
+		check func(Snapshot) bool
+	}{
+		{"sonar url and token together", sonarSeeds(), `{"sonar.url":"https://other.example.com","sonar.token":"squ_new"}`,
+			func(s Snapshot) bool { return s.SonarURL == "https://other.example.com" && s.SonarToken == "squ_new" }},
+		{"gitlab url and client secret together", gitlabSeeds(), `{"gitlab.url":"https://other.example.com","gitlab.client_secret":"new"}`,
+			func(s Snapshot) bool {
+				return s.GitLabURL == "https://other.example.com" && s.GitLabClientSecret == "new"
+			}},
+		{"same url again", sonarSeeds(), `{"sonar.url":"https://sonarqube.example.com/"}`,
+			func(s Snapshot) bool { return s.SonarToken == "squ_seed" }},
+		{"gitlab url without a client secret", nil, `{"gitlab.url":"https://other.example.com"}`,
+			func(s Snapshot) bool { return s.GitLabURL == "https://other.example.com" }},
+		{"sonar url when no token is stored", nil, `{"sonar.url":"https://other.example.com","sonar.token":"squ_new"}`,
+			func(s Snapshot) bool { return s.SonarToken == "squ_new" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEnv(t, tc.seeds)
+			code, body := e.patch(t, tc.body)
+			if code != 200 {
+				t.Fatalf("status = %d, body %v", code, body)
+			}
+			if snap := e.svc.Current(); !tc.check(snap) {
+				t.Errorf("snapshot = %+v", snap)
+			}
+		})
 	}
 }
