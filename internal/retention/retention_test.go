@@ -32,6 +32,7 @@ func TestCutoffs(t *testing.T) {
 		{"audit is never shorter", 1000, now.Add(-1000 * day), now.Add(-1000 * day)},
 		{"zero falls back to the minimum", 0, now.Add(-7 * day), now.Add(-365 * day)},
 		{"below the minimum", 1, now.Add(-7 * day), now.Add(-365 * day)},
+		{"above the maximum", 100000, now.Add(-3650 * day), now.Add(-3650 * day)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			scans, audit := cutoffs(now, tc.days)

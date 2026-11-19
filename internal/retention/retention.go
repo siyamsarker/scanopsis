@@ -98,12 +98,11 @@ func (r *Retention) Run(ctx context.Context) {
 	}
 }
 
-// cutoffs returns the age limits for a run at now. The audit limit is never
+// cutoffs returns the age limits for a run at now; days is kept within the
+// allowed range, so a cutoff is always in the past. The audit limit is never
 // closer to now than the scan limit.
 func cutoffs(now time.Time, days int) (scans, audit time.Time) {
-	if days < settings.MinRetentionDays {
-		days = settings.MinRetentionDays
-	}
+	days = min(max(days, settings.MinRetentionDays), settings.MaxRetentionDays)
 	period := time.Duration(days) * 24 * time.Hour
 	scans = now.Add(-period)
 	audit = now.Add(-max(AuditRetention, period))
@@ -115,7 +114,7 @@ func cutoffs(now time.Time, days int) (scans, audit time.Time) {
 func (r *Retention) RunOnce(ctx context.Context) Result {
 	start := r.now()
 	days := r.cfg.Current().RetentionDays
-	res := Result{RetentionDays: max(days, settings.MinRetentionDays)}
+	res := Result{RetentionDays: min(max(days, settings.MinRetentionDays), settings.MaxRetentionDays)}
 	res.ScanCutoff, res.AuditCutoff = cutoffs(start, days)
 
 	conn, err := r.pool.Acquire(ctx)
