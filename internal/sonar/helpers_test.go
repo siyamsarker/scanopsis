@@ -31,12 +31,6 @@ func (f *fixedSettings) Current() settings.Snapshot {
 	return f.snap
 }
 
-func (f *fixedSettings) set(fn func(*settings.Snapshot)) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	fn(&f.snap)
-}
-
 func sign(secret string, body []byte) string {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write(body)

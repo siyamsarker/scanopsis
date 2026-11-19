@@ -117,6 +117,6 @@ func (s *Sonar) client(snap settings.Snapshot) *client {
 		s.warnedPlain = ""
 	}
 	s.mu.Unlock()
-	s.keys.forConfig(snap.SonarURL, snap.SonarToken)
-	return &client{http: s.hc, base: snap.SonarURL, token: snap.SonarToken, keys: &s.keys}
+	cfg := s.keys.forConfig(snap.SonarURL, snap.SonarToken)
+	return &client{http: s.hc, base: snap.SonarURL, token: snap.SonarToken, keys: &s.keys, cfg: cfg}
 }

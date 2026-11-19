@@ -39,7 +39,7 @@ func TestPinWritesAuditEvent(t *testing.T) {
 	e := newEnv(t)
 	sid := e.service(t, "platform/new", 5, "")
 	e.project("new:key")
-	props := map[string]string{"sonar.analysis.gitlabProjectId": "5"}
+	props := map[string]string{"sonar.analysis.gitlabProjectId": "5", "sonar.analysis.pipelineId": "77"}
 	wantStatus(t, e, hook("task-au", "new:key", map[string]any{"properties": props}), 202)
 	e.drain(t, 1)
 	// A later delivery by key links nothing new and writes no event.
@@ -52,7 +52,8 @@ func TestPinWritesAuditEvent(t *testing.T) {
 		"detail": map[string]any{
 			"id": float64(sid), "gitlab_project_path": "platform/new", "fields": []any{"sonar_project_key"},
 			"sonar_project_key": "new:key", "task_id": "task-au",
-			"reason": "linked by the sonar.analysis.gitlabProjectId scanner property",
+			"reason":                    "linked by the sonar.analysis.gitlabProjectId scanner property",
+			"claimed_gitlab_project_id": "5", "pipeline_id": float64(77),
 		},
 	}}
 	if !reflect.DeepEqual(got, want) {

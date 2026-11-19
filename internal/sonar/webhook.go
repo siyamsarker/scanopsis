@@ -239,6 +239,7 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 	a := snapshot{
 		ServiceID: sid, TaskID: p.TaskID, AnalysedAt: analysedAt, Revision: p.Revision,
 		Measures: measures, Conditions: []Condition{},
+		ClaimedProjectID: p.Properties["sonar.analysis.gitlabProjectId"],
 	}
 	if p.QualityGate != nil {
 		a.Gate = p.QualityGate.Status
@@ -307,6 +308,9 @@ type snapshot struct {
 	Conditions  []Condition
 	Measures    map[string]string
 	Pipeline    *int64
+	// ClaimedProjectID is the gitlabProjectId scanner property, recorded in
+	// the audit event when the analysis links a service.
+	ClaimedProjectID string
 }
 
 // errPinConflict is returned when a service cannot be linked to a project.
@@ -361,7 +365,7 @@ func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
 	detail, err := json.Marshal(map[string]any{
 		"id": a.ServiceID, "gitlab_project_path": path, "fields": []string{"sonar_project_key"},
 		"sonar_project_key": pinKey, "reason": "linked by the sonar.analysis.gitlabProjectId scanner property",
-		"task_id": a.TaskID,
+		"task_id": a.TaskID, "claimed_gitlab_project_id": a.ClaimedProjectID, "pipeline_id": a.Pipeline,
 	})
 	if err != nil {
 		return err

@@ -8,6 +8,7 @@ package sonar
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,29 +56,46 @@ var (
 // accepts. It is reset when the URL or token changes.
 type keySetCache struct {
 	mu  sync.Mutex
-	cfg string
+	cfg [sha256.Size]byte // digest of URL and token; the token itself is not kept
 	set int
 }
 
-// forConfig resets the cache when the configuration differs from the last.
-func (k *keySetCache) forConfig(url, token string) {
-	k.mu.Lock()
-	defer k.mu.Unlock()
-	if cfg := url + "\x00" + token; cfg != k.cfg {
-		k.cfg, k.set = cfg, 0
-	}
+// configDigest identifies a SonarQube configuration without retaining the
+// token.
+func configDigest(url, token string) [sha256.Size]byte {
+	return sha256.Sum256([]byte(url + "\x00" + token))
 }
 
-func (k *keySetCache) get() int {
+// forConfig resets the cache when the configuration differs from the last
+// and returns the configuration's digest for getFor and putFor.
+func (k *keySetCache) forConfig(url, token string) [sha256.Size]byte {
+	d := configDigest(url, token)
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if d != k.cfg {
+		k.cfg, k.set = d, 0
+	}
+	return d
+}
+
+// getFor returns the remembered key set for cfg, or 0 for another
+// configuration.
+func (k *keySetCache) getFor(cfg [sha256.Size]byte) int {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if cfg != k.cfg {
+		return 0
+	}
 	return k.set
 }
 
-func (k *keySetCache) put(i int) {
+// putFor remembers a key set, unless the configuration changed meanwhile.
+func (k *keySetCache) putFor(cfg [sha256.Size]byte, i int) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	k.set = i
+	if cfg == k.cfg {
+		k.set = i
+	}
 }
 
 // apiError is a failed Web API call. It carries only the endpoint and the
@@ -85,6 +103,9 @@ func (k *keySetCache) put(i int) {
 type apiError struct {
 	Endpoint string
 	Status   int
+	// MetricKeys is set when SonarQube's error message is about unknown
+	// metric keys (as opposed to, for example, an unknown project).
+	MetricKeys bool
 }
 
 func (e *apiError) Error() string {
@@ -95,8 +116,10 @@ type client struct {
 	http  *http.Client
 	base  string
 	token string
-	// keys remembers the working metric key set; nil means no memory.
+	// keys remembers the working metric key set for configuration cfg; nil
+	// means no memory.
 	keys *keySetCache
+	cfg  [sha256.Size]byte
 }
 
 func (c *client) get(ctx context.Context, endpoint string, q url.Values) ([]byte, error) {
@@ -122,7 +145,10 @@ func (c *client) get(ctx context.Context, endpoint string, q url.Values) ([]byte
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, &apiError{Endpoint: endpoint, Status: resp.StatusCode}
+		// Only the classification is kept, never the body itself.
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+		return nil, &apiError{Endpoint: endpoint, Status: resp.StatusCode,
+			MetricKeys: strings.Contains(strings.ToLower(string(msg)), "metric")}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse))
 	if err != nil {
@@ -134,25 +160,33 @@ func (c *client) get(ctx context.Context, endpoint string, q url.Values) ([]byte
 // measures returns every measure SonarQube reports for the project, by
 // metric key. Metrics without a value are absent.
 func (c *client) measures(ctx context.Context, key string) (map[string]string, error) {
+	// One deadline for the whole call, however many key sets are tried.
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
+	defer cancel()
 	start := 0
 	if c.keys != nil {
-		start = c.keys.get()
+		start = c.keys.getFor(c.cfg)
 	}
-	for i := start; ; i++ {
-		m, err := c.measuresFor(ctx, key, metricKeySets[i])
-		if err == nil {
+	// Try the remembered set first, then the others once each, so a server
+	// whose mode changed is handled too.
+	var err error
+	for n := range metricKeySets {
+		i := (start + n) % len(metricKeySets)
+		var m map[string]string
+		if m, err = c.measuresFor(ctx, key, metricKeySets[i]); err == nil {
 			if c.keys != nil {
-				c.keys.put(i)
+				c.keys.putFor(c.cfg, i)
 			}
 			return m, nil
 		}
-		// SonarQube may answer 400 or 404 for metric keys it does not know.
+		// Move on only when SonarQube rejected the metric keys; an unknown
+		// project, a permission problem or a server error is final.
 		var ae *apiError
-		if i+1 < len(metricKeySets) && errors.As(err, &ae) && (ae.Status == http.StatusBadRequest || ae.Status == http.StatusNotFound) {
-			continue
+		if !errors.As(err, &ae) || (ae.Status != http.StatusBadRequest && ae.Status != http.StatusNotFound) || !ae.MetricKeys {
+			return nil, err
 		}
-		return nil, err
 	}
+	return nil, err
 }
 
 func (c *client) measuresFor(ctx context.Context, key string, keys []string) (map[string]string, error) {

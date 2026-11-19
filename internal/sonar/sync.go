@@ -24,7 +24,6 @@ const advisoryLockKey int64 = 0x53434e5359 // "SCNSY"
 // when ctx ends. The settings are read again on every check, so changes apply
 // without a restart.
 func (s *Sonar) Run(ctx context.Context) {
-	s.interruptPending(ctx)
 	ticker := time.NewTicker(s.tick)
 	defer ticker.Stop()
 	var last time.Time // zero: a sync is due at the first tick
@@ -71,6 +70,9 @@ func (s *Sonar) sync(ctx context.Context, snap settings.Snapshot) {
 		}
 		conn.Release()
 	}()
+
+	// Under the lock, so only one instance changes delivery rows.
+	s.interruptPending(ctx)
 
 	cl := s.client(snap)
 	var lastErr string
@@ -156,10 +158,17 @@ const pendingTimeout = 10 * time.Minute
 
 // interruptPending fails deliveries left pending by a server that stopped
 // while processing them.
+// interruptedDetail must not promise more than the sync can do: the sync
+// only reads projects that are already linked by key.
+const interruptedDetail = "Processing was interrupted. Redeliver the webhook from SonarQube to process it again; analyses of projects linked by key are also picked up by the next sync."
+
+// interruptPending fails deliveries left pending for longer than
+// pendingTimeout, for example because the server stopped while processing
+// them. It runs on every sync, under the sync's advisory lock.
 func (s *Sonar) interruptPending(ctx context.Context) {
 	_, err := s.q.InterruptSonarDeliveries(ctx, store.InterruptSonarDeliveriesParams{
 		ReceivedAt: pgtype.Timestamptz{Time: s.now().Add(-pendingTimeout), Valid: true},
-		Detail:     "Processing was interrupted; the next sync picks the analysis up.",
+		Detail:     interruptedDetail,
 	})
 	if err != nil && ctx.Err() == nil {
 		s.log.WarnContext(ctx, "could not clean up interrupted SonarQube deliveries", "error", err)

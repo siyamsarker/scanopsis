@@ -92,7 +92,10 @@ func (q *Queries) InsertSonarAnalysis(ctx context.Context, arg InsertSonarAnalys
 const insertSonarDelivery = `-- name: InsertSonarDelivery :execrows
 INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail)
 VALUES ($1, $2, $3, 'pending', '')
-ON CONFLICT (task_id) DO NOTHING
+ON CONFLICT (task_id) DO UPDATE
+SET outcome = 'pending', detail = '', service_id = NULL,
+    project_key = EXCLUDED.project_key, received_at = EXCLUDED.received_at
+WHERE sonar_deliveries.outcome = 'failed'
 `
 
 type InsertSonarDeliveryParams struct {
@@ -103,6 +106,10 @@ type InsertSonarDeliveryParams struct {
 
 // InsertSonarDelivery records a delivery as pending; zero rows mean the task
 // ID was delivered before.
+// InsertSonarDelivery records a delivery as pending. A redelivery of a task
+// whose earlier processing failed is accepted again (an administrator can
+// redeliver it from SonarQube); any other duplicate changes nothing and
+// affects no row.
 func (q *Queries) InsertSonarDelivery(ctx context.Context, arg InsertSonarDeliveryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSonarDelivery, arg.TaskID, arg.ProjectKey, arg.ReceivedAt)
 	if err != nil {
@@ -239,7 +246,7 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 
 const pinSonarKey = `-- name: PinSonarKey :one
 UPDATE services SET sonar_project_key = $2
-WHERE id = $1 AND sonar_project_key IS NULL
+WHERE id = $1 AND sonar_project_key IS NULL AND NOT archived
 RETURNING gitlab_project_path
 `
 
