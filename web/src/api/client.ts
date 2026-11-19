@@ -7,10 +7,13 @@ import type { components, paths } from './schema.gen';
 export type User = components['schemas']['User'];
 export type Role = components['schemas']['Role'];
 
+// openapi-fetch builds a Request object, and Request rejects relative URLs
+// outside a browser page context (jsdom, Node). The base URL is therefore the
+// page's own origin, which is the same as a relative URL in the browser.
 // The fetch wrapper looks up globalThis.fetch on every call, so the client
 // does not capture the function that existed when this module was loaded.
 export const api = createClient<paths>({
-  baseUrl: '',
+  baseUrl: globalThis.location?.origin ?? '',
   credentials: 'same-origin',
   fetch: (request) => globalThis.fetch(request),
 });

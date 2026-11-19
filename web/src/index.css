@@ -64,6 +64,11 @@
   --radius-control: 8px;
 }
 
+:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
 html {
   font-size: 14px;
 }
