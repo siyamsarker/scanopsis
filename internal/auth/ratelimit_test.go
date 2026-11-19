@@ -5,6 +5,7 @@ package auth
 
 import (
 	"fmt"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -96,7 +97,7 @@ func TestRateLimiterSweepsAtMostOncePerMinute(t *testing.T) {
 	}
 	l.Allow("late")
 	clk.Advance(30 * time.Second)
-	l.buckets["stale"] = &bucket{last: clk.Now().Add(-time.Hour)}
+	l.buckets["stale"] = l.order.PushBack(&bucket{key: "stale", last: clk.Now().Add(-time.Hour)})
 	l.Allow("z") // within a minute of the last sweep: no sweep
 	if _, ok := l.buckets["stale"]; !ok {
 		t.Fatal("sweep ran more than once a minute")
@@ -138,5 +139,53 @@ func TestRateLimiterNilClockAndConcurrency(t *testing.T) {
 	wg.Wait()
 	if allowed != 50 {
 		t.Fatalf("allowed %d concurrent attempts; want exactly the burst of 50", allowed)
+	}
+}
+
+func TestRateLimiterIsBoundedUnderAFlood(t *testing.T) {
+	clk := newFakeClock()
+	l := NewRateLimiter(time.Second, 2, clk.Now)
+	for i := range 20_000 {
+		l.Allow(fmt.Sprintf("flood%d", i))
+		clk.Advance(time.Millisecond)
+	}
+	if n, m := len(l.buckets), l.order.Len(); n != limiterMaxKeys || m != limiterMaxKeys {
+		t.Fatalf("tracking %d keys (list %d); want %d", n, m, limiterMaxKeys)
+	}
+	if _, ok := l.buckets["flood0"]; ok {
+		t.Fatal("the oldest key was kept")
+	}
+	if _, ok := l.buckets["flood19999"]; !ok {
+		t.Fatal("the newest key was dropped")
+	}
+}
+
+func TestRateLimiterEvictsTheLeastRecentlyUsedKey(t *testing.T) {
+	clk := newFakeClock()
+	l := NewRateLimiter(time.Second, 2, clk.Now)
+	for i := range limiterMaxKeys {
+		l.Allow(fmt.Sprintf("k%d", i))
+	}
+	l.Allow("k0") // refreshed: k1 is now the least recently used
+	l.Allow("new")
+	if _, ok := l.buckets["k0"]; !ok {
+		t.Fatal("a recently used key was evicted")
+	}
+	if _, ok := l.buckets["k1"]; ok {
+		t.Fatal("the least recently used key was kept")
+	}
+}
+
+func TestAddrKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.0.2.7":            "192.0.2.7",
+		"::ffff:192.0.2.7":     "192.0.2.7",
+		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::1": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":      "2001:db8:1:3::/64",
+	} {
+		if got := addrKey(netip.MustParseAddr(in)); got != want {
+			t.Errorf("addrKey(%s) = %s; want %s", in, got, want)
+		}
 	}
 }

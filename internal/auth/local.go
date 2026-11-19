@@ -14,6 +14,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -46,19 +47,22 @@ type localLogin struct {
 	sessions SessionStarter
 	audit    AuditRecorder
 	clientIP func(*http.Request) netip.Addr
-	limiter  *RateLimiter
+	byAddr   *RateLimiter
+	byUser   *RateLimiter
 	log      *slog.Logger
 }
 
 // NewLocalLogin returns the handler for POST /api/v1/auth/local/login.
-// Callers should use NewRateLimiter(12*time.Second, 10, nil) as limiter: ten
-// attempts per client address, then five per minute.
+// Callers should use NewRateLimiter(12*time.Second, 10, nil) for both
+// limiters: byAddr limits attempts per client network (an IPv4 address or an
+// IPv6 /64) and byUser per lower-cased username, each to ten attempts and
+// then five per minute.
 // Server-side failures are logged to log (nil discards them).
-func NewLocalLogin(users LocalUserStore, sessions SessionStarter, audit AuditRecorder, clientIP func(*http.Request) netip.Addr, limiter *RateLimiter, log *slog.Logger) http.Handler {
+func NewLocalLogin(users LocalUserStore, sessions SessionStarter, audit AuditRecorder, clientIP func(*http.Request) netip.Addr, byAddr, byUser *RateLimiter, log *slog.Logger) http.Handler {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &localLogin{users: users, sessions: sessions, audit: audit, clientIP: clientIP, limiter: limiter, log: log}
+	return &localLogin{users: users, sessions: sessions, audit: audit, clientIP: clientIP, byAddr: byAddr, byUser: byUser, log: log}
 }
 
 type loginRequest struct {
@@ -74,16 +78,20 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	ip := h.clientIP(r)
 	// Limit before any parsing or hashing, so floods cost almost nothing.
-	if ok, wait := h.limiter.Allow(ip.String()); !ok {
-		secs := max(1, int(math.Ceil(wait.Seconds())))
-		w.Header().Set("Retry-After", strconv.Itoa(secs))
-		writeError(w, http.StatusTooManyRequests, "too_many_attempts",
-			"Too many sign-in attempts. Wait "+strconv.Itoa(secs)+" seconds and try again.")
+	okAddr, waitAddr := h.byAddr.Allow(addrKey(ip))
+	if !okAddr {
+		tooManyAttempts(w, waitAddr)
 		return
 	}
 
 	username, password, ok := decodeLogin(w, r)
 	if !ok {
+		return
+	}
+	// Per-username limit, checked before any password is verified, so that
+	// many addresses cannot guess one account's password.
+	if ok, wait := h.byUser.Allow(strings.ToLower(username)); !ok {
+		tooManyAttempts(w, max(waitAddr, wait))
 		return
 	}
 
@@ -100,9 +108,14 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if found && user.PasswordHash.Valid {
 		hash = user.PasswordHash.String
 	}
-	match, verr := verifyPassword(hash, password)
+	match, verr := verifyPassword(r.Context(), hash, password)
+	if errors.Is(verr, context.Canceled) || errors.Is(verr, context.DeadlineExceeded) {
+		// The client left while waiting for a hashing slot: not a failed sign-in.
+		writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again in a moment.")
+		return
+	}
 	if !found || !user.PasswordHash.Valid || verr != nil || !match {
-		h.audit.Record(r.Context(), username, audit.ActionLoginFailed, h.detail(username, ip))
+		h.audit.Record(r.Context(), "local:"+username, audit.ActionLoginFailed, h.detail(username, ip))
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Wrong username or password.")
 		return
 	}
@@ -117,9 +130,16 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeInternalError(w)
 		return
 	}
-	h.audit.Record(r.Context(), username, audit.ActionLoginSucceeded, h.detail(username, ip))
+	h.audit.Record(r.Context(), "local:"+username, audit.ActionLoginSucceeded, h.detail(username, ip))
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func tooManyAttempts(w http.ResponseWriter, wait time.Duration) {
+	secs := max(1, int(math.Ceil(wait.Seconds())))
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeError(w, http.StatusTooManyRequests, "too_many_attempts",
+		"Too many sign-in attempts. Wait "+strconv.Itoa(secs)+" seconds and try again.")
 }
 
 func (h *localLogin) detail(username string, ip netip.Addr) map[string]any {

@@ -64,7 +64,7 @@ func TestBootstrapAdminCreatesAdmin(t *testing.T) {
 	if u.PasswordHash.String == "initial-pass" || !phcPattern.MatchString(u.PasswordHash.String) {
 		t.Fatalf("stored hash %q is not an Argon2id hash", u.PasswordHash.String)
 	}
-	if ok, err := VerifyPassword(u.PasswordHash.String, "initial-pass"); err != nil || !ok {
+	if ok, err := VerifyPassword(context.Background(), u.PasswordHash.String, "initial-pass"); err != nil || !ok {
 		t.Fatalf("stored hash does not verify: %v, %v", ok, err)
 	}
 	want := []auditEvent{{

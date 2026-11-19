@@ -4,11 +4,14 @@
 package auth
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -16,29 +19,29 @@ import (
 var phcPattern = regexp.MustCompile(`^\$argon2id\$v=19\$m=65536,t=3,p=4\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$`)
 
 func TestHashPasswordRoundTrip(t *testing.T) {
-	enc, err := HashPassword("correct horse")
+	enc, err := HashPassword(context.Background(), "correct horse")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !phcPattern.MatchString(enc) {
 		t.Fatalf("encoded hash %q does not match the specified format", enc)
 	}
-	ok, err := VerifyPassword(enc, "correct horse")
+	ok, err := VerifyPassword(context.Background(), enc, "correct horse")
 	if err != nil || !ok {
-		t.Fatalf("VerifyPassword(right) = %v, %v; want true, nil", ok, err)
+		t.Fatalf("VerifyPassword(context.Background(), right) = %v, %v; want true, nil", ok, err)
 	}
-	ok, err = VerifyPassword(enc, "correct horsf")
+	ok, err = VerifyPassword(context.Background(), enc, "correct horsf")
 	if err != nil || ok {
-		t.Fatalf("VerifyPassword(wrong) = %v, %v; want false, nil", ok, err)
+		t.Fatalf("VerifyPassword(context.Background(), wrong) = %v, %v; want false, nil", ok, err)
 	}
 }
 
 func TestHashPasswordSaltIsUnique(t *testing.T) {
-	a, err := HashPassword("same")
+	a, err := HashPassword(context.Background(), "same")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := HashPassword("same")
+	b, err := HashPassword(context.Background(), "same")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,10 +63,10 @@ func cheapHash(password string, m, tm uint32, p uint8) string {
 
 func TestVerifyPasswordUsesEncodedParameters(t *testing.T) {
 	enc := cheapHash("pw", 8, 1, 1)
-	if ok, err := VerifyPassword(enc, "pw"); err != nil || !ok {
+	if ok, err := VerifyPassword(context.Background(), enc, "pw"); err != nil || !ok {
 		t.Fatalf("cheap hash: %v, %v; want true, nil", ok, err)
 	}
-	if ok, err := VerifyPassword(enc, "other"); err != nil || ok {
+	if ok, err := VerifyPassword(context.Background(), enc, "other"); err != nil || ok {
 		t.Fatalf("cheap hash wrong password: %v, %v; want false, nil", ok, err)
 	}
 }
@@ -76,7 +79,7 @@ func TestVerifyPasswordRejectsMalformedHashes(t *testing.T) {
 		key33 = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gIA" // 33 bytes
 	)
 	good := "$argon2id$v=19$m=8,t=1,p=1$" + salt + "$" + key
-	if _, err := VerifyPassword(good, "x"); err != nil {
+	if _, err := VerifyPassword(context.Background(), good, "x"); err != nil {
 		t.Fatalf("control hash rejected: %v", err)
 	}
 	cases := map[string]string{
@@ -123,9 +126,9 @@ func TestVerifyPasswordRejectsMalformedHashes(t *testing.T) {
 	}
 	for name, enc := range cases {
 		t.Run(name, func(t *testing.T) {
-			match, err := VerifyPassword(enc, "x")
+			match, err := VerifyPassword(context.Background(), enc, "x")
 			if err == nil || match {
-				t.Fatalf("VerifyPassword(%q) = %v, %v; want false and an error", enc, match, err)
+				t.Fatalf("VerifyPassword(context.Background(), %q) = %v, %v; want false and an error", enc, match, err)
 			}
 		})
 	}
@@ -137,5 +140,59 @@ func TestDummyHashIsValid(t *testing.T) {
 	}
 	if !strings.Contains(dummyHash, "m=65536,t=3,p=4") {
 		t.Fatal("dummyHash must cost the same as real hashes")
+	}
+}
+
+func holdSlots(t *testing.T) {
+	t.Helper()
+	for range cap(hashSlots) {
+		hashSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range cap(hashSlots) {
+			<-hashSlots
+		}
+	})
+}
+
+func TestPasswordHashingStopsWaitingWhenContextEnds(t *testing.T) {
+	holdSlots(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := HashPassword(ctx, "pw"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("HashPassword err = %v; want deadline exceeded", err)
+	}
+	if ok, err := VerifyPassword(ctx, cheapHash("pw", 8, 1, 1), "pw"); ok || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("VerifyPassword = %v, %v; want false, deadline exceeded", ok, err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("waiting for a slot did not stop with the context")
+	}
+}
+
+func TestPasswordHashingRestoresSlots(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := HashPassword(ctx, "pw"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := VerifyPassword(context.Background(), "garbage", "pw"); err == nil {
+		t.Fatal("malformed hash accepted")
+	}
+	if _, err := VerifyPassword(context.Background(), cheapHash("pw", 8, 1, 1), "pw"); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(hashSlots); n != 0 {
+		t.Fatalf("%d slots still held", n)
+	}
+	// A panic inside the computation releases the slot too (deferred release).
+	func() {
+		defer func() { _ = recover() }()
+		// threads = 0 makes argon2.IDKey panic.
+		_, _ = deriveKey(context.Background(), []byte("pw"), []byte("saltsalt"), 1, 8, 0)
+	}()
+	if n := len(hashSlots); n != 0 {
+		t.Fatalf("a panic leaked %d slots", n)
 	}
 }

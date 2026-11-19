@@ -35,7 +35,7 @@ func BootstrapAdmin(ctx context.Context, s AdminBootstrapStore, rec AuditRecorde
 	if username == "" {
 		return false, errors.New("bootstrap administrator needs a username")
 	}
-	hash, err := HashPassword(password)
+	hash, err := HashPassword(ctx, password)
 	if err != nil {
 		return false, err
 	}

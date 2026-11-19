@@ -4,7 +4,9 @@
 package auth
 
 import (
+	"container/list"
 	"math"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -12,10 +14,14 @@ import (
 const (
 	limiterMinIdle       = 10 * time.Minute
 	limiterSweepInterval = time.Minute
+	// limiterMaxKeys bounds the memory of a limiter under a flood of distinct keys.
+	limiterMaxKeys = 10_000
 )
 
 // RateLimiter is a per-key token bucket: each key may make burst requests at
-// once and then one more every interval. It is safe for concurrent use.
+// once and then one more every interval. It tracks at most limiterMaxKeys
+// keys: when full, the least recently used key is dropped. It is safe for
+// concurrent use.
 type RateLimiter struct {
 	every time.Duration
 	burst float64
@@ -23,18 +29,21 @@ type RateLimiter struct {
 	now   func() time.Time
 
 	mu        sync.Mutex
-	buckets   map[string]*bucket
+	buckets   map[string]*list.Element // values are *bucket
+	order     *list.List               // front = most recently used
 	lastSweep time.Time
 }
 
 type bucket struct {
+	key    string
 	tokens float64
 	last   time.Time
 }
 
 // NewRateLimiter returns a limiter allowing burst requests per key and then
 // one every interval. A nil now uses time.Now. The sign-in endpoint uses
-// NewRateLimiter(12*time.Second, 10, nil): ten attempts, then five a minute.
+// NewRateLimiter(12*time.Second, 10, nil) for each of its two limiters: ten
+// attempts, then five a minute.
 func NewRateLimiter(every time.Duration, burst int, now func() time.Time) *RateLimiter {
 	if now == nil {
 		now = time.Now
@@ -46,7 +55,8 @@ func NewRateLimiter(every time.Duration, burst int, now func() time.Time) *RateL
 		burst:   float64(burst),
 		idle:    idle,
 		now:     now,
-		buckets: make(map[string]*bucket),
+		buckets: make(map[string]*list.Element),
+		order:   list.New(),
 	}
 }
 
@@ -58,10 +68,18 @@ func (l *RateLimiter) Allow(key string) (ok bool, retryAfter time.Duration) {
 	now := l.now()
 	l.sweep(now)
 
-	b := l.buckets[key]
-	if b == nil {
-		b = &bucket{tokens: l.burst, last: now}
-		l.buckets[key] = b
+	var b *bucket
+	if el := l.buckets[key]; el != nil {
+		l.order.MoveToFront(el)
+		b = el.Value.(*bucket)
+	} else {
+		if len(l.buckets) >= limiterMaxKeys {
+			oldest := l.order.Back()
+			delete(l.buckets, oldest.Value.(*bucket).key)
+			l.order.Remove(oldest)
+		}
+		b = &bucket{key: key, tokens: l.burst, last: now}
+		l.buckets[key] = l.order.PushFront(b)
 	}
 	if elapsed := now.Sub(b.last); elapsed > 0 {
 		b.tokens = min(l.burst, b.tokens+float64(elapsed)/float64(l.every))
@@ -74,16 +92,31 @@ func (l *RateLimiter) Allow(key string) (ok bool, retryAfter time.Duration) {
 	return false, time.Duration(math.Ceil((1 - b.tokens) * float64(l.every)))
 }
 
-// sweep drops idle keys, at most once per limiterSweepInterval. The caller
-// holds l.mu.
+// sweep drops idle keys, at most once per limiterSweepInterval. Keys are
+// ordered by last use, so it stops at the first one that is not idle. The
+// caller holds l.mu.
 func (l *RateLimiter) sweep(now time.Time) {
 	if now.Sub(l.lastSweep) < limiterSweepInterval {
 		return
 	}
 	l.lastSweep = now
-	for k, b := range l.buckets {
-		if now.Sub(b.last) > l.idle {
-			delete(l.buckets, k)
+	for el := l.order.Back(); el != nil; el = l.order.Back() {
+		b := el.Value.(*bucket)
+		if now.Sub(b.last) <= l.idle {
+			return
 		}
+		delete(l.buckets, b.key)
+		l.order.Remove(el)
 	}
+}
+
+// addrKey is the rate-limit key for a client address: IPv4 addresses are
+// used whole, IPv6 addresses by their /64 prefix, because one client usually
+// controls a whole /64.
+func addrKey(a netip.Addr) string {
+	a = a.Unmap()
+	if a.Is4() {
+		return a.String()
+	}
+	return netip.PrefixFrom(a, 64).Masked().String()
 }

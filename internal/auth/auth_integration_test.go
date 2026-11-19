@@ -64,7 +64,7 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	sessions := NewSessions(q, SessionOptions{Idle: testIdle, Absolute: testAbsolute, Secure: true, Now: clk.Now})
 	rec := audit.New(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	resolver := clientip.New(nil)
-	login := NewLocalLogin(q, sessions, rec, resolver.IP, NewRateLimiter(12*time.Second, 10, nil), nil)
+	login := NewLocalLogin(q, sessions, rec, resolver.IP, NewRateLimiter(12*time.Second, 10, nil), NewRateLimiter(12*time.Second, 10, nil), nil)
 	return &integrationEnv{pool: pool, q: q, sessions: sessions, clock: clk, login: login}
 }
 
@@ -321,7 +321,7 @@ func TestIntegrationBootstrapCreatesOneAdminAndIsIdempotent(t *testing.T) {
 	if err != nil || !u.PasswordHash.Valid {
 		t.Fatalf("GetLocalUserByUsername: %+v, %v", u, err)
 	}
-	if ok, err := VerifyPassword(u.PasswordHash.String, "initial-pass"); err != nil || !ok {
+	if ok, err := VerifyPassword(context.Background(), u.PasswordHash.String, "initial-pass"); err != nil || !ok {
 		t.Fatalf("stored hash does not verify: %v, %v", ok, err)
 	}
 }
@@ -329,7 +329,7 @@ func TestIntegrationBootstrapCreatesOneAdminAndIsIdempotent(t *testing.T) {
 func TestIntegrationLoginRateLimitUsesClientIP(t *testing.T) {
 	e := newIntegrationEnv(t)
 	ip := func(*http.Request) netip.Addr { return netip.MustParseAddr("198.51.100.1") }
-	h := NewLocalLogin(e.q, e.sessions, audit.New(e.q, slog.New(slog.NewTextHandler(io.Discard, nil))), ip, NewRateLimiter(time.Hour, 1, nil), nil)
+	h := NewLocalLogin(e.q, e.sessions, audit.New(e.q, slog.New(slog.NewTextHandler(io.Discard, nil))), ip, NewRateLimiter(time.Hour, 1, nil), NewRateLimiter(time.Hour, 1, nil), nil)
 	for i, want := range []int{http.StatusUnauthorized, http.StatusTooManyRequests} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, newRequest(http.MethodPost, "/", strings.NewReader(creds("ghost", "x"))))

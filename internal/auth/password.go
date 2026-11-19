@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -35,15 +36,33 @@ var hashSlots = make(chan struct{}, 2)
 
 var errInvalidHash = errors.New("invalid password hash")
 
-// HashPassword returns the Argon2id hash of password in PHC string format.
-func HashPassword(password string) (string, error) {
+// deriveKey computes an Argon2id key while holding one of the hashSlots. It
+// waits for a slot until ctx is done and then returns ctx.Err(). The slot is
+// released by defer, so a panic in the computation cannot leak it.
+func deriveKey(ctx context.Context, password, salt []byte, time, memory uint32, threads uint8) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	select {
+	case hashSlots <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-hashSlots }()
+	return argon2.IDKey(password, salt, time, memory, threads, argonKeyLen), nil
+}
+
+// HashPassword returns the Argon2id hash of password in PHC string format. It
+// returns ctx.Err() if ctx ends while waiting for a free hashing slot.
+func HashPassword(ctx context.Context, password string) (string, error) {
 	salt := make([]byte, argonSaltLen)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generate salt: %w", err)
 	}
-	hashSlots <- struct{}{}
-	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, argonKeyLen)
-	<-hashSlots
+	key, err := deriveKey(ctx, []byte(password), salt, argonTime, argonMemory, argonThreads)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s", argon2.Version,
 		argonMemory, argonTime, argonThreads,
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key)), nil
@@ -51,15 +70,17 @@ func HashPassword(password string) (string, error) {
 
 // VerifyPassword reports whether password matches the PHC-encoded Argon2id
 // hash. It returns an error, and false, if encoded is malformed or uses
-// parameters outside the accepted bounds.
-func VerifyPassword(encoded, password string) (bool, error) {
+// parameters outside the accepted bounds, and ctx.Err() if ctx ends while
+// waiting for a free hashing slot.
+func VerifyPassword(ctx context.Context, encoded, password string) (bool, error) {
 	p, err := parseHash(encoded)
 	if err != nil {
 		return false, err
 	}
-	hashSlots <- struct{}{}
-	key := argon2.IDKey([]byte(password), p.salt, p.time, p.memory, p.threads, argonKeyLen)
-	<-hashSlots
+	key, err := deriveKey(ctx, []byte(password), p.salt, p.time, p.memory, p.threads)
+	if err != nil {
+		return false, err
+	}
 	return subtle.ConstantTimeCompare(key, p.key) == 1, nil
 }
 

@@ -89,6 +89,7 @@ type loginFixture struct {
 	audit  *fakeAudit
 	calls  []verifyCall
 	limit  *RateLimiter
+	byUser *RateLimiter
 	clock  *fakeClock
 	userID int64
 }
@@ -115,12 +116,13 @@ func newLoginFixture(t *testing.T, every time.Duration, burst int) *loginFixture
 	}
 	f.limit = NewRateLimiter(every, burst, f.clock.Now)
 	ip := func(r *http.Request) netip.Addr { return netip.MustParseAddrPort(r.RemoteAddr).Addr() }
-	f.h = NewLocalLogin(f.users, f.start, f.audit, ip, f.limit, nil)
+	f.byUser = NewRateLimiter(every, burst, f.clock.Now)
+	f.h = NewLocalLogin(f.users, f.start, f.audit, ip, f.limit, f.byUser, nil)
 
 	orig := verifyPassword
-	verifyPassword = func(encoded, password string) (bool, error) {
+	verifyPassword = func(ctx context.Context, encoded, password string) (bool, error) {
 		f.calls = append(f.calls, verifyCall{encoded, password})
-		return orig(encoded, password)
+		return orig(ctx, encoded, password)
 	}
 	t.Cleanup(func() { verifyPassword = orig })
 	return f
@@ -177,7 +179,7 @@ func TestLocalLoginSuccess(t *testing.T) {
 		t.Fatal("the session cookie was not passed through to the response")
 	}
 	want := []auditEvent{{
-		Actor: "admin", Action: "login.succeeded",
+		Actor: "local:admin", Action: "login.succeeded",
 		Detail: map[string]any{"method": "local", "username": "admin", "ip": "192.0.2.1"},
 	}}
 	if !reflect.DeepEqual(f.audit.events, want) {
@@ -218,7 +220,7 @@ func TestLocalLoginWrongPassword(t *testing.T) {
 	if len(f.start.started) != 0 || len(f.users.touched) != 0 || len(w.Result().Cookies()) != 0 {
 		t.Fatal("a failed login started a session or touched the user")
 	}
-	if len(f.audit.events) != 1 || f.audit.events[0].Action != "login.failed" ||
+	if len(f.audit.events) != 1 || f.audit.events[0].Actor != "local:admin" || f.audit.events[0].Action != "login.failed" ||
 		!reflect.DeepEqual(f.audit.events[0].Detail, map[string]any{"method": "local", "username": "admin", "ip": "192.0.2.1"}) {
 		t.Fatalf("audit %+v", f.audit.events)
 	}
@@ -344,7 +346,7 @@ func TestLocalLoginRateLimit(t *testing.T) {
 		t.Fatalf("status %d for a limited invalid request", w.Code)
 	}
 	// Another address has its own budget.
-	if w := f.do(http.MethodPost, creds(goodUser, goodPass), "198.51.100.7:1234"); w.Code != http.StatusNoContent {
+	if w := f.do(http.MethodPost, creds("other", "x"), "198.51.100.7:1234"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("other address: status %d", w.Code)
 	}
 	// The same address recovers after the advertised time.
@@ -438,7 +440,7 @@ func TestLocalLoginLogsServerErrors(t *testing.T) {
 	var buf bytes.Buffer
 	f.users.lookupErr = errors.New("database is down")
 	f.h = NewLocalLogin(f.users, f.start, f.audit, func(*http.Request) netip.Addr { return netip.MustParseAddr("192.0.2.1") },
-		f.limit, slog.New(slog.NewTextHandler(&buf, nil)))
+		f.limit, f.byUser, slog.New(slog.NewTextHandler(&buf, nil)))
 	if w := f.post(creds(goodUser, goodPass)); w.Code != http.StatusInternalServerError {
 		t.Fatalf("status %d", w.Code)
 	}
@@ -447,5 +449,79 @@ func TestLocalLoginLogsServerErrors(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), goodPass) {
 		t.Fatal("password written to the log")
+	}
+}
+
+func TestLocalLoginAuditsUnknownUserUnderGivenName(t *testing.T) {
+	f := newLoginFixture(t, 12*time.Second, 10)
+	f.post(creds("Ghost", "x"))
+	if len(f.audit.events) != 1 || f.audit.events[0].Actor != "local:Ghost" {
+		t.Fatalf("audit %+v; want actor local:Ghost", f.audit.events)
+	}
+}
+
+func TestLocalLoginRateLimitPerUsername(t *testing.T) {
+	f := newLoginFixture(t, 12*time.Second, 2)
+	addr := func(i int) string { return "198.51.100." + string(rune('0'+i)) + ":1000" }
+	for i := range 2 {
+		if w := f.do(http.MethodPost, creds(goodUser, "wrong"), addr(i)); w.Code != http.StatusUnauthorized {
+			t.Fatalf("status %d within the burst", w.Code)
+		}
+	}
+	f.calls = nil
+	// A third address, a different case: same account, so limited before any hashing.
+	w := f.do(http.MethodPost, creds("ADMIN", goodPass), addr(3))
+	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "12" {
+		t.Fatalf("status %d Retry-After %q; want 429 and 12", w.Code, w.Header().Get("Retry-After"))
+	}
+	if code, _ := errorCode(t, w); code != "too_many_attempts" {
+		t.Fatalf("code %q", code)
+	}
+	if len(f.calls) != 0 || len(f.users.lookups) != 2 {
+		t.Fatal("a username-limited request was looked up or hashed")
+	}
+	// Another account from that address is fine.
+	if w := f.do(http.MethodPost, creds("other", "x"), addr(3)); w.Code != http.StatusUnauthorized {
+		t.Fatalf("other user: status %d", w.Code)
+	}
+}
+
+func TestLocalLoginIPv6SharesTheSlash64(t *testing.T) {
+	f := newLoginFixture(t, 12*time.Second, 1)
+	if w := f.do(http.MethodPost, creds("a", "x"), "[2001:db8:1:2::1]:1000"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("first: status %d", w.Code)
+	}
+	if w := f.do(http.MethodPost, creds("b", "x"), "[2001:db8:1:2:ffff::9]:1000"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("same /64: status %d; want 429", w.Code)
+	}
+	if w := f.do(http.MethodPost, creds("c", "x"), "[2001:db8:1:3::1]:1000"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("other /64: status %d", w.Code)
+	}
+}
+
+func TestLocalLoginCancelledWhileWaitingForASlot(t *testing.T) {
+	f := newLoginFixture(t, 12*time.Second, 10)
+	for range cap(hashSlots) {
+		hashSlots <- struct{}{}
+	}
+	t.Cleanup(func() {
+		for range cap(hashSlots) {
+			<-hashSlots
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r := newRequest(http.MethodPost, "/api/v1/auth/local/login", strings.NewReader(creds(goodUser, "wrong"))).WithContext(ctx)
+	r.RemoteAddr = "192.0.2.1:5555"
+	w := httptest.NewRecorder()
+	f.h.ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status %d; want 503", w.Code)
+	}
+	if code, msg := errorCode(t, w); code != "busy" || msg != "The server is busy. Try again in a moment." {
+		t.Fatalf("code %q message %q", code, msg)
+	}
+	if len(f.audit.events) != 0 || len(f.start.started) != 0 {
+		t.Fatalf("a busy response was audited or logged in: %+v", f.audit.events)
 	}
 }
