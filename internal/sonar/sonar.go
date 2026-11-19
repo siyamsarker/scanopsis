@@ -79,7 +79,9 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 // Handlers returns the HTTP handlers by OpenAPI operation ID.
 func (s *Sonar) Handlers() map[string]http.Handler {
 	return map[string]http.Handler{
-		"sonarWebhook": http.HandlerFunc(s.webhook),
+		"sonarWebhook":        http.HandlerFunc(s.webhook),
+		"getServiceSonar":     http.HandlerFunc(s.getServiceSonar),
+		"getSonarIntegration": http.HandlerFunc(s.getSonarIntegration),
 	}
 }
 
