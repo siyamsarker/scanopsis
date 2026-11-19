@@ -5,6 +5,7 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"reflect"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/siyamsarker/scanopsis/internal/auth"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
@@ -165,7 +167,7 @@ func TestLogout(t *testing.T) {
 		t.Fatalf("anonymous logout = %d", rec.Code)
 	}
 	// Only signed-in users are audited; an anonymous logout records nothing.
-	want := []auditEvent{{"vera", "logout", nil}}
+	want := []auditEvent{{"gitlab:vera", "logout", nil}}
 	if !reflect.DeepEqual(e.audit.events, want) {
 		t.Fatalf("audit = %+v, want %+v", e.audit.events, want)
 	}
@@ -181,6 +183,37 @@ func TestLogoutEndFailure(t *testing.T) {
 	if len(e.audit.events) != 0 {
 		t.Fatalf("no audit expected on failure, got %+v", e.audit.events)
 	}
+}
+
+func TestLogoutSessionLookupFailureDoesNotBlock(t *testing.T) {
+	e := newEnv(t, nil)
+	e.sessions.authErr = errors.New("db down")
+	if rec := e.do("POST", "/api/v1/auth/logout", "viewer", ""); rec.Code != 204 {
+		t.Fatalf("logout = %d, want 204", rec.Code)
+	}
+	if e.sessions.ended != 1 {
+		t.Fatalf("End called %d times, want 1", e.sessions.ended)
+	}
+	if len(e.audit.events) != 0 {
+		t.Fatalf("no actor is known, got audit %+v", e.audit.events)
+	}
+	if !strings.Contains(e.logs.String(), "db down") {
+		t.Fatalf("lookup error not logged: %s", e.logs.String())
+	}
+}
+
+func TestSessionStoreFailureIsNotUnauthenticated(t *testing.T) {
+	e := newEnv(t, nil)
+	e.sessions.authErr = errors.New("db down")
+	assertError(t, e.do("GET", "/api/v1/me", "viewer", ""), 500, "internal_error")
+	if !strings.Contains(e.logs.String(), "db down") {
+		t.Fatalf("error not logged: %s", e.logs.String())
+	}
+	// No session at all is still a 401.
+	e.sessions.authErr = nil
+	assertError(t, e.do("GET", "/api/v1/me", "", ""), 401, "unauthenticated")
+	e.sessions.authErr = fmt.Errorf("wrapped: %w", auth.ErrNoSession)
+	assertError(t, e.do("GET", "/api/v1/me", "", ""), 401, "unauthenticated")
 }
 
 func TestMe(t *testing.T) {
@@ -263,7 +296,7 @@ func TestUpdateUser(t *testing.T) {
 	if u := decode[userJSON](t, rec); u.ID != 3 || u.Role != "admin" || u.Username != "wes" {
 		t.Fatalf("user = %+v", u)
 	}
-	want := []auditEvent{{"root", "user.role_changed", map[string]any{
+	want := []auditEvent{{"local:root", "user.role_changed", map[string]any{
 		"user_id": int64(3), "username": "wes", "from": "viewer", "to": "admin",
 	}}}
 	if !reflect.DeepEqual(e.audit.events, want) {

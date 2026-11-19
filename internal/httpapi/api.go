@@ -123,9 +123,15 @@ func (s *server) optional(h http.Handler, what string) http.Handler {
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
+	// Logging out must work even if the session cannot be read, so errors
+	// other than "no session" are logged and otherwise ignored.
 	actor := ""
-	if p, err := s.Sessions.Authenticate(r); err == nil && p != nil {
-		actor = p.Username
+	p, err := s.Sessions.Authenticate(r)
+	switch {
+	case err == nil && p != nil:
+		actor = p.Source + ":" + p.Username
+	case err != nil && !errors.Is(err, auth.ErrNoSession):
+		s.Log.ErrorContext(r.Context(), "cannot check session on logout", "error", err)
 	}
 	if err := s.Sessions.End(w, r); err != nil {
 		s.internalError(w, r, "cannot end session", err)
@@ -217,7 +223,7 @@ func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := auth.PrincipalFrom(r.Context())
-	s.Audit.Record(r.Context(), actor.Username, audit.ActionRoleChanged, map[string]any{
+	s.Audit.Record(r.Context(), actor.Source+":"+actor.Username, audit.ActionRoleChanged, map[string]any{
 		"user_id": updated.ID, "username": updated.Username, "from": before.Role, "to": updated.Role,
 	})
 	writeJSON(w, http.StatusOK, toUser(updated))

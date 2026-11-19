@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -29,16 +28,20 @@ const roleHeader = "X-Test-Role"
 type fakeSessions struct {
 	ended    int
 	endError error
+	authErr  error // returned by Authenticate instead of the role lookup
 }
 
 func (f *fakeSessions) Authenticate(r *http.Request) (*auth.Principal, error) {
+	if f.authErr != nil {
+		return nil, f.authErr
+	}
 	switch r.Header.Get(roleHeader) {
 	case "admin":
-		return &auth.Principal{UserID: 1, Username: "root", Role: auth.RoleAdmin}, nil
+		return &auth.Principal{UserID: 1, Source: "local", Username: "root", Role: auth.RoleAdmin}, nil
 	case "viewer":
-		return &auth.Principal{UserID: 2, Username: "vera", Role: auth.RoleViewer}, nil
+		return &auth.Principal{UserID: 2, Source: "gitlab", Username: "vera", Role: auth.RoleViewer}, nil
 	}
-	return nil, errors.New("no session")
+	return nil, auth.ErrNoSession
 }
 
 func (f *fakeSessions) End(http.ResponseWriter, *http.Request) error {

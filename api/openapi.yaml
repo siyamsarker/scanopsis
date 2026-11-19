@@ -126,7 +126,8 @@ paths:
         "400": { description: Malformed request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: Wrong username or password., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Local sign-in is disabled., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "429": { description: Too many attempts from this address. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Too many attempts from this network or for this username. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: The server is busy hashing other passwords and the request ended while waiting. Try again., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/auth/logout:
     post:

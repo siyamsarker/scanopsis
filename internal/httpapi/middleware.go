@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -120,6 +121,11 @@ func limitBody(next http.Handler) http.Handler {
 func (s *server) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.Sessions.Authenticate(r)
+		if err != nil && !errors.Is(err, auth.ErrNoSession) {
+			// A failing session store is a server problem, not a signed-out user.
+			s.internalError(w, r, "cannot check session", err)
+			return
+		}
 		if err != nil || p == nil {
 			writeError(w, http.StatusUnauthorized, "unauthenticated", "Sign in to continue.")
 			return

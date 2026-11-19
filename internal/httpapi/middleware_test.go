@@ -72,6 +72,23 @@ func TestCrossOriginProtection(t *testing.T) {
 	}
 }
 
+func TestCrossSiteLocalLoginNeverReachesHandler(t *testing.T) {
+	reached := false
+	login := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusNoContent)
+	})
+	e := newEnv(t, func(d *Deps) { d.LocalLogin = login })
+	body := `{"username":"root","password":"x"}`
+	assertError(t, e.do("POST", "/api/v1/auth/local/login", "", body, "Sec-Fetch-Site", "cross-site"), 403, "cross_origin")
+	if reached {
+		t.Fatal("cross-site login reached the handler")
+	}
+	if rec := e.do("POST", "/api/v1/auth/local/login", "", body, "Sec-Fetch-Site", "same-origin"); rec.Code != 204 || !reached {
+		t.Fatalf("same-origin login = %d, reached = %v", rec.Code, reached)
+	}
+}
+
 func TestRequestLogOmitsQueryAndCookies(t *testing.T) {
 	e := newEnv(t, nil)
 	e.do("GET", "/api/v1/version?code=SECRET", "", "", "Cookie", "scanopsis_session=COOKIEVALUE", "Authorization", "Bearer TOKENVALUE")
