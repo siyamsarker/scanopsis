@@ -12,8 +12,8 @@ import (
 )
 
 const adoptServiceByPath = `-- name: AdoptServiceByPath :one
-UPDATE services SET gitlab_project_id = $1
-WHERE gitlab_project_path = $2 AND gitlab_project_id IS NULL AND NOT archived
+UPDATE services SET gitlab_project_id = $1, gitlab_project_path = $2
+WHERE lower(gitlab_project_path) = lower($2) AND gitlab_project_id IS NULL AND NOT archived
 RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at
 `
 
@@ -23,7 +23,8 @@ type AdoptServiceByPathParams struct {
 }
 
 // A service added by an administrator learns its project ID from the first
-// upload whose token names its path. Archived services are left alone.
+// upload whose token names its path, in any letter case, and takes GitLab's
+// spelling of the path. Archived services are left alone.
 func (q *Queries) AdoptServiceByPath(ctx context.Context, arg AdoptServiceByPathParams) (Service, error) {
 	row := q.db.QueryRow(ctx, adoptServiceByPath, arg.ProjectID, arg.ProjectPath)
 	var i Service
@@ -66,11 +67,11 @@ func (q *Queries) DeleteScanForJob(ctx context.Context, arg DeleteScanForJobPara
 }
 
 const getServiceByPath = `-- name: GetServiceByPath :one
-SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at FROM services WHERE gitlab_project_path = $1
+SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at FROM services WHERE lower(gitlab_project_path) = lower($1)
 `
 
-func (q *Queries) GetServiceByPath(ctx context.Context, gitlabProjectPath string) (Service, error) {
-	row := q.db.QueryRow(ctx, getServiceByPath, gitlabProjectPath)
+func (q *Queries) GetServiceByPath(ctx context.Context, lower string) (Service, error) {
+	row := q.db.QueryRow(ctx, getServiceByPath, lower)
 	var i Service
 	err := row.Scan(
 		&i.ID,
@@ -218,7 +219,7 @@ func (q *Queries) LockIngestProject(ctx context.Context, projectID string) error
 const renameServicePath = `-- name: RenameServicePath :execrows
 UPDATE services SET gitlab_project_path = $1
 WHERE services.id = $2
-  AND NOT EXISTS (SELECT 1 FROM services other WHERE other.gitlab_project_path = $1 AND other.id <> $2)
+  AND NOT EXISTS (SELECT 1 FROM services other WHERE lower(other.gitlab_project_path) = lower($1) AND other.id <> $2)
 `
 
 type RenameServicePathParams struct {

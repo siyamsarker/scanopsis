@@ -749,3 +749,67 @@ func TestIntegrationArchivedServices(t *testing.T) {
 		}
 	})
 }
+
+// GitLab paths are case-insensitive: a service an administrator typed in
+// another case is adopted, and takes GitLab's spelling.
+func TestIntegrationPathCaseDifference(t *testing.T) {
+	body := []byte(`{"SchemaVersion":2,"ArtifactName":"a"}`)
+	t.Run("adopted with the spelling of the token", func(t *testing.T) {
+		e := newIEnv(t, nil)
+		var id int64
+		if err := e.pool.QueryRow(context.Background(), `INSERT INTO services (name, gitlab_project_path, created_via)
+			VALUES ('Payments', 'Platform/Payments-API', 'manual') RETURNING id`).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		res := e.mustUpload(upload{body: body})
+		if res.ServiceID != id || res.ServiceCreated || e.count("services") != 1 {
+			t.Fatalf("result = %+v, %d services", res, e.count("services"))
+		}
+		var path string
+		var pid int64
+		_ = e.pool.QueryRow(context.Background(), `SELECT gitlab_project_path, gitlab_project_id FROM services`).Scan(&path, &pid)
+		if path != "platform/payments-api" || pid != 42 {
+			t.Errorf("path %q id %d", path, pid)
+		}
+	})
+	t.Run("archived manual service in another case", func(t *testing.T) {
+		e := newIEnv(t, nil)
+		if _, err := e.pool.Exec(context.Background(), `INSERT INTO services (name, gitlab_project_path, created_via, archived)
+			VALUES ('Payments', 'PLATFORM/payments-api', 'manual', true)`); err != nil {
+			t.Fatal(err)
+		}
+		code, b := e.upload(upload{body: body})
+		if code != http.StatusConflict || !strings.Contains(string(b), `"service_archived"`) || e.count("services") != 1 {
+			t.Fatalf("%d %s", code, b)
+		}
+	})
+	t.Run("renamed project keeps its service", func(t *testing.T) {
+		e := newIEnv(t, nil)
+		first := e.mustUpload(upload{body: body})
+		again := e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["project_path"] = "Platform/Payments-API" }})
+		var path string
+		_ = e.pool.QueryRow(context.Background(), `SELECT gitlab_project_path FROM services`).Scan(&path)
+		if again.ServiceID != first.ServiceID || path != "Platform/Payments-API" || e.count("services") != 1 {
+			t.Errorf("service %d path %q services %d", again.ServiceID, path, e.count("services"))
+		}
+	})
+	t.Run("another project with a path differing in case is a conflict", func(t *testing.T) {
+		e := newIEnv(t, nil)
+		if _, err := e.pool.Exec(context.Background(), `INSERT INTO services (name, gitlab_project_path, gitlab_project_id, created_via)
+			VALUES ('old', 'Platform/Payments-API', 7, 'ingest')`); err != nil {
+			t.Fatal(err)
+		}
+		code, b := e.upload(upload{body: body})
+		if code != http.StatusConflict || !strings.Contains(string(b), `"service_conflict"`) {
+			t.Fatalf("%d %s", code, b)
+		}
+		// A rename onto a path that differs only in case from another service is refused too.
+		e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["project_id"], c["project_path"] = "8", "platform/other" }})
+		e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["project_id"], c["project_path"] = "8", "PLATFORM/PAYMENTS-api" }})
+		var path string
+		_ = e.pool.QueryRow(context.Background(), `SELECT gitlab_project_path FROM services WHERE gitlab_project_id = 8`).Scan(&path)
+		if path != "platform/other" {
+			t.Errorf("path = %q, want the old path kept", path)
+		}
+	})
+}

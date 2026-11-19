@@ -10,13 +10,14 @@ SELECT pg_advisory_xact_lock(hashtextextended('scanopsis.ingest:' || sqlc.arg(pr
 SELECT * FROM services WHERE gitlab_project_id = $1;
 
 -- name: GetServiceByPath :one
-SELECT * FROM services WHERE gitlab_project_path = $1;
+SELECT * FROM services WHERE lower(gitlab_project_path) = lower($1);
 
 -- name: AdoptServiceByPath :one
 -- A service added by an administrator learns its project ID from the first
--- upload whose token names its path. Archived services are left alone.
-UPDATE services SET gitlab_project_id = @project_id
-WHERE gitlab_project_path = @project_path AND gitlab_project_id IS NULL AND NOT archived
+-- upload whose token names its path, in any letter case, and takes GitLab's
+-- spelling of the path. Archived services are left alone.
+UPDATE services SET gitlab_project_id = @project_id, gitlab_project_path = @project_path
+WHERE lower(gitlab_project_path) = lower(@project_path) AND gitlab_project_id IS NULL AND NOT archived
 RETURNING *;
 
 -- name: RenameServicePath :execrows
@@ -24,7 +25,7 @@ RETURNING *;
 -- service already uses the new path.
 UPDATE services SET gitlab_project_path = @project_path
 WHERE services.id = @id
-  AND NOT EXISTS (SELECT 1 FROM services other WHERE other.gitlab_project_path = @project_path AND other.id <> @id);
+  AND NOT EXISTS (SELECT 1 FROM services other WHERE lower(other.gitlab_project_path) = lower(@project_path) AND other.id <> @id);
 
 -- name: InsertIngestService :one
 -- Returns no row when the path is already used by another service.
