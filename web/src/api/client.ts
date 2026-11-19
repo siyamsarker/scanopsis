@@ -5,6 +5,7 @@ import createClient from 'openapi-fetch';
 import type { components, paths } from './schema.gen';
 
 export type User = components['schemas']['User'];
+export type Me = components['schemas']['Me'];
 export type Role = components['schemas']['Role'];
 
 // openapi-fetch builds a Request object, and Request rejects relative URLs

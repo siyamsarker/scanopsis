@@ -2,16 +2,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, unwrap, type ApiError, type Role, type User } from './client';
+import { api, unwrap, type ApiError, type Me, type Role, type User } from './client';
 
 export const meKey = ['me'] as const;
 const usersKey = ['users'] as const;
 
-/** The signed-in user, or null when there is no session (401 is not an error). */
+export const setupKey = ['setup'] as const;
+
+/** Whether the first administrator still has to be created. */
+export function useSetupStatus() {
+  return useQuery({
+    queryKey: setupKey,
+    queryFn: async () => unwrap(await api.GET('/api/v1/setup')),
+  });
+}
+
+/** The signed-in user and session state, or null when there is no session (401 is not an error). */
 export function useMe() {
   return useQuery({
     queryKey: meKey,
-    queryFn: async (): Promise<User | null> => {
+    queryFn: async (): Promise<Me | null> => {
       const result = await api.GET('/api/v1/me');
       if (result.response.status === 401) return null;
       return unwrap(result);

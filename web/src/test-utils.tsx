@@ -5,7 +5,7 @@ import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { render } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { App } from './App';
-import type { User } from './api/client';
+import type { Me } from './api/client';
 import { createQueryClient } from './api/queryClient';
 
 export interface RecordedCall {
@@ -66,7 +66,7 @@ export function renderApp(path: string, client: QueryClient = createQueryClient(
   );
 }
 
-export function makeUser(overrides: Partial<User> = {}): User {
+export function makeUser(overrides: Partial<Me> = {}): Me {
   return {
     id: 1,
     source: 'gitlab',
@@ -76,6 +76,9 @@ export function makeUser(overrides: Partial<User> = {}): User {
     role: 'admin',
     created_at: '2026-01-01T00:00:00Z',
     last_login_at: '2026-11-18T10:00:00Z',
+    mfa_enrolled: true,
+    mfa_verified: true,
+    must_change_password: false,
     ...overrides,
   };
 }

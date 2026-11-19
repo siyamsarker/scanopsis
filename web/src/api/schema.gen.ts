@@ -155,7 +155,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** The signed-in user. */
+        /**
+         * The signed-in user and the state of the session.
+         * @description Also answers for a session that still has to complete two-factor
+         *     authentication or a password change, so the web interface can guide
+         *     the user. Every other endpoint that needs a session answers 403 with
+         *     code mfa_required, mfa_enrollment_required or password_change_required
+         *     until the session is complete.
+         */
         get: operations["getMe"];
         put?: never;
         post?: never;
@@ -197,6 +204,152 @@ export interface paths {
         head?: never;
         /** Change a user's role (admin only). */
         patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/api/v1/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether the first-run setup is still required (no administrator exists). */
+        get: operations["getSetupStatus"];
+        put?: never;
+        /**
+         * Create the first administrator (local account) with the one-time setup token.
+         * @description The token is printed to the server log at start while no administrator
+         *     exists. On success the session cookie is set; the new administrator must
+         *     enrol two-factor authentication before the session is fully usable.
+         */
+        post: operations["completeSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete sign-in with a TOTP code or a recovery code.
+         * @description Allowed for a session that has passed the first factor and whose user has enrolled.
+         */
+        post: operations["verifyMFA"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/enrollment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start TOTP enrolment and get the secret to add to an authenticator app.
+         * @description Allowed for a session whose user has not enrolled (first sign-in or
+         *     after a reset). Calling it again replaces the pending secret.
+         */
+        post: operations["startMFAEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/mfa/enrollment/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Confirm enrolment with a code from the app and receive recovery codes. */
+        post: operations["confirmMFAEnrollment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the password of the signed-in local user.
+         * @description Required after a password reset from the command line. Allowed for a
+         *     session whose second factor is verified. Other sessions of the user are
+         *     signed out.
+         */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/users/{id}/mfa": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Reset a user's two-factor authentication (admin only).
+         * @description Removes the TOTP secret and recovery codes and signs the user out everywhere; the user enrols again at the next sign-in.
+         */
+        delete: operations["resetUserMFA"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List all runtime settings (admin only). Secret values are never returned. */
+        get: operations["listSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Change runtime settings (admin only). Changes apply immediately.
+         * @description The body maps setting keys to new values. A null value resets the key to
+         *     its environment or default value. All changes are validated together and
+         *     applied atomically.
+         */
+        patch: operations["updateSettings"];
         trace?: never;
     };
 }
@@ -259,6 +412,74 @@ export interface components {
         };
         /** @enum {string} */
         Role: "admin" | "viewer";
+        Me: components["schemas"]["User"] & {
+            /** @description The user has a confirmed TOTP enrolment. */
+            mfa_enrolled: boolean;
+            /** @description This session has passed the second factor. */
+            mfa_verified: boolean;
+            must_change_password: boolean;
+        };
+        SetupStatus: {
+            required: boolean;
+        };
+        SetupRequest: {
+            token: string;
+            username: string;
+            password: string;
+        };
+        MFACode: {
+            /** @description A 6-digit TOTP code or a recovery code (xxxxx-xxxxx). */
+            code: string;
+        };
+        MFAEnrollment: {
+            /** @description Base32 secret for manual entry. */
+            secret: string;
+            /** @description otpauth://totp/... URI for a QR code. */
+            otpauth_uri: string;
+        };
+        RecoveryCodes: {
+            recovery_codes: string[];
+        };
+        PasswordChange: {
+            current_password: string;
+            new_password: string;
+        };
+        Setting: {
+            /** @example gitlab.allowed_groups */
+            key: string;
+            /** @enum {string} */
+            type: "string" | "url" | "boolean" | "duration" | "string_list";
+            secret: boolean;
+            /** @enum {string} */
+            source: "default" | "env" | "ui";
+            /** @description Current value; always null for secrets. */
+            value: null | string | boolean | string[];
+            /** @description For secrets */
+            is_set: boolean;
+            /** @description Environment variable that seeds this setting. */
+            env_var: string;
+            description: string;
+            updated_by?: string | null;
+            /** Format: date-time */
+            updated_at?: string | null;
+        };
+        SettingList: {
+            items: components["schemas"]["Setting"][];
+        };
+        SettingUpdate: {
+            [key: string]: null | string | boolean | string[];
+        };
+        SettingsError: {
+            error: {
+                /** @example invalid_settings */
+                code: string;
+                message: string;
+                /** @description Problem per setting key. */
+                fields: {
+                    [key: string]: string;
+                };
+            };
+        };
     };
     responses: {
         /** @description No valid session. */
@@ -536,7 +757,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["User"];
+                    "application/json": components["schemas"]["Me"];
                 };
             };
             401: components["responses"]["Unauthenticated"];
@@ -630,6 +851,378 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+        };
+    };
+    getSetupStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Setup status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatus"];
+                };
+            };
+        };
+    };
+    completeSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRequest"];
+            };
+        };
+        responses: {
+            /** @description Administrator created and signed in (two-factor enrolment pending). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request or password does not meet the rules (code invalid_request or weak_password). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Wrong setup token (code invalid_setup_token). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Setup is already complete (code setup_complete). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many attempts. Retry-After gives seconds. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    verifyMFA: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MFACode"];
+            };
+        };
+        responses: {
+            /** @description Second factor accepted; the session is fully usable. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Wrong or reused code (code invalid_code) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Two-factor authentication is not enrolled yet (code mfa_enrollment_required). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many attempts. Retry-After gives seconds. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    startMFAEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending enrolment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MFAEnrollment"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Already enrolled (code mfa_already_enrolled). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    confirmMFAEnrollment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MFACode"];
+            };
+        };
+        responses: {
+            /** @description Enrolled. The recovery codes are shown only this once; the session is fully usable. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCodes"];
+                };
+            };
+            /** @description Malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Wrong code (code invalid_code) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No pending enrolment (code mfa_enrollment_not_started) or already enrolled. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many attempts. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChange"];
+            };
+        };
+        responses: {
+            /** @description Password changed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid request or weak password (code weak_password). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Wrong current password (code invalid_credentials) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not a local account (code not_local) or second factor not verified. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    resetUserMFA: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Reset. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such user. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Settings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    updateSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SettingUpdate"];
+            };
+        };
+        responses: {
+            /** @description Settings after the change. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingList"];
+                };
+            };
+            /** @description Validation failed (code invalid_settings); details name each key. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsError"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
         };
     };
 }

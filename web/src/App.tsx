@@ -6,16 +6,19 @@ import { HomePage } from './routes/HomePage';
 import { LoginPage } from './routes/LoginPage';
 import { NotFoundPage } from './routes/NotFoundPage';
 import { ProtectedLayout } from './routes/ProtectedLayout';
+import { SetupGate } from './routes/SetupGate';
 import { UsersPage } from './routes/UsersPage';
 
 export function App() {
   return (
     <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route element={<ProtectedLayout />}>
-        <Route index element={<HomePage />} />
-        <Route path="admin/users" element={<UsersPage />} />
-        <Route path="*" element={<NotFoundPage />} />
+      <Route element={<SetupGate />}>
+        <Route path="/login" element={<LoginPage />} />
+        <Route element={<ProtectedLayout />}>
+          <Route index element={<HomePage />} />
+          <Route path="admin/users" element={<UsersPage />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Route>
       </Route>
     </Routes>
   );

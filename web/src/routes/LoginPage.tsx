@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useQueryClient } from '@tanstack/react-query';
-import { CircleAlert, LogIn } from 'lucide-react';
+import { LogIn } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
+import { describeError } from '../api/errors';
 import { useAuthMethods, useMe } from '../api/hooks';
 import { safeReturnTo } from '../auth/returnTo';
-import { Wordmark } from '../components/ApertureMark';
-import { ThemeSwitch } from '../components/ThemeSwitch';
-import { cardClass, headingClass, inputClass, primaryButtonClass } from '../ui';
+import { AuthShell } from '../components/AuthShell';
+import { ErrorNote } from '../components/ErrorNote';
+import { inputClass, primaryButtonClass } from '../ui';
 
 const errorMessages: Record<string, string> = {
   access_denied: 'You cancelled the sign-in on GitLab.',
@@ -22,30 +23,8 @@ const errorMessages: Record<string, string> = {
 };
 
 function localLoginMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.status === 401) return 'Wrong username or password.';
-    if (err.status === 429) {
-      return err.retryAfter === null
-        ? 'Too many attempts. Try again later.'
-        : `Too many attempts. Try again in ${err.retryAfter} ${err.retryAfter === 1 ? 'second' : 'seconds'}.`;
-    }
-    return err.message;
-  }
-  return 'Scanopsis could not reach the server. Check your connection and try again.';
-}
-
-function ErrorNote({ children }: { children: string }) {
-  return (
-    <p role="alert" className="flex items-start gap-2 text-text">
-      <CircleAlert
-        size={16}
-        strokeWidth={1.5}
-        aria-hidden="true"
-        className="mt-0.5 shrink-0 text-fail"
-      />
-      <span>{children}</span>
-    </p>
-  );
+  if (err instanceof ApiError && err.status === 401) return 'Wrong username or password.';
+  return describeError(err);
 }
 
 function LocalForm({ returnTo }: { returnTo: string }) {
@@ -164,19 +143,9 @@ export function LoginPage() {
   }
 
   return (
-    <main className="brand-glow flex min-h-screen flex-col items-center justify-center gap-6 px-4 py-10 sm:px-6">
-      <Wordmark size={28} className="text-xl" />
-      <section
-        className={`${cardClass} brand-edge rise flex w-full max-w-md flex-col gap-6 p-6 sm:p-8`}
-      >
-        <div>
-          <h1 className={headingClass}>Sign in</h1>
-          <p className="mt-1 text-text-muted">to see your SonarQube and Trivy results.</p>
-        </div>
-        {urlError && <ErrorNote>{urlError}</ErrorNote>}
-        <div className="min-h-24">{body}</div>
-      </section>
-      <ThemeSwitch />
-    </main>
+    <AuthShell title="Sign in" lead="to see your SonarQube and Trivy results." focusHeading={false}>
+      {urlError && <ErrorNote>{urlError}</ErrorNote>}
+      <div className="min-h-24">{body}</div>
+    </AuthShell>
   );
 }

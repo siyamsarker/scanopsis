@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { useMe } from '../api/hooks';
+import { nextStep, stepUrl } from '../auth/session';
 import { Wordmark } from '../components/ApertureMark';
 import { ThemeSwitch } from '../components/ThemeSwitch';
 import { primaryButtonClass, secondaryButtonClass } from '../ui';
@@ -71,6 +72,12 @@ export function ProtectedLayout() {
         <Navigate to={`/login?return_to=${returnTo}`} replace />
       </>
     );
+  }
+
+  const step = nextStep(user);
+  if (step) {
+    // The session is not complete: no application page renders until it is.
+    return <Navigate to={stepUrl(step, location.pathname + location.search)} replace />;
   }
 
   function finishSignOut() {
