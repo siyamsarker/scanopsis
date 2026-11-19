@@ -8,6 +8,7 @@ import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { useAuthMethods, useMe } from '../api/hooks';
 import { safeReturnTo } from '../auth/returnTo';
+import { ThemeSwitch } from '../components/ThemeSwitch';
 import { cardClass, headingClass, inputClass, primaryButtonClass } from '../ui';
 
 const errorMessages: Record<string, string> = {
@@ -170,6 +171,7 @@ export function LoginPage() {
         </div>
         {urlError && <ErrorNote>{urlError}</ErrorNote>}
         {body}
+        <ThemeSwitch />
       </section>
     </main>
   );

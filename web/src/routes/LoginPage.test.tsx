@@ -82,6 +82,14 @@ describe('login page methods', () => {
   });
 });
 
+describe('login page theme', () => {
+  it('offers the theme switch', async () => {
+    mockFetch(anonymous());
+    renderApp('/login');
+    expect(await screen.findByRole('group', { name: 'Theme' })).toBeInTheDocument();
+  });
+});
+
 describe('login page return_to', () => {
   it.each(['//evil.com', 'https://evil.com', '/\\evil.com'])(
     'falls back to / for %s',

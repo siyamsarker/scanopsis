@@ -42,6 +42,12 @@ describe('protected layout', () => {
     ).toBeInTheDocument();
   });
 
+  it('offers the theme switch in the header', async () => {
+    mockFetch((call) => (call.path === '/api/v1/me' ? json(200, makeUser()) : undefined));
+    renderApp('/');
+    expect(await screen.findByRole('group', { name: 'Theme' })).toBeInTheDocument();
+  });
+
   it('hides the Users link for viewers and falls back to the username', async () => {
     mockFetch((call) =>
       call.path === '/api/v1/me'

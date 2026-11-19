@@ -3,7 +3,10 @@
 
 @import 'tailwindcss';
 
-/* Dark is the default theme; light follows the system preference. */
+/*
+ * Dark is the default. With no data-theme attribute the system preference
+ * decides; data-theme="light" or "dark" on <html> is an explicit choice.
+ */
 :root {
   color-scheme: dark;
 
@@ -12,6 +15,7 @@
   --surface: #131a2e;
   --surface-raised: #1b2440;
   --border: #273152;
+  --border-strong: #6b769c;
   --text: #e6eaf2;
   --text-muted: #9aa4bf;
 
@@ -26,7 +30,7 @@
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme]) {
     color-scheme: light;
 
     --brand: #4f46e5;
@@ -34,9 +38,23 @@
     --surface: #ffffff;
     --surface-raised: #ffffff;
     --border: #e2e6ef;
+    --border-strong: #7b8499;
     --text: #111827;
     --text-muted: #5b6478;
   }
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --brand: #4f46e5;
+  --bg: #f7f8fb;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --border: #e2e6ef;
+  --border-strong: #7b8499;
+  --text: #111827;
+  --text-muted: #5b6478;
 }
 
 @theme inline {
@@ -45,6 +63,7 @@
   --color-surface: var(--surface);
   --color-surface-raised: var(--surface-raised);
   --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
   --color-text: var(--text);
   --color-text-muted: var(--text-muted);
 
@@ -71,6 +90,7 @@
 
 html {
   font-size: 14px;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {

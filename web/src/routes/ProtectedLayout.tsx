@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { useMe } from '../api/hooks';
+import { ThemeSwitch } from '../components/ThemeSwitch';
 import { primaryButtonClass, secondaryButtonClass } from '../ui';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
@@ -115,6 +116,7 @@ export function ProtectedLayout() {
                 {user.role === 'admin' ? 'Admin' : 'Viewer'}
               </span>
             </span>
+            <ThemeSwitch />
             <button type="button" className={secondaryButtonClass} onClick={() => void signOut()}>
               <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
               Sign out

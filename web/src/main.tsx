@@ -10,6 +10,10 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router';
 import { App } from './App';
 import { createQueryClient } from './api/queryClient';
+import { applyTheme, readStoredTheme } from './theme';
+
+// Apply the saved theme before React renders, so the first paint is not the wrong one.
+applyTheme(readStoredTheme());
 
 const queryClient = createQueryClient();
 
