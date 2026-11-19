@@ -565,7 +565,8 @@ func TestTrivyIntegration(t *testing.T) {
 	}
 
 	svc := addService(t, pool, "s", "g/s", false)
-	now := time.Now()
+	// PostgreSQL keeps microseconds; Linux clocks have nanoseconds.
+	now := time.Now().Truncate(time.Microsecond)
 	for i, ago := range []time.Duration{time.Hour, 5 * time.Hour, 30 * time.Hour, 48 * time.Hour} {
 		addScan(t, pool, scanSeed{svc: svc, kind: "image", artifact: "x", ref: "main", job: int64(i + 1), at: now.Add(-ago)})
 		mustExec(t, pool, `UPDATE scans SET received_at = $1 WHERE gitlab_job_id = $2`, now.Add(-ago), i+1)
