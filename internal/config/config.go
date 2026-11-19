@@ -76,7 +76,8 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 	c.Seeds = map[string]any{}
 	l.seeds(c.Seeds)
 
-	if c.DatabaseURL == "" {
+	// A problem with the variable or its file is already reported.
+	if c.DatabaseURL == "" && !l.hasErr("DATABASE_URL") {
 		l.fail("DATABASE_URL", "is required")
 	}
 	if err := errors.Join(l.errs...); err != nil {

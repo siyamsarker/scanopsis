@@ -175,6 +175,10 @@ func TestLoadErrors(t *testing.T) {
 			[]string{"SCANOPSIS_SECRET_KEY_FILE cannot be read"}},
 		{"secret and file both set", with(minimal(), "SCANOPSIS_SECRET_KEY_FILE", "/f"), nil,
 			[]string{"SCANOPSIS_SECRET_KEY and SCANOPSIS_SECRET_KEY_FILE are both set"}},
+		{"database url and file both set", with(minimal(), "SCANOPSIS_DATABASE_URL_FILE", "/f"), nil,
+			[]string{"SCANOPSIS_DATABASE_URL and SCANOPSIS_DATABASE_URL_FILE are both set"}},
+		{"database url file missing", with(without(minimal(), "SCANOPSIS_DATABASE_URL"), "SCANOPSIS_DATABASE_URL_FILE", "/missing"), nil,
+			[]string{"SCANOPSIS_DATABASE_URL_FILE cannot be read"}},
 		{"gitlab secret file missing", with(minimal(), "SCANOPSIS_GITLAB_CLIENT_SECRET_FILE", "/missing"), nil,
 			[]string{"SCANOPSIS_GITLAB_CLIENT_SECRET_FILE cannot be read"}},
 		{"bad bool", with(minimal(), "SCANOPSIS_LOCAL_LOGIN_ENABLED", "maybe"), nil,
@@ -211,6 +215,11 @@ func TestLoadErrors(t *testing.T) {
 			c, err := load(t, tt.env, tt.files)
 			if err == nil {
 				t.Fatalf("expected an error, got config %+v", c)
+			}
+			// One message per problem: a missing value is not reported
+			// again when its variable or file already failed.
+			if n := strings.Count(err.Error(), "SCANOPSIS_DATABASE_URL is required"); n > 0 && tt.name != "missing required" {
+				t.Errorf("unexpected %q in %q", "SCANOPSIS_DATABASE_URL is required", err)
 			}
 			for _, w := range tt.want {
 				if !strings.Contains(err.Error(), w) {
