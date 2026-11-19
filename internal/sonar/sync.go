@@ -6,7 +6,6 @@ package sonar
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -74,7 +73,7 @@ func (s *Sonar) sync(ctx context.Context, snap settings.Snapshot) {
 	var lastErr string
 	if v, err := cl.serverVersion(ctx); err != nil {
 		s.warn(ctx, "reading the SonarQube version failed", "", err)
-		lastErr = err.Error()
+		lastErr = briefError(err)
 	} else {
 		s.mu.Lock()
 		s.version = v
@@ -95,7 +94,7 @@ func (s *Sonar) sync(ctx context.Context, snap settings.Snapshot) {
 			continue
 		}
 		s.warn(ctx, "SonarQube sync failed for a project", svc.SonarProjectKey, err)
-		lastErr = fmt.Sprintf("%s: %v", svc.SonarProjectKey, err)
+		lastErr = svc.SonarProjectKey + ": " + briefError(err)
 		var ae *apiError
 		if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
 			break // the token is wrong for every project
@@ -135,7 +134,7 @@ func (s *Sonar) syncProject(ctx context.Context, cl *client, svc store.SonarLink
 		ServiceID: svc.ID, TaskID: "sync:" + latest.Key, AnalysisKey: latest.Key,
 		AnalysedAt: latest.Date, Revision: latest.Revision, Gate: gate,
 		Conditions: conds, Measures: measures,
-	})
+	}, "")
 }
 
 // warn logs a failure with the SonarQube status code when there is one.

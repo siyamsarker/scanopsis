@@ -101,6 +101,9 @@ func TestWebhookLinkedByPropertyStandardUnreported(t *testing.T) {
 	if !a.GitlabPipelineID.Valid || a.GitlabPipelineID.Int64 != 9001 {
 		t.Errorf("pipeline: %+v", a.GitlabPipelineID)
 	}
+	if k, ok := e.serviceKey(t, sid); !ok || k != "any-key" {
+		t.Errorf("service key %q %v, want it pinned", k, ok)
+	}
 	if a.Revision != "" {
 		t.Errorf("revision: %q (the analysis search has none)", a.Revision)
 	}
@@ -165,9 +168,9 @@ func TestWebhookWebAPIErrors(t *testing.T) {
 		status         int
 		detail         string
 	}{
-		{"measures 500", "api/measures/component", 500, "Reading measures failed: SonarQube returned HTTP 500 for api/measures/component. The next sync will retry."},
-		{"measures 404", "api/measures/component", 404, "Reading measures failed: SonarQube returned HTTP 404 for api/measures/component. The next sync will retry."},
-		{"search 403", "api/project_analyses/search", 403, "Reading the latest analysis failed: SonarQube returned HTTP 403 for api/project_analyses/search. The next sync will retry."},
+		{"measures 500", "api/measures/component", 500, "Reading measures failed: SonarQube answered 500 on api/measures/component. The next sync will retry."},
+		{"measures 404", "api/measures/component", 404, "Reading measures failed: SonarQube answered 404 on api/measures/component. The next sync will retry."},
+		{"search 403", "api/project_analyses/search", 403, "Reading the latest analysis failed: SonarQube answered 403 on api/project_analyses/search. The next sync will retry."},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -196,7 +199,7 @@ func TestWebhookWrongToken(t *testing.T) {
 	wantStatus(t, e, hook("task-6", "platform:payments-api", nil), 202)
 	e.drain(t, 1)
 	d := e.delivery(t, "task-6")
-	if d.Outcome != "failed" || !strings.Contains(d.Detail, "HTTP 401") || strings.Contains(d.Detail, "squ_wrong") {
+	if d.Outcome != "failed" || !strings.Contains(d.Detail, "answered 401") || strings.Contains(d.Detail, "squ_wrong") {
 		t.Errorf("delivery: %+v", d)
 	}
 }
@@ -243,7 +246,7 @@ func TestWebhookAnalysisCases(t *testing.T) {
 		{"no analyses", nil,
 			nil, "linked", "SonarQube reports no analysis for the project; the measures may not belong to this analysis.", ""},
 		{"bad analysedAt", []fakesonar.Analysis{{Key: "AY1", Date: analysisTime}},
-			map[string]any{"analysedAt": "soon"}, "failed", `The webhook has no readable analysedAt ("soon").`, ""},
+			map[string]any{"analysedAt": "soon"}, "failed", `The webhook has no readable analysedAt.`, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -277,7 +280,7 @@ func TestWebhookAlreadyStoredBySync(t *testing.T) {
 	if err := e.s.save(context.Background(), snapshot{
 		ServiceID: sid, TaskID: "sync:AY1", AnalysisKey: "AY1", AnalysedAt: analysisTime,
 		Measures: map[string]string{}, Conditions: []Condition{},
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatal(err)
 	}
 	wantStatus(t, e, hook("task-9", "platform:payments-api", nil), 202)

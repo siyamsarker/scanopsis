@@ -216,6 +216,25 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 	return items, nil
 }
 
+const pinSonarKey = `-- name: PinSonarKey :execrows
+UPDATE services SET sonar_project_key = $2 WHERE id = $1 AND sonar_project_key IS NULL
+`
+
+type PinSonarKeyParams struct {
+	ID              int64
+	SonarProjectKey pgtype.Text
+}
+
+// PinSonarKey links an unlinked service to a SonarQube project; zero rows
+// mean the service was linked in the meantime.
+func (q *Queries) PinSonarKey(ctx context.Context, arg PinSonarKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pinSonarKey, arg.ID, arg.SonarProjectKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const sonarAnalysisKnown = `-- name: SonarAnalysisKnown :one
 SELECT EXISTS (
     SELECT 1 FROM sonar_analyses WHERE service_id = $1 AND analysis_key = $2
@@ -268,20 +287,25 @@ func (q *Queries) SonarLinkedServices(ctx context.Context) ([]SonarLinkedService
 
 const sonarServiceByGitlabProject = `-- name: SonarServiceByGitlabProject :one
 
-SELECT id FROM services WHERE gitlab_project_id = $1
+SELECT id, sonar_project_key FROM services WHERE gitlab_project_id = $1 AND NOT archived
 `
+
+type SonarServiceByGitlabProjectRow struct {
+	ID              int64
+	SonarProjectKey pgtype.Text
+}
 
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
-func (q *Queries) SonarServiceByGitlabProject(ctx context.Context, gitlabProjectID pgtype.Int8) (int64, error) {
+func (q *Queries) SonarServiceByGitlabProject(ctx context.Context, gitlabProjectID pgtype.Int8) (SonarServiceByGitlabProjectRow, error) {
 	row := q.db.QueryRow(ctx, sonarServiceByGitlabProject, gitlabProjectID)
-	var id int64
-	err := row.Scan(&id)
-	return id, err
+	var i SonarServiceByGitlabProjectRow
+	err := row.Scan(&i.ID, &i.SonarProjectKey)
+	return i, err
 }
 
 const sonarServiceByKey = `-- name: SonarServiceByKey :one
-SELECT id FROM services WHERE sonar_project_key = $1
+SELECT id FROM services WHERE sonar_project_key = $1 AND NOT archived
 `
 
 func (q *Queries) SonarServiceByKey(ctx context.Context, sonarProjectKey pgtype.Text) (int64, error) {

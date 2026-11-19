@@ -138,7 +138,7 @@ func TestSyncErrors(t *testing.T) {
 		t.Error("a failed project must store nothing")
 	}
 	_, at, lastErr := e.state()
-	if lastErr != "platform:good: SonarQube returned HTTP 500 for api/qualitygates/project_status" || at.IsZero() {
+	if lastErr != "platform:good: SonarQube answered 500 on api/qualitygates/project_status" || at.IsZero() {
 		t.Errorf("lastErr %q at %v", lastErr, at)
 	}
 	e.fake.Fail("api/qualitygates/project_status", 0)
@@ -156,7 +156,7 @@ func TestSyncErrors(t *testing.T) {
 	e.fake.Fail("api/server/version", 404)
 	e.service(t, "platform/gone", 0, "platform:gone")
 	e.runSync(t)
-	if _, _, lastErr := e.state(); lastErr != "platform:gone: SonarQube returned HTTP 404 for api/project_analyses/search" {
+	if _, _, lastErr := e.state(); lastErr != "platform:gone: SonarQube answered 404 on api/project_analyses/search" {
 		t.Errorf("lastErr %q", lastErr)
 	}
 }
@@ -170,7 +170,7 @@ func TestSyncWrongTokenStopsEarly(t *testing.T) {
 	if n := e.fake.Count("api/project_analyses/search"); n != 1 {
 		t.Errorf("%d searches; a rejected token must stop the cycle", n)
 	}
-	if _, _, lastErr := e.state(); lastErr != "platform:a: SonarQube returned HTTP 401 for api/project_analyses/search" {
+	if _, _, lastErr := e.state(); lastErr != "platform:a: SonarQube answered 401 on api/project_analyses/search" {
 		t.Errorf("lastErr %q", lastErr)
 	}
 }

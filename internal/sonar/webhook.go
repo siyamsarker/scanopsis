@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/siyamsarker/scanopsis/internal/httpapi"
@@ -133,71 +134,104 @@ func (s *Sonar) finish(ctx context.Context, taskID, outcome string, serviceID *i
 	}
 }
 
-// linkService finds the service of a project: by the GitLab project ID the
-// pipeline passed as a scanner property, else by the SonarQube project key.
-func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (int64, bool, error) {
-	if raw := p.Properties["sonar.analysis.gitlabProjectId"]; raw != "" {
-		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			sid, err := s.q.SonarServiceByGitlabProject(ctx, pgtype.Int8{Int64: id, Valid: true})
-			if err == nil {
-				return sid, true, nil
-			}
-			if !errors.Is(err, pgx.ErrNoRows) {
-				return 0, false, err
-			}
-		}
-	}
+// link is the result of resolving a delivery to a service.
+type link struct {
+	ServiceID int64
+	// Pin is set when the service has no SonarQube key yet and must be linked
+	// to the project when its first analysis is stored.
+	Pin bool
+	// Unlinked explains why no service was found; empty when one was.
+	Unlinked string
+}
+
+// linkService finds the service of a project. The signature only proves the
+// delivery came from SonarQube, not which service it belongs to, so the
+// project key decides first. The gitlabProjectId scanner property, which any
+// pipeline can set, is used only for a service that is not linked to a
+// SonarQube project yet, and then pins that link; it can never move a
+// service to another project.
+func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (link, error) {
 	sid, err := s.q.SonarServiceByKey(ctx, pgtype.Text{String: p.Project.Key, Valid: true})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, false, nil
+	if err == nil {
+		return link{ServiceID: sid}, nil
 	}
-	return sid, err == nil, err
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return link{}, err
+	}
+	notFound := fmt.Sprintf(
+		"No service is linked to SonarQube project %q. Pass -Dsonar.analysis.gitlabProjectId=$CI_PROJECT_ID to the scanner, or set the SonarQube key on the service.",
+		p.Project.Key)
+	id, perr := strconv.ParseInt(p.Properties["sonar.analysis.gitlabProjectId"], 10, 64)
+	if perr != nil {
+		return link{Unlinked: notFound}, nil
+	}
+	svc, err := s.q.SonarServiceByGitlabProject(ctx, pgtype.Int8{Int64: id, Valid: true})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return link{Unlinked: notFound}, nil
+	}
+	if err != nil {
+		return link{}, err
+	}
+	if !svc.SonarProjectKey.Valid {
+		return link{ServiceID: svc.ID, Pin: true}, nil
+	}
+	return link{Unlinked: fmt.Sprintf(
+		"The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, so project %q was not linked to it. Change the SonarQube key on the service if the project was renamed.",
+		p.Project.Key)}, nil
+}
+
+// briefError describes a failed Web API call without internals.
+func briefError(err error) string {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return fmt.Sprintf("SonarQube answered %d on %s", ae.Status, ae.Endpoint)
+	}
+	return "the request failed or the answer was unreadable; see the server log"
 }
 
 // process turns a recorded delivery into a stored analysis. Every path ends
 // by setting the delivery's outcome.
 func (s *Sonar) process(ctx context.Context, d delivery) {
 	p := d.payload
-	fail := func(sid *int64, format string, args ...any) {
-		detail := fmt.Sprintf(format, args...)
-		s.log.WarnContext(ctx, "SonarQube delivery failed", "task_id", p.TaskID, "project", p.Project.Key, "detail", detail)
+	// fail records a short message for administrators and logs the cause.
+	fail := func(sid *int64, detail string, cause error) {
+		s.log.WarnContext(ctx, "SonarQube delivery failed", "task_id", p.TaskID, "project", p.Project.Key, "detail", detail, "error", cause)
 		s.finish(ctx, p.TaskID, outcomeFailed, sid, detail)
 	}
 
-	sid, linked, err := s.linkService(ctx, p)
+	l, err := s.linkService(ctx, p)
 	if err != nil {
-		fail(nil, "Looking up the service failed: %v", err)
+		fail(nil, "Looking up the service failed; see the server log.", err)
 		return
 	}
-	if !linked {
-		s.finish(ctx, p.TaskID, outcomeUnlinked, nil, fmt.Sprintf(
-			"No service is linked to SonarQube project %q. Pass -Dsonar.analysis.gitlabProjectId=$CI_PROJECT_ID to the scanner, or set the SonarQube key on the service.",
-			p.Project.Key))
+	if l.Unlinked != "" {
+		s.finish(ctx, p.TaskID, outcomeUnlinked, nil, l.Unlinked)
 		return
 	}
+	sid := l.ServiceID
 	if p.Status != "SUCCESS" {
-		fail(&sid, "The analysis task ended with status %q; nothing was stored.", p.Status)
+		fail(&sid, fmt.Sprintf("The analysis task ended with status %q; nothing was stored.", p.Status), nil)
 		return
 	}
 	analysedAt, err := parseTime(p.AnalysedAt)
 	if err != nil {
-		fail(&sid, "The webhook has no readable analysedAt (%q).", p.AnalysedAt)
+		fail(&sid, "The webhook has no readable analysedAt.", err)
 		return
 	}
 	snap := s.cfg.Current()
 	if !snap.SonarEnabled() {
-		fail(&sid, "The SonarQube URL and token are not configured, so the analysis cannot be read.")
+		fail(&sid, "The SonarQube URL and token are not configured, so the analysis cannot be read.", nil)
 		return
 	}
 	cl := s.client(snap)
 	measures, err := cl.measures(ctx, p.Project.Key)
 	if err != nil {
-		fail(&sid, "Reading measures failed: %v. The next sync will retry.", err)
+		fail(&sid, "Reading measures failed: "+briefError(err)+". The next sync will retry.", err)
 		return
 	}
 	latest, err := cl.latestAnalysis(ctx, p.Project.Key)
 	if err != nil {
-		fail(&sid, "Reading the latest analysis failed: %v. The next sync will retry.", err)
+		fail(&sid, "Reading the latest analysis failed: "+briefError(err)+". The next sync will retry.", err)
 		return
 	}
 
@@ -237,7 +271,7 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 	if a.AnalysisKey != "" {
 		known, err := s.q.SonarAnalysisKnown(ctx, store.SonarAnalysisKnownParams{ServiceID: sid, AnalysisKey: a.AnalysisKey})
 		if err != nil {
-			fail(&sid, "Checking stored analyses failed: %v", err)
+			fail(&sid, "Checking stored analyses failed; see the server log.", err)
 			return
 		}
 		if known {
@@ -245,8 +279,17 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 			return
 		}
 	}
-	if err := s.save(ctx, a); err != nil {
-		fail(&sid, "Storing the analysis failed: %v", err)
+	pin := ""
+	if l.Pin {
+		pin = p.Project.Key
+	}
+	switch err := s.save(ctx, a, pin); {
+	case errors.Is(err, errPinConflict):
+		s.finish(ctx, p.TaskID, outcomeUnlinked, nil, fmt.Sprintf(
+			"The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project %q because the service or the key is already linked.", p.Project.Key))
+		return
+	case err != nil:
+		fail(&sid, "Storing the analysis failed; see the server log.", err)
 		return
 	}
 	s.finish(ctx, p.TaskID, outcomeLinked, &sid, detail)
@@ -265,7 +308,12 @@ type snapshot struct {
 	Pipeline    *int64
 }
 
-func (s *Sonar) save(ctx context.Context, a snapshot) error {
+// errPinConflict is returned when a service cannot be linked to a project.
+var errPinConflict = errors.New("service or SonarQube key already linked")
+
+// save stores an analysis. With a pin key it first links the service to that
+// SonarQube project, in the same transaction.
+func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
 	conds, err := json.Marshal(a.Conditions)
 	if err != nil {
 		return err
@@ -292,5 +340,28 @@ func (s *Sonar) save(ctx context.Context, a snapshot) error {
 	if a.Pipeline != nil {
 		arg.GitlabPipelineID = pgtype.Int8{Int64: *a.Pipeline, Valid: true}
 	}
-	return s.q.InsertSonarAnalysis(ctx, arg)
+	if pinKey == "" {
+		return s.q.InsertSonarAnalysis(ctx, arg)
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	q := s.q.WithTx(tx)
+	n2, err := q.PinSonarKey(ctx, store.PinSonarKeyParams{ID: a.ServiceID, SonarProjectKey: pgtype.Text{String: pinKey, Valid: true}})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+		return errPinConflict
+	}
+	if err != nil {
+		return err
+	}
+	if n2 == 0 {
+		return errPinConflict
+	}
+	if err := q.InsertSonarAnalysis(ctx, arg); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

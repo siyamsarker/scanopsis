@@ -4,8 +4,10 @@
 package sonar
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,6 +50,8 @@ type Sonar struct {
 	version    string
 	lastSyncAt time.Time
 	lastErr    string
+	// warnedPlain is the plain http URL the TLS warning was logged for.
+	warnedPlain string
 }
 
 // New returns a Sonar that stores results in pool.
@@ -62,6 +66,7 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 	if s.hc == nil {
 		s.hc = &http.Client{}
 	}
+	s.hc = sameHostClient(s.hc)
 	if s.log == nil {
 		s.log = slog.Default()
 	}
@@ -78,6 +83,36 @@ func (s *Sonar) Handlers() map[string]http.Handler {
 	}
 }
 
+// sameHostClient returns a copy of c that refuses redirects to another scheme
+// or host, so the bearer token is never sent anywhere else.
+func sameHostClient(c *http.Client) *http.Client {
+	out := *c
+	prev := c.CheckRedirect
+	out.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if first := via[0].URL; req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
+			return errors.New("refusing a redirect to another scheme or host")
+		}
+		if prev != nil {
+			return prev(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
+	}
+	return &out
+}
+
 func (s *Sonar) client(snap settings.Snapshot) *client {
+	s.mu.Lock()
+	if strings.HasPrefix(strings.ToLower(snap.SonarURL), "http://") {
+		if s.warnedPlain != snap.SonarURL {
+			s.warnedPlain = snap.SonarURL
+			s.log.Warn("the SonarQube token is sent without TLS; use an https:// SonarQube URL")
+		}
+	} else {
+		s.warnedPlain = ""
+	}
+	s.mu.Unlock()
 	return &client{http: s.hc, base: snap.SonarURL, token: snap.SonarToken}
 }
