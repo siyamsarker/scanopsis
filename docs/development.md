@@ -53,6 +53,8 @@ Run `make help` to list every target. The most common ones are:
 | `make test` | Runs the Go unit tests with the race detector. |
 | `make test-integration` | Runs the Go tests that need PostgreSQL, against a database in Docker. See [integration tests](#integration-tests). |
 | `make generate` | Regenerates the database code and the web API types. See [generated code](#generated-code). |
+| `make coverage` | Measures test coverage for Go and the web interface and enforces the minimums. Needs Docker. See [coverage](#coverage). |
+| `make perf` | Measures the performance targets and fails when one is missed. Needs Docker. See [performance](#performance). |
 | `make lint` | Lints the Go code. |
 | `make web-test` | Installs the web dependencies and runs the web unit tests. |
 | `make web-lint` | Type-checks, lints and checks the formatting of the web code. |
@@ -211,6 +213,116 @@ go test -race -count=1 -tags integration ./internal/auth -run TestSetup
 
 If the tests fail with `start PostgreSQL container`, Docker is not running or
 the current user cannot reach the Docker socket.
+
+## Coverage
+
+`make coverage` is not part of `make check`, which stays fast. CI runs it in
+the Coverage job. Docker must be running, because the Go part includes the
+integration tests.
+
+```sh
+make coverage
+```
+
+The Go part runs the unit and integration tests once with
+`-coverpkg=./internal/...,./cmd/...` into `coverage/go.out`, then
+`scripts/covercheck` prints one line per package and fails when a minimum is
+missed. The minimums are 85% for `internal/ingest`, `internal/auth`,
+`internal/domain` and `internal/sonar`, and 75% overall. Generated `*.gen.go`
+files, `internal/store/storetest` and `internal/testutil` are not counted.
+Output of a run at the time of writing:
+
+```text
+package                           coverage  required
+cmd/scanopsis                        84.2%         -
+internal/audit                      100.0%         -
+internal/auditlog                   100.0%         -
+internal/auth                        95.3%    >= 85%
+internal/catalog                     90.1%         -
+internal/clientip                   100.0%         -
+internal/config                      94.2%         -
+internal/domain                     100.0%    >= 85%
+internal/findings                    88.0%         -
+internal/httpapi                    100.0%         -
+internal/ingest                      94.1%    >= 85%
+internal/secretbox                   88.9%         -
+internal/settings                    98.3%         -
+internal/sonar                       91.7%    >= 85%
+internal/store                       78.3%         -
+overall                              93.2%    >= 75%
+```
+
+To see which lines are not covered, run
+`go tool cover -html=coverage/go.out`.
+
+The web part runs `npm run coverage` in `web/` with `@vitest/coverage-v8`. It
+measures the logic modules only, selected by the `include` patterns in
+`web/vite.config.ts` (formatting, charts, `model.ts` and `links.ts` files,
+service conditions, authentication, theme and the API client), and requires 75%
+for lines, functions, branches and statements. A new module that matches a
+pattern is measured without a change to the configuration. The lazily loaded
+ECharts wrapper `src/charts/ChartCore.tsx` is excluded because jsdom cannot
+draw it. The summary at the time of writing:
+
+```text
+File               | % Stmts | % Branch | % Funcs | % Lines
+All files          |   96.91 |    89.67 |   95.62 |   97.08
+ src/api           |     100 |       95 |     100 |     100
+ src/auth          |   96.87 |    93.75 |     100 |   95.83
+ src/charts        |    92.8 |    77.65 |   90.16 |   93.39
+ src/format        |    98.3 |    98.21 |     100 |     100
+ ...outes/findings |   97.67 |    89.58 |     100 |   97.18
+ ...utes/portfolio |     100 |    94.11 |     100 |     100
+ ...routes/service |     100 |    96.66 |     100 |     100
+```
+
+## Performance
+
+`make perf` builds the web interface and the image, starts PostgreSQL and
+Scanopsis in Docker, and checks the targets below. Docker must be running. It
+removes its containers and network when it ends, also when it fails. CI runs
+it in the Performance job.
+
+```sh
+make perf
+```
+
+| Measure | Target | How it is measured |
+|---|---|---|
+| Initial JavaScript | under 300 KB gzip | The size check of the web build. |
+| Container cold start | under 2 s | Time from `docker run` until `/readyz` returns 200. PostgreSQL is already running and the image is already built. |
+| Idle memory | under 64 MiB | `docker stats --no-stream` ten seconds after `/readyz` returned 200. |
+| Portfolio and read API | p95 under 150 ms | The integration tests `TestPortfolioPerformance` (500 services, 45,000 scans) and `TestReadPerformance`, without the race detector. |
+| Ingest of a 20 MB report | under 3 s | `TestIntegrationIngest20MB`, without the race detector. |
+
+Result of a run on a development laptop:
+
+```text
+measure                                                        result        limit  status
+------------------------------------------------------ -------------- ------------  ------
+initial JavaScript (gzip)                                    105.8 KB     < 300 KB  ok
+container cold start                                           454 ms    < 2000 ms  ok
+idle memory                                                   9.1 MiB     < 64 MiB  ok
+portfolio p95 (500 services)                                  54.9 ms     < 150 ms  ok
+read API p95: /api/v1/services/1/overview                     14.2 ms     < 150 ms  ok
+read API p95: /api/v1/services/1/vulnerabilities              44.2 ms     < 150 ms  ok
+20 MB ingest: full-detail plain                              308.5 ms    < 3000 ms  ok
+20 MB ingest: full-detail gzip                               546.3 ms    < 3000 ms  ok
+20 MB ingest: dense plain                                    905.2 ms    < 3000 ms  ok
+performance tests (go test)                                    ok         pass  ok
+```
+
+## Release notes
+
+`scripts/release-notes.sh <version>` prints the body of the `## [<version>]`
+section of `CHANGELOG.md`, without the heading and without the link references
+at the end of the file. It fails when the section is missing or empty. The
+release workflow uses it, and `make test-scripts` tests it. See
+[releasing](releasing.md).
+
+```sh
+scripts/release-notes.sh 1.2.0 CHANGELOG.md
+```
 
 ## Generated code
 

@@ -38,6 +38,13 @@ Run the checks before you open a pull request. CI runs the same checks.
 
 To build the container image, run `make image`.
 
+Two slower checks are not part of `make check`, but CI runs them. Both need Docker. Run them when you change code that they measure:
+
+- `make coverage` enforces the test coverage minimums for Go and the web interface.
+- `make perf` checks the performance targets: bundle size, start-up time, idle memory, and the speed of the portfolio and report upload.
+
+See the [development guide](docs/development.md) for the details.
+
 ## Commit messages
 
 Write commit messages that follow the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification. A commit message has a type, an optional scope, and a short description. Examples:
