@@ -88,6 +88,11 @@
   outline-offset: 2px;
 }
 
+/* Headings that take focus when a step changes are not controls: no ring. */
+[tabindex='-1']:focus-visible {
+  outline: none;
+}
+
 html {
   font-size: 14px;
   -webkit-text-size-adjust: 100%;

@@ -35,7 +35,7 @@ export function AuthShell({
         className={`${cardClass} brand-edge rise flex w-full ${wide ? 'max-w-xl' : 'max-w-md'} flex-col gap-6 p-6 sm:p-8`}
       >
         <div>
-          <h1 ref={heading} tabIndex={-1} className={`${headingClass} outline-none`}>
+          <h1 ref={heading} tabIndex={-1} className={headingClass}>
             {title}
           </h1>
           {lead && <p className="mt-1 text-text-muted">{lead}</p>}
