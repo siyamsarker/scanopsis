@@ -1,28 +1,41 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Command scanopsis runs the Scanopsis server.
+// Command scanopsis runs the Scanopsis server. `scanopsis admin ...` runs
+// administration commands and `scanopsis healthcheck` probes a running
+// server.
 package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"runtime"
 	"runtime/debug"
-	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/siyamsarker/scanopsis/internal/audit"
+	"github.com/siyamsarker/scanopsis/internal/auth"
+	"github.com/siyamsarker/scanopsis/internal/clientip"
+	"github.com/siyamsarker/scanopsis/internal/config"
+	"github.com/siyamsarker/scanopsis/internal/httpapi"
+	"github.com/siyamsarker/scanopsis/internal/secretbox"
+	"github.com/siyamsarker/scanopsis/internal/settings"
+	"github.com/siyamsarker/scanopsis/internal/store"
 	"github.com/siyamsarker/scanopsis/web"
 )
 
@@ -32,13 +45,27 @@ var (
 	commit  = ""
 )
 
-const listenAddr = ":8080"
+const (
+	sessionCleanupInterval = time.Hour
+	startupTimeout         = 30 * time.Second
+)
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr, os.Getenv)
+	stop()
+	os.Exit(code)
 }
 
-func run(args []string, stdout, stderr io.Writer) int {
+func run(ctx context.Context, args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "admin":
+			return runAdmin(ctx, args[1:], stdout, stderr, getenv)
+		case "healthcheck":
+			return healthcheck(ctx, stderr, getenv)
+		}
+	}
 	flags := flag.NewFlagSet("scanopsis", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	showVersion := flags.Bool("version", false, "print the version and exit")
@@ -50,28 +77,262 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	logger := slog.New(slog.NewJSONHandler(stderr, nil))
-	assets, ok := web.Assets()
-	if !ok {
-		logger.Warn("binary was built without the web interface")
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	// Inside a container the server must accept connections on all interfaces.
-	var lc net.ListenConfig
-	ln, err := lc.Listen(ctx, "tcp", listenAddr) //nolint:gosec // G102: intended, see comment above.
+	cfg, err := config.Load(getenv, os.ReadFile)
 	if err != nil {
-		logger.Error("cannot listen", "addr", listenAddr, "error", err)
+		_, _ = fmt.Fprintf(stderr, "configuration error:\n%v\n", err)
+		return 2
+	}
+	log := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: cfg.LogLevel}))
+	if err := serveApp(ctx, cfg, log); err != nil {
+		log.Error("scanopsis stopped with an error", "error", err)
 		return 1
 	}
-	logger.Info("scanopsis started", "addr", ln.Addr().String(), "version", version)
-	if err := serve(ctx, ln, newHandler(assets, ok)); err != nil {
-		logger.Error("server stopped with an error", "error", err)
+	log.Info("scanopsis stopped")
+	return 0
+}
+
+// serveApp connects to the database, wires the application and serves it
+// until ctx is cancelled.
+func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
+	log.Info("scanopsis starting", "version", version, "commit", resolveCommit(), "config", cfg)
+
+	httpClient, err := newHTTPClient(cfg.CAFile)
+	if err != nil {
+		return err
+	}
+	box, err := secretbox.New(cfg.SecretKey)
+	if err != nil {
+		return fmt.Errorf("%sSECRET_KEY: %w", config.Prefix, err)
+	}
+
+	startCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	pool, err := store.Open(startCtx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if err := store.Migrate(startCtx, pool); err != nil {
+		return err
+	}
+
+	q := store.New(pool)
+	rec := audit.New(q, log)
+	resolver := clientip.New(cfg.TrustedProxies)
+
+	conf, err := settings.New(startCtx, q, settingsTx(pool), box, cfg.Seeds, rec, log)
+	if err != nil {
+		return err
+	}
+	snap := conf.Current()
+	sessions := auth.NewSessions(q, auth.SessionOptions{
+		Idle: snap.SessionIdleTimeout, Absolute: snap.SessionAbsoluteTimeout, Secure: cfg.Secure(),
+	})
+
+	setup := auth.NewSetup(q, sessions, rec, resolver.IP, auth.NewRateLimiter(12*time.Second, 5, nil), log)
+	token, err := setup.PrepareToken(startCtx)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		log.Warn("no administrator exists yet: open Scanopsis in a browser to finish the setup",
+			"setup_url", cfg.PublicURL.String()+"/setup", "setup_token", token)
+	}
+
+	mfa := auth.NewMFA(q, sessions, rec, resolver.IP, auth.MFAOptions{
+		Issuer: "Scanopsis", Box: box, Limiter: auth.NewRateLimiter(30*time.Second, 5, nil), Logger: log,
+	})
+	localLogin := auth.NewLocalLogin(q, sessions, rec, resolver.IP,
+		auth.NewRateLimiter(12*time.Second, 10, nil), auth.NewRateLimiter(12*time.Second, 10, nil), log)
+
+	// GitLab sign-in and session timeouts follow the Settings page; changes
+	// apply to the next request without a restart.
+	var gitlab atomic.Pointer[auth.GitLab]
+	apply := func(s settings.Snapshot) {
+		sessions.SetTimeouts(s.SessionIdleTimeout, s.SessionAbsoluteTimeout)
+		if !s.GitLabEnabled() {
+			gitlab.Store(nil)
+			return
+		}
+		gitlab.Store(auth.NewGitLab(auth.GitLabOptions{
+			IssuerURL:     s.GitLabURL,
+			ClientID:      s.GitLabClientID,
+			ClientSecret:  s.GitLabClientSecret,
+			PublicURL:     cfg.PublicURL.String(),
+			Secure:        cfg.Secure(),
+			AllowedGroups: s.GitLabAllowedGroups,
+			HTTPClient:    httpClient,
+			Logger:        log,
+		}, q, sessions, rec, resolver.IP))
+	}
+	apply(snap)
+	conf.OnChange(apply)
+
+	notEnabledGitLab := httpapi.NotEnabled("GitLab sign-in")
+	gitlabHandler := func(pick func(*auth.GitLab) http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if g := gitlab.Load(); g != nil {
+				pick(g).ServeHTTP(w, r)
+				return
+			}
+			notEnabledGitLab.ServeHTTP(w, r)
+		})
+	}
+	notEnabledLocal := httpapi.NotEnabled("Local sign-in")
+
+	deps := httpapi.Deps{
+		Log:      log,
+		DB:       pool,
+		Users:    userStore{q: q, pool: pool},
+		Sessions: sessions,
+		Audit:    rec,
+		ClientIP: resolver.IP,
+		LocalLogin: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if conf.Current().LocalLoginEnabled {
+				localLogin.ServeHTTP(w, r)
+				return
+			}
+			notEnabledLocal.ServeHTTP(w, r)
+		}),
+		GitLabLogin:    gitlabHandler((*auth.GitLab).LoginHandler),
+		GitLabCallback: gitlabHandler((*auth.GitLab).CallbackHandler),
+		Methods: func() (bool, bool) {
+			return gitlab.Load() != nil, conf.Current().LocalLoginEnabled
+		},
+		Setup:                setup.Handler(),
+		MFAStartEnrollment:   mfa.StartEnrollmentHandler(),
+		MFAConfirmEnrollment: mfa.ConfirmEnrollmentHandler(),
+		MFAVerify:            mfa.VerifyHandler(),
+		PasswordChange:       auth.NewPasswordChange(q, rec, auth.NewRateLimiter(12*time.Second, 10, nil), log),
+		SettingsList:         conf.ListHandler(),
+		SettingsUpdate:       conf.UpdateHandler(),
+		Build:                httpapi.BuildInfo{Version: version, Commit: resolveCommit(), Go: runtime.Version()},
+		Secure:               cfg.Secure(),
+	}
+	if assets, ok := web.Assets(); ok {
+		deps.Assets = assets
+	} else {
+		log.Warn("binary was built without the web interface")
+	}
+
+	go removeExpiredSessions(ctx, sessions, log)
+
+	var lc net.ListenConfig
+	ln, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
+	}
+	log.Info("scanopsis listening", "addr", ln.Addr().String())
+	return serve(ctx, ln, httpapi.New(deps))
+}
+
+// settingsTx runs fn with queries bound to one database transaction.
+func settingsTx(pool *pgxpool.Pool) func(context.Context, func(settings.Store) error) error {
+	return func(ctx context.Context, fn func(settings.Store) error) error {
+		return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error { return fn(store.New(tx)) })
+	}
+}
+
+// userStore adapts the generated queries to the API's needs.
+type userStore struct {
+	q    *store.Queries
+	pool *pgxpool.Pool
+}
+
+func (u userStore) ListUsers(ctx context.Context, arg store.ListUsersParams) ([]store.User, error) {
+	return u.q.ListUsers(ctx, arg)
+}
+
+func (u userStore) GetUser(ctx context.Context, id int64) (store.User, error) {
+	usr, err := u.q.GetUser(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return usr, store.ErrNotFound
+	}
+	return usr, err
+}
+
+func (u userStore) SetUserRole(ctx context.Context, id int64, role string) (store.User, error) {
+	return store.SetUserRole(ctx, u.pool, id, role)
+}
+
+func (u userStore) ResetMFA(ctx context.Context, id int64) error {
+	return store.ResetMFA(ctx, u.pool, id)
+}
+
+// expiredSessionRemover is the part of *auth.Sessions the clean-up loop uses.
+type expiredSessionRemover interface {
+	RemoveExpired(ctx context.Context) (int64, error)
+}
+
+// removeExpiredSessions deletes expired sessions every hour until ctx ends.
+func removeExpiredSessions(ctx context.Context, s expiredSessionRemover, log *slog.Logger) {
+	t := time.NewTicker(sessionCleanupInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if n, err := s.RemoveExpired(ctx); err != nil {
+				log.Error("cannot remove expired sessions", "error", err)
+			} else if n > 0 {
+				log.Debug("removed expired sessions", "count", n)
+			}
+		}
+	}
+}
+
+// newHTTPClient returns the client for outgoing calls to GitLab. It trusts
+// the system roots plus, if set, the PEM bundle in caFile. TLS verification
+// is never disabled.
+func newHTTPClient(caFile string) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if caFile != "" {
+		pem, err := os.ReadFile(caFile) //nolint:gosec // G304: the path comes from the operator's configuration.
+		if err != nil {
+			return nil, fmt.Errorf("read %sCA_FILE: %w", config.Prefix, err)
+		}
+		roots, err := x509.SystemCertPool()
+		if err != nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("%sCA_FILE %s contains no PEM certificates", config.Prefix, caFile)
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}
+	}
+	return &http.Client{Transport: transport, Timeout: 30 * time.Second}, nil
+}
+
+// healthcheck asks the local server for /healthz. It lets the container
+// image, which has no shell or curl, declare a Docker health check.
+func healthcheck(ctx context.Context, stderr io.Writer, getenv func(string) string) int {
+	addr := getenv(config.Prefix + "LISTEN_ADDR")
+	if addr == "" {
+		addr = ":8080"
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "healthcheck: invalid %sLISTEN_ADDR %q\n", config.Prefix, addr)
 		return 1
 	}
-	logger.Info("scanopsis stopped")
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+net.JoinHostPort("127.0.0.1", port)+"/healthz", nil)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "healthcheck: %v\n", err)
+		return 1
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = fmt.Fprintf(stderr, "healthcheck: status %d\n", resp.StatusCode)
+		return 1
+	}
 	return 0
 }
 
@@ -93,46 +354,6 @@ func resolveCommit() string {
 		}
 	}
 	return "unknown"
-}
-
-func newHandler(assets fs.FS, ok bool) http.Handler {
-	if !ok {
-		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			http.Error(w, "The web interface is not included in this build.", http.StatusServiceUnavailable)
-		})
-	}
-	files := http.FileServerFS(assets)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !servablePath(assets, r.URL.Path) {
-			http.NotFound(w, r)
-			return
-		}
-		files.ServeHTTP(w, r)
-	})
-}
-
-// servablePath rejects hidden files and directory listings, so only regular
-// build output is ever served. A directory is servable only when it contains
-// an index.html.
-func servablePath(assets fs.FS, urlPath string) bool {
-	name := strings.Trim(path.Clean("/"+urlPath), "/")
-	for _, seg := range strings.Split(name, "/") {
-		if strings.HasPrefix(seg, ".") {
-			return false
-		}
-	}
-	if name == "" {
-		name = "."
-	}
-	info, err := fs.Stat(assets, name)
-	if err != nil {
-		return true // let the file server answer 404
-	}
-	if info.IsDir() {
-		_, err := fs.Stat(assets, path.Join(name, "index.html"))
-		return err == nil
-	}
-	return true
 }
 
 // serve runs an HTTP server on ln until ctx is cancelled, then shuts it down

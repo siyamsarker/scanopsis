@@ -48,4 +48,6 @@ COPY --from=build /out/scanopsis /scanopsis
 USER 65532:65532
 # Unprivileged port; the binary writes nothing, so a read-only root filesystem works.
 EXPOSE 8080
+# The image has no shell or curl; the binary probes its own /healthz.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD ["/scanopsis", "healthcheck"]
 ENTRYPOINT ["/scanopsis"]

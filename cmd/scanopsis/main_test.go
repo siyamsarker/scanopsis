@@ -6,16 +6,23 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/pem"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 )
+
+func discardLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
+
+func env(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
 
 func TestRunVersion(t *testing.T) {
 	oldVersion, oldCommit := version, commit
@@ -23,7 +30,7 @@ func TestRunVersion(t *testing.T) {
 	version, commit = "1.2.3", "abc1234"
 
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"--version"}, &stdout, &stderr); code != 0 {
+	if code := run(t.Context(), []string{"--version"}, &stdout, &stderr, env(nil)); code != 0 {
 		t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr.String())
 	}
 	want := "scanopsis 1.2.3 (commit abc1234, " + runtime.Version() + ")\n"
@@ -34,11 +41,33 @@ func TestRunVersion(t *testing.T) {
 
 func TestRunUnknownFlag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"--no-such-flag"}, &stdout, &stderr); code != 2 {
+	if code := run(t.Context(), []string{"--no-such-flag"}, &stdout, &stderr, env(nil)); code != 2 {
 		t.Fatalf("exit code = %d, want 2", code)
 	}
 	if !strings.Contains(stderr.String(), "no-such-flag") {
 		t.Fatalf("stderr should name the bad flag, got %q", stderr.String())
+	}
+}
+
+func TestRunConfigurationError(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run(t.Context(), nil, &stdout, &stderr, env(nil)); code != 2 {
+		t.Fatalf("exit code = %d, want 2", code)
+	}
+	for _, want := range []string{"configuration error", "SCANOPSIS_DATABASE_URL", "SCANOPSIS_SECRET_KEY"} {
+		if !strings.Contains(stderr.String(), want) {
+			t.Errorf("stderr lacks %q: %s", want, stderr.String())
+		}
+	}
+}
+
+func TestRunRoutesAdminCommands(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run(t.Context(), []string{"admin", "--help"}, &stdout, &stderr, env(nil)); code != 0 {
+		t.Fatalf("exit code = %d, want 0 (stderr: %s)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "reset-password") {
+		t.Fatalf("admin help not shown: %q", stdout.String())
 	}
 }
 
@@ -56,54 +85,102 @@ func TestResolveCommitPrefersBuildValue(t *testing.T) {
 	}
 }
 
-func TestNewHandler(t *testing.T) {
-	t.Run("without web build", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		newHandler(nil, false).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
-		if rec.Code != http.StatusServiceUnavailable {
-			t.Fatalf("status = %d, want 503", rec.Code)
+func TestHealthcheck(t *testing.T) {
+	var status int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Errorf("healthcheck requested %s", r.URL.Path)
 		}
-	})
-	t.Run("with web build", func(t *testing.T) {
-		assets := fstest.MapFS{"index.html": {Data: []byte("<!doctype html><title>x</title>")}}
-		rec := httptest.NewRecorder()
-		newHandler(assets, true).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("status = %d, want 200", rec.Code)
-		}
-		if !strings.Contains(rec.Body.String(), "<title>x</title>") {
-			t.Fatalf("body does not contain index.html: %q", rec.Body.String())
-		}
-	})
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
+	_, port, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	cfg := env(map[string]string{"SCANOPSIS_LISTEN_ADDR": ":" + port})
+
+	status = http.StatusOK
+	if code := run(t.Context(), []string{"healthcheck"}, io.Discard, io.Discard, cfg); code != 0 {
+		t.Fatalf("healthy server: exit %d, want 0", code)
+	}
+	status = http.StatusServiceUnavailable
+	var stderr bytes.Buffer
+	if code := run(t.Context(), []string{"healthcheck"}, io.Discard, &stderr, cfg); code != 1 || !strings.Contains(stderr.String(), "503") {
+		t.Fatalf("unhealthy server: exit %d, stderr %q", code, stderr.String())
+	}
+	srv.Close()
+	if code := run(t.Context(), []string{"healthcheck"}, io.Discard, io.Discard, cfg); code != 1 {
+		t.Fatalf("stopped server: exit %d, want 1", code)
+	}
+	bad := env(map[string]string{"SCANOPSIS_LISTEN_ADDR": "no-port"})
+	if code := run(t.Context(), []string{"healthcheck"}, io.Discard, io.Discard, bad); code != 1 {
+		t.Fatalf("invalid listen address: exit %d, want 1", code)
+	}
 }
 
-func TestNewHandlerHidesNonBuildFiles(t *testing.T) {
-	assets := fstest.MapFS{
-		"index.html":       {Data: []byte("<!doctype html>")},
-		"assets/app.js":    {Data: []byte("x")},
-		".env":             {Data: []byte("SECRET=1")},
-		".hidden/file.txt": {Data: []byte("x")},
-		"assets/.keep":     {Data: []byte("")},
+// selfSignedServer returns a TLS test server and its certificate as PEM.
+func selfSignedServer(t *testing.T) (*httptest.Server, []byte) {
+	t.Helper()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") }))
+	t.Cleanup(srv.Close)
+	return srv, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+}
+
+func TestNewHTTPClientTrustsCAFile(t *testing.T) {
+	srv, caPEM := selfSignedServer(t)
+
+	plain, err := newHTTPClient("")
+	if err != nil {
+		t.Fatal(err)
 	}
-	h := newHandler(assets, true)
-	tests := []struct {
-		path string
-		want int
-	}{
-		{"/", http.StatusOK},
-		{"/assets/app.js", http.StatusOK},
-		{"/.env", http.StatusNotFound},
-		{"/.hidden/file.txt", http.StatusNotFound},
-		{"/assets/.keep", http.StatusNotFound},
-		{"/assets/", http.StatusNotFound}, // no directory listings
-		{"/missing.js", http.StatusNotFound},
+	if resp, err := plain.Get(srv.URL); err == nil { //nolint:noctx // test request
+		_ = resp.Body.Close()
+		t.Fatal("system roots trusted a self-signed certificate")
 	}
-	for _, tt := range tests {
-		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, nil))
-		if rec.Code != tt.want {
-			t.Errorf("GET %s: status = %d, want %d", tt.path, rec.Code, tt.want)
-		}
+
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withCA, err := newHTTPClient(caFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := withCA.Get(srv.URL) //nolint:noctx // test request
+	if err != nil {
+		t.Fatalf("CA_FILE certificate not trusted: %v", err)
+	}
+	_ = resp.Body.Close()
+}
+
+func TestNewHTTPClientRejectsBadCAFile(t *testing.T) {
+	if _, err := newHTTPClient(filepath.Join(t.TempDir(), "missing.pem")); err == nil || !strings.Contains(err.Error(), "SCANOPSIS_CA_FILE") {
+		t.Fatalf("missing file: err = %v", err)
+	}
+	notPEM := filepath.Join(t.TempDir(), "x.pem")
+	_ = os.WriteFile(notPEM, []byte("not a certificate"), 0o600)
+	if _, err := newHTTPClient(notPEM); err == nil || !strings.Contains(err.Error(), "contains no PEM certificates") {
+		t.Fatalf("non-PEM file: err = %v", err)
+	}
+}
+
+type countingRemover struct{ calls chan struct{} }
+
+func (c countingRemover) RemoveExpired(context.Context) (int64, error) {
+	c.calls <- struct{}{}
+	return 1, nil
+}
+
+func TestRemoveExpiredSessionsStopsWithContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		removeExpiredSessions(ctx, countingRemover{calls: make(chan struct{}, 1)}, discardLogger())
+		close(done)
+	}()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("clean-up loop did not stop when the context ended")
 	}
 }
 
