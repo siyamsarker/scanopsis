@@ -366,14 +366,25 @@ The test used a fake GitLab behind Caddy, with a certificate that the
 container did not trust. Before the CA was set, an upload was refused:
 
 ```text
-{"error":{"code":"gitlab_unavailable","message":"The signature could not be checked: Scanopsis could not fetch the signing keys from https://gitlab.example.com/oauth/discovery/keys. Try again later."}}
+{"error":{"code":"gitlab_unavailable","message":"The signature could not be checked: Scanopsis could not fetch the signing keys from GitLab. Try again later."}}
 HTTP 503
 ```
 
-The Scanopsis log says only `cannot fetch GitLab signing keys`. To see the
-cause, make the same request from a throwaway container on the same network.
-This uses the `caddy` image only because it has a `wget` that prints TLS errors.
-Replace the network name (`<project>_frontend`) and the address:
+The answer does not name the cause, on purpose. The Scanopsis log does:
+
+```sh
+docker compose logs scanopsis | grep 'upload rejected' | tail -1
+```
+
+```text
+scanopsis-1  | {"time":"2026-11-19T13:18:55.621785344Z","level":"WARN","msg":"upload rejected","status":503,"reason":"gitlab_unavailable","ip":"172.30.0.1","gitlab_url":"https://gitlab.example.com","cause":"failed to verify signature: fetching keys oidc: get keys failed Get \"https://gitlab.example.com/oauth/discovery/keys\": tls: failed to verify certificate: x509: certificate signed by unknown authority (https://gitlab.example.com/oauth/discovery/keys)"}
+```
+
+`x509: certificate signed by unknown authority` means that the container does
+not trust the certificate. You can also test the connection yourself from a
+throwaway container on the same network. This uses the `caddy` image only
+because it has a `wget` that prints TLS errors. Replace the network name
+(`<project>_frontend`) and the address:
 
 ```sh
 docker run --rm --network scanopsis_frontend caddy:2 wget -q -O- https://gitlab.example.com/oauth/discovery/keys
@@ -400,7 +411,7 @@ The CA file applies to GitLab and to SonarQube.
 ## Sizing
 
 The figures below are for up to 500 services and 3,000 pipelines a day. They
-were measured with Scanopsis `42e0377` (Go 1.27.4) and PostgreSQL 18.7 on one
+were measured with Scanopsis `7e53111` (Go 1.27.4) and PostgreSQL 18.7 on one
 Docker Desktop machine. Measure again on your hardware if you are close to
 a limit.
 
@@ -412,14 +423,19 @@ read from its control group:
 | State | Memory |
 |---|---|
 | Idle, a minute after start | 11 to 14 MiB (`docker stats` shows 12 MiB) |
-| Peak during start (migrations, first requests) | 26 MiB |
-| One upload of a 20.3 MB report (uncompressed) | peak 33 MiB |
-| Four uploads of 20.3 MB reports at the same time | peak 72 MiB |
+| Peak during start (migrations, first requests) | 28 MiB |
+| One upload of a 20.3 MB report (uncompressed) | peak 34 MiB |
+| Four uploads of 20.3 MB reports at the same time | peak 73 MiB |
+| Eight uploads of 20.3 MB reports at the same time | peak 94 MiB |
 
 The 20.3 MB report is the fixture `internal/ingest/testdata/image-full.json`
 with its findings repeated 35 times, so it holds 4,830 findings. It is a
-synthetic report, sent without compression. A single 20 MB upload took 0.4
-seconds from request to the `201` answer.
+synthetic report, sent without compression. A single 20 MB upload took 0.2 to 0.4
+seconds from request to the `201` answer. Scanopsis processes at most four
+uploads at a time, all addresses together. Others wait for a free slot, as long
+as their request lasts, and then get `503 busy` with `Retry-After: 5`. In the
+test with eight uploads at once, all eight were stored, and memory peaked at
+94 MiB.
 
 At 3,000 uploads a day, the average is two a minute, so memory stays close to
 the idle value. Give the Scanopsis container a limit of 256 MiB. The database
@@ -524,7 +540,7 @@ separate migration step.
    ```
 
    ```text
-   -rw-------  1 siyam  wheel  166551 Nov 19 19:01 scanopsis-before-upgrade.dump
+   -rw-------  1 siyam  wheel  166549 Nov 19 19:14 scanopsis-before-upgrade.dump
    ```
 
 3. Note the schema version, so that you can check the upgrade:
@@ -560,13 +576,17 @@ separate migration step.
 
    ```text
    SERVICE       STATUS
-   db            Up 3 minutes (healthy)
-   scanopsis     Up About a minute (healthy)
-   {"version":"42e0377","commit":"42e0377","go":"go1.27.4"}
-                 4
+   caddy         Up 40 seconds
+   db            Up 40 seconds (healthy)
+   fake-gitlab   Up 40 seconds
+   nginx         Up 40 seconds
+   scanopsis     Up 14 seconds (healthy)
+   {"version":"7e53111","commit":"7e53111","go":"go1.27.4"}
+                 5
    ```
 
-   The schema version went from 3 to 4. Sign in and open the portfolio:
+   The schema version went from 3 to 5. (The other services in the output are
+   those of the test setup.) Sign in and open the portfolio:
    the earlier data is still there. The test upgraded a database with one
    scan, and the scan was unchanged.
 
@@ -579,8 +599,9 @@ transaction, so a failed one leaves the schema as it was.
 
 Go back to the backup. Do not rely on starting the old image against the
 migrated database. The test did that once and the old version started, because
-the new migration only added indexes, but this holds for no migration in
-general and the old version does not know what the new one changed.
+the two new migrations only added indexes and a column with a default, but this
+holds for no migration in general and the old version does not know what the
+new ones changed.
 
 1. Set the old image in `.env`.
 2. Stop Scanopsis and restore the backup over the database, as in

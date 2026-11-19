@@ -290,6 +290,9 @@ login HTTP 204
 verify HTTP 204
 ```
 
+The server replaces the session cookie when it accepts the code. Keep `-c jar.txt`
+on the second command, so that the file holds the new cookie.
+
 Then the portfolio:
 
 ```sh
