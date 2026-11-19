@@ -90,7 +90,7 @@ func rating(v string) string {
 	if err != nil || f != math.Trunc(f) || f < 1 || f > 5 {
 		return ""
 	}
-	return string(rune('A' + int(f) - 1))
+	return "ABCDE"[int(f)-1 : int(f)]
 }
 
 func percent(m map[string]string, key string) *float64 {

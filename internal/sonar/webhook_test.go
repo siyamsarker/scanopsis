@@ -5,6 +5,7 @@ package sonar
 
 import (
 	"bytes"
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,7 +74,7 @@ func TestWebhookRejections(t *testing.T) {
 	check("wrong secret", post(h, "other", body), 401, "invalid_signature")
 	check("missing header", post(h, "", body), 401, "invalid_signature")
 
-	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(append([]byte(" "), body...)))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/", bytes.NewReader(append([]byte(" "), body...)))
 	req.Header.Set(signatureHeader, sign(testSecret, body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)

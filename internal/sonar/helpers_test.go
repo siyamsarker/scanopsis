@@ -5,6 +5,7 @@ package sonar
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -73,7 +74,7 @@ func hook(taskID, projectKey string, over map[string]any) []byte {
 
 // post sends a signed webhook to h.
 func post(h http.Handler, secret string, body []byte) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/hooks/sonarqube", bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/hooks/sonarqube", bytes.NewReader(body))
 	if secret != "" {
 		req.Header.Set(signatureHeader, sign(secret, body))
 	}

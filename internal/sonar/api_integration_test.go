@@ -6,6 +6,7 @@
 package sonar
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +26,7 @@ func (e *env) get(t *testing.T, op, path string) (int, string, http.Header) {
 	mux.Handle("GET /api/v1/services/{id}/sonar", e.s.Handlers()["getServiceSonar"])
 	mux.Handle("GET /api/v1/admin/integrations/sonarqube", e.s.Handlers()["getSonarIntegration"])
 	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	mux.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil))
 	return rec.Code, rec.Body.String(), rec.Header()
 }
 
