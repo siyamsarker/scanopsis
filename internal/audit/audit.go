@@ -27,6 +27,13 @@ const (
 	ActionSetupCompleted  = "setup.completed"
 	ActionPasswordChanged = "user.password_changed"
 	ActionPasswordReset   = "user.password_reset"
+
+	// Scan ingestion and services. ingest.rejected details carry "reason"
+	// and, when the token was valid, "project_path".
+	ActionIngestRejected = "ingest.rejected"
+	ActionServiceCreated = "service.created"
+	ActionServiceUpdated = "service.updated"
+	ActionServiceDeleted = "service.deleted"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.

@@ -20,6 +20,12 @@ tags:
   - name: users
   - name: setup
   - name: settings
+  - name: ingest
+  - name: sonarqube
+  - name: services
+  - name: scans
+  - name: findings
+  - name: admin
 
 paths:
   /healthz:
@@ -365,8 +371,277 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+  /api/v1/ingest/trivy:
+    post:
+      tags: [ingest]
+      summary: Upload one Trivy JSON report from a GitLab CI job.
+      description: |
+        Authenticated with the job's GitLab CI/CD ID token (`Authorization:
+        Bearer <token>`), whose audience must be the Scanopsis public URL. The
+        project, pipeline, job, ref and commit come from the verified token,
+        never from the report. The body is the raw report (`Content-Type:
+        application/json`), optionally gzip-compressed (`Content-Encoding:
+        gzip`). A repeated upload for the same job, artifact and kind replaces
+        the earlier one. Every rejection is written to the audit log.
+      operationId: ingestTrivy
+      security: [ { ciIdToken: [] } ]
+      parameters:
+        - name: kind
+          in: query
+          description: image (default) for `trivy image`, secret-fs for `trivy fs --scanners secret`.
+          schema: { type: string, enum: [image, secret-fs], default: image }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: A Trivy JSON report (SchemaVersion 2). }
+      responses:
+        "201": { description: Stored., content: { application/json: { schema: { $ref: "#/components/schemas/IngestResult" } } } }
+        "400": { description: Malformed body or gzip stream (code invalid_report)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Missing or invalid ID token (code invalid_token; the message names the failed check)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: Project namespace not allowed (code namespace_not_allowed) or ref not protected (code ref_not_protected)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "413": { description: Report larger than the limit (code report_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "415": { description: Unsupported content type or encoding (code unsupported_media_type)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Too many uploads from this address. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: The GitLab URL is not configured (code ingest_not_configured)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/hooks/sonarqube:
+    post:
+      tags: [sonarqube]
+      summary: SonarQube webhook target.
+      description: |
+        Verified with the X-Sonar-Webhook-HMAC-SHA256 header (hex HMAC-SHA256 of
+        the raw body with the webhook secret). Deliveries are deduplicated by
+        taskId. The analysis is then read from the SonarQube Web API.
+      operationId: sonarWebhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, description: SonarQube webhook payload. }
+      responses:
+        "202": { description: Accepted (also for a duplicate delivery). }
+        "400": { description: Malformed payload (code invalid_payload)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: Missing or wrong signature (code invalid_signature)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "413": { description: Payload too large., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: SonarQube integration not configured (code sonar_not_configured)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
+  /api/v1/portfolio:
+    get:
+      tags: [services]
+      summary: Current posture of every non-archived service.
+      operationId: getPortfolio
+      responses:
+        "200": { description: Portfolio., content: { application/json: { schema: { $ref: "#/components/schemas/Portfolio" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+
+  /api/v1/services:
+    get:
+      tags: [services]
+      operationId: listServices
+      parameters:
+        - { name: q, in: query, description: Substring of name or project path., schema: { type: string, maxLength: 200 } }
+        - { name: archived, in: query, schema: { type: boolean, default: false } }
+        - { name: after, in: query, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        "200": { description: One page of services ordered by id., content: { application/json: { schema: { $ref: "#/components/schemas/ServicePage" } } } }
+        "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    post:
+      tags: [services]
+      summary: Add a service by GitLab project path (admin only).
+      operationId: createService
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ServiceCreate" } } }
+      responses:
+        "201": { description: Created., content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
+        "400": { description: Invalid request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: The project path or SonarQube key is already used (code conflict)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/services/{id}:
+    get:
+      tags: [services]
+      operationId: getService
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Service., content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    patch:
+      tags: [services]
+      summary: Rename, link a SonarQube project key, or archive (admin only).
+      operationId: updateService
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ServiceUpdate" } } }
+      responses:
+        "200": { description: Updated., content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
+        "400": { description: Invalid request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: The SonarQube key is already linked to another service (code conflict)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [services]
+      summary: Delete a service and all its data (admin only).
+      operationId: deleteService
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/services/{id}/overview:
+    get:
+      tags: [services]
+      summary: Current Trivy posture of a service for one ref.
+      operationId: getServiceOverview
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+      responses:
+        "200": { description: Overview., content: { application/json: { schema: { $ref: "#/components/schemas/Overview" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/services/{id}/scans:
+    get:
+      tags: [scans]
+      summary: Scans of a service, newest first.
+      operationId: listServiceScans
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: before, in: query, description: Return scans with an id lower than this value., schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200": { description: One page of scans., content: { application/json: { schema: { $ref: "#/components/schemas/ScanPage" } } } }
+        "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/scans/{id}:
+    get:
+      tags: [scans]
+      operationId: getScan
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Scan., content: { application/json: { schema: { $ref: "#/components/schemas/Scan" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/scans/{id}/diff:
+    get:
+      tags: [scans]
+      summary: Findings new and fixed since the previous scan of the same service, ref, artifact and kind.
+      operationId: getScanDiff
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "200": { description: Diff., content: { application/json: { schema: { $ref: "#/components/schemas/ScanDiff" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/services/{id}/vulnerabilities:
+    get:
+      tags: [findings]
+      summary: Vulnerabilities in the current state (latest scan per artifact) of a ref.
+      operationId: listServiceVulnerabilities
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: severity, in: query, description: Comma-separated list., schema: { type: string, example: "CRITICAL,HIGH" } }
+        - { name: fixable, in: query, schema: { type: boolean } }
+        - { name: suppressed, in: query, description: Include suppressed findings., schema: { type: boolean, default: false } }
+        - { name: q, in: query, description: Substring of package name, vulnerability ID or title., schema: { type: string, maxLength: 200 } }
+        - { name: after, in: query, schema: { type: integer, format: int64, minimum: 0, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        "200": { description: One page ordered by id., content: { application/json: { schema: { $ref: "#/components/schemas/VulnerabilityPage" } } } }
+        "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/services/{id}/secrets:
+    get:
+      tags: [findings]
+      summary: Secret findings in the current state of a ref. Matched values are never stored or returned.
+      operationId: listServiceSecrets
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+      responses:
+        "200": { description: Secret findings., content: { application/json: { schema: { $ref: "#/components/schemas/SecretFindingList" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/services/{id}/trends:
+    get:
+      tags: [services]
+      summary: Severity counts per scan over time for one ref.
+      operationId: getServiceTrends
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 90 } }
+      responses:
+        "200": { description: Trend points, oldest first., content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
+        "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/services/{id}/sonar:
+    get:
+      tags: [sonarqube]
+      summary: Latest SonarQube analysis of a service and its history.
+      operationId: getServiceSonar
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, description: Number of history entries., schema: { type: integer, minimum: 1, maximum: 200, default: 30 } }
+      responses:
+        "200": { description: SonarQube data; latest is null when nothing was analysed yet., content: { application/json: { schema: { $ref: "#/components/schemas/ServiceSonar" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/search/vulnerabilities:
+    get:
+      tags: [findings]
+      summary: Every service and artifact whose current state contains a vulnerability ID.
+      operationId: searchVulnerabilities
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: string, minLength: 3, maxLength: 100, example: CVE-2024-3094 } }
+      responses:
+        "200": { description: Matches., content: { application/json: { schema: { $ref: "#/components/schemas/VulnerabilitySearch" } } } }
+        "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+  /api/v1/admin/integrations/trivy:
+    get:
+      tags: [admin]
+      summary: Health of scan ingestion (admin only).
+      operationId: getTrivyIntegration
+      responses:
+        "200": { description: Status., content: { application/json: { schema: { $ref: "#/components/schemas/TrivyIntegration" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/v1/admin/integrations/sonarqube:
+    get:
+      tags: [admin]
+      summary: Health of the SonarQube integration (admin only).
+      operationId: getSonarIntegration
+      responses:
+        "200": { description: Status., content: { application/json: { schema: { $ref: "#/components/schemas/SonarIntegration" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
 components:
   securitySchemes:
+    ciIdToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: GitLab CI/CD ID token (id_tokens keyword) with the Scanopsis public URL as audience.
     session:
       type: apiKey
       in: cookie
@@ -448,6 +723,335 @@ components:
     Role:
       type: string
       enum: [admin, viewer]
+    SeverityCounts:
+      type: object
+      required: [critical, high, medium, low, unknown]
+      properties:
+        critical: { type: integer }
+        high: { type: integer }
+        medium: { type: integer }
+        low: { type: integer }
+        unknown: { type: integer }
+    IngestResult:
+      type: object
+      required: [scan_id, service_id, service_created, replaced, counts, fixable, secrets, suppressed]
+      properties:
+        scan_id: { type: integer, format: int64 }
+        service_id: { type: integer, format: int64 }
+        service_created: { type: boolean }
+        replaced: { type: boolean, description: An earlier upload for the same job, artifact and kind was replaced. }
+        counts: { $ref: "#/components/schemas/SeverityCounts" }
+        fixable: { type: integer }
+        secrets: { type: integer }
+        suppressed: { type: integer }
+    Service:
+      type: object
+      required: [id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at]
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        gitlab_project_id: { type: [integer, "null"], format: int64 }
+        gitlab_project_path: { type: string }
+        sonar_project_key: { type: [string, "null"] }
+        created_via: { type: string, enum: [ingest, manual] }
+        archived: { type: boolean }
+        created_at: { type: string, format: date-time }
+    ServicePage:
+      type: object
+      required: [items, next_after]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Service" } }
+        next_after: { type: [integer, "null"], format: int64 }
+    ServiceCreate:
+      type: object
+      required: [gitlab_project_path]
+      additionalProperties: false
+      properties:
+        gitlab_project_path: { type: string, minLength: 1, maxLength: 500, example: platform/payments-api }
+        name: { type: string, maxLength: 200, description: Defaults to the last path segment. }
+        sonar_project_key: { type: string, maxLength: 400 }
+    ServiceUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        sonar_project_key: { type: [string, "null"], maxLength: 400, description: null unlinks. }
+        archived: { type: boolean }
+    ScanSummary:
+      type: object
+      required: [id, service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, trivy_version, scanned_at, received_at, counts, fixable, secrets, suppressed]
+      properties:
+        id: { type: integer, format: int64 }
+        service_id: { type: integer, format: int64 }
+        kind: { type: string, enum: [image, secret-fs] }
+        artifact_name: { type: string }
+        gitlab_pipeline_id: { type: integer, format: int64 }
+        gitlab_job_id: { type: integer, format: int64 }
+        ref: { type: string }
+        ref_protected: { type: boolean }
+        commit_sha: { type: string }
+        trivy_version: { type: string }
+        scanned_at: { type: string, format: date-time }
+        received_at: { type: string, format: date-time }
+        counts: { $ref: "#/components/schemas/SeverityCounts" }
+        fixable: { type: integer }
+        secrets: { type: integer }
+        suppressed: { type: integer }
+    Scan:
+      allOf:
+        - $ref: "#/components/schemas/ScanSummary"
+        - type: object
+          required: [gitlab_project_path, pipeline_url, job_url, commit_url]
+          properties:
+            gitlab_project_path: { type: string }
+            pipeline_url: { type: [string, "null"], description: Link into GitLab; null when the GitLab URL is not configured. }
+            job_url: { type: [string, "null"] }
+            commit_url: { type: [string, "null"] }
+    ScanPage:
+      type: object
+      required: [items, next_before]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/ScanSummary" } }
+        next_before: { type: [integer, "null"], format: int64 }
+    Vulnerability:
+      type: object
+      required: [id, scan_id, artifact_name, target, class, pkg_type, pkg_name, pkg_path, installed_version, fixed_version, vuln_id, severity, status, title, primary_url, suppressed, suppression, first_seen_at]
+      properties:
+        id: { type: integer, format: int64 }
+        scan_id: { type: integer, format: int64 }
+        artifact_name: { type: string }
+        target: { type: string }
+        class: { type: string, example: os-pkgs }
+        pkg_type: { type: string }
+        pkg_name: { type: string }
+        pkg_path: { type: string }
+        installed_version: { type: string }
+        fixed_version: { type: string, description: Empty when no fix is available. }
+        vuln_id: { type: string }
+        severity: { $ref: "#/components/schemas/Severity" }
+        status: { type: string }
+        title: { type: string }
+        primary_url: { type: string }
+        suppressed: { type: boolean }
+        suppression: { type: string, description: Reason recorded by Trivy for a suppressed finding. }
+        first_seen_at: { type: string, format: date-time, description: Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id, pkg_name, target). }
+    VulnerabilityPage:
+      type: object
+      required: [items, next_after]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Vulnerability" } }
+        next_after: { type: [integer, "null"], format: int64 }
+    Severity:
+      type: string
+      enum: [CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN]
+    SecretFinding:
+      type: object
+      required: [id, scan_id, artifact_name, target, rule_id, category, severity, title, start_line, end_line, suppressed]
+      properties:
+        id: { type: integer, format: int64 }
+        scan_id: { type: integer, format: int64 }
+        artifact_name: { type: string }
+        target: { type: string }
+        rule_id: { type: string }
+        category: { type: string }
+        severity: { $ref: "#/components/schemas/Severity" }
+        title: { type: string }
+        start_line: { type: integer }
+        end_line: { type: integer }
+        suppressed: { type: boolean }
+    SecretFindingList:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/SecretFinding" } }
+    PackageImpact:
+      type: object
+      required: [pkg_name, installed_version, fix_version, findings, by_severity]
+      properties:
+        pkg_name: { type: string }
+        installed_version: { type: string }
+        fix_version: { type: string, description: Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. }
+        findings: { type: integer }
+        by_severity: { $ref: "#/components/schemas/SeverityCounts" }
+    Overview:
+      type: object
+      required: [service, ref, refs, artifacts, counts, fixable, secrets, suppressed, new_since_previous, fixed_since_previous, by_class, top_packages, data_at]
+      properties:
+        service: { $ref: "#/components/schemas/Service" }
+        ref: { type: [string, "null"], description: null when the service has no scans yet. }
+        refs: { type: array, items: { type: string }, description: Refs with scans, most recent first. }
+        artifacts: { type: array, items: { $ref: "#/components/schemas/ScanSummary" }, description: Latest scan per artifact and kind for the ref. }
+        counts: { $ref: "#/components/schemas/SeverityCounts" }
+        fixable: { type: integer }
+        secrets: { type: integer }
+        suppressed: { type: integer }
+        new_since_previous: { type: integer }
+        fixed_since_previous: { type: integer }
+        by_class:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/SeverityCounts" }
+          description: Counts per Trivy result class (os-pkgs, lang-pkgs).
+        top_packages: { type: array, maxItems: 10, items: { $ref: "#/components/schemas/PackageImpact" } }
+        data_at: { type: [string, "null"], format: date-time, description: Scan time of the newest scan in this overview. }
+    ScanDiff:
+      type: object
+      required: [scan_id, previous_scan_id, new, fixed, unchanged]
+      properties:
+        scan_id: { type: integer, format: int64 }
+        previous_scan_id: { type: [integer, "null"], format: int64 }
+        new: { type: array, items: { $ref: "#/components/schemas/Vulnerability" } }
+        fixed: { type: array, items: { $ref: "#/components/schemas/Vulnerability" } }
+        unchanged: { type: integer }
+    TrendPoint:
+      type: object
+      required: [scan_id, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable]
+      properties:
+        scan_id: { type: integer, format: int64 }
+        scanned_at: { type: string, format: date-time }
+        gitlab_pipeline_id: { type: integer, format: int64 }
+        commit_sha: { type: string }
+        artifact_name: { type: string }
+        counts: { $ref: "#/components/schemas/SeverityCounts" }
+        fixable: { type: integer }
+    Trends:
+      type: object
+      required: [ref, points]
+      properties:
+        ref: { type: [string, "null"] }
+        points: { type: array, items: { $ref: "#/components/schemas/TrendPoint" } }
+    Rating:
+      type: [string, "null"]
+      enum: [A, B, C, D, E, null]
+      description: null when SonarQube did not report the metric.
+    SonarAnalysis:
+      type: object
+      required: [id, analysed_at, revision, quality_gate_status, conditions, reliability_rating, security_rating, maintainability_rating, security_review_rating, coverage, duplicated_lines_density, measures, mode, gitlab_pipeline_id, project_url]
+      properties:
+        id: { type: integer, format: int64 }
+        analysed_at: { type: string, format: date-time }
+        revision: { type: string }
+        quality_gate_status: { type: string, enum: [OK, WARN, ERROR, NONE, ""] }
+        conditions:
+          type: array
+          items:
+            type: object
+            required: [metric, operator, threshold, value, status]
+            properties:
+              metric: { type: string }
+              operator: { type: string }
+              threshold: { type: string }
+              value: { type: [string, "null"] }
+              status: { type: string }
+        reliability_rating: { $ref: "#/components/schemas/Rating" }
+        security_rating: { $ref: "#/components/schemas/Rating" }
+        maintainability_rating: { $ref: "#/components/schemas/Rating" }
+        security_review_rating: { $ref: "#/components/schemas/Rating" }
+        coverage: { type: [number, "null"] }
+        duplicated_lines_density: { type: [number, "null"] }
+        measures:
+          type: object
+          additionalProperties: { type: string }
+          description: Every measure as reported by SonarQube, by metric key.
+        mode: { type: string, enum: [mqr, standard, ""] }
+        gitlab_pipeline_id: { type: [integer, "null"], format: int64 }
+        project_url: { type: [string, "null"], description: Link to the project in SonarQube. }
+    ServiceSonar:
+      type: object
+      required: [sonar_project_key, latest, history]
+      properties:
+        sonar_project_key: { type: [string, "null"] }
+        latest: { oneOf: [ { $ref: "#/components/schemas/SonarAnalysis" }, { type: "null" } ] }
+        history: { type: array, items: { $ref: "#/components/schemas/SonarAnalysis" }, description: Newest first, including latest. }
+    PortfolioItem:
+      type: object
+      required: [service, ref, counts, fixable, secrets, last_scan_at, quality_gate_status, reliability_rating, security_rating, maintainability_rating, coverage, last_analysis_at]
+      properties:
+        service: { $ref: "#/components/schemas/Service" }
+        ref: { type: [string, "null"], description: Ref with the most recent scan. }
+        counts: { $ref: "#/components/schemas/SeverityCounts" }
+        fixable: { type: integer }
+        secrets: { type: integer }
+        last_scan_at: { type: [string, "null"], format: date-time }
+        quality_gate_status: { type: [string, "null"] }
+        reliability_rating: { $ref: "#/components/schemas/Rating" }
+        security_rating: { $ref: "#/components/schemas/Rating" }
+        maintainability_rating: { $ref: "#/components/schemas/Rating" }
+        coverage: { type: [number, "null"] }
+        last_analysis_at: { type: [string, "null"], format: date-time }
+    Portfolio:
+      type: object
+      required: [items, totals, generated_at]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/PortfolioItem" } }
+        totals:
+          type: object
+          required: [services, failing_quality_gates, services_with_critical, fixable]
+          properties:
+            services: { type: integer }
+            failing_quality_gates: { type: integer }
+            services_with_critical: { type: integer }
+            fixable: { type: integer }
+        generated_at: { type: string, format: date-time }
+    VulnerabilitySearch:
+      type: object
+      required: [vuln_id, items]
+      properties:
+        vuln_id: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            required: [service, ref, artifact_name, scan_id, scanned_at, pkg_name, installed_version, fixed_version, severity]
+            properties:
+              service: { $ref: "#/components/schemas/Service" }
+              ref: { type: string }
+              artifact_name: { type: string }
+              scan_id: { type: integer, format: int64 }
+              scanned_at: { type: string, format: date-time }
+              pkg_name: { type: string }
+              installed_version: { type: string }
+              fixed_version: { type: string }
+              severity: { $ref: "#/components/schemas/Severity" }
+    TrivyIntegration:
+      type: object
+      required: [configured, last_upload_at, uploads_24h, rejections_24h, recent_rejections]
+      properties:
+        configured: { type: boolean, description: The GitLab URL is set, so ID tokens can be verified. }
+        last_upload_at: { type: [string, "null"], format: date-time }
+        uploads_24h: { type: integer }
+        rejections_24h: { type: integer }
+        recent_rejections:
+          type: array
+          maxItems: 20
+          items:
+            type: object
+            required: [at, reason, project_path]
+            properties:
+              at: { type: string, format: date-time }
+              reason: { type: string }
+              project_path: { type: [string, "null"] }
+    SonarIntegration:
+      type: object
+      required: [configured, server_version, last_webhook_at, last_sync_at, last_sync_error, recent_deliveries]
+      properties:
+        configured: { type: boolean }
+        server_version: { type: [string, "null"] }
+        last_webhook_at: { type: [string, "null"], format: date-time }
+        last_sync_at: { type: [string, "null"], format: date-time }
+        last_sync_error: { type: [string, "null"] }
+        recent_deliveries:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [task_id, project_key, received_at, outcome, service_id, detail]
+            properties:
+              task_id: { type: string }
+              project_key: { type: string }
+              received_at: { type: string, format: date-time }
+              outcome: { type: string, enum: [linked, unlinked, failed] }
+              service_id: { type: [integer, "null"], format: int64 }
+              detail: { type: string }
     Me:
       allOf:
         - $ref: "#/components/schemas/User"

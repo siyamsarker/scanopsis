@@ -105,6 +105,15 @@ CREATE TABLE sonar_analyses (
     measures            jsonb       NOT NULL DEFAULT '{}'::jsonb,
     -- 'mqr' or 'standard' (SonarQube mode the measures came from).
     mode                text        NOT NULL DEFAULT '',
+    -- Normalised values, independent of the mode, for overviews. Ratings
+    -- are 'A' to 'E', or '' when SonarQube did not report the metric.
+    reliability_rating      text NOT NULL DEFAULT '' CHECK (reliability_rating IN ('', 'A', 'B', 'C', 'D', 'E')),
+    security_rating         text NOT NULL DEFAULT '' CHECK (security_rating IN ('', 'A', 'B', 'C', 'D', 'E')),
+    maintainability_rating  text NOT NULL DEFAULT '' CHECK (maintainability_rating IN ('', 'A', 'B', 'C', 'D', 'E')),
+    security_review_rating  text NOT NULL DEFAULT '' CHECK (security_review_rating IN ('', 'A', 'B', 'C', 'D', 'E')),
+    -- Percentages; NULL when not reported (never 0 for "unknown").
+    coverage                 double precision,
+    duplicated_lines_density double precision,
     gitlab_pipeline_id  bigint,
     received_at         timestamptz NOT NULL DEFAULT now()
 );

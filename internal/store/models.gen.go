@@ -90,18 +90,24 @@ type Setting struct {
 }
 
 type SonarAnalysis struct {
-	ID                int64
-	ServiceID         int64
-	TaskID            string
-	AnalysisKey       string
-	AnalysedAt        pgtype.Timestamptz
-	Revision          string
-	QualityGateStatus string
-	GateConditions    []byte
-	Measures          []byte
-	Mode              string
-	GitlabPipelineID  pgtype.Int8
-	ReceivedAt        pgtype.Timestamptz
+	ID                     int64
+	ServiceID              int64
+	TaskID                 string
+	AnalysisKey            string
+	AnalysedAt             pgtype.Timestamptz
+	Revision               string
+	QualityGateStatus      string
+	GateConditions         []byte
+	Measures               []byte
+	Mode                   string
+	ReliabilityRating      string
+	SecurityRating         string
+	MaintainabilityRating  string
+	SecurityReviewRating   string
+	Coverage               pgtype.Float8
+	DuplicatedLinesDensity pgtype.Float8
+	GitlabPipelineID       pgtype.Int8
+	ReceivedAt             pgtype.Timestamptz
 }
 
 type SonarDelivery struct {

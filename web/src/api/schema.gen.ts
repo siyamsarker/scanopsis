@@ -352,6 +352,292 @@ export interface paths {
         patch: operations["updateSettings"];
         trace?: never;
     };
+    "/api/v1/ingest/trivy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload one Trivy JSON report from a GitLab CI job.
+         * @description Authenticated with the job's GitLab CI/CD ID token (`Authorization:
+         *     Bearer <token>`), whose audience must be the Scanopsis public URL. The
+         *     project, pipeline, job, ref and commit come from the verified token,
+         *     never from the report. The body is the raw report (`Content-Type:
+         *     application/json`), optionally gzip-compressed (`Content-Encoding:
+         *     gzip`). A repeated upload for the same job, artifact and kind replaces
+         *     the earlier one. Every rejection is written to the audit log.
+         */
+        post: operations["ingestTrivy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/hooks/sonarqube": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * SonarQube webhook target.
+         * @description Verified with the X-Sonar-Webhook-HMAC-SHA256 header (hex HMAC-SHA256 of
+         *     the raw body with the webhook secret). Deliveries are deduplicated by
+         *     taskId. The analysis is then read from the SonarQube Web API.
+         */
+        post: operations["sonarWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/portfolio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current posture of every non-archived service. */
+        get: operations["getPortfolio"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listServices"];
+        put?: never;
+        /** Add a service by GitLab project path (admin only). */
+        post: operations["createService"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getService"];
+        put?: never;
+        post?: never;
+        /** Delete a service and all its data (admin only). */
+        delete: operations["deleteService"];
+        options?: never;
+        head?: never;
+        /** Rename, link a SonarQube project key, or archive (admin only). */
+        patch: operations["updateService"];
+        trace?: never;
+    };
+    "/api/v1/services/{id}/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Trivy posture of a service for one ref. */
+        get: operations["getServiceOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services/{id}/scans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scans of a service, newest first. */
+        get: operations["listServiceScans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getScan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{id}/diff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Findings new and fixed since the previous scan of the same service, ref, artifact and kind. */
+        get: operations["getScanDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services/{id}/vulnerabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Vulnerabilities in the current state (latest scan per artifact) of a ref. */
+        get: operations["listServiceVulnerabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services/{id}/secrets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Secret findings in the current state of a ref. Matched values are never stored or returned. */
+        get: operations["listServiceSecrets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services/{id}/trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Severity counts per scan over time for one ref. */
+        get: operations["getServiceTrends"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/services/{id}/sonar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Latest SonarQube analysis of a service and its history. */
+        get: operations["getServiceSonar"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search/vulnerabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every service and artifact whose current state contains a vulnerability ID. */
+        get: operations["searchVulnerabilities"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/integrations/trivy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health of scan ingestion (admin only). */
+        get: operations["getTrivyIntegration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/integrations/sonarqube": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health of the SonarQube integration (admin only). */
+        get: operations["getSonarIntegration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -412,6 +698,328 @@ export interface components {
         };
         /** @enum {string} */
         Role: "admin" | "viewer";
+        SeverityCounts: {
+            critical: number;
+            high: number;
+            medium: number;
+            low: number;
+            unknown: number;
+        };
+        IngestResult: {
+            /** Format: int64 */
+            scan_id: number;
+            /** Format: int64 */
+            service_id: number;
+            service_created: boolean;
+            /** @description An earlier upload for the same job */
+            replaced: boolean;
+            counts: components["schemas"]["SeverityCounts"];
+            fixable: number;
+            secrets: number;
+            suppressed: number;
+        };
+        Service: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            /** Format: int64 */
+            gitlab_project_id: number | null;
+            gitlab_project_path: string;
+            sonar_project_key: string | null;
+            /** @enum {string} */
+            created_via: "ingest" | "manual";
+            archived: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        ServicePage: {
+            items: components["schemas"]["Service"][];
+            /** Format: int64 */
+            next_after: number | null;
+        };
+        ServiceCreate: {
+            /** @example platform/payments-api */
+            gitlab_project_path: string;
+            /** @description Defaults to the last path segment. */
+            name?: string;
+            sonar_project_key?: string;
+        };
+        ServiceUpdate: {
+            name?: string;
+            /** @description null unlinks. */
+            sonar_project_key?: string | null;
+            archived?: boolean;
+        };
+        ScanSummary: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            service_id: number;
+            /** @enum {string} */
+            kind: "image" | "secret-fs";
+            artifact_name: string;
+            /** Format: int64 */
+            gitlab_pipeline_id: number;
+            /** Format: int64 */
+            gitlab_job_id: number;
+            ref: string;
+            ref_protected: boolean;
+            commit_sha: string;
+            trivy_version: string;
+            /** Format: date-time */
+            scanned_at: string;
+            /** Format: date-time */
+            received_at: string;
+            counts: components["schemas"]["SeverityCounts"];
+            fixable: number;
+            secrets: number;
+            suppressed: number;
+        };
+        Scan: components["schemas"]["ScanSummary"] & {
+            gitlab_project_path: string;
+            /** @description Link into GitLab; null when the GitLab URL is not configured. */
+            pipeline_url: string | null;
+            job_url: string | null;
+            commit_url: string | null;
+        };
+        ScanPage: {
+            items: components["schemas"]["ScanSummary"][];
+            /** Format: int64 */
+            next_before: number | null;
+        };
+        Vulnerability: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            scan_id: number;
+            artifact_name: string;
+            target: string;
+            /** @example os-pkgs */
+            class: string;
+            pkg_type: string;
+            pkg_name: string;
+            pkg_path: string;
+            installed_version: string;
+            /** @description Empty when no fix is available. */
+            fixed_version: string;
+            vuln_id: string;
+            severity: components["schemas"]["Severity"];
+            status: string;
+            title: string;
+            primary_url: string;
+            suppressed: boolean;
+            /** @description Reason recorded by Trivy for a suppressed finding. */
+            suppression: string;
+            /**
+             * Format: date-time
+             * @description Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id
+             */
+            first_seen_at: string;
+        };
+        VulnerabilityPage: {
+            items: components["schemas"]["Vulnerability"][];
+            /** Format: int64 */
+            next_after: number | null;
+        };
+        /** @enum {string} */
+        Severity: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "UNKNOWN";
+        SecretFinding: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            scan_id: number;
+            artifact_name: string;
+            target: string;
+            rule_id: string;
+            category: string;
+            severity: components["schemas"]["Severity"];
+            title: string;
+            start_line: number;
+            end_line: number;
+            suppressed: boolean;
+        };
+        SecretFindingList: {
+            items: components["schemas"]["SecretFinding"][];
+        };
+        PackageImpact: {
+            pkg_name: string;
+            installed_version: string;
+            /** @description Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. */
+            fix_version: string;
+            findings: number;
+            by_severity: components["schemas"]["SeverityCounts"];
+        };
+        Overview: {
+            service: components["schemas"]["Service"];
+            /** @description null when the service has no scans yet. */
+            ref: string | null;
+            /** @description Refs with scans */
+            refs: string[];
+            /** @description Latest scan per artifact and kind for the ref. */
+            artifacts: components["schemas"]["ScanSummary"][];
+            counts: components["schemas"]["SeverityCounts"];
+            fixable: number;
+            secrets: number;
+            suppressed: number;
+            new_since_previous: number;
+            fixed_since_previous: number;
+            /** @description Counts per Trivy result class (os-pkgs, lang-pkgs). */
+            by_class: {
+                [key: string]: components["schemas"]["SeverityCounts"];
+            };
+            top_packages: components["schemas"]["PackageImpact"][];
+            /**
+             * Format: date-time
+             * @description Scan time of the newest scan in this overview.
+             */
+            data_at: string | null;
+        };
+        ScanDiff: {
+            /** Format: int64 */
+            scan_id: number;
+            /** Format: int64 */
+            previous_scan_id: number | null;
+            new: components["schemas"]["Vulnerability"][];
+            fixed: components["schemas"]["Vulnerability"][];
+            unchanged: number;
+        };
+        TrendPoint: {
+            /** Format: int64 */
+            scan_id: number;
+            /** Format: date-time */
+            scanned_at: string;
+            /** Format: int64 */
+            gitlab_pipeline_id: number;
+            commit_sha: string;
+            artifact_name: string;
+            counts: components["schemas"]["SeverityCounts"];
+            fixable: number;
+        };
+        Trends: {
+            ref: string | null;
+            points: components["schemas"]["TrendPoint"][];
+        };
+        /**
+         * @description null when SonarQube did not report the metric.
+         * @enum {string|null}
+         */
+        Rating: "A" | "B" | "C" | "D" | "E" | null;
+        SonarAnalysis: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            analysed_at: string;
+            revision: string;
+            /** @enum {string} */
+            quality_gate_status: "OK" | "WARN" | "ERROR" | "NONE" | "";
+            conditions: {
+                metric: string;
+                operator: string;
+                threshold: string;
+                value: string | null;
+                status: string;
+            }[];
+            reliability_rating: components["schemas"]["Rating"];
+            security_rating: components["schemas"]["Rating"];
+            maintainability_rating: components["schemas"]["Rating"];
+            security_review_rating: components["schemas"]["Rating"];
+            coverage: number | null;
+            duplicated_lines_density: number | null;
+            /** @description Every measure as reported by SonarQube, by metric key. */
+            measures: {
+                [key: string]: string;
+            };
+            /** @enum {string} */
+            mode: "mqr" | "standard" | "";
+            /** Format: int64 */
+            gitlab_pipeline_id: number | null;
+            /** @description Link to the project in SonarQube. */
+            project_url: string | null;
+        };
+        ServiceSonar: {
+            sonar_project_key: string | null;
+            latest: components["schemas"]["SonarAnalysis"] | null;
+            /** @description Newest first */
+            history: components["schemas"]["SonarAnalysis"][];
+        };
+        PortfolioItem: {
+            service: components["schemas"]["Service"];
+            /** @description Ref with the most recent scan. */
+            ref: string | null;
+            counts: components["schemas"]["SeverityCounts"];
+            fixable: number;
+            secrets: number;
+            /** Format: date-time */
+            last_scan_at: string | null;
+            quality_gate_status: string | null;
+            reliability_rating: components["schemas"]["Rating"];
+            security_rating: components["schemas"]["Rating"];
+            maintainability_rating: components["schemas"]["Rating"];
+            coverage: number | null;
+            /** Format: date-time */
+            last_analysis_at: string | null;
+        };
+        Portfolio: {
+            items: components["schemas"]["PortfolioItem"][];
+            totals: {
+                services: number;
+                failing_quality_gates: number;
+                services_with_critical: number;
+                fixable: number;
+            };
+            /** Format: date-time */
+            generated_at: string;
+        };
+        VulnerabilitySearch: {
+            vuln_id: string;
+            items: {
+                service: components["schemas"]["Service"];
+                ref: string;
+                artifact_name: string;
+                /** Format: int64 */
+                scan_id: number;
+                /** Format: date-time */
+                scanned_at: string;
+                pkg_name: string;
+                installed_version: string;
+                fixed_version: string;
+                severity: components["schemas"]["Severity"];
+            }[];
+        };
+        TrivyIntegration: {
+            /** @description The GitLab URL is set */
+            configured: boolean;
+            /** Format: date-time */
+            last_upload_at: string | null;
+            uploads_24h: number;
+            rejections_24h: number;
+            recent_rejections: {
+                /** Format: date-time */
+                at: string;
+                reason: string;
+                project_path: string | null;
+            }[];
+        };
+        SonarIntegration: {
+            configured: boolean;
+            server_version: string | null;
+            /** Format: date-time */
+            last_webhook_at: string | null;
+            /** Format: date-time */
+            last_sync_at: string | null;
+            last_sync_error: string | null;
+            recent_deliveries: {
+                task_id: string;
+                project_key: string;
+                /** Format: date-time */
+                received_at: string;
+                /** @enum {string} */
+                outcome: "linked" | "unlinked" | "failed";
+                /** Format: int64 */
+                service_id: number | null;
+                detail: string;
+            }[];
+        };
         Me: components["schemas"]["User"] & {
             /** @description The user has a confirmed TOTP enrolment. */
             mfa_enrolled: boolean;
@@ -1219,6 +1827,772 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SettingsError"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    ingestTrivy: {
+        parameters: {
+            query?: {
+                /** @description image (default) for `trivy image`, secret-fs for `trivy fs --scanners secret`. */
+                kind?: "image" | "secret-fs";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestResult"];
+                };
+            };
+            /** @description Malformed body or gzip stream (code invalid_report). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or invalid ID token (code invalid_token; the message names the failed check). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Project namespace not allowed (code namespace_not_allowed) or ref not protected (code ref_not_protected). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Report larger than the limit (code report_too_large). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Unsupported content type or encoding (code unsupported_media_type). */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not a Trivy JSON report */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many uploads from this address. Retry-After gives seconds. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The GitLab URL is not configured (code ingest_not_configured). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    sonarWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": Record<string, never>;
+            };
+        };
+        responses: {
+            /** @description Accepted (also for a duplicate delivery). */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed payload (code invalid_payload). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Missing or wrong signature (code invalid_signature). */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Payload too large. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description SonarQube integration not configured (code sonar_not_configured). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getPortfolio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Portfolio. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Portfolio"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+        };
+    };
+    listServices: {
+        parameters: {
+            query?: {
+                /** @description Substring of name or project path. */
+                q?: string;
+                archived?: boolean;
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of services ordered by id. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServicePage"];
+                };
+            };
+            /** @description Invalid parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+        };
+    };
+    createService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceCreate"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The project path or SonarQube key is already used (code conflict). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Service. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateService: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServiceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Service"];
+                };
+            };
+            /** @description Invalid request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The SonarQube key is already linked to another service (code conflict). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getServiceOverview: {
+        parameters: {
+            query?: {
+                /** @description Git ref; defaults to the ref with the most recent scan. */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Overview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Overview"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listServiceScans: {
+        parameters: {
+            query?: {
+                /** @description Git ref; defaults to the ref with the most recent scan. */
+                ref?: string;
+                /** @description Return scans with an id lower than this value. */
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of scans. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanPage"];
+                };
+            };
+            /** @description Invalid parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getScan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Scan. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Scan"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getScanDiff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Diff. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanDiff"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listServiceVulnerabilities: {
+        parameters: {
+            query?: {
+                /** @description Git ref; defaults to the ref with the most recent scan. */
+                ref?: string;
+                /** @description Comma-separated list. */
+                severity?: string;
+                fixable?: boolean;
+                /** @description Include suppressed findings. */
+                suppressed?: boolean;
+                /** @description Substring of package name */
+                q?: string;
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page ordered by id. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VulnerabilityPage"];
+                };
+            };
+            /** @description Invalid parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listServiceSecrets: {
+        parameters: {
+            query?: {
+                /** @description Git ref; defaults to the ref with the most recent scan. */
+                ref?: string;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Secret findings. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SecretFindingList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getServiceTrends: {
+        parameters: {
+            query?: {
+                /** @description Git ref; defaults to the ref with the most recent scan. */
+                ref?: string;
+                days?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Trend points */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Trends"];
+                };
+            };
+            /** @description Invalid parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getServiceSonar: {
+        parameters: {
+            query?: {
+                /** @description Number of history entries. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SonarQube data; latest is null when nothing was analysed yet. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceSonar"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    searchVulnerabilities: {
+        parameters: {
+            query: {
+                id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Matches. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VulnerabilitySearch"];
+                };
+            };
+            /** @description Invalid parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+        };
+    };
+    getTrivyIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrivyIntegration"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getSonarIntegration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SonarIntegration"];
                 };
             };
             401: components["responses"]["Unauthenticated"];
