@@ -4,6 +4,7 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { resetPasswordWithCli } from '../fixtures/stack';
 import { freshCode } from '../fixtures/totp';
+import { registerDashboardFlows } from './dashboard-flows';
 
 // The flows share one database and run in order; each one starts from the
 // state the previous one left, which the comments at the top of each state.
@@ -353,4 +354,11 @@ test('11. security headers are set', async () => {
   const me = await rootContext.request.get('/api/v1/me');
   expect(me.status()).toBe(200);
   expect(me.headers()['cache-control']).toContain('no-store');
+});
+
+// Flows 12 to 20 upload real Trivy reports and check every dashboard screen.
+registerDashboardFlows({
+  root: () => root,
+  rootContext: () => rootContext,
+  viewer: () => alice,
 });
