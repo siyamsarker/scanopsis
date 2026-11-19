@@ -107,7 +107,7 @@ func TestVerifyFailures(t *testing.T) {
 		{"wrong audience", "Bearer " + g.token(t, func(c map[string]any) { c["aud"] = "https://other.example.com" }), "audience (aud) does not contain " + testAudience},
 		{"audience array without ours", "Bearer " + g.token(t, func(c map[string]any) { c["aud"] = []string{"a", "b"} }), "audience (aud)"},
 		{"no audience", "Bearer " + g.token(t, func(c map[string]any) { delete(c, "aud") }), "audience (aud)"},
-		{"wrong issuer", "Bearer " + g.token(t, func(c map[string]any) { c["iss"] = "https://gitlab.evil.example.com" }), "issuer (iss) is not " + g.url},
+		{"wrong issuer", "Bearer " + g.token(t, func(c map[string]any) { c["iss"] = "https://gitlab.evil.example.com" }), "issuer (iss) is not the GitLab URL configured"},
 		{"expired", "Bearer " + g.token(t, func(c map[string]any) { c["exp"] = time.Now().Add(-time.Minute).Unix() }), "has expired"},
 		{"no exp", "Bearer " + g.token(t, func(c map[string]any) { delete(c, "exp") }), "has expired"},
 		{"not yet valid", "Bearer " + g.token(t, func(c map[string]any) { c["nbf"] = time.Now().Add(time.Hour).Unix() }), "not valid yet"},
@@ -142,6 +142,9 @@ func TestVerifyFailures(t *testing.T) {
 			}
 			if te.unavailable {
 				t.Error("marked unavailable")
+			}
+			if strings.Contains(te.msg, "http://") || strings.Contains(te.msg, g.url) {
+				t.Errorf("message names the GitLab URL: %q", te.msg)
 			}
 			if strings.Contains(te.msg, tc.header) && len(tc.header) > 20 {
 				t.Error("message echoes the header")
@@ -328,6 +331,12 @@ func TestVerifyKeysUnavailable(t *testing.T) {
 	_, te := newVerifier().verify(context.Background(), g.url, "Bearer "+tok)
 	if te == nil || !te.unavailable || !strings.Contains(te.msg, "could not fetch the signing keys") {
 		t.Fatalf("%v", te)
+	}
+	if strings.Contains(te.msg, g.url) || strings.Contains(te.msg, "discovery") {
+		t.Errorf("message names the GitLab URL: %q", te.msg)
+	}
+	if !strings.Contains(te.detail, g.url+"/oauth/discovery/keys") {
+		t.Errorf("log detail %q lacks the keys URL", te.detail)
 	}
 }
 

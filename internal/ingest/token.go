@@ -44,6 +44,9 @@ type tokenError struct {
 	// unavailable is set when the check could not be made because GitLab's
 	// signing keys could not be fetched, not because the token is bad.
 	unavailable bool
+	// detail is for the server log only: it may name the GitLab URL or carry
+	// the upstream error text, which the caller must not see.
+	detail string
 }
 
 func (e *tokenError) Error() string { return e.msg }
@@ -87,9 +90,10 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 	tok, err := v.forURL(gitlabURL).Verify(context.WithValue(ctx, fetchFailedKey{}, fetchFailed), raw)
 	if err != nil {
 		if fetchFailed.Load() {
-			return nil, &tokenError{unavailable: true, msg: "The signature could not be checked: Scanopsis could not fetch the signing keys from " + gitlabURL + "/oauth/discovery/keys."}
+			return nil, &tokenError{unavailable: true, detail: err.Error() + " (" + gitlabURL + "/oauth/discovery/keys)",
+				msg: "The signature could not be checked: Scanopsis could not fetch the signing keys from GitLab."}
 		}
-		return nil, v.explain(err, gitlabURL)
+		return nil, v.explain(err)
 	}
 	var wire struct {
 		ProjectID     flex `json:"project_id"`
@@ -185,7 +189,7 @@ func (p fetchProbe) VerifySignature(ctx context.Context, jwt string) ([]byte, er
 // explain turns a go-oidc error into a message that names the failed check.
 // go-oidc has typed errors only for expiry, so the others are recognised by
 // the text of the pinned library version; tests cover every case.
-func (v *verifier) explain(err error, gitlabURL string) *tokenError {
+func (v *verifier) explain(err error) *tokenError {
 	var expired *oidc.TokenExpiredError
 	msg := err.Error()
 	switch {
@@ -197,9 +201,9 @@ func (v *verifier) explain(err error, gitlabURL string) *tokenError {
 		strings.HasPrefix(msg, "oidc: multiple signatures"), strings.HasPrefix(msg, "oidc: failed to unmarshal claims"):
 		return &tokenError{msg: "The token is malformed: it is not a signed JWT (RS256)."}
 	case strings.HasPrefix(msg, "failed to verify signature"):
-		return &tokenError{msg: "The token signature is not valid for the signing keys published by " + gitlabURL + "."}
+		return &tokenError{msg: "The token signature is not valid for the signing keys of the GitLab configured in Scanopsis."}
 	case strings.HasPrefix(msg, "oidc: id token issued by a different provider"):
-		return &tokenError{msg: "The token issuer (iss) is not " + gitlabURL + "."}
+		return &tokenError{msg: "The token issuer (iss) is not the GitLab URL configured in Scanopsis."}
 	case strings.HasPrefix(msg, "oidc: expected audience"):
 		return &tokenError{msg: "The token audience (aud) does not contain " + v.audience + ". Set aud to the Scanopsis URL in id_tokens."}
 	}

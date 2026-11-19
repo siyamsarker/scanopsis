@@ -174,11 +174,13 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	if te != nil {
 		if te.unavailable {
 			// Not the pipeline's fault: say so instead of calling the token
-			// invalid. It is still audited, with its own reason.
-			reject(http.StatusServiceUnavailable, codeGitLabUnavailable, te.msg+" Try again later.", "gitlab_url", gitlabURL)
+			// invalid. It is still audited, with its own reason. The URL and
+			// the cause stay in the server log; the caller gets neither.
+			reject(http.StatusServiceUnavailable, codeGitLabUnavailable, te.msg+" Try again later.",
+				"gitlab_url", gitlabURL, "cause", te.detail)
 			return
 		}
-		reject(http.StatusUnauthorized, codeInvalidToken, te.msg)
+		reject(http.StatusUnauthorized, codeInvalidToken, te.msg, "gitlab_url", gitlabURL)
 		return
 	}
 
