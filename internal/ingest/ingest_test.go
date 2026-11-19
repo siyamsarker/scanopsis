@@ -476,12 +476,13 @@ func TestIngestRateLimit(t *testing.T) {
 	if w.Code != 429 || errCode(t, w) != "too_many_requests" || w.Header().Get("Retry-After") != "10" {
 		t.Fatalf("%d %q %s", w.Code, w.Header().Get("Retry-After"), w.Body)
 	}
-	ev := e.audit.list()
-	if len(ev) != 1 || ev[0].actor != "ci:unknown" || ev[0].detail["reason"] != "too_many_requests" || ev[0].detail["ip"] != "192.0.2.10" {
+	// A rate-limited request needs no credentials, so it is neither audited
+	// nor logged as a warning.
+	if ev := e.audit.list(); len(ev) != 0 {
 		t.Fatalf("audit = %+v", ev)
 	}
-	if _, has := ev[0].detail["project_path"]; has {
-		t.Error("project_path on a rate-limited request")
+	if strings.Contains(e.logs.String(), "level=WARN") {
+		t.Errorf("rate limit logged as a warning: %s", e.logs)
 	}
 	// The limit is per address.
 	e.in.opts.ClientIP = func(*http.Request) netip.Addr { return netip.MustParseAddr("192.0.2.11") }

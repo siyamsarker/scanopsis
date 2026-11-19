@@ -53,6 +53,13 @@ const (
 	codeArchived          = "service_archived"
 )
 
+// Defaults of the audit limiter: a client address gets this many rejection
+// records at once and then one more per DefaultAuditEvery.
+const (
+	DefaultAuditBurst = 10
+	DefaultAuditEvery = time.Minute
+)
+
 // Options configure an Ingest.
 type Options struct {
 	// Audience is the Scanopsis public URL. CI tokens must carry it in aud.
@@ -65,6 +72,10 @@ type Options struct {
 	HTTPClient *http.Client
 	// Limiter limits uploads per client address. nil means no limit.
 	Limiter *auth.RateLimiter
+	// AuditLimiter limits how many rejections per client address are written
+	// to the audit log. nil means a burst of DefaultAuditBurst and then one
+	// per DefaultAuditEvery.
+	AuditLimiter *auth.RateLimiter
 	// ClientIP returns the client address for rate limiting and audit.
 	ClientIP func(*http.Request) netip.Addr
 	Logger   *slog.Logger
@@ -82,6 +93,9 @@ type Ingest struct {
 	log   *slog.Logger
 	ver   *verifier
 	store saver
+	// auditLimit bounds the audit records per client address, so requests
+	// that need no credentials cannot fill the audit log.
+	auditLimit *auth.RateLimiter
 }
 
 // New returns an Ingest that stores uploads in pool.
@@ -98,10 +112,14 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.AuditLimiter == nil {
+		opts.AuditLimiter = auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, opts.Now)
+	}
 	return &Ingest{
 		cfg: cfg, audit: audit, opts: opts, log: opts.Logger,
-		ver:   &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
-		store: &pgSaver{pool: pool, log: opts.Logger},
+		ver:        &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
+		store:      &pgSaver{pool: pool, log: opts.Logger},
+		auditLimit: opts.AuditLimiter,
 	}
 }
 
@@ -123,15 +141,18 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	ip := i.clientIP(r)
 	var claims *Claims // nil until the token is verified
 
-	reject := func(status int, code, message string) {
-		i.reject(ctx, w, ip, claims, status, code, message)
+	reject := func(status int, code, message string, extra ...any) {
+		i.reject(ctx, w, ip, claims, status, code, message, extra...)
 	}
 
 	if l := i.opts.Limiter; l != nil {
 		if ok, wait := l.Allow(limitKey(ip)); !ok {
 			secs := max(1, int(wait/time.Second)+btoi(wait%time.Second != 0))
 			w.Header().Set("Retry-After", strconv.Itoa(secs))
-			reject(http.StatusTooManyRequests, codeRateLimited, "Too many uploads from this address. Retry later.")
+			// Neither audited nor logged above debug level: the client needs
+			// no credentials to cause it, so it could fill the audit log.
+			i.log.DebugContext(ctx, "upload rate limited", "ip", ipString(ip))
+			httpapi.WriteError(w, http.StatusTooManyRequests, codeRateLimited, "Too many uploads from this address. Retry later.")
 			return
 		}
 	}
@@ -154,8 +175,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		if te.unavailable {
 			// Not the pipeline's fault: say so instead of calling the token
 			// invalid. It is still audited, with its own reason.
-			i.log.Error("cannot fetch GitLab signing keys", "gitlab_url", gitlabURL)
-			reject(http.StatusServiceUnavailable, codeGitLabUnavailable, te.msg+" Try again later.")
+			reject(http.StatusServiceUnavailable, codeGitLabUnavailable, te.msg+" Try again later.", "gitlab_url", gitlabURL)
 			return
 		}
 		reject(http.StatusUnauthorized, codeInvalidToken, te.msg)
@@ -254,8 +274,11 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 }
 
 // reject answers with an error, writes the audit event and logs it. claims is
-// nil when the token was not valid.
-func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Addr, claims *Claims, status int, code, message string) {
+// nil when the token was not valid. extra are log attributes for the server
+// log only. At most a bounded number of rejections per client address are
+// audited and logged as a warning; the others are logged at debug level. The
+// response is the same either way.
+func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Addr, claims *Claims, status int, code, message string, extra ...any) {
 	httpapi.WriteError(w, status, code, message)
 	actor := "ci:unknown"
 	detail := map[string]any{"reason": code, "ip": ipString(ip)}
@@ -264,6 +287,11 @@ func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Add
 		actor = "ci:" + claims.ProjectPath
 		detail["project_path"] = claims.ProjectPath
 		attrs = append(attrs, "project", claims.ProjectPath, "job_id", claims.JobID)
+	}
+	attrs = append(attrs, extra...)
+	if ok, _ := i.auditLimit.Allow(limitKey(ip)); !ok {
+		i.log.DebugContext(ctx, "upload rejected; not recorded: too many rejections from this address", attrs...)
+		return
 	}
 	i.audit.Record(ctx, actor, audit.ActionIngestRejected, detail)
 	i.log.WarnContext(ctx, "upload rejected", attrs...)

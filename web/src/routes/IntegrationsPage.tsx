@@ -148,7 +148,7 @@ function TrivyCard() {
       <Grid cols={2} className="mt-4">
         <StatTile label="Uploads, last 24 hours" value={d.uploads_24h} tone="pass" />
         <StatTile
-          label="Rejections, last 24 hours"
+          label="Recorded rejections, last 24 hours"
           value={d.rejections_24h}
           tone={d.rejections_24h > 0 ? 'warn' : undefined}
         />
@@ -166,7 +166,7 @@ function TrivyCard() {
             compact
             headingLevel={4}
             title="No rejections"
-            body="Every recent upload was accepted."
+            body="No rejected upload was recorded recently."
           />
         }
       />

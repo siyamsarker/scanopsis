@@ -369,7 +369,8 @@ export interface paths {
          *     never from the report. The body is the raw report (`Content-Type:
          *     application/json`), optionally gzip-compressed (`Content-Encoding:
          *     gzip`). A repeated upload for the same job, artifact and kind replaces
-         *     the earlier one. Every rejection is written to the audit log.
+         *     the earlier one. Rejections are written to the audit log, except rate-limited requests (429),
+         *     and at most a bounded number per client address.
          */
         post: operations["ingestTrivy"];
         delete?: never;
@@ -1028,6 +1029,7 @@ export interface components {
             /** Format: date-time */
             last_upload_at: string | null;
             uploads_24h: number;
+            /** @description Recorded rejections in the last 24 hours. Rate-limited requests are not recorded and the number of recorded rejections per client address is bounded. */
             rejections_24h: number;
             recent_rejections: {
                 /** Format: date-time */
