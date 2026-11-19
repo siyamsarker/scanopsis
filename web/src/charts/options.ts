@@ -260,6 +260,9 @@ export interface TreemapItem {
  */
 export function treemap(items: TreemapItem[], options: { valueLabel?: string } = {}): ChartFactory {
   const valueLabel = options.valueLabel ?? 'findings';
+  // echarts sorts treemap tiles by value, so tiles are matched by id, never by position.
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const lookup = (raw: unknown) => byId.get((raw as { data?: { id?: string } }).data?.id ?? '');
   const levelText = (severity: SeverityKey | null) =>
     severity ? SEVERITY_LABEL[severity] : 'No findings';
   return (p) => ({
@@ -268,7 +271,7 @@ export function treemap(items: TreemapItem[], options: { valueLabel?: string } =
       ...(base(p).tooltip as object),
       trigger: 'item',
       formatter: (raw: unknown) => {
-        const item = items[(raw as { dataIndex: number }).dataIndex];
+        const item = lookup(raw);
         if (!item) return '';
         return tipShell(
           item.name,
@@ -305,7 +308,7 @@ export function treemap(items: TreemapItem[], options: { valueLabel?: string } =
           lineHeight: 16,
           overflow: 'truncate',
           formatter: (raw: unknown) => {
-            const item = items[(raw as { dataIndex: number }).dataIndex];
+            const item = lookup(raw);
             return item
               ? `${item.name}\n${levelText(item.severity)} · ${formatInt(item.value, { compact: true })}`
               : '';

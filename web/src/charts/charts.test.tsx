@@ -185,12 +185,12 @@ describe('treemap', () => {
   });
 
   it('names the severity in the tooltip and escapes names', () => {
-    const html = option.tooltip.formatter({ dataIndex: 0 });
+    const html = option.tooltip.formatter({ data: { id: 'a' } });
     expect(html).toContain('Critical');
     expect(html).toContain('<b>120</b>');
     expect(html).toContain('platform/payments-api');
     expect(escapeHtml('<img onerror="x">')).toBe('&#60;img onerror=&#34;x&#34;&#62;');
-    expect(option.tooltip.formatter({ dataIndex: 1 })).toContain('No findings');
+    expect(option.tooltip.formatter({ data: { id: 'b' } })).toContain('No findings');
   });
 });
 
