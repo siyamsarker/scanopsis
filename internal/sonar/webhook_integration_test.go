@@ -314,7 +314,7 @@ func TestWebhookQueueFull(t *testing.T) {
 	if d.Outcome != "failed" || d.Detail != "The processing queue was full; the next sync will read the analysis." {
 		t.Errorf("delivery: %+v", d)
 	}
-	if d := e.delivery(t, "task-11"); d.Detail != "pending" {
+	if d := e.delivery(t, "task-11"); d.Outcome != "pending" {
 		t.Errorf("the queued delivery must stay pending: %+v", d)
 	}
 }

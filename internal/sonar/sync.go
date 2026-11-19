@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/siyamsarker/scanopsis/internal/settings"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
@@ -22,6 +24,7 @@ const advisoryLockKey int64 = 0x53434e5359 // "SCNSY"
 // when ctx ends. The settings are read again on every check, so changes apply
 // without a restart.
 func (s *Sonar) Run(ctx context.Context) {
+	s.interruptPending(ctx)
 	ticker := time.NewTicker(s.tick)
 	defer ticker.Stop()
 	var last time.Time // zero: a sync is due at the first tick
@@ -145,4 +148,20 @@ func (s *Sonar) warn(ctx context.Context, msg, project string, err error) {
 		args = append(args, "status", ae.Status)
 	}
 	s.log.WarnContext(ctx, msg, args...)
+}
+
+// pendingTimeout is how long a delivery may stay pending before it counts as
+// interrupted.
+const pendingTimeout = 10 * time.Minute
+
+// interruptPending fails deliveries left pending by a server that stopped
+// while processing them.
+func (s *Sonar) interruptPending(ctx context.Context) {
+	_, err := s.q.InterruptSonarDeliveries(ctx, store.InterruptSonarDeliveriesParams{
+		ReceivedAt: pgtype.Timestamptz{Time: s.now().Add(-pendingTimeout), Valid: true},
+		Detail:     "Processing was interrupted; the next sync picks the analysis up.",
+	})
+	if err != nil && ctx.Err() == nil {
+		s.log.WarnContext(ctx, "could not clean up interrupted SonarQube deliveries", "error", err)
+	}
 }

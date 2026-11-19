@@ -25,13 +25,20 @@ ORDER BY id;
 -- ID was delivered before.
 -- name: InsertSonarDelivery :execrows
 INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail)
-VALUES ($1, $2, $3, 'failed', 'pending')
+VALUES ($1, $2, $3, 'pending', '')
 ON CONFLICT (task_id) DO NOTHING;
 
 -- name: FinishSonarDelivery :exec
 UPDATE sonar_deliveries
 SET outcome = $2, service_id = $3, detail = $4
 WHERE task_id = $1;
+
+-- InterruptSonarDeliveries fails deliveries that stayed pending since before
+-- the cutoff, because the server stopped while processing them.
+-- name: InterruptSonarDeliveries :execrows
+UPDATE sonar_deliveries
+SET outcome = 'failed', detail = $2
+WHERE outcome = 'pending' AND received_at < $1;
 
 -- name: InsertSonarAnalysis :exec
 INSERT INTO sonar_analyses (

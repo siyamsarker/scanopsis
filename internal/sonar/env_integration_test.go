@@ -123,7 +123,7 @@ func (e *env) waitDelivery(t *testing.T, taskID string) store.ListSonarDeliverie
 			t.Fatal(err)
 		}
 		for _, r := range rows {
-			if r.TaskID == taskID && r.Detail != "pending" {
+			if r.TaskID == taskID && r.Outcome != "pending" {
 				return r
 			}
 		}

@@ -91,7 +91,7 @@ func (q *Queries) InsertSonarAnalysis(ctx context.Context, arg InsertSonarAnalys
 
 const insertSonarDelivery = `-- name: InsertSonarDelivery :execrows
 INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail)
-VALUES ($1, $2, $3, 'failed', 'pending')
+VALUES ($1, $2, $3, 'pending', '')
 ON CONFLICT (task_id) DO NOTHING
 `
 
@@ -105,6 +105,27 @@ type InsertSonarDeliveryParams struct {
 // ID was delivered before.
 func (q *Queries) InsertSonarDelivery(ctx context.Context, arg InsertSonarDeliveryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSonarDelivery, arg.TaskID, arg.ProjectKey, arg.ReceivedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const interruptSonarDeliveries = `-- name: InterruptSonarDeliveries :execrows
+UPDATE sonar_deliveries
+SET outcome = 'failed', detail = $2
+WHERE outcome = 'pending' AND received_at < $1
+`
+
+type InterruptSonarDeliveriesParams struct {
+	ReceivedAt pgtype.Timestamptz
+	Detail     string
+}
+
+// InterruptSonarDeliveries fails deliveries that stayed pending since before
+// the cutoff, because the server stopped while processing them.
+func (q *Queries) InterruptSonarDeliveries(ctx context.Context, arg InterruptSonarDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, interruptSonarDeliveries, arg.ReceivedAt, arg.Detail)
 	if err != nil {
 		return 0, err
 	}

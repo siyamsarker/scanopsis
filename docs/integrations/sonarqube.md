@@ -223,7 +223,8 @@ integration page as `unlinked` unless a service uses that project key.
 | `failed`: Storing the analysis failed; see the server log. | A database error. | Read the server log. |
 | `linked` with a note: A newer analysis (...) already exists | Another analysis finished before this one was read. The measures are from the newer one. | None; the next sync adds the newer analysis. |
 | `linked`: The analysis was already stored by a sync. | The sync was faster than the webhook. | None. |
-| a delivery stays `failed` with detail `pending` | The server stopped while it was processing it. | None; the next sync reads the analysis. |
+| `pending` | The delivery is waiting to be processed. | None, it changes within seconds. |
+| `failed`: Processing was interrupted; the next sync picks the analysis up. | The server stopped while processing it; a delivery pending for over 10 minutes is marked this way when the server starts. | None; the next sync reads the analysis. |
 
 ### Other problems
 
