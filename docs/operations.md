@@ -295,6 +295,39 @@ could not be reached.
 Sign in as a local administrator. If you lost the password or the phone, use
 the commands above first.
 
+## Choose the dashboard branch of a service
+
+Scanopsis keeps the scans of every branch (ref) that uploads, but a dashboard
+shows one branch. An administrator chooses which one for each service. Without
+this choice, a dashboard shows the branch with the most recent scan, so one
+developer's feature branch can replace what everyone sees.
+
+1. Sign in as an administrator and open **Services** in the navigation bar.
+2. Find the service. The column **Dashboard branch** shows the chosen branch,
+   or "Not chosen - showing the latest scanned branch (name)".
+3. Select **Choose** (or **Change**). Type a branch name, or pick one of the
+   branches that have been scanned from the suggestions. Select **Save**.
+4. To go back to the latest scanned branch, select **Change**, then
+   **Clear**.
+
+Expected result: the service dashboard, the findings explorer and the
+portfolio card show the branch you chose. The service dashboard says "dashboard
+branch" next to the branch name, and the card names the branch.
+
+The rule for the branch a dashboard shows is:
+
+1. A branch you select on the service page, or pass as `ref` to the API, wins.
+2. Otherwise the dashboard branch of the service, even if it has no scans yet.
+   The dashboards then say "No scans of that branch yet". They never show
+   another branch instead.
+3. Otherwise the branch with the most recent scan.
+
+A branch name can be at most 255 characters, without control characters.
+Spaces at the start and end are removed. Every change is recorded in the
+audit log as `service.updated`, with the previous and the new branch. The
+cross-service CVE search lists the findings of every branch and is not
+affected.
+
 ## Data retention
 
 Scanopsis deletes old data once a day so that the database does not grow

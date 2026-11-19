@@ -252,7 +252,7 @@ which jobs are accepted. Set them in **Settings**, or with environment variables
 | Setting | Variable | Effect |
 | --- | --- | --- |
 | Allowed namespaces | `SCANOPSIS_INGEST_ALLOWED_NAMESPACES` | Comma-separated full group paths, for example `platform,security/appsec`. Only projects in these groups or below them may upload. Empty accepts every project. |
-| Protected refs only | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | `true` accepts only pipelines on protected branches and tags, so a feature branch cannot overwrite what the dashboard shows. |
+| Protected refs only | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | `true` accepts only pipelines on protected branches and tags, so a feature branch cannot add scans or replace results. |
 
 A rejected upload is answered with 403 and recorded in the audit log as
 `ingest.rejected`, with the reason and, when the token was valid, the project
@@ -277,6 +277,14 @@ a suppressed finding is shown as suppressed with the reason Trivy gave, and
 duplicates are kept as Trivy listed them (Trivy can report one CVE for several
 targets). Every report is traceable to the pipeline, job, branch and commit in
 the token, and the compressed original is kept.
+
+Scanopsis keeps the scans of every branch that uploads. A dashboard shows one
+branch, and its numbers are the latest scan of each artifact on that branch.
+An administrator chooses the branch for each service on the Services page, see
+[choose the dashboard branch](../operations.md#choose-the-dashboard-branch-of-a-service).
+Until one is chosen, a dashboard shows the branch with the most recent scan,
+so a scan of a feature branch changes what is shown. Choose the branch right
+after the first upload, usually the default branch of the project.
 
 ## Troubleshooting
 

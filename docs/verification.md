@@ -176,8 +176,10 @@ If the answer is an error, use the table in the GitLab CI guide.
 Remember how Scanopsis decides what to show, because the comparison depends on it:
 
 - The dashboards show the **current state** of a **ref**: the latest scan of
-  each artifact and kind, by the time in the report (`CreatedAt`). The default
-  ref is the ref of the most recent scan.
+  each artifact and kind, by the time in the report (`CreatedAt`). The ref
+  shown is the one you select, else the dashboard branch an administrator chose
+  for the service, else the ref of the most recent scan. The service page and
+  the portfolio tile name the branch.
 - **Severity counts** are the **unsuppressed** vulnerabilities. Suppressed
   findings (those in `ExperimentalModifiedFindings`) are counted separately.
 - **Fixable** is the number of unsuppressed vulnerabilities that have a fixed version.
@@ -260,7 +262,7 @@ Read the same numbers in three places. Compare each one with A and B.
 
 **1. The portfolio** (home page). The tile of each service shows the severity
 bar and the number of fixable findings. These are the sums over the
-artifacts of the default ref. Secrets are not on the tile: read them on the
+artifacts of the branch named on the tile. Secrets are not on the tile: read them on the
 service dashboard.
 
 **2. The service dashboard.** Open the service. **Findings by severity** and

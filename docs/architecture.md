@@ -208,7 +208,14 @@ All jobs run inside the Scanopsis process. There is no separate worker.
 
 The dashboards show the current state of a service. The definition is exact:
 
-- The default ref of a service is the ref of its most recent scan.
+- The ref a dashboard shows is decided by one rule. A `ref` you select on the
+  page, or pass to the API, wins. Otherwise the **dashboard branch** that an
+  administrator chose for the service is used, even when it has no scans yet
+  (the dashboards then say "No scans of that branch yet" and do not show
+  another branch). When no dashboard branch is chosen, the ref of the most
+  recent scan is used, so a scan of any branch can change what is shown until
+  an administrator chooses one. The API reports which case applied as
+  `ref_source`: `requested`, `default` or `latest`.
 - For a ref, the current state is the **latest scan per artifact and kind**.
   "Latest" is decided by `scanned_at`, which is the time in the Trivy report
   (`CreatedAt`), then by the scan ID. It is not the time the report arrived.

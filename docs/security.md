@@ -201,6 +201,18 @@ mitigation.
 9. **The raw report is kept as uploaded.** It can contain whatever Trivy wrote,
    such as file paths and package names. Trivy masks secret values in it.
 
+10. **Until an administrator chooses a branch, the latest scanned branch is
+    shown.** A dashboard shows one branch of a service. An administrator
+    chooses it for each service on the Services page, and no scan of another
+    branch can change it. For a service where none is chosen, the dashboard
+    shows the branch with the most recent scan, so anyone who can upload a
+    scan from any branch can change what is shown (and with it the numbers on
+    the portfolio) until a branch is chosen. Choose the branch of every
+    service after its first upload, and use protected refs only to keep
+    unprotected branches from uploading at all. A change of the branch is
+    recorded in the audit log (`service.updated`, with the previous and the new
+    value).
+
 ## Hardening checklist
 
 Go through this list when you deploy, and again after each upgrade.

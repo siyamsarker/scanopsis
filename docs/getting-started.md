@@ -321,3 +321,5 @@ If sign-in fails, see [recovering access](operations.md#recovering-access-when-l
    [configuration reference](configuration.md).
 4. Set up backups and learn the administration commands in
    [operations](operations.md).
+5. Once services exist, choose the branch each dashboard shows. See
+   [choose the dashboard branch](operations.md#choose-the-dashboard-branch-of-a-service).
