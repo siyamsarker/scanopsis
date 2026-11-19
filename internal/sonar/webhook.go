@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/httpapi"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
@@ -349,16 +350,24 @@ func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := s.q.WithTx(tx)
-	n2, err := q.PinSonarKey(ctx, store.PinSonarKeyParams{ID: a.ServiceID, SonarProjectKey: pgtype.Text{String: pinKey, Valid: true}})
+	path, err := q.PinSonarKey(ctx, store.PinSonarKeyParams{ID: a.ServiceID, SonarProjectKey: pgtype.Text{String: pinKey, Valid: true}})
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
+	if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "23505") { // unique_violation
 		return errPinConflict
 	}
 	if err != nil {
 		return err
 	}
-	if n2 == 0 {
-		return errPinConflict
+	detail, err := json.Marshal(map[string]any{
+		"id": a.ServiceID, "gitlab_project_path": path, "fields": []string{"sonar_project_key"},
+		"sonar_project_key": pinKey, "reason": "linked by the sonar.analysis.gitlabProjectId scanner property",
+		"task_id": a.TaskID,
+	})
+	if err != nil {
+		return err
+	}
+	if err := q.InsertAudit(ctx, store.InsertAuditParams{Actor: "sonarqube", Action: audit.ActionServiceUpdated, Detail: detail}); err != nil {
+		return err
 	}
 	if err := q.InsertSonarAnalysis(ctx, arg); err != nil {
 		return err

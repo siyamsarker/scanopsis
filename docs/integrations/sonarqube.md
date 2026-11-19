@@ -128,10 +128,14 @@ sonar-scanner \
 SonarQube copies properties that start with `sonar.analysis.` into the
 webhook. Scanopsis links by the project key first. It uses
 `sonar.analysis.gitlabProjectId` only for a service that has no SonarQube key
-yet, and then saves the project key on that service, so the link is fixed after
-the first analysis. A pipeline cannot move a service to another SonarQube
-project, or attach itself to a service that is already linked to a different
-project. `sonar.analysis.pipelineId` is shown next to the analysis.
+yet: the first analysis that carries the property links the project, and
+Scanopsis saves the project key on that service, so the link is fixed from then
+on. The link is shown on the Services page, where an administrator can change
+or remove it. Administrators see each automatic link in the audit log, as a
+`service.updated` event by the actor `sonarqube` with the service, the key and
+the task ID. A pipeline cannot move a service to another SonarQube project, or
+attach itself to a service that is already linked to a different project.
+`sonar.analysis.pipelineId` is shown next to the analysis.
 
 Archived services are never linked.
 

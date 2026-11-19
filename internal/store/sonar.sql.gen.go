@@ -237,8 +237,10 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 	return items, nil
 }
 
-const pinSonarKey = `-- name: PinSonarKey :execrows
-UPDATE services SET sonar_project_key = $2 WHERE id = $1 AND sonar_project_key IS NULL
+const pinSonarKey = `-- name: PinSonarKey :one
+UPDATE services SET sonar_project_key = $2
+WHERE id = $1 AND sonar_project_key IS NULL
+RETURNING gitlab_project_path
 `
 
 type PinSonarKeyParams struct {
@@ -247,13 +249,12 @@ type PinSonarKeyParams struct {
 }
 
 // PinSonarKey links an unlinked service to a SonarQube project; zero rows
-// mean the service was linked in the meantime.
-func (q *Queries) PinSonarKey(ctx context.Context, arg PinSonarKeyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, pinSonarKey, arg.ID, arg.SonarProjectKey)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// mean (pgx.ErrNoRows) the service was linked in the meantime. It returns the project path.
+func (q *Queries) PinSonarKey(ctx context.Context, arg PinSonarKeyParams) (string, error) {
+	row := q.db.QueryRow(ctx, pinSonarKey, arg.ID, arg.SonarProjectKey)
+	var gitlab_project_path string
+	err := row.Scan(&gitlab_project_path)
+	return gitlab_project_path, err
 }
 
 const sonarAnalysisKnown = `-- name: SonarAnalysisKnown :one

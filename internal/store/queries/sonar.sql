@@ -8,9 +8,11 @@ SELECT id, sonar_project_key FROM services WHERE gitlab_project_id = $1 AND NOT 
 SELECT id FROM services WHERE sonar_project_key = $1 AND NOT archived;
 
 -- PinSonarKey links an unlinked service to a SonarQube project; zero rows
--- mean the service was linked in the meantime.
--- name: PinSonarKey :execrows
-UPDATE services SET sonar_project_key = $2 WHERE id = $1 AND sonar_project_key IS NULL;
+-- mean (pgx.ErrNoRows) the service was linked in the meantime. It returns the project path.
+-- name: PinSonarKey :one
+UPDATE services SET sonar_project_key = $2
+WHERE id = $1 AND sonar_project_key IS NULL
+RETURNING gitlab_project_path;
 
 -- name: SonarServiceKey :one
 SELECT sonar_project_key FROM services WHERE id = $1;
