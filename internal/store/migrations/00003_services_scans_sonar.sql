@@ -133,7 +133,11 @@ CREATE TABLE sonar_deliveries (
 
 CREATE INDEX sonar_deliveries_received_idx ON sonar_deliveries (received_at DESC);
 
+-- Integration health lists recent events of one action (rejected uploads).
+CREATE INDEX audit_log_action_at_idx ON audit_log (action, at DESC);
+
 -- +goose Down
+DROP INDEX audit_log_action_at_idx;
 DROP TABLE sonar_deliveries;
 DROP TABLE sonar_analyses;
 DROP TABLE secret_findings;
