@@ -407,7 +407,7 @@ paths:
         "415": { description: Unsupported content type or encoding (code unsupported_media_type)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "422": { description: Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many uploads from this address. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { description: The GitLab URL is not configured (code ingest_not_configured), or GitLab's signing keys could not be fetched (code gitlab_unavailable)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), or the server is processing other uploads and the request ended while waiting for a free slot (code busy; Retry-After gives seconds)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/hooks/sonarqube:
     post:

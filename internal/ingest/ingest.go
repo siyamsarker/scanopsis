@@ -51,7 +51,16 @@ const (
 	codeInvalidParam      = "invalid_parameter"
 	codeConflict          = "service_conflict"
 	codeArchived          = "service_archived"
+	// codeBusy: every upload slot is taken and the client stopped waiting.
+	codeBusy = "busy"
 )
+
+// DefaultMaxConcurrentUploads is the number of uploads processed at once when
+// Options.MaxConcurrentUploads is 0. Each may hold a whole report in memory.
+const DefaultMaxConcurrentUploads = 4
+
+// busyRetryAfter is the Retry-After value, in seconds, of a busy response.
+const busyRetryAfter = 5
 
 // Defaults of the audit limiter: a client address gets this many rejection
 // records at once and then one more per DefaultAuditEvery.
@@ -70,6 +79,10 @@ type Options struct {
 	// HTTPClient fetches GitLab's signing keys (for a custom CA). nil means
 	// http.DefaultClient.
 	HTTPClient *http.Client
+	// MaxConcurrentUploads limits the uploads read and stored at the same
+	// time, all addresses together. Others wait for a free slot while their
+	// request lasts. 0 means DefaultMaxConcurrentUploads.
+	MaxConcurrentUploads int
 	// Limiter limits uploads per client address. nil means no limit.
 	Limiter *auth.RateLimiter
 	// AuditLimiter limits how many rejections per client address are written
@@ -96,6 +109,8 @@ type Ingest struct {
 	// auditLimit bounds the audit records per client address, so requests
 	// that need no credentials cannot fill the audit log.
 	auditLimit *auth.RateLimiter
+	// sem holds one entry per upload being processed.
+	sem chan struct{}
 }
 
 // New returns an Ingest that stores uploads in pool.
@@ -112,6 +127,9 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	if opts.MaxConcurrentUploads <= 0 {
+		opts.MaxConcurrentUploads = DefaultMaxConcurrentUploads
+	}
 	if opts.AuditLimiter == nil {
 		opts.AuditLimiter = auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, opts.Now)
 	}
@@ -120,6 +138,7 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 		ver:        &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
 		store:      &pgSaver{pool: pool, log: opts.Logger},
 		auditLimit: opts.AuditLimiter,
+		sem:        make(chan struct{}, opts.MaxConcurrentUploads),
 	}
 }
 
@@ -225,6 +244,18 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	limit := i.opts.MaxReportBytes
 	if r.ContentLength > limit {
 		reject(http.StatusRequestEntityTooLarge, codeTooLarge, tooLargeMessage(limit))
+		return
+	}
+
+	// A report can take up to limit bytes compressed and as many parsed, so
+	// only a few are processed at once. The slot is held until the scan is
+	// stored.
+	select {
+	case i.sem <- struct{}{}:
+		defer func() { <-i.sem }()
+	case <-ctx.Done():
+		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
+		reject(http.StatusServiceUnavailable, codeBusy, "The server is processing other uploads. Retry later.", "slots", cap(i.sem))
 		return
 	}
 
