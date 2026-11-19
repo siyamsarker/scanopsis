@@ -89,3 +89,13 @@ actionlint: ## Lint GitHub Actions workflows
 
 clean: ## Remove build output
 	rm -rf bin web/dist/app
+
+.PHONY: e2e e2e-down
+
+e2e: ## Run the end-to-end tests in a browser against a Docker Compose stack
+	cd test/e2e && npm ci
+	cd test/e2e && if [ -n "$$CI" ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
+	cd test/e2e && npx playwright test
+
+e2e-down: ## Stop the end-to-end stack that E2E_KEEP=1 left running
+	docker compose -p scanopsis-e2e -f test/e2e/compose.yaml down -v --remove-orphans

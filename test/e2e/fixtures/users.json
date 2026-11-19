@@ -1,0 +1,23 @@
+[
+  {
+    "ID": 1001,
+    "Username": "alice",
+    "Name": "Alice Example",
+    "Email": "alice@example.com",
+    "Groups": ["platform"]
+  },
+  {
+    "ID": 1002,
+    "Username": "bob",
+    "Name": "Bob Example",
+    "Email": "bob@example.com",
+    "Groups": []
+  },
+  {
+    "ID": 1003,
+    "Username": "carol",
+    "Name": "Carol Example",
+    "Email": "carol@example.com",
+    "Groups": ["platform/team-a"]
+  }
+]

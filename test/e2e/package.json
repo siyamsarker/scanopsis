@@ -1,0 +1,17 @@
+{
+  "name": "scanopsis-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "End-to-end tests for Scanopsis",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1",
+    "@types/node": "26.6.6",
+    "typescript": "5.9.3"
+  }
+}

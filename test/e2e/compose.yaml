@@ -1,0 +1,57 @@
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Stack for the end-to-end tests: PostgreSQL, a fake GitLab sign-in provider and
+# Scanopsis built from the repository. Everything here is for tests only; the
+# keys and passwords are public on purpose.
+name: scanopsis-e2e
+
+services:
+  db:
+    image: postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
+    environment:
+      POSTGRES_USER: scanopsis
+      POSTGRES_PASSWORD: scanopsis
+      POSTGRES_DB: scanopsis
+    # Data lives in memory: every run starts from an empty database.
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scanopsis -d scanopsis"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  fake-gitlab:
+    build:
+      context: ../..
+      dockerfile: test/fakegitlab/Dockerfile
+    # The issuer is the same host name inside the network and in the browser,
+    # which reaches it through a Chromium host-resolver rule.
+    environment:
+      FAKEGITLAB_LISTEN: ":19000"
+      FAKEGITLAB_ISSUER: http://fake-gitlab:19000
+      FAKEGITLAB_CLIENT_ID: e2e-client
+      FAKEGITLAB_CLIENT_SECRET: e2e-client-secret
+      FAKEGITLAB_REDIRECT_URI: http://localhost:18080/api/v1/auth/gitlab/callback
+      FAKEGITLAB_USERS: /etc/fakegitlab/users.json
+    volumes:
+      - ./fixtures/users.json:/etc/fakegitlab/users.json:ro
+    ports:
+      - "19000:19000"
+
+  scanopsis:
+    build:
+      context: ../..
+    depends_on:
+      db:
+        condition: service_healthy
+      fake-gitlab:
+        condition: service_started
+    environment:
+      SCANOPSIS_DATABASE_URL: postgres://scanopsis:scanopsis@db:5432/scanopsis?sslmode=disable
+      SCANOPSIS_PUBLIC_URL: http://localhost:18080
+      SCANOPSIS_SECRET_KEY: c2Nhbm9wc2lzLWUyZS1maXhlZC10ZXN0LWtleS0zMi4=
+      SCANOPSIS_LISTEN_ADDR: ":8080"
+    ports:
+      - "18080:8080"
