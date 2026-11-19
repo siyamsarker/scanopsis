@@ -118,7 +118,7 @@ describe('login page return_to', () => {
       renderApp(`/login?return_to=${encodeURIComponent(value)}`);
       await screen.findByLabelText('Username');
       fillAndSubmit();
-      expect(await screen.findByRole('heading', { name: 'Services' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
       expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
     },
   );
@@ -264,7 +264,7 @@ describe('local sign-in cache', () => {
     renderApp('/login', client);
     await screen.findByLabelText('Username');
     fillAndSubmit();
-    expect(await screen.findByRole('heading', { name: 'Services' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
     expect(client.getQueryData(['users'])).toBeUndefined();
   });
 });

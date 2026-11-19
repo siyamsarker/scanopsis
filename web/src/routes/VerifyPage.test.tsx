@@ -61,7 +61,7 @@ describe('two-factor code page', () => {
     expect(input).toHaveClass('font-mono');
     fireEvent.change(input, { target: { value: 'abcde-fghij' } });
     fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
-    expect(await screen.findByRole('heading', { name: 'Services' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
     expect(calls.find((c) => c.path === '/api/v1/auth/mfa/verify')?.body).toEqual({
       code: 'abcde-fghij',
     });

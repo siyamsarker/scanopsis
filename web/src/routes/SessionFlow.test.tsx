@@ -82,7 +82,7 @@ describe('session routing', () => {
   it('sends a complete session away from a step page', async () => {
     mockFetch(server({ me: {} }));
     renderApp('/2fa');
-    expect(await screen.findByRole('heading', { name: 'Services' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
     expect(where()).toHaveTextContent(/^\/$/);
   });
 

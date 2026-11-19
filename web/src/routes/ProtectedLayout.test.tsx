@@ -5,6 +5,12 @@ import { fireEvent, screen } from '@testing-library/react';
 import { createQueryClient } from '../api/queryClient';
 import { apiError, json, makeUser, mockFetch, noContent, renderApp } from '../test-utils';
 
+const emptyPortfolio = {
+  items: [],
+  totals: { services: 0, failing_quality_gates: 0, services_with_critical: 0, fixable: 0 },
+  generated_at: '2026-11-19T10:00:00Z',
+};
+
 describe('protected layout', () => {
   it('redirects anonymous users to the login page with return_to', async () => {
     mockFetch((call) => {
@@ -23,9 +29,10 @@ describe('protected layout', () => {
   });
 
   it('shows the Users link, name and role for admins', async () => {
-    mockFetch((call) =>
-      call.path === '/api/v1/me' ? json(200, makeUser({ role: 'admin' })) : undefined,
-    );
+    mockFetch((call) => {
+      if (call.path === '/api/v1/portfolio') return json(200, emptyPortfolio);
+      return call.path === '/api/v1/me' ? json(200, makeUser({ role: 'admin' })) : undefined;
+    });
     renderApp('/');
     for (const [name, href] of [
       ['Services', '/admin/services'],
@@ -43,12 +50,8 @@ describe('protected layout', () => {
     expect(screen.getByRole('link', { name: 'Search' })).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
     expect(screen.getByText('Admin')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Services' })).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        'No services yet. Services appear here after the first pipeline uploads a scan.',
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
+    expect(await screen.findByText('No services yet')).toBeInTheDocument();
   });
 
   it('offers the theme switch in the header', async () => {
@@ -58,11 +61,15 @@ describe('protected layout', () => {
   });
 
   it('shows the mark with the wordmark in the header and the aperture in the empty state', async () => {
-    mockFetch((call) => (call.path === '/api/v1/me' ? json(200, makeUser()) : undefined));
+    mockFetch((call) => {
+      if (call.path === '/api/v1/portfolio') return json(200, emptyPortfolio);
+      return call.path === '/api/v1/me' ? json(200, makeUser()) : undefined;
+    });
     const { container } = renderApp('/');
     expect(await screen.findByRole('link', { name: 'scanopsis' })).toHaveAttribute('href', '/');
     expect(container.querySelectorAll('header a svg path')).toHaveLength(2);
-    expect(container.querySelectorAll('main svg path')).toHaveLength(2);
+    await screen.findByText('No services yet');
+    expect(container.querySelectorAll('main .aperture-halo svg path')).toHaveLength(2);
   });
 
   it('hides the Users link for viewers and falls back to the username', async () => {
