@@ -3,8 +3,11 @@
 Scanopsis is a small, self-hosted dashboard that shows SonarQube and Trivy
 results from your GitLab CI/CD pipelines in one view.
 
-> **Status:** early development. The server and web interface build and run,
-> but Scanopsis does not ingest or display scan results yet. Do not deploy it.
+> **Status:** early development. Sign-in with GitLab or a local account,
+> two-factor authentication, first-run setup, user management and the
+> settings page work, and you can run them with Docker Compose. Scanopsis does
+> not ingest or display scan results yet, so do not rely on it for production
+> data.
 
 ## Planned features
 
@@ -24,19 +27,39 @@ that produced it.
 Scanopsis works with SonarQube and Trivy. It is not affiliated with or endorsed
 by SonarSource, Aqua Security or GitLab.
 
-## Build from source
+## Quick start
 
-You need Go 1.27, Node.js 26 LTS and GNU Make.
+No release image is published yet, so you build the image first and then start
+Scanopsis and PostgreSQL with Docker Compose:
 
 ```sh
-make build
-./bin/scanopsis
+make image
+cd deploy/compose
 ```
 
-Open <http://localhost:8080>. See the [development guide](docs/development.md)
-for details, the container image, and how to run the checks.
+Then create the secrets and the configuration file, run `docker compose up -d`
+and finish the setup in the browser. The
+[getting started guide](docs/getting-started.md) explains each step, how to
+check it and what to do when it fails.
+
+## Build from source
+
+You need Go 1.27, Node.js 26 LTS, GNU Make and a PostgreSQL database. The
+[development guide](docs/development.md) shows how to build the binary, start
+a database, run the server and run the checks.
 
 ## Documentation
+
+For operators:
+
+- [Getting started](docs/getting-started.md)
+- [Configuration reference](docs/configuration.md)
+- [Sign in with GitLab](docs/integrations/gitlab-sso.md)
+- [Operations](docs/operations.md): health checks, logs, administration
+  commands, recovering access, backup and restore
+- [Docker Compose files](deploy/compose/README.md)
+
+For contributors and project policy:
 
 - [Development guide](docs/development.md)
 - [Contributing](CONTRIBUTING.md)

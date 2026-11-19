@@ -12,7 +12,7 @@ Install the following tools:
 | Go | 1.27.4 | `go.mod` declares 1.27 as the minimum. CI uses 1.27.4. |
 | Node.js | 26.13.1 (LTS) | The exact version is in `.nvmrc`. |
 | GNU Make | 3.81 or later | The `Makefile` is the single entry point for every task. |
-| Docker | Any current release with BuildKit | Only needed to build the container image. |
+| Docker | Any current release with BuildKit | Needed to build the container image, to run a local PostgreSQL and to run the integration tests. |
 | Git | Any current release | Version information is read from Git at build time. |
 
 Go tools used by the checks (golangci-lint, govulncheck, go-licenses,
@@ -37,7 +37,10 @@ nvm use
 | `web/embed.go` | Embeds the built web interface into the Go binary |
 | `scripts/` | Helper scripts used by CI |
 | `.github/` | CI workflow, Dependabot, issue and pull request templates |
-| `docs/` | Documentation |
+| `docs/` | Documentation for operators and developers |
+| `api/openapi.yaml` | The HTTP API contract |
+| `internal/` | Server packages: configuration, settings, authentication, HTTP API, database access |
+| `deploy/compose/` | Docker Compose deployment |
 
 ## Common tasks
 
@@ -47,12 +50,14 @@ Run `make help` to list every target. The most common ones are:
 |---|---|
 | `make check` | Runs every check that CI runs, except the image build. Run it before you open a pull request. |
 | `make fmt` | Formats the Go code. |
-| `make test` | Runs the Go tests with the race detector. |
+| `make test` | Runs the Go unit tests with the race detector. |
+| `make test-integration` | Runs the Go tests that need PostgreSQL, against a database in Docker. See [integration tests](#integration-tests). |
+| `make generate` | Regenerates the database code and the web API types. See [generated code](#generated-code). |
 | `make lint` | Lints the Go code. |
 | `make web-test` | Installs the web dependencies and runs the web unit tests. |
 | `make web-lint` | Type-checks, lints and checks the formatting of the web code. |
 | `make build` | Builds the web interface, then builds `bin/scanopsis` with it embedded. |
-| `make image` | Builds the container image `scanopsis:dev`. |
+| `make image` | Builds the container image `scanopsis:dev`. The Compose deployment in `deploy/compose` runs it. |
 | `make clean` | Removes `bin/` and the web build output. |
 
 ## Build and run from source
@@ -78,15 +83,58 @@ Run `make help` to list every target. The most common ones are:
    scanopsis 42418ad (commit 42418ad, go1.27.4)
    ```
 
-3. Start the server:
+3. Start a PostgreSQL database for development:
 
    ```sh
+   docker run -d --name scanopsis-dev-db \
+     -e POSTGRES_USER=scanopsis -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scanopsis \
+     -p 127.0.0.1:15432:5432 \
+     postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
+   ```
+
+   The database is published on port 15432, so that it does not clash with a
+   PostgreSQL that already runs on the default port 5432. If 15432 is taken
+   too, choose another port here and in the URL in the next step.
+
+4. Start the server. It needs a database URL, its public URL and a secret key:
+
+   ```sh
+   export SCANOPSIS_DATABASE_URL='postgres://scanopsis:dev@127.0.0.1:15432/scanopsis?sslmode=disable'
+   export SCANOPSIS_PUBLIC_URL='http://localhost:8080'
+   export SCANOPSIS_SECRET_KEY="$(openssl rand -base64 32)"
    ./bin/scanopsis
    ```
 
    The server listens on port 8080 and writes JSON logs to standard error.
-   Open <http://localhost:8080> in a browser. Press `Ctrl+C` to stop it; the
-   server shuts down gracefully and logs `scanopsis stopped`.
+   While no administrator exists, one log line holds the setup URL and token.
+   Open <http://localhost:8080> in a browser and complete the setup. Press
+   `Ctrl+C` to stop the server; it shuts down gracefully and logs
+   `scanopsis stopped`.
+
+   Keep the same `SCANOPSIS_SECRET_KEY` for as long as you keep the
+   database. Store it in a file or in your shell profile, or remove the
+   database with `docker rm -f scanopsis-dev-db` and start again. The
+   [configuration reference](configuration.md) lists every variable.
+
+5. Stop and remove the database when you are done:
+
+   ```sh
+   docker rm -f scanopsis-dev-db
+   ```
+
+### Administration commands during development
+
+The server binary contains the same administration commands as the container.
+They read `SCANOPSIS_DATABASE_URL` (or `SCANOPSIS_DATABASE_URL_FILE`) from the
+environment, and the server must have run once so that the tables exist:
+
+```sh
+./bin/scanopsis admin reset-password root
+./bin/scanopsis admin reset-2fa local:root
+./bin/scanopsis admin -h
+```
+
+They are described in [operations](operations.md#administration-commands).
 
 ## Work on the web interface
 
@@ -119,17 +167,80 @@ Other scripts in `web/package.json`:
    make image
    ```
 
-2. Run it with the same restrictions recommended for production:
+2. Check that the image starts, with the same restrictions that the Compose
+   file applies in production:
 
    ```sh
-   docker run --rm -p 8080:8080 --read-only --cap-drop ALL \
-     --security-opt no-new-privileges scanopsis:dev
+   docker run --rm --read-only --cap-drop ALL \
+     --security-opt no-new-privileges scanopsis:dev --version
    ```
 
-3. Open <http://localhost:8080>. Press `Ctrl+C` to stop the container.
+   Expected output (your version and commit will differ):
+
+   ```text
+   scanopsis acabe79 (commit acabe79, go1.27.4)
+   ```
+
+3. To run the whole stack, with a database, use the Compose deployment in
+   `deploy/compose`. Follow the [getting started guide](getting-started.md).
+   Without a database URL, a public URL and a secret key, the container
+   prints `configuration error:` and exits.
 
 The image is based on `gcr.io/distroless/static-debian13:nonroot`. It runs as
 user `65532`, contains no shell and works with a read-only root file system.
+
+## Integration tests
+
+Tests that need a real database carry the Go build tag `integration`. `make
+test` does not run them. `make test-integration` does:
+
+```sh
+make test-integration
+```
+
+Docker must be running. The tests start one PostgreSQL container, the same
+image as the one in the Compose file, and create a fresh database in it for
+each test. The container is removed when the tests end. The first run pulls
+the image.
+
+To run a single package or test, call `go` directly with the same tag:
+
+```sh
+go test -race -count=1 -tags integration ./internal/auth -run TestSetup
+```
+
+If the tests fail with `start PostgreSQL container`, Docker is not running or
+the current user cannot reach the Docker socket.
+
+## Generated code
+
+Two kinds of source files are generated and committed:
+
+- The database access code in `internal/store`, generated by sqlc from the SQL
+  files in `internal/store/queries` and `internal/store/migrations`.
+- The TypeScript types of the web client in `web/src/api`, generated from
+  `api/openapi.yaml`.
+
+After you change a SQL query, a migration or the OpenAPI document, regenerate
+both with:
+
+```sh
+make web-install
+make generate
+```
+
+`make web-install` installs the web dependencies, which provide the
+TypeScript generator. You need it once. Without it, `make generate` stops at
+the second step with `openapi-typescript: command not found`. The first run
+downloads sqlc into the Go module cache.
+
+Expected result: the command ends with a line like
+`../api/openapi.yaml → src/api/schema.gen.ts`, and `git status` shows no
+change when the generated files were already up to date.
+
+`make generate-check` runs the generation and fails if it changes any
+committed file. CI uses it, so commit the generated files together with your
+change.
 
 ## Conventions
 

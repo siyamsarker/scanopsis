@@ -10,5 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Project scaffold: Go server entry point, embedded web interface, build tooling and project documentation.
+- Sign-in with GitLab (OpenID Connect) with an optional restriction to GitLab groups, and sign-in with a local username and password, with rate limits on failed attempts.
+- Two-factor authentication with an authenticator app and ten single-use recovery codes. Every user must enrol before using the application.
+- First-run setup that creates the first administrator, protected by a one-time token written to the server log.
+- Settings page for administrators. GitLab sign-in, local sign-in and session timeouts change without a restart. Environment variables seed the settings on first start.
+- Administration commands `scanopsis admin reset-password` and `scanopsis admin reset-2fa` for recovering access.
+- Docker health check, using the new `scanopsis healthcheck` command, so the image works without a shell or curl.
+- Docker Compose deployment in `deploy/compose`, with documentation for installation, configuration, GitLab sign-in, operations, backup and restore.
 
 [Unreleased]: https://github.com/siyamsarker/scanopsis/commits/main
