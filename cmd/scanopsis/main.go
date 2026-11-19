@@ -29,6 +29,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/siyamsarker/scanopsis/internal/audit"
+	"github.com/siyamsarker/scanopsis/internal/auditlog"
 	"github.com/siyamsarker/scanopsis/internal/auth"
 	"github.com/siyamsarker/scanopsis/internal/catalog"
 	"github.com/siyamsarker/scanopsis/internal/clientip"
@@ -225,6 +226,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		catalog.New(pool, conf, rec, log).Handlers(),
 		findings.New(pool, conf, log).Handlers(),
 		sonarQube.Handlers(),
+		auditlog.New(pool, log).Handlers(),
 	)
 	if err != nil {
 		return err

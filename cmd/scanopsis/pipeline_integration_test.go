@@ -252,6 +252,11 @@ func TestIntegrationPipelineToDashboard(t *testing.T) {
 	if code, h := c.do("GET", "/api/v1/admin/integrations/trivy", nil); code != 200 || h["configured"] != true || h["last_upload_at"] == nil || h["rejections_24h"] != 1.0 {
 		t.Fatalf("trivy health = %d %v", code, h)
 	}
+	// The audit log shows the rejected upload (wrong audience).
+	code, al := c.do("GET", "/api/v1/admin/audit?action=ingest.rejected", nil)
+	if events, _ := al["items"].([]any); code != 200 || len(events) != 1 || events[0].(map[string]any)["actor"] != "ci:unknown" {
+		t.Fatalf("audit log = %d %v", code, al)
+	}
 	code, sh := c.do("GET", "/api/v1/admin/integrations/sonarqube", nil)
 	deliveries, _ := sh["recent_deliveries"].([]any)
 	if code != 200 || sh["configured"] != true || len(deliveries) != 1 || deliveries[0].(map[string]any)["outcome"] != "linked" {
