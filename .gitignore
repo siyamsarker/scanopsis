@@ -14,6 +14,7 @@ coverage/
 /test/e2e/playwright-report/
 
 # Local configuration and secrets
+/deploy/compose/secrets/
 .env
 .env.*
 !.env.example

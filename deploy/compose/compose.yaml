@@ -7,15 +7,19 @@
 #
 # Image: no release image is published yet. Build one from the repository
 # root with `make image`, then set SCANOPSIS_IMAGE=scanopsis:dev in the file
-# named .env next to this one (.env.example already does). Compose reads
-# SCANOPSIS_IMAGE from there for this file.
+# named .env next to this one (.env.example already does). SCANOPSIS_IMAGE is
+# required, so Compose never falls back to an unpinned image. Once releases
+# exist, pin a release by digest, for example
+# ghcr.io/siyamsarker/scanopsis:v1.0.0@sha256:<digest>.
 #
 # TLS: the port is published on the loopback interface only. Put a reverse
 # proxy in front of it that terminates TLS (see docs/configuration.md).
 #
 # Secrets: create the three files under ./secrets before `docker compose up`
 # (see docs/getting-started.md). They are mounted read-only under
-# /run/secrets and never appear in `docker inspect` or the environment.
+# /run/secrets, so their values do not appear in `docker inspect` or the
+# environment. Keep secrets out of .env: enter the GitLab client secret on the
+# Settings page, where it is stored encrypted.
 
 name: scanopsis
 
@@ -31,6 +35,21 @@ services:
       - postgres_password
     volumes:
       - db-data:/var/lib/postgresql
+    # Only Scanopsis can reach the database; it has no route to other networks.
+    networks:
+      - backend
+    # The entrypoint needs these capabilities to prepare the data directory
+    # and switch to the postgres user; everything else is dropped.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U scanopsis -d scanopsis"]
       interval: 5s
@@ -39,7 +58,7 @@ services:
       start_period: 10s
 
   scanopsis:
-    image: ${SCANOPSIS_IMAGE:-ghcr.io/siyamsarker/scanopsis:latest}
+    image: ${SCANOPSIS_IMAGE:?set SCANOPSIS_IMAGE in .env, see the comment at the top of this file}
     restart: unless-stopped
     depends_on:
       db:
@@ -54,6 +73,9 @@ services:
     secrets:
       - database_url
       - secret_key
+    networks:
+      - backend
+      - frontend
     ports:
       - "127.0.0.1:8080:8080"
     read_only: true
@@ -69,6 +91,12 @@ secrets:
     file: ./secrets/secret_key
   postgres_password:
     file: ./secrets/postgres_password
+
+networks:
+  # Published port and outgoing connections (GitLab).
+  frontend:
+  backend:
+    internal: true
 
 volumes:
   db-data:
