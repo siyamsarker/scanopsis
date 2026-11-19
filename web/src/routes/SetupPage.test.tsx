@@ -1,7 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import {
   apiError,
   json,
@@ -42,7 +42,9 @@ describe('setup page', () => {
   it('explains where to find the token and the password rules', async () => {
     mockFetch(setupApi(() => noContent()));
     renderApp('/');
-    expect(await screen.findByRole('heading', { name: 'Set up Scanopsis' })).toHaveFocus();
+    const heading = await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    // Focus moves to the heading after the page renders.
+    await waitFor(() => expect(heading).toHaveFocus());
     expect(screen.getByText(/Find the setup token in the server log/)).toHaveTextContent(
       'docker logs <container>',
     );

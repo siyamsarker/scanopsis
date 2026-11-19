@@ -1,7 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import {
   apiError,
   json,
@@ -39,7 +39,9 @@ describe('password page', () => {
   it('shows the rules, changes the password and continues to the destination', async () => {
     const { calls } = mockFetch(passwordApi(() => noContent()));
     renderApp('/password?return_to=%2Fadmin%2Fusers');
-    expect(await screen.findByRole('heading', { name: 'Choose a new password' })).toHaveFocus();
+    const heading = await screen.findByRole('heading', { name: 'Choose a new password' });
+    // Focus moves to the heading after the page renders.
+    await waitFor(() => expect(heading).toHaveFocus());
     expect(screen.getByText('At least 12 characters, and not your username.')).toBeVisible();
     fill();
     expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument();

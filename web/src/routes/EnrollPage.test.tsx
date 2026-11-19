@@ -98,7 +98,9 @@ describe('two-factor enrolment', () => {
     fireEvent.change(await toCodeStep(), { target: { value: '123 456' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
-    expect(await screen.findByRole('heading', { name: 'Save your recovery codes' })).toHaveFocus();
+    const heading = await screen.findByRole('heading', { name: 'Save your recovery codes' });
+    // Focus moves to the heading after the page renders.
+    await waitFor(() => expect(heading).toHaveFocus());
     expect(calls.find((c) => c.path.endsWith('/confirm'))?.body).toEqual({ code: '123456' });
     const list = screen.getByRole('list', { name: 'Recovery codes' });
     expect(list.querySelectorAll('li')).toHaveLength(10);
