@@ -34,18 +34,41 @@ export function useFindingsOverview(id: number, ref: string | undefined) {
   });
 }
 
-/**
- * Every vulnerability of the current state, loaded by following `next_after`
- * page by page. Filtering, sorting and grouping happen on the complete list.
- */
-export function useAllVulnerabilities(
+/** The most rows the explorer loads before it stops and asks for narrower filters. */
+export const MAX_ROWS = 50_000;
+
+/** Filters the server applies itself; the rest (class, artifact) are client-side only. */
+export interface ServerFilters {
+  /** Comma-separated, upper case: "CRITICAL,HIGH". */
+  severity?: string;
+  fixable?: boolean;
+  q?: string;
+}
+
+function hasServerFilters(f: ServerFilters | undefined): f is ServerFilters {
+  return f !== undefined && (Boolean(f.severity) || f.fixable !== undefined || Boolean(f.q));
+}
+
+/** Pages of the current state, followed by `next_after` until done or `ceiling` rows. */
+function usePagedVulnerabilities(
   id: number,
   ref: string | undefined,
   suppressed: boolean,
+  filters: ServerFilters | undefined,
   enabled: boolean,
+  ceiling: number,
 ) {
   const query = useInfiniteQuery({
-    queryKey: ['findings', 'vulnerabilities', id, ref ?? null, suppressed],
+    queryKey: [
+      'findings',
+      'vulnerabilities',
+      id,
+      ref ?? null,
+      suppressed,
+      filters?.severity ?? null,
+      filters?.fixable ?? null,
+      filters?.q ?? null,
+    ],
     enabled: enabled && ref !== undefined,
     initialPageParam: undefined as number | undefined,
     queryFn: async ({ pageParam }) =>
@@ -53,7 +76,15 @@ export function useAllVulnerabilities(
         await api.GET('/api/v1/services/{id}/vulnerabilities', {
           params: {
             path: { id },
-            query: { ref, suppressed, limit: PAGE_SIZE, after: pageParam },
+            query: {
+              ref,
+              suppressed,
+              severity: filters?.severity || undefined,
+              fixable: filters?.fixable,
+              q: filters?.q || undefined,
+              limit: PAGE_SIZE,
+              after: pageParam,
+            },
           },
         }),
       ),
@@ -61,24 +92,62 @@ export function useAllVulnerabilities(
   });
   const { hasNextPage, isFetching, isError, fetchNextPage } = query;
   const loadedPages = query.data?.pages.length ?? 0;
+  const loadedRows = useMemo(
+    () => query.data?.pages.reduce((sum, page) => sum + page.items.length, 0) ?? 0,
+    [query.data],
+  );
+  const truncated = hasNextPage && loadedRows >= ceiling;
 
   // A fast response can start and finish a fetch within one render, leaving
   // isFetching unchanged, so the number of loaded pages also triggers the next request.
   useEffect(() => {
-    if (enabled && hasNextPage && !isFetching && !isError) void fetchNextPage();
-  }, [enabled, hasNextPage, isFetching, isError, fetchNextPage, loadedPages]);
+    if (enabled && hasNextPage && !truncated && !isFetching && !isError) void fetchNextPage();
+  }, [enabled, hasNextPage, truncated, isFetching, isError, fetchNextPage, loadedPages]);
 
-  const rows = useMemo(() => query.data?.pages.flatMap((page) => page.items) ?? [], [query.data]);
+  const rows = useMemo(() => {
+    const all = query.data?.pages.flatMap((page) => page.items) ?? [];
+    return all.length > ceiling ? all.slice(0, ceiling) : all;
+  }, [query.data, ceiling]);
   return {
     rows,
     /** True until the first page arrived. */
     loading: query.isPending && query.fetchStatus !== 'idle',
     /** True while later pages are still being fetched. */
-    loadingMore: !isError && (hasNextPage || isFetching) && rows.length > 0,
+    loadingMore: !isError && !truncated && (hasNextPage || isFetching) && rows.length > 0,
     complete: query.data !== undefined && !hasNextPage && !isError,
+    /** True when loading stopped at the ceiling although more rows exist. */
+    truncated,
     error: query.error,
     retry: () => (query.data && hasNextPage ? void fetchNextPage() : void query.refetch()),
   };
+}
+
+/**
+ * Every vulnerability of the current state, loaded by following `next_after`
+ * page by page. Filtering, sorting and grouping happen on the complete list.
+ * Loading stops after `ceiling` rows (50 000). Only then are the server-side
+ * `filters` sent, so narrowing the filters really narrows what is loaded; below
+ * the ceiling every filter stays exact on the client.
+ */
+export function useAllVulnerabilities(
+  id: number,
+  ref: string | undefined,
+  suppressed: boolean,
+  enabled: boolean,
+  filters?: ServerFilters,
+  ceiling = MAX_ROWS,
+) {
+  const all = usePagedVulnerabilities(id, ref, suppressed, undefined, enabled, ceiling);
+  const narrow = all.truncated && hasServerFilters(filters);
+  const narrowed = usePagedVulnerabilities(
+    id,
+    ref,
+    suppressed,
+    narrow ? filters : undefined,
+    enabled && narrow,
+    ceiling,
+  );
+  return narrow ? { ...narrowed, narrowed: true } : { ...all, narrowed: false };
 }
 
 export function useSecrets(id: number, ref: string | undefined, enabled: boolean) {

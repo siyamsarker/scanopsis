@@ -30,6 +30,7 @@ export function FixTab({
   rows,
   loading,
   loadingMore,
+  truncated = false,
   error,
   onRetry,
 }: {
@@ -38,6 +39,8 @@ export function FixTab({
   rows: Vulnerability[];
   loading: boolean;
   loadingMore: boolean;
+  /** Loading stopped at the row ceiling although more findings exist. */
+  truncated?: boolean;
   error: unknown;
   onRetry: () => void;
 }) {
@@ -53,6 +56,8 @@ export function FixTab({
     );
   }
 
+  // Totals of a list that stopped loading are lower bounds, never the full picture.
+  const incomplete = rows.length > 0 && (Boolean(error) || truncated);
   const top = groups.slice(0, EMPHASISED);
   const total = groups.reduce((sum, g) => sum + g.cleared, 0);
   const cleared = top.reduce((sum, g) => sum + g.cleared, 0);
@@ -112,10 +117,26 @@ export function FixTab({
 
   return (
     <div className="space-y-4">
+      {incomplete ? (
+        <div role="alert" className="rounded-card border border-border-strong bg-surface p-4">
+          <p className="text-text">
+            Loading stopped after {formatInt(rows.length)} findings; these totals are incomplete.
+            {error ? (
+              <>
+                {' '}
+                <button type="button" onClick={onRetry} className="underline underline-offset-2">
+                  Try again
+                </button>
+              </>
+            ) : null}
+          </p>
+        </div>
+      ) : null}
       {groups.length > 0 ? (
         <Card className="space-y-3">
           <p className="text-lg font-semibold tracking-tight text-text tabular-nums">
-            Upgrading {countOf(top.length, 'package')} clears {formatInt(cleared)} of{' '}
+            Upgrading {countOf(top.length, 'package')} clears {incomplete ? 'at least ' : ''}
+            {formatInt(cleared)} of {incomplete ? 'at least ' : ''}
             {formatInt(total)} fixable {total === 1 ? 'vulnerability' : 'vulnerabilities'}
           </p>
           <SeverityBar

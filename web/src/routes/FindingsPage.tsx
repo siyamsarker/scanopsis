@@ -3,11 +3,18 @@
 
 import { Link, useParams, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client';
-import { useAllVulnerabilities, useFindingsOverview, useFindingsService } from '../api/findings';
+import {
+  MAX_ROWS,
+  useAllVulnerabilities,
+  useFindingsOverview,
+  useFindingsService,
+  type ServerFilters,
+} from '../api/findings';
 import { Select } from '../components/inputs';
 import { PageHeader } from '../components/layout';
 import { EmptyState, ErrorState, Skeleton, SkeletonTable } from '../components/states';
 import { TabPanel, Tabs } from '../components/Tabs';
+import { parseFilters } from './findings/model';
 import { FixTab } from './findings/FixTab';
 import { SecretsTab } from './findings/SecretsTab';
 import { VulnerabilitiesTab } from './findings/VulnerabilitiesTab';
@@ -25,7 +32,8 @@ function NotFound() {
   );
 }
 
-export function FindingsPage() {
+/** `rowCeiling` is the number of rows after which loading stops; only tests change it. */
+export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } = {}) {
   const { id: idParam } = useParams();
   const id = /^\d+$/.test(idParam ?? '') ? Number(idParam) : NaN;
   const [params, setParams] = useSearchParams();
@@ -39,11 +47,24 @@ export function FindingsPage() {
   const service = useFindingsService(id);
   const overview = useFindingsOverview(id, urlRef ?? undefined);
   const gitRef = overview.data?.ref ?? undefined;
+  // Only the vulnerabilities tab narrows what is loaded; the upgrade list always
+  // works on the unfiltered state, so its totals never depend on a leftover filter.
+  const urlFilters = parseFilters(params);
+  const serverFilters: ServerFilters | undefined =
+    tab === 'vulnerabilities'
+      ? {
+          severity: urlFilters.severity.map((s) => s.toUpperCase()).join(',') || undefined,
+          fixable: urlFilters.fixable === null ? undefined : urlFilters.fixable === 'true',
+          q: urlFilters.q || undefined,
+        }
+      : undefined;
   const vulns = useAllVulnerabilities(
     id,
     gitRef,
     includeSuppressed,
     tab === 'vulnerabilities' || tab === 'fix',
+    serverFilters,
+    rowCeiling,
   );
 
   const notFound = [service.error, overview.error].some(
@@ -164,6 +185,7 @@ export function FindingsPage() {
               rows={vulns.rows}
               loading={vulns.loading}
               loadingMore={vulns.loadingMore}
+              truncated={vulns.truncated}
               error={vulns.error}
               onRetry={vulns.retry}
             />
@@ -178,6 +200,7 @@ export function FindingsPage() {
               rows={vulns.rows}
               loading={vulns.loading}
               loadingMore={vulns.loadingMore}
+              truncated={vulns.truncated}
               error={vulns.error}
               onRetry={vulns.retry}
             />

@@ -52,6 +52,8 @@ export interface VulnerabilitiesTabProps {
   rows: Vulnerability[];
   loading: boolean;
   loadingMore: boolean;
+  /** Loading stopped at the row ceiling although more findings exist. */
+  truncated?: boolean;
   error: unknown;
   onRetry: () => void;
 }
@@ -60,6 +62,7 @@ export function VulnerabilitiesTab({
   rows,
   loading,
   loadingMore,
+  truncated = false,
   error,
   onRetry,
 }: VulnerabilitiesTabProps) {
@@ -283,6 +286,11 @@ export function VulnerabilitiesTab({
         {loadingMore ? (
           <p role="status" className="text-sm text-text-muted tabular-nums">
             Loaded {formatInt(rows.length)} so far, counts update as more arrive
+          </p>
+        ) : null}
+        {truncated ? (
+          <p role="status" className="text-sm text-text-muted">
+            Showing the first 50 000 findings. Narrow the filters to see the rest.
           </p>
         ) : null}
         {error && rows.length > 0 ? (
