@@ -10,12 +10,16 @@ CREATE TABLE services (
     id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name                text        NOT NULL CHECK (name <> ''),
     gitlab_project_id   bigint      UNIQUE,
-    gitlab_project_path text        NOT NULL UNIQUE CHECK (gitlab_project_path <> ''),
+    gitlab_project_path text        NOT NULL CHECK (gitlab_project_path <> ''),
     sonar_project_key   text        UNIQUE,
     created_via         text        NOT NULL CHECK (created_via IN ('ingest', 'manual')),
     archived            boolean     NOT NULL DEFAULT false,
     created_at          timestamptz NOT NULL DEFAULT now()
 );
+
+-- GitLab treats project paths case-insensitively, so two services must not
+-- differ only in case. Lookups by path compare lower(gitlab_project_path).
+CREATE UNIQUE INDEX services_gitlab_project_path_key ON services (lower(gitlab_project_path));
 
 -- One Trivy report for one artifact in one CI job. A repeated upload for the
 -- same (service, job, artifact, kind) replaces the earlier one.

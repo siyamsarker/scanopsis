@@ -434,6 +434,12 @@ func TestCreateUpdateDeleteService(t *testing.T) {
 	if e.Error.Code != "conflict" || !strings.Contains(e.Error.Message, "project path") {
 		t.Errorf("path conflict = %+v", e)
 	}
+	// GitLab paths are case-insensitive: a path differing only in case is
+	// the same project.
+	e = decode[errJSON](t, call(t, c, "createService", "POST", "/", `{"gitlab_project_path":"Platform/UI"}`, ""), http.StatusConflict)
+	if e.Error.Code != "conflict" || !strings.Contains(e.Error.Message, "project path") {
+		t.Errorf("case-only path conflict = %+v", e)
+	}
 	e = decode[errJSON](t, call(t, c, "createService", "POST", "/",
 		`{"gitlab_project_path":"platform/other","sonar_project_key":"platform:ui"}`, ""), http.StatusConflict)
 	if e.Error.Code != "conflict" || !strings.Contains(e.Error.Message, "SonarQube") {
