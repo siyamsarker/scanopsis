@@ -36,6 +36,36 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
       - run: make fmt-check lint test vuln
 
+  integration:
+    name: Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      # Starts PostgreSQL containers through the runner's Docker daemon.
+      - run: make test-integration
+
+  generated:
+    name: Generated code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make web-install generate-check
+
   web:
     name: Web
     runs-on: ubuntu-latest
