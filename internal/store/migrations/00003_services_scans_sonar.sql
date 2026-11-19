@@ -71,7 +71,8 @@ CREATE TABLE vulnerabilities (
 );
 
 CREATE INDEX vulnerabilities_scan_idx ON vulnerabilities (scan_id, id);
-CREATE INDEX vulnerabilities_vuln_id_idx ON vulnerabilities (vuln_id);
+-- Cross-service search matches IDs case-insensitively (GHSA IDs are lower case).
+CREATE INDEX vulnerabilities_vuln_id_idx ON vulnerabilities (lower(vuln_id));
 
 -- Secret findings: rule and location only. The matched value is never stored.
 CREATE TABLE secret_findings (

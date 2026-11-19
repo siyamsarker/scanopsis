@@ -520,7 +520,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
         - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
-        - { name: before, in: query, description: Return scans with an id lower than this value., schema: { type: integer, format: int64 } }
+        - { name: before, in: query, description: Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page., schema: { type: integer, format: int64 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
         "200": { description: One page of scans., content: { application/json: { schema: { $ref: "#/components/schemas/ScanPage" } } } }

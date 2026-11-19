@@ -2249,7 +2249,7 @@ export interface operations {
             query?: {
                 /** @description Git ref; defaults to the ref with the most recent scan. */
                 ref?: string;
-                /** @description Return scans with an id lower than this value. */
+                /** @description Return the scans that come after the scan with this id in newest-first order (by scan time */
                 before?: number;
                 limit?: number;
             };
