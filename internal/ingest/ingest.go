@@ -63,6 +63,9 @@ const DefaultMaxConcurrentUploads = 4
 // busyRetryAfter is the Retry-After value, in seconds, of a busy response.
 const busyRetryAfter = 5
 
+// auditTimeout bounds the audit write of a rejection.
+const auditTimeout = 5 * time.Second
+
 // Defaults of the audit limiter: a client address gets this many rejection
 // records at once and then one more per DefaultAuditEvery.
 const (
@@ -365,8 +368,11 @@ func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Add
 		}
 	}
 	// The request may already be over (a client that stopped waiting for a
-	// slot), so the record does not depend on it.
-	i.audit.Record(context.WithoutCancel(ctx), actor, audit.ActionIngestRejected, detail)
+	// slot), so the record does not depend on it, but it cannot hold the
+	// request for long either.
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+	defer cancel()
+	i.audit.Record(actx, actor, audit.ActionIngestRejected, detail)
 	i.log.WarnContext(ctx, "upload rejected", attrs...)
 }
 
