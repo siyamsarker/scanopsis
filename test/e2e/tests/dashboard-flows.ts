@@ -514,7 +514,7 @@ export function registerDashboardFlows(session: Session): void {
       await row()
         .getByRole('button', { name: /^(Choose|Change) dashboard branch of payments-api$/ })
         .click();
-      await row().getByLabel('Dashboard branch of payments-api').fill(branch);
+      await row().getByLabel('Dashboard branch of payments-api', { exact: true }).fill(branch);
       await row().getByRole('button', { name: 'Save dashboard branch of payments-api' }).click();
       await expect(page.getByText(`The dashboards of payments-api now show ${branch}.`)).toBeVisible();
     }
@@ -575,9 +575,10 @@ export function registerDashboardFlows(session: Session): void {
     await page.goto('/admin/audit');
     await page.getByLabel('Action', { exact: true }).selectOption('service.updated');
     const audit = m.getByRole('table', { name: 'Audit log' });
-    await expect(audit).toContainText('"from":null,"to":"feature/login"');
-    await expect(audit).toContainText('"from":"feature/login","to":"release/9"');
-    await expect(audit).toContainText('"from":"release/9","to":null');
+    // The details are stored as JSON, which lists the shorter key first.
+    await expect(audit).toContainText('{"to":"feature/login","from":null}');
+    await expect(audit).toContainText('{"to":"release/9","from":"feature/login"}');
+    await expect(audit).toContainText('{"to":null,"from":"release/9"}');
   });
 }
 

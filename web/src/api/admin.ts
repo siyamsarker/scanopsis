@@ -59,13 +59,14 @@ export function useUpdateService() {
     mutationFn: async ({ id, body }) =>
       unwrap(await api.PATCH('/api/v1/services/{id}', { params: { path: { id } }, body })),
     // A changed dashboard branch changes what every dashboard of the service shows.
-    onSuccess: () =>
-      Promise.all([
-        queryClient.invalidateQueries({ queryKey: servicesKey }),
-        queryClient.invalidateQueries({ queryKey: portfolioKey }),
-        queryClient.invalidateQueries({ queryKey: ['service'] }),
-        queryClient.invalidateQueries({ queryKey: ['findings'] }),
-      ]),
+    // Only the services list is awaited: when a row leaves the list its actions
+    // unmount, and the notice they report must come first.
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: portfolioKey });
+      void queryClient.invalidateQueries({ queryKey: ['service'] });
+      void queryClient.invalidateQueries({ queryKey: ['findings'] });
+      return queryClient.invalidateQueries({ queryKey: servicesKey });
+    },
   });
 }
 
