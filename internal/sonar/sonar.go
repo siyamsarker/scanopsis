@@ -4,7 +4,6 @@
 package sonar
 
 import (
-	"context"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -42,6 +41,8 @@ type Sonar struct {
 	queue chan delivery
 	// tick is how often Run checks whether a sync is due.
 	tick time.Duration
+	// minInterval is the shortest sync interval honoured.
+	minInterval time.Duration
 
 	mu         sync.Mutex
 	version    string
@@ -54,8 +55,9 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 	s := &Sonar{
 		pool: pool, q: store.New(pool), cfg: cfg,
 		hc: opts.HTTPClient, log: opts.Logger, now: opts.Now,
-		queue: make(chan delivery, queueSize),
-		tick:  10 * time.Second,
+		queue:       make(chan delivery, queueSize),
+		tick:        10 * time.Second,
+		minInterval: settings.MinSonarSyncInterval,
 	}
 	if s.hc == nil {
 		s.hc = &http.Client{}
@@ -73,18 +75,6 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 func (s *Sonar) Handlers() map[string]http.Handler {
 	return map[string]http.Handler{
 		"sonarWebhook": http.HandlerFunc(s.webhook),
-	}
-}
-
-// Run processes webhook deliveries until ctx ends.
-func (s *Sonar) Run(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case d := <-s.queue:
-			s.process(ctx, d)
-		}
 	}
 }
 
