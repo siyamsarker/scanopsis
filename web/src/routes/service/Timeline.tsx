@@ -33,7 +33,21 @@ export function TrendsChart({
   onDaysChange: (days: Days) => void;
 }) {
   const query = useTrends(serviceId, gitRef, Number(days));
-  const points = query.data?.points;
+  // Trend points carry no scan kind; the scan list, which the recent scans table
+  // loads anyway, says which scans were secret scans. Those have no vulnerability
+  // counts and would show as empty bars.
+  const scans = useServiceScans(serviceId, gitRef);
+  const secretScanIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const page of scans.data?.pages ?? []) {
+      for (const s of page.items) if (s.kind === 'secret-fs') ids.add(s.id);
+    }
+    return ids;
+  }, [scans.data]);
+  const points = useMemo(
+    () => query.data?.points.filter((p) => !secretScanIds.has(p.scan_id)),
+    [query.data, secretScanIds],
+  );
   const option = useMemo(
     () =>
       stackedSeverityBars(
@@ -45,19 +59,20 @@ export function TrendsChart({
       ),
     [points],
   );
-  const status = query.isPending
-    ? 'loading'
-    : query.isError
-      ? 'error'
-      : points && points.length === 0
-        ? 'empty'
-        : 'ready';
+  const status =
+    query.isPending || (scans.isPending && !scans.isError)
+      ? 'loading'
+      : query.isError
+        ? 'error'
+        : points && points.length === 0
+          ? 'empty'
+          : 'ready';
   return (
     <Card padded={false} className="min-w-0">
       <CardHeader
         padded
         title="How did the findings change scan by scan?"
-        description="One bar per scan, critical at the bottom"
+        description="One bar per image scan, critical at the bottom. Secret scans have no vulnerability counts and are not shown."
         actions={
           <Segmented
             label="Time range in days"

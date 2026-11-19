@@ -439,6 +439,29 @@ describe('service dashboard', () => {
     );
   });
 
+  it('leaves secret scans out of the trends chart and says so', async () => {
+    setup('/services/7', {
+      overrides: (call) =>
+        call.path.startsWith('/api/v1/services/7/scans')
+          ? json(200, {
+              items: [scan(1), scan(2, { kind: 'secret-fs', artifact_name: '.' })],
+              next_before: null,
+            })
+          : undefined,
+    });
+    expect(
+      await screen.findByText(/One bar per image scan.*Secret scans have no vulnerability counts/),
+    ).toBeVisible();
+    await waitFor(() => {
+      const chart = lastChart(/Findings per scan/) as ChartProps;
+      const option = (
+        typeof chart.option === 'function' ? chart.option(palette) : chart.option
+      ) as { series: { data: number[] }[]; xAxis: { data: string[] } };
+      expect(option.xAxis.data).toEqual(['10 Nov #801']);
+      expect(option.series[0].data).toEqual([3]);
+    });
+  });
+
   it('builds the trends chart: stacked critical first, one bar per scan, days param', async () => {
     const { calls } = setup();
     await waitFor(() => expect(lastChart(/Findings per scan/)).toBeDefined());
