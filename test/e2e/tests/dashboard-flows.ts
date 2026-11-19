@@ -412,14 +412,14 @@ export function registerDashboardFlows(session: Session): void {
     await expect(m).toContainText('Ready');
     const uploads = /Uploads, last 24 hours\s*(\d+)/.exec(await flat(m));
     expect(Number(uploads?.[1])).toBeGreaterThanOrEqual(4);
-    await expect(m).toContainText(/Rejections, last 24 hours\s*0/);
+    await expect(m).toContainText(/Recorded rejections, last 24 hours\s*0/);
 
     // A token for another audience is refused, and the page says why.
     const wrong = await upload(request, imageFull, { ...jobs.billing, pipelineId: 2002, jobId: 6002, audience: 'https://elsewhere.example.com' });
     expect(wrong.status()).toBe(401);
     expect(((await wrong.json()) as { error: { code: string } }).error.code).toBe('invalid_token');
     await page.reload();
-    await expect(m).toContainText(/Rejections, last 24 hours\s*1/);
+    await expect(m).toContainText(/Recorded rejections, last 24 hours\s*1/);
     await expect(m.getByText('invalid_token', { exact: true })).toBeVisible();
 
     // The audit log keeps it.
