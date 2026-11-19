@@ -60,3 +60,11 @@ export function useUpdateUserRole() {
     },
   });
 }
+
+export function useResetUserMfa() {
+  return useMutation<void, ApiError, number>({
+    mutationFn: async (id) => {
+      unwrap(await api.DELETE('/api/v1/users/{id}/mfa', { params: { path: { id } } }));
+    },
+  });
+}

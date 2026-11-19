@@ -37,7 +37,7 @@ describe('users page', () => {
       within(table)
         .getAllByRole('columnheader')
         .map((h) => h.textContent),
-    ).toEqual(['Username', 'Name', 'E-mail', 'Sign-in', 'Role', 'Last sign-in']);
+    ).toEqual(['Username', 'Name', 'E-mail', 'Sign-in', 'Role', 'Last sign-in', 'Two-factor']);
     const row = within(table).getByRole('row', { name: /grace/ });
     expect(within(row).getByText('Grace Hopper')).toBeInTheDocument();
     expect(within(row).getByText('grace@example.com')).toBeInTheDocument();
