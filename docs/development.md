@@ -253,7 +253,7 @@ change.
   digest in the `Dockerfile`, and GitHub Actions by commit SHA. Dependabot
   proposes updates weekly.
 - **Licence policy:** distributed dependencies may only use Apache-2.0, MIT,
-  BSD-2-Clause, BSD-3-Clause or ISC licences, plus OFL-1.1 for fonts.
+  BSD-2-Clause, BSD-3-Clause, ISC or 0BSD licences, plus OFL-1.1 for fonts.
   `make licenses` enforces this.
 
 ### Update the Trivy version used in CI

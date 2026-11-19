@@ -11,8 +11,9 @@ ACTIONLINT    := go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
 # Licence policy: only these licences may appear in distributed dependencies.
 # go-licenses takes a comma-separated list, license-checker a semicolon-separated one.
+# 0BSD (public-domain equivalent, no attribution required) is used by tslib.
 GO_LICENSES_ALLOWED  := Apache-2.0,MIT,BSD-2-Clause,BSD-3-Clause,ISC
-NPM_LICENSES_ALLOWED := Apache-2.0;MIT;BSD-2-Clause;BSD-3-Clause;ISC;OFL-1.1
+NPM_LICENSES_ALLOWED := Apache-2.0;MIT;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;OFL-1.1
 
 # Restrict VCS-derived values to a safe character set: tag names may contain
 # shell metacharacters, and these values are spliced into command lines.
