@@ -128,7 +128,9 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, "cannot end session", err)
 		return
 	}
-	s.Audit.Record(r.Context(), actor, audit.ActionLogout, nil)
+	if actor != "" {
+		s.Audit.Record(r.Context(), actor, audit.ActionLogout, nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

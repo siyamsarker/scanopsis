@@ -164,7 +164,8 @@ func TestLogout(t *testing.T) {
 	if rec := e.do("POST", "/api/v1/auth/logout", "", ""); rec.Code != 204 {
 		t.Fatalf("anonymous logout = %d", rec.Code)
 	}
-	want := []auditEvent{{"vera", "logout", nil}, {"", "logout", nil}}
+	// Only signed-in users are audited; an anonymous logout records nothing.
+	want := []auditEvent{{"vera", "logout", nil}}
 	if !reflect.DeepEqual(e.audit.events, want) {
 		t.Fatalf("audit = %+v, want %+v", e.audit.events, want)
 	}
