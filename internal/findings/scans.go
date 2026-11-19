@@ -120,9 +120,9 @@ func (f *Findings) getScan(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, scanJSON{
 		scanSummaryJSON:   newScanSummary(scan),
 		GitlabProjectPath: path,
-		PipelineURL:       gitlabLink(base, path, "pipelines/"+strconv.FormatInt(scan.GitlabPipelineID, 10)),
-		JobURL:            gitlabLink(base, path, "jobs/"+strconv.FormatInt(scan.GitlabJobID, 10)),
-		CommitURL:         gitlabLink(base, path, "commit/"+scan.CommitSha),
+		PipelineURL:       gitlabLink(base, path, "pipelines", strconv.FormatInt(scan.GitlabPipelineID, 10)),
+		JobURL:            gitlabLink(base, path, "jobs", strconv.FormatInt(scan.GitlabJobID, 10)),
+		CommitURL:         gitlabLink(base, path, "commit", commitID(scan.CommitSha)),
 	})
 }
 

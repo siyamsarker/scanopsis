@@ -15,6 +15,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -263,13 +264,40 @@ func (f *Findings) currentScans(ctx context.Context, serviceID int64, ref string
 
 // gitlabLink joins the configured GitLab URL, the project path and a suffix;
 // it is nil when no GitLab URL is configured.
-func gitlabLink(base, projectPath, suffix string) *string {
+// gitlabLink builds <base>/<project path>/-/<kind>/<id>. Every path segment
+// is escaped, so a project path or ID can never change the link's host,
+// query or fragment. It returns nil when no GitLab URL is configured or id
+// is empty.
+func gitlabLink(base, projectPath, kind, id string) *string {
 	base = strings.TrimRight(base, "/")
-	if base == "" {
+	if base == "" || projectPath == "" || id == "" {
 		return nil
 	}
-	u := base + "/" + projectPath + "/-/" + suffix
+	var b strings.Builder
+	b.WriteString(base)
+	for _, seg := range strings.Split(projectPath, "/") {
+		b.WriteString("/")
+		b.WriteString(url.PathEscape(seg))
+	}
+	b.WriteString("/-/")
+	b.WriteString(kind)
+	b.WriteString("/")
+	b.WriteString(url.PathEscape(id))
+	u := b.String()
 	return &u
+}
+
+// commitID returns sha when it is a hexadecimal Git object ID, else "".
+func commitID(sha string) string {
+	if len(sha) < 7 || len(sha) > 64 {
+		return ""
+	}
+	for _, c := range sha {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return ""
+		}
+	}
+	return sha
 }
 
 const invalidSeverityMsg = "The severity parameter must be a comma-separated list of CRITICAL, HIGH, MEDIUM, LOW and UNKNOWN."
