@@ -6,7 +6,7 @@ import { CircleAlert, LogIn } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
-import { meKey, useAuthMethods, useMe } from '../api/hooks';
+import { useAuthMethods, useMe } from '../api/hooks';
 import { safeReturnTo } from '../auth/returnTo';
 import { cardClass, headingClass, inputClass, primaryButtonClass } from '../ui';
 
@@ -60,7 +60,8 @@ function LocalForm({ returnTo }: { returnTo: string }) {
     setError(null);
     try {
       unwrap(await api.POST('/api/v1/auth/local/login', { body: { username, password } }));
-      await queryClient.invalidateQueries({ queryKey: meKey });
+      // Nothing cached before sign-in may be shown to the new principal.
+      queryClient.clear();
       void navigate(returnTo, { replace: true });
     } catch (err) {
       setError(localLoginMessage(err));
@@ -117,7 +118,8 @@ export function LoginPage() {
   if (me.data) return <Navigate to={returnTo} replace />;
 
   const errorCode = params.get('error');
-  const urlError = errorCode ? errorMessages[errorCode] : undefined;
+  const urlError =
+    errorCode && Object.hasOwn(errorMessages, errorCode) ? errorMessages[errorCode] : undefined;
 
   let body;
   if (me.isPending || methods.isPending) {

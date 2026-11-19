@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { fireEvent, screen } from '@testing-library/react';
+import { createQueryClient } from '../api/queryClient';
 import { apiError, json, makeUser, mockFetch, noContent, renderApp } from '../test-utils';
 
 describe('protected layout', () => {
@@ -103,5 +104,76 @@ describe('protected layout', () => {
     renderApp('/nowhere');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'home page' })).toHaveAttribute('href', '/');
+  });
+
+  it('clears the query cache when the session is gone', async () => {
+    mockFetch((call) => {
+      if (call.path === '/api/v1/me') return apiError(401, 'unauthenticated', 'Sign in first.');
+      if (call.path === '/api/v1/auth/methods') return json(200, { gitlab: true, local: false });
+      return undefined;
+    });
+    const client = createQueryClient();
+    client.setQueryData(['users'], { pages: ['previous principal'] });
+    renderApp('/', client);
+    expect(await screen.findByRole('link', { name: 'Sign in with GitLab' })).toBeInTheDocument();
+    expect(client.getQueryData(['users'])).toBeUndefined();
+  });
+
+  it('clears the query cache on sign-out', async () => {
+    let out = false;
+    mockFetch((call) => {
+      if (call.path === '/api/v1/auth/logout') {
+        out = true;
+        return noContent();
+      }
+      if (call.path === '/api/v1/me')
+        return out ? apiError(401, 'unauthenticated', 'Sign in first.') : json(200, makeUser());
+      if (call.path === '/api/v1/auth/methods') return json(200, { gitlab: true, local: true });
+      return undefined;
+    });
+    const client = createQueryClient();
+    client.setQueryData(['anything'], 'cached');
+    renderApp('/', client);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(client.getQueryData(['anything'])).toBeUndefined();
+  });
+
+  it('treats a 401 from logout as signed out', async () => {
+    let out = false;
+    mockFetch((call) => {
+      if (call.path === '/api/v1/auth/logout') {
+        out = true;
+        return apiError(401, 'unauthenticated', 'Sign in first.');
+      }
+      if (call.path === '/api/v1/me')
+        return out ? apiError(401, 'unauthenticated', 'Sign in first.') : json(200, makeUser());
+      if (call.path === '/api/v1/auth/methods') return json(200, { gitlab: true, local: true });
+      return undefined;
+    });
+    const client = createQueryClient();
+    client.setQueryData(['anything'], 'cached');
+    renderApp('/', client);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/login$/);
+    expect(client.getQueryData(['anything'])).toBeUndefined();
+  });
+
+  it('keeps the error and the session when logout answers 5xx', async () => {
+    mockFetch((call) => {
+      if (call.path === '/api/v1/auth/logout') return apiError(503, 'unavailable', 'Down.');
+      if (call.path === '/api/v1/me') return json(200, makeUser());
+      return undefined;
+    });
+    const client = createQueryClient();
+    client.setQueryData(['anything'], 'cached');
+    renderApp('/', client);
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    expect(
+      await screen.findByText('Signing out failed. Check your connection and try again.'),
+    ).toBeVisible();
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
+    expect(client.getQueryData(['anything'])).toBe('cached');
   });
 });

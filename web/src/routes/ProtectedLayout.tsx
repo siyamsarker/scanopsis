@@ -3,16 +3,25 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import { LogOut } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
-import { api, unwrap } from '../api/client';
-import { meKey, useMe } from '../api/hooks';
+import { api, ApiError, unwrap } from '../api/client';
+import { useMe } from '../api/hooks';
 import { primaryButtonClass, secondaryButtonClass } from '../ui';
 
 const navLinkClass = ({ isActive }: { isActive: boolean }) =>
   `rounded-control px-3 py-2 transition-colors duration-150 ease-out hover:bg-surface-raised ${
     isActive ? 'bg-surface-raised text-text' : 'text-text-muted'
   }`;
+
+/** Empties the query cache once, so data of an ended session is never kept. */
+function ClearCache() {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    queryClient.clear();
+  }, [queryClient]);
+  return null;
+}
 
 export function ProtectedLayout() {
   const me = useMe();
@@ -52,21 +61,34 @@ export function ProtectedLayout() {
   const user = me.data;
   if (user === null) {
     const returnTo = encodeURIComponent(location.pathname + location.search);
-    return <Navigate to={`/login?return_to=${returnTo}`} replace />;
+    return (
+      <>
+        <ClearCache />
+        <Navigate to={`/login?return_to=${returnTo}`} replace />
+      </>
+    );
+  }
+
+  function finishSignOut() {
+    setSigningOut(true);
+    queryClient.clear();
+    void navigate('/login', { replace: true });
   }
 
   async function signOut() {
     setSignOutError(null);
     try {
       unwrap(await api.POST('/api/v1/auth/logout'));
-    } catch {
+    } catch (err) {
+      // 401 means the session is already gone, which is what signing out wants.
+      if (err instanceof ApiError && err.status === 401) {
+        finishSignOut();
+        return;
+      }
       setSignOutError('Signing out failed. Check your connection and try again.');
       return;
     }
-    setSigningOut(true);
-    queryClient.setQueryData(meKey, null);
-    queryClient.removeQueries({ queryKey: ['users'] });
-    void navigate('/login', { replace: true });
+    finishSignOut();
   }
 
   return (

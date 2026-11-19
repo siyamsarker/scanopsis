@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { fireEvent, screen } from '@testing-library/react';
+import { createQueryClient } from '../api/queryClient';
 import {
   apiError,
   json,
@@ -224,5 +225,38 @@ describe('login page error codes', () => {
     renderApp('/login?error=whatever');
     await screen.findByLabelText('Username');
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it.each(['__proto__', 'constructor', 'toString', 'hasOwnProperty'])(
+    'shows no message and does not crash for the inherited name %s',
+    async (code) => {
+      mockFetch(anonymous());
+      renderApp(`/login?error=${code}`);
+      await screen.findByLabelText('Username');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    },
+  );
+});
+
+describe('local sign-in cache', () => {
+  it('clears data cached before sign-in', async () => {
+    let signedIn = false;
+    mockFetch(
+      anonymous(undefined, (call) => {
+        if (call.path === '/api/v1/auth/local/login') {
+          signedIn = true;
+          return noContent();
+        }
+        if (call.path === '/api/v1/me' && signedIn) return json(200, makeUser());
+        return undefined;
+      }),
+    );
+    const client = createQueryClient();
+    client.setQueryData(['users'], { pages: ['previous principal'] });
+    renderApp('/login', client);
+    await screen.findByLabelText('Username');
+    fillAndSubmit();
+    expect(await screen.findByRole('heading', { name: 'Services' })).toBeInTheDocument();
+    expect(client.getQueryData(['users'])).toBeUndefined();
   });
 });
