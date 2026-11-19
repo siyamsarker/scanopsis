@@ -116,3 +116,8 @@ go-coverage: ## Measure Go coverage with unit and integration tests and enforce 
 
 web-coverage: web-install ## Measure web coverage of the logic modules and enforce the thresholds
 	cd web && npm run coverage
+
+.PHONY: perf
+
+perf: ## Measure start-up time, idle memory, bundle size and the performance tests (needs Docker)
+	bash scripts/perf.sh

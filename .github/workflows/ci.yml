@@ -75,6 +75,28 @@ jobs:
         env:
           TESTCONTAINERS_RYUK_DISABLED: "true"
 
+  perf:
+    name: Performance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # Bundle size, cold start, idle memory, portfolio and ingest timings.
+      # The limits are the product targets; a shared runner is slower than a
+      # laptop, which leaves the margins wide on purpose.
+      - run: make perf
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+
   generated:
     name: Generated code
     runs-on: ubuntu-latest
