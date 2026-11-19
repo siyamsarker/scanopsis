@@ -6,6 +6,7 @@ import { Route, Routes } from 'react-router';
 import { HomePage } from './routes/HomePage';
 import { LoginPage } from './routes/LoginPage';
 import { NotFoundPage } from './routes/NotFoundPage';
+import { PasswordPage } from './routes/PasswordPage';
 import { ProtectedLayout } from './routes/ProtectedLayout';
 import { SetupGate } from './routes/SetupGate';
 import { SetupPage } from './routes/SetupPage';
@@ -32,6 +33,7 @@ export function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/2fa/setup" element={<EnrollPage />} />
           <Route path="/2fa" element={<VerifyPage />} />
+        <Route path="/password" element={<PasswordPage />} />
           <Route element={<ProtectedLayout />}>
             <Route index element={<HomePage />} />
             <Route path="admin/users" element={<UsersPage />} />
