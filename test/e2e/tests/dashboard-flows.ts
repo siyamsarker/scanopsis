@@ -492,6 +492,93 @@ export function registerDashboardFlows(session: Session): void {
     const integrations = await viewer.evaluate(async () => (await fetch('/api/v1/admin/integrations/trivy')).status);
     expect(integrations).toBe(403);
   });
+
+  test('21. an administrator chooses the branch the dashboards show', async ({ request }) => {
+    const page = root();
+    const m = main(page);
+    // An older scan of another branch of payments-api. The latest scan is still on main.
+    const feature = { ...payments, pipelineId: 1004, jobId: 5004, ref: 'feature/login' };
+    await expectUploaded(await upload(request, imageFull, feature), imageFull, {
+      ...documented.full,
+      secrets: 0,
+    });
+
+    const tile = () => page.getByRole('listitem').filter({ hasText: 'platform/payments-api' });
+    const row = () =>
+      m
+        .getByRole('table', { name: 'Active services' })
+        .getByRole('row')
+        .filter({ hasText: 'platform/payments-api' });
+    async function choose(branch: string) {
+      await page.goto('/admin/services');
+      await row()
+        .getByRole('button', { name: /^(Choose|Change) dashboard branch of payments-api$/ })
+        .click();
+      await row().getByLabel('Dashboard branch of payments-api').fill(branch);
+      await row().getByRole('button', { name: 'Save dashboard branch of payments-api' }).click();
+      await expect(page.getByText(`The dashboards of payments-api now show ${branch}.`)).toBeVisible();
+    }
+
+    // Nothing is chosen yet: the latest scanned branch is shown, and the page says so.
+    await page.goto('/admin/services');
+    await expect(row()).toContainText('Not chosen — showing the latest scanned branch (main)');
+    await row().getByRole('button', { name: 'Choose dashboard branch of payments-api' }).click();
+    // The editor suggests the branches that have scans.
+    await expect(row().locator('datalist option')).toHaveCount(2);
+    await row().getByRole('button', { name: 'Cancel editing the dashboard branch of payments-api' }).click();
+    await page.goto('/');
+    await expect(tile()).toContainText('main');
+    await expect(tile()).toContainText(summary(current.counts));
+
+    // Choose the feature branch: the portfolio card and the dashboard follow it.
+    await choose('feature/login');
+    await expect(row()).toContainText('feature/login');
+    await expect(row()).not.toContainText('Not chosen');
+    await page.goto('/');
+    await expect(tile()).toContainText('feature/login');
+    await expect(tile()).toContainText(summary(imageFull.counts));
+    await expect(tile()).toContainText(`${imageFull.fixable} fixable`);
+    await tile().getByRole('link', { name: 'payments-api' }).click();
+    await expect(page.getByTestId('ref-source')).toHaveText('Showing feature/login · dashboard branch');
+    await expect(m).toContainText('Current state of feature/login, latest scan per artifact');
+    await expect(m).toContainText(summary(imageFull.counts));
+    await expect(page.getByLabel('Git ref')).toHaveValue('feature/login');
+    await page.getByRole('link', { name: 'Explore findings' }).click();
+    await expect(m.getByText(`${sum(imageFull.counts)} vulnerabilities, ${imageFull.fixable} fixable`)).toBeVisible();
+
+    // A branch without scans shows the empty state for that branch, not another branch.
+    await choose('release/9');
+    await page.goto('/');
+    await expect(tile()).toContainText('No scans of release/9 yet.');
+    await tile().getByRole('link', { name: 'payments-api' }).click();
+    await expect(m).toContainText('No scans of release/9 yet');
+    await expect(page.getByTestId('ref-source')).toHaveText('Showing release/9 · dashboard branch');
+    await expect(m).not.toContainText('Findings by severity');
+
+    // Clearing the choice brings back the latest scanned branch.
+    await page.goto('/admin/services');
+    await row().getByRole('button', { name: 'Change dashboard branch of payments-api' }).click();
+    await row().getByRole('button', { name: 'Clear dashboard branch of payments-api' }).click();
+    await expect(page.getByText(/Cleared the dashboard branch of payments-api/)).toBeVisible();
+    await expect(row()).toContainText('Not chosen — showing the latest scanned branch (main)');
+    await page.goto('/');
+    await expect(tile()).toContainText('main');
+    await expect(tile()).toContainText(summary(current.counts));
+    await tile().getByRole('link', { name: 'payments-api' }).click();
+    await expect(page.getByTestId('ref-source')).toHaveText(
+      'Showing main · latest scan (no dashboard branch chosen)',
+    );
+    await expect(m).toContainText('Current state of main, latest scan per artifact');
+    await expect(m).toContainText(summary(current.counts));
+
+    // Every change is in the audit log with the old and the new branch.
+    await page.goto('/admin/audit');
+    await page.getByLabel('Action', { exact: true }).selectOption('service.updated');
+    const audit = m.getByRole('table', { name: 'Audit log' });
+    await expect(audit).toContainText('"from":null,"to":"feature/login"');
+    await expect(audit).toContainText('"from":"feature/login","to":"release/9"');
+    await expect(audit).toContainText('"from":"release/9","to":null');
+  });
 }
 
 function summaryTile(page: Page, label: string): Locator {
