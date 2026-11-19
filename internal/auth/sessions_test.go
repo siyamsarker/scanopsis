@@ -545,3 +545,37 @@ func TestNewSessionsDefaultsClock(t *testing.T) {
 		t.Fatalf("expiry %v is not based on the wall clock", exp)
 	}
 }
+
+func TestSetTimeoutsAppliesToLaterRequests(t *testing.T) {
+	st := newFakeSessionStore()
+	clock := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	now := func() time.Time { return clock }
+	st.now = now
+	s := NewSessions(st, SessionOptions{Idle: time.Hour, Absolute: 2 * time.Hour, Now: now})
+	s.SetTimeouts(10*time.Minute, 30*time.Minute)
+
+	w := httptest.NewRecorder()
+	if err := s.Start(w, httptest.NewRequestWithContext(t.Context(), "POST", "/", nil), 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, sess := range st.sessions {
+		if got := sess.ExpiresAt.Time.Sub(clock); got != 30*time.Minute {
+			t.Fatalf("absolute expiry = %v after SetTimeouts, want 30m", got)
+		}
+	}
+	cookie := w.Result().Cookies()[0]
+	authAt := func(d time.Duration) error {
+		clock = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC).Add(d)
+		r := httptest.NewRequestWithContext(t.Context(), "GET", "/", nil)
+		r.AddCookie(cookie)
+		_, err := s.Authenticate(r)
+		return err
+	}
+	if err := authAt(9 * time.Minute); err != nil {
+		t.Fatalf("session idle for 9m rejected with a 10m idle timeout: %v", err)
+	}
+	// The original one-hour idle timeout would accept this; the new one does not.
+	if err := authAt(9*time.Minute + 11*time.Minute); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("session idle for 11m accepted with a 10m idle timeout: %v", err)
+	}
+}

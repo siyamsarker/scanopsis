@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,6 +51,10 @@ type SessionOptions struct {
 // Sessions manages server-side sessions identified by a random cookie. Only
 // the SHA-256 of the token is stored.
 type Sessions struct {
+	// idle and absolute hold the current timeouts in nanoseconds; they can
+	// change at run time through SetTimeouts.
+	idle, absolute atomic.Int64
+
 	store SessionStore
 	opts  SessionOptions
 }
@@ -59,7 +64,9 @@ func NewSessions(s SessionStore, opts SessionOptions) *Sessions {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	return &Sessions{store: s, opts: opts}
+	out := &Sessions{store: s, opts: opts}
+	out.SetTimeouts(opts.Idle, opts.Absolute)
+	return out
 }
 
 // CookieName returns the session cookie's name. Secure deployments use the
@@ -108,6 +115,13 @@ func (s *Sessions) cookie(value string, expires time.Time, maxAge int) *http.Coo
 	}
 }
 
+// SetTimeouts changes the idle and absolute timeouts for sessions started
+// or checked from now on. It is safe to call while requests are served.
+func (s *Sessions) SetTimeouts(idle, absolute time.Duration) {
+	s.idle.Store(int64(idle))
+	s.absolute.Store(int64(absolute))
+}
+
 // Start begins a session for userID, replacing any session the request
 // carries, and sets the cookie on w.
 func (s *Sessions) Start(w http.ResponseWriter, r *http.Request, userID int64) error {
@@ -120,7 +134,7 @@ func (s *Sessions) Start(w http.ResponseWriter, r *http.Request, userID int64) e
 	if _, err := rand.Read(token); err != nil {
 		return fmt.Errorf("generate session token: %w", err)
 	}
-	expires := s.opts.Now().Add(s.opts.Absolute)
+	expires := s.opts.Now().Add(time.Duration(s.absolute.Load()))
 	err := s.store.CreateSession(r.Context(), store.CreateSessionParams{
 		IDHash:    hashToken(token),
 		UserID:    userID,
@@ -145,7 +159,7 @@ func (s *Sessions) Authenticate(r *http.Request) (*Principal, error) {
 	row, err := s.store.GetSession(r.Context(), store.GetSessionParams{
 		IDHash:     id,
 		Now:        ts(now),
-		IdleCutoff: ts(now.Add(-s.opts.Idle)),
+		IdleCutoff: ts(now.Add(-time.Duration(s.idle.Load()))),
 	})
 	if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, store.ErrNotFound) {
 		return nil, ErrNoSession
@@ -198,6 +212,6 @@ func (s *Sessions) RemoveExpired(ctx context.Context) (int64, error) {
 	now := s.opts.Now()
 	return s.store.DeleteExpiredSessions(ctx, store.DeleteExpiredSessionsParams{
 		Now:        ts(now),
-		IdleCutoff: ts(now.Add(-s.opts.Idle)),
+		IdleCutoff: ts(now.Add(-time.Duration(s.idle.Load()))),
 	})
 }
