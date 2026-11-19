@@ -22,7 +22,8 @@ import (
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
-// roleHeader selects the fake principal: "admin", "viewer" or absent.
+// roleHeader selects the fake principal: "admin" and "viewer" (complete
+// sessions), "first-unenrolled", "first-enrolled", "pwchange" or absent.
 const roleHeader = "X-Test-Role"
 
 type fakeSessions struct {
@@ -37,9 +38,15 @@ func (f *fakeSessions) Authenticate(r *http.Request) (*auth.Principal, error) {
 	}
 	switch r.Header.Get(roleHeader) {
 	case "admin":
-		return &auth.Principal{UserID: 1, Source: "local", Username: "root", Role: auth.RoleAdmin}, nil
+		return &auth.Principal{UserID: 1, Source: "local", Username: "root", Role: auth.RoleAdmin, MFAEnrolled: true, MFAVerified: true}, nil
 	case "viewer":
-		return &auth.Principal{UserID: 2, Source: "gitlab", Username: "vera", Role: auth.RoleViewer}, nil
+		return &auth.Principal{UserID: 2, Source: "gitlab", Username: "vera", Role: auth.RoleViewer, MFAEnrolled: true, MFAVerified: true}, nil
+	case "first-unenrolled":
+		return &auth.Principal{UserID: 1, Source: "local", Username: "root", Role: auth.RoleAdmin}, nil
+	case "first-enrolled":
+		return &auth.Principal{UserID: 1, Source: "local", Username: "root", Role: auth.RoleAdmin, MFAEnrolled: true}, nil
+	case "pwchange":
+		return &auth.Principal{UserID: 1, Source: "local", Username: "root", Role: auth.RoleAdmin, MFAEnrolled: true, MFAVerified: true, MustChangePassword: true}, nil
 	}
 	return nil, auth.ErrNoSession
 }
@@ -54,6 +61,8 @@ type fakeUsers struct {
 	listErr    error
 	getErr     error
 	setErr     error
+	resetErr   error
+	resetIDs   []int64
 	lastParams store.ListUsersParams
 }
 
@@ -101,6 +110,17 @@ func (f *fakeUsers) SetUserRole(_ context.Context, id int64, role string) (store
 	}
 	f.users[i].Role = role
 	return f.users[i], nil
+}
+
+func (f *fakeUsers) ResetMFA(_ context.Context, id int64) error {
+	if f.resetErr != nil {
+		return f.resetErr
+	}
+	if _, ok := f.find(id); !ok {
+		return store.ErrNotFound
+	}
+	f.resetIDs = append(f.resetIDs, id)
+	return nil
 }
 
 type auditEvent struct {

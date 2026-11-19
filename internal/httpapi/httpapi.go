@@ -31,6 +31,9 @@ type UserStore interface {
 	GetUser(ctx context.Context, id int64) (store.User, error)
 	// SetUserRole wraps store.SetUserRole.
 	SetUserRole(ctx context.Context, id int64, role string) (store.User, error)
+	// ResetMFA wraps store.ResetMFA; it returns store.ErrNotFound for an
+	// unknown user.
+	ResetMFA(ctx context.Context, id int64) error
 }
 
 // Pinger checks that the database is reachable. *pgxpool.Pool implements it.
@@ -57,6 +60,18 @@ type Deps struct {
 	LocalLogin     http.Handler // nil when local sign-in is disabled
 	GitLabLogin    http.Handler // nil when GitLab sign-in is not configured
 	GitLabCallback http.Handler
+
+	// Handlers provided by other packages. All but Setup may be nil when the
+	// feature is unavailable; the routes then answer 404 not_enabled. They
+	// receive the principal in the request context where the route needs a
+	// session.
+	Setup                http.Handler // GET and POST /api/v1/setup, public
+	MFAStartEnrollment   http.Handler
+	MFAConfirmEnrollment http.Handler
+	MFAVerify            http.Handler
+	PasswordChange       http.Handler
+	SettingsList         http.Handler
+	SettingsUpdate       http.Handler
 
 	Assets fs.FS // built web interface rooted at index.html; nil when not built
 	Build  BuildInfo
@@ -94,7 +109,16 @@ func (s *server) routes() []route {
 		{"GET", "/api/v1/auth/gitlab/callback", s.optional(s.GitLabCallback, "GitLab")},
 		{"POST", "/api/v1/auth/local/login", s.optional(s.LocalLogin, "Local")},
 		{"POST", "/api/v1/auth/logout", http.HandlerFunc(s.logout)},
-		{"GET", "/api/v1/me", s.requireSession(http.HandlerFunc(s.me))},
+		{"GET", "/api/v1/me", s.requireFirstFactor(http.HandlerFunc(s.me))},
+		{"POST", "/api/v1/me/password", s.requireMFA(s.optional(s.PasswordChange, "Password change"))},
+		{"GET", "/api/v1/setup", s.optional(s.Setup, "Setup")},
+		{"POST", "/api/v1/setup", s.optional(s.Setup, "Setup")},
+		{"POST", "/api/v1/auth/mfa/verify", s.requireFirstFactor(s.optional(s.MFAVerify, "Two-factor authentication"))},
+		{"POST", "/api/v1/auth/mfa/enrollment", s.requireFirstFactor(s.optional(s.MFAStartEnrollment, "Two-factor authentication"))},
+		{"POST", "/api/v1/auth/mfa/enrollment/confirm", s.requireFirstFactor(s.optional(s.MFAConfirmEnrollment, "Two-factor authentication"))},
+		{"GET", "/api/v1/settings", s.requireAdmin(s.optional(s.SettingsList, "Settings"))},
+		{"PATCH", "/api/v1/settings", s.requireAdmin(s.optional(s.SettingsUpdate, "Settings"))},
+		{"DELETE", "/api/v1/users/{id}/mfa", s.requireAdmin(http.HandlerFunc(s.resetMFA))},
 		{"GET", "/api/v1/users", s.requireAdmin(http.HandlerFunc(s.listUsers))},
 		{"PATCH", "/api/v1/users/{id}", s.requireAdmin(http.HandlerFunc(s.updateUser))},
 	}

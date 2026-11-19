@@ -51,6 +51,13 @@ type userJSON struct {
 	LastLoginAt *time.Time `json:"last_login_at"`
 }
 
+type meJSON struct {
+	userJSON
+	MFAEnrolled        bool `json:"mfa_enrolled"`
+	MFAVerified        bool `json:"mfa_verified"`
+	MustChangePassword bool `json:"must_change_password"`
+}
+
 type userPage struct {
 	Items     []userJSON `json:"items"`
 	NextAfter *int64     `json:"next_after"`
@@ -118,7 +125,7 @@ func (s *server) optional(h http.Handler, what string) http.Handler {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		writeError(w, http.StatusNotFound, "not_enabled", what+" sign-in is not enabled on this server.")
+		writeError(w, http.StatusNotFound, "not_enabled", what+" is not enabled on this server.")
 	})
 }
 
@@ -152,7 +159,10 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.internalError(w, r, "cannot load user", err)
 	default:
-		writeJSON(w, http.StatusOK, toUser(u))
+		writeJSON(w, http.StatusOK, meJSON{
+			userJSON: toUser(u), MFAEnrolled: p.MFAEnrolled, MFAVerified: p.MFAVerified,
+			MustChangePassword: p.MustChangePassword,
+		})
 	}
 }
 
@@ -227,6 +237,28 @@ func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
 		"user_id": updated.ID, "username": updated.Username, "from": before.Role, "to": updated.Role,
 	})
 	writeJSON(w, http.StatusOK, toUser(updated))
+}
+
+func (s *server) resetMFA(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || id < 1 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "The user id must be a positive integer.")
+		return
+	}
+	u, err := s.Users.GetUser(r.Context(), id)
+	if err != nil {
+		s.userError(w, r, err)
+		return
+	}
+	if err := s.Users.ResetMFA(r.Context(), id); err != nil {
+		s.userError(w, r, err)
+		return
+	}
+	actor, _ := auth.PrincipalFrom(r.Context())
+	s.Audit.Record(r.Context(), actor.Source+":"+actor.Username, audit.ActionMFAReset, map[string]any{
+		"user_id": u.ID, "username": u.Username,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) userError(w http.ResponseWriter, r *http.Request, err error) {

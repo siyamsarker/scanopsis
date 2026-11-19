@@ -18,40 +18,63 @@ import (
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
+// principals of the RBAC matrix, in column order.
+var rbacPrincipals = []string{"", "first-unenrolled", "first-enrolled", "pwchange", "viewer", "admin"}
+
+// rbacRoutes lists every route with the expected outcome per principal:
+// anonymous, first factor only (not enrolled), first factor only (enrolled),
+// verified with a pending password change, complete viewer, complete admin.
+// A cell is a status, optionally followed by ":" and the error code.
+var rbacRoutes = []struct {
+	method, target, body string
+	want                 [6]string
+}{
+	{"GET", "/healthz", "", [6]string{"200", "200", "200", "200", "200", "200"}},
+	{"GET", "/readyz", "", [6]string{"200", "200", "200", "200", "200", "200"}},
+	{"GET", "/api/v1/version", "", [6]string{"200", "200", "200", "200", "200", "200"}},
+	{"GET", "/api/v1/auth/methods", "", [6]string{"200", "200", "200", "200", "200", "200"}},
+	{"GET", "/api/v1/auth/gitlab/login", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"GET", "/api/v1/auth/gitlab/callback", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/auth/local/login", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/auth/logout", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"GET", "/api/v1/setup", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/setup", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/auth/mfa/verify", "{}", [6]string{"401:unauthenticated", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/auth/mfa/enrollment", "", [6]string{"401:unauthenticated", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/auth/mfa/enrollment/confirm", "{}", [6]string{"401:unauthenticated", "204", "204", "204", "204", "204"}},
+	{"GET", "/api/v1/me", "", [6]string{"401:unauthenticated", "200", "200", "200", "200", "200"}},
+	{"POST", "/api/v1/me/password", "{}", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "204", "204", "204"}},
+	{"GET", "/api/v1/users", "", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "200"}},
+	{"PATCH", "/api/v1/users/3", `{"role":"viewer"}`, [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "200"}},
+	{"DELETE", "/api/v1/users/3/mfa", "", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/settings", "", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"PATCH", "/api/v1/settings", "{}", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+}
+
 func TestRBACMatrix(t *testing.T) {
-	login := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	e := newEnv(t, func(d *Deps) {
-		d.LocalLogin, d.GitLabLogin, d.GitLabCallback = login, login, login
-	})
-	tests := []struct {
-		method, target, body string
-		anon, viewer, admin  int
-	}{
-		{"GET", "/healthz", "", 200, 200, 200},
-		{"GET", "/readyz", "", 200, 200, 200},
-		{"GET", "/api/v1/version", "", 200, 200, 200},
-		{"GET", "/api/v1/auth/methods", "", 200, 200, 200},
-		{"GET", "/api/v1/auth/gitlab/login", "", 204, 204, 204},
-		{"GET", "/api/v1/auth/gitlab/callback", "", 204, 204, 204},
-		{"POST", "/api/v1/auth/local/login", "{}", 204, 204, 204},
-		{"POST", "/api/v1/auth/logout", "", 204, 204, 204},
-		{"GET", "/api/v1/me", "", 401, 200, 200},
-		{"GET", "/api/v1/users", "", 401, 403, 200},
-		{"PATCH", "/api/v1/users/3", `{"role":"viewer"}`, 401, 403, 200},
-	}
-	for _, tt := range tests {
-		for i, role := range []string{"", "viewer", "admin"} {
-			want := []int{tt.anon, tt.viewer, tt.admin}[i]
+	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	for _, tt := range rbacRoutes {
+		for i, role := range rbacPrincipals {
 			t.Run(tt.method+" "+tt.target+" as "+role, func(t *testing.T) {
+				// A fresh environment per cell: some routes change state.
+				e := newEnv(t, func(d *Deps) {
+					d.LocalLogin, d.GitLabLogin, d.GitLabCallback = ok, ok, ok
+					d.Setup, d.MFAVerify, d.MFAStartEnrollment, d.MFAConfirmEnrollment = ok, ok, ok, ok
+					d.PasswordChange, d.SettingsList, d.SettingsUpdate = ok, ok, ok
+				})
 				rec := e.do(tt.method, tt.target, role, tt.body)
-				if rec.Code != want {
-					t.Fatalf("status = %d, want %d; body %s", rec.Code, want, rec.Body.String())
+				status, code, _ := strings.Cut(tt.want[i], ":")
+				if status != fmt.Sprint(rec.Code) {
+					t.Fatalf("status = %d, want %s; body %s", rec.Code, status, rec.Body.String())
 				}
-				switch want {
-				case 401:
-					assertError(t, rec, 401, "unauthenticated")
-				case 403:
-					assertError(t, rec, 403, "forbidden")
+				if code != "" {
+					assertError(t, rec, rec.Code, code)
 				}
 			})
 		}
@@ -60,13 +83,12 @@ func TestRBACMatrix(t *testing.T) {
 
 func TestRBACMatrixCoversEveryRoute(t *testing.T) {
 	// Guards the matrix above: every registered route must appear in it.
-	covered := map[string]bool{
-		"GET /healthz": true, "GET /readyz": true, "GET /api/v1/version": true,
-		"GET /api/v1/auth/methods": true, "GET /api/v1/auth/gitlab/login": true,
-		"GET /api/v1/auth/gitlab/callback": true, "POST /api/v1/auth/local/login": true,
-		"POST /api/v1/auth/logout": true, "GET /api/v1/me": true, "GET /api/v1/users": true,
-		"PATCH /api/v1/users/{id}": true,
+	covered := map[string]bool{}
+	for _, tt := range rbacRoutes {
+		covered[tt.method+" "+strings.NewReplacer("/3/", "/{id}/").Replace(tt.target)] = true
 	}
+	covered["PATCH /api/v1/users/{id}"] = true
+	delete(covered, "PATCH /api/v1/users/3")
 	s := &server{}
 	for _, rt := range s.routes() {
 		if !covered[rt.method+" "+rt.pattern] {
@@ -221,7 +243,8 @@ func TestMe(t *testing.T) {
 	e.users.users[1].LastLoginAt = pgtype.Timestamptz{Time: testTime, Valid: true}
 	rec := e.do("GET", "/api/v1/me", "viewer", "")
 	want := `{"id":2,"source":"gitlab","username":"vera","name":"VERA","email":"vera@example.com","role":"viewer",` +
-		`"created_at":"2026-03-01T12:00:00Z","last_login_at":"2026-03-01T12:00:00Z"}` + "\n"
+		`"created_at":"2026-03-01T12:00:00Z","last_login_at":"2026-03-01T12:00:00Z",` +
+		`"mfa_enrolled":true,"mfa_verified":true,"must_change_password":false}` + "\n"
 	if rec.Code != 200 || rec.Body.String() != want {
 		t.Fatalf("me = %d %s", rec.Code, rec.Body.String())
 	}

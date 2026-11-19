@@ -116,9 +116,10 @@ func limitBody(next http.Handler) http.Handler {
 	})
 }
 
-// requireSession rejects requests without a valid session and otherwise
-// passes the principal to next through the request context.
-func (s *server) requireSession(next http.Handler) http.Handler {
+// requireFirstFactor rejects requests without a valid session and otherwise
+// passes the principal to next through the request context. The session may
+// still lack the second factor or have a password change pending.
+func (s *server) requireFirstFactor(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, err := s.Sessions.Authenticate(r)
 		if err != nil && !errors.Is(err, auth.ErrNoSession) {
@@ -134,13 +135,50 @@ func (s *server) requireSession(next http.Handler) http.Handler {
 	})
 }
 
-// requireAdmin is requireSession plus the admin role.
+// requireMFA is requireFirstFactor plus a verified second factor. A pending
+// password change does not matter: it is how the user resolves it.
+func (s *server) requireMFA(next http.Handler) http.Handler {
+	return s.requireFirstFactor(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p, _ := auth.PrincipalFrom(r.Context()); !p.MFAVerified {
+			writeIncomplete(w, p)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// requireComplete is requireFirstFactor plus a complete session: second
+// factor verified and no password change pending.
+func (s *server) requireComplete(next http.Handler) http.Handler {
+	return s.requireFirstFactor(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p, _ := auth.PrincipalFrom(r.Context()); !p.Complete() {
+			writeIncomplete(w, p)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// requireAdmin is requireComplete plus the admin role.
 func (s *server) requireAdmin(next http.Handler) http.Handler {
-	return s.requireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.requireComplete(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if p, _ := auth.PrincipalFrom(r.Context()); !p.IsAdmin() {
 			writeError(w, http.StatusForbidden, "forbidden", "This action requires the admin role.")
 			return
 		}
 		next.ServeHTTP(w, r)
 	}))
+}
+
+// writeIncomplete answers 403 for a session that cannot yet use the
+// application, naming the next step.
+func writeIncomplete(w http.ResponseWriter, p *auth.Principal) {
+	switch {
+	case !p.MFAEnrolled:
+		writeError(w, http.StatusForbidden, "mfa_enrollment_required", "Set up two-factor authentication to continue.")
+	case !p.MFAVerified:
+		writeError(w, http.StatusForbidden, "mfa_required", "Enter your two-factor authentication code to continue.")
+	default:
+		writeError(w, http.StatusForbidden, "password_change_required", "Change your password to continue.")
+	}
 }

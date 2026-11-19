@@ -19,6 +19,7 @@ const (
 	ActionLogout         = "logout"
 	ActionUserCreated    = "user.created"
 	ActionRoleChanged    = "user.role_changed"
+	ActionMFAReset       = "mfa.reset"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.
