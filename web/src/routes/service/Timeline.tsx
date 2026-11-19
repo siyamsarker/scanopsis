@@ -6,6 +6,7 @@ import { Link } from 'react-router';
 import { useServiceScans, useSonar, useTrends, type ScanSummary } from '../../api/service';
 import { Chart } from '../../charts/Chart';
 import { lineSeries, stackedSeverityBars } from '../../charts/options';
+import { ArtifactName } from '../../components/ArtifactName';
 import { Mono } from '../../components/Mono';
 import { Segmented } from '../../components/Segmented';
 import { SeverityBar } from '../../components/Severity';
@@ -145,7 +146,9 @@ export function RecentScans({ serviceId, gitRef }: { serviceId: number; gitRef?:
     {
       key: 'artifact',
       header: 'Artifact',
-      cell: (s) => <Mono value={s.artifact_name} truncate className="max-w-64" />,
+      cell: (s) => (
+        <ArtifactName name={s.artifact_name} kind={s.kind} truncate className="max-w-64" />
+      ),
     },
     { key: 'kind', header: 'Kind', cell: (s) => SCAN_KIND_LABEL[s.kind] ?? s.kind },
     {

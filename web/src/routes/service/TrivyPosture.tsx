@@ -3,6 +3,7 @@
 
 import { Link } from 'react-router';
 import { useOverview, type Overview } from '../../api/service';
+import { ArtifactName } from '../../components/ArtifactName';
 import { Mono } from '../../components/Mono';
 import { SeverityBar, SeverityCounts } from '../../components/Severity';
 import { StatTile } from '../../components/StatTile';
@@ -217,7 +218,12 @@ export function TrivyPosture({ serviceId, gitRef }: { serviceId: number; gitRef?
                 className="grid gap-x-4 gap-y-2 px-6 py-3 transition-colors duration-150 ease-out hover:bg-surface-raised sm:grid-cols-[1fr_12rem]"
               >
                 <span className="min-w-0">
-                  <Mono value={scan.artifact_name} truncate className="font-medium text-text" />
+                  <ArtifactName
+                    name={scan.artifact_name}
+                    kind={scan.kind}
+                    truncate
+                    className="font-medium text-text"
+                  />
                   <span className="mt-0.5 block text-sm text-text-muted">
                     {SCAN_KIND_LABEL[scan.kind] ?? scan.kind} · scanned{' '}
                     <time dateTime={scan.scanned_at} title={scan.scanned_at}>

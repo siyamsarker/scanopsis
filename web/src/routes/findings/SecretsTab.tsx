@@ -4,6 +4,7 @@
 import { ApiError } from '../../api/client';
 import type { SecretFinding } from '../../api/findings';
 import { useSecrets } from '../../api/findings';
+import { ArtifactName } from '../../components/ArtifactName';
 import { DataTable } from '../../components/DataTable';
 import { Mono } from '../../components/Mono';
 import { SeverityBadge } from '../../components/Severity';
@@ -34,7 +35,11 @@ const columns: Column<SecretFinding>[] = [
     header: 'Lines',
     cell: (s) => <span className="tabular-nums">{lineRange(s.start_line, s.end_line)}</span>,
   },
-  { key: 'artifact', header: 'Artifact', cell: (s) => s.artifact_name },
+  {
+    key: 'artifact',
+    header: 'Artifact',
+    cell: (s) => <ArtifactName name={s.artifact_name} kind="secret-fs" />,
+  },
   {
     key: 'suppressed',
     header: 'Suppressed',

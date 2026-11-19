@@ -73,7 +73,7 @@ const overview = {
     scan(11),
     scan(12, {
       kind: 'secret-fs',
-      artifact_name: 'repo',
+      artifact_name: '.',
       counts: counts(0, 0, 0, 0, 0),
       scanned_at: '2026-11-18T09:00:00Z',
     }),
@@ -259,7 +259,7 @@ describe('service dashboard', () => {
     // Artifacts
     const artifact = screen.getAllByText('registry.example.com/payments/api:1.4')[0];
     expect(href(artifact)).toBe('/scans/11');
-    expect(screen.getAllByText('repo')[0].closest('a')).toHaveAttribute('href', '/scans/12');
+    expect(screen.getAllByText('Source tree')[0].closest('a')).toHaveAttribute('href', '/scans/12');
 
     // Classes: os, language and other are separate rows
     expect(screen.getByText('OS packages')).toBeInTheDocument();

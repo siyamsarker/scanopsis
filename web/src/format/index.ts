@@ -132,3 +132,17 @@ export function safeExternalUrl(value: string | null | undefined): string | unde
 export function shortSha(sha: string, length = 8) {
   return sha.slice(0, length);
 }
+
+/** What a secret scan of a source tree is called, since Trivy reports the directory "." as its name. */
+export const SOURCE_TREE = 'Source tree';
+
+/**
+ * The name to show for a scanned artifact. A secret scan of a source tree
+ * reports "." (or nothing) and reads "Source tree"; every other name is shown
+ * exactly as reported. Keep the raw name in a title attribute.
+ */
+export function artifactLabel(name: string | null | undefined, kind: string | null | undefined) {
+  const raw = name ?? '';
+  if (kind === 'secret-fs' && (raw === '.' || raw.trim() === '')) return SOURCE_TREE;
+  return raw;
+}

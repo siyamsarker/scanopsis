@@ -128,7 +128,7 @@ const SECRETS = {
     {
       id: 1,
       scan_id: 11,
-      artifact_name: 'repo',
+      artifact_name: '.',
       target: 'config/prod.env',
       rule_id: 'aws-access-key-id',
       category: 'AWS',

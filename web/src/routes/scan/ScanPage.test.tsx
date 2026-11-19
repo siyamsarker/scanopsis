@@ -129,10 +129,13 @@ describe('scan detail', () => {
         commit_url: null,
         ref_protected: false,
         kind: 'secret-fs',
+        artifact_name: '.',
       },
     });
     renderApp('/scans/7');
     expect(await screen.findByText('Secret scan of the source tree')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Source tree');
+    expect(screen.getByText('Source tree')).toHaveAttribute('title', '.');
     expect(screen.getByText('Pipeline #1001')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Pipeline #1001' })).toBeNull();
     expect(screen.getByText('Job #5001')).toBeInTheDocument();

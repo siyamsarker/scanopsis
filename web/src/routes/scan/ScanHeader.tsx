@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import { NO_VALUE, safeExternalUrl } from '../../format';
 import type { Scan } from '../../api/scan';
+import { ArtifactName } from '../../components/ArtifactName';
 import { Freshness } from '../../components/Freshness';
 import { Mono } from '../../components/Mono';
 import { Card, PageHeader } from '../../components/layout';
@@ -61,7 +62,7 @@ export function ScanHeader({ scan, serviceName }: { scan: Scan; serviceName: str
             </ol>
           </nav>
         }
-        title={<Mono value={scan.artifact_name} className="text-[0.9em]" />}
+        title={<ArtifactName name={scan.artifact_name} kind={scan.kind} className="text-[0.9em]" />}
         subtitle={kindLabel(scan.kind)}
       />
       <Card className="mb-8">
