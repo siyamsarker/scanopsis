@@ -661,17 +661,27 @@ func TestConcurrentReadsDuringUpdates(t *testing.T) {
 	wg.Wait()
 }
 
-func TestLocalSignInStaysOnWithoutGitLab(t *testing.T) {
+func TestStartRefusesSettingsWithoutSignIn(t *testing.T) {
 	// An environment seed (not validated by the Settings page) disables local
 	// sign-in while GitLab is not configured: nobody could sign in.
-	e := newEnv(t, map[string]any{KeyLocalLoginEnabled: false})
-	if !e.svc.Current().LocalLoginEnabled {
-		t.Fatal("local sign-in disabled without GitLab sign-in: everyone is locked out")
+	_, err := New(context.Background(), newFakeStore(), newFakeStore().tx, testBox(t, 1),
+		map[string]any{KeyLocalLoginEnabled: false}, &fakeAudit{}, discard)
+	if err == nil || !strings.Contains(err.Error(), "remove SCANOPSIS_LOCAL_LOGIN_ENABLED=false") {
+		t.Fatalf("env seed: err = %v", err)
 	}
-	// With GitLab fully configured the seed takes effect.
+
+	// The same combination saved in the database names the database fix.
+	st := newFakeStore()
+	st.rows[KeyLocalLoginEnabled] = store.Setting{Key: KeyLocalLoginEnabled, Value: []byte("false"), Source: SourceUI, UpdatedBy: "local:root"}
+	_, err = New(context.Background(), st, st.tx, testBox(t, 1), nil, &fakeAudit{}, discard)
+	if err == nil || !strings.Contains(err.Error(), "DELETE FROM settings WHERE key = 'auth.local_login_enabled'") {
+		t.Fatalf("saved value: err = %v", err)
+	}
+
+	// With GitLab fully configured the seed takes effect, and is reported as is.
 	seeds := gitlabSeeds()
 	seeds[KeyLocalLoginEnabled] = false
 	if newEnv(t, seeds).svc.Current().LocalLoginEnabled {
-		t.Fatal("local sign-in stays enabled although GitLab sign-in is configured")
+		t.Fatal("local sign-in enabled although it is off and GitLab sign-in is configured")
 	}
 }

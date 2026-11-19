@@ -143,6 +143,9 @@ func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Sto
 		stored[r.Key] = e
 	}
 	stt := s.build(stored)
+	if err := signInPossible(stt); err != nil {
+		return nil, err
+	}
 	s.cur.Store(stt)
 	return s, nil
 }
@@ -195,16 +198,7 @@ func (s *Service) build(stored map[string]entry) *state {
 	for _, d := range Definitions {
 		entries[d.Key] = s.effective(d, stored)
 	}
-	snap := snapshotOf(entries)
-	// Fail safe: with local sign-in off and GitLab sign-in incomplete nobody
-	// could sign in. The Settings page refuses that combination, but an
-	// environment seed or a direct database change can still produce it, so
-	// local sign-in stays available until GitLab sign-in is configured.
-	if !snap.LocalLoginEnabled && !snap.GitLabEnabled() {
-		snap.LocalLoginEnabled = true
-		s.log.Warn("local sign-in is disabled but GitLab sign-in is not fully configured; keeping local sign-in enabled so that administrators can still sign in")
-	}
-	return &state{entries: entries, snap: snap}
+	return &state{entries: entries, snap: snapshotOf(entries)}
 }
 
 func (s *Service) effective(d Definition, stored map[string]entry) entry {
@@ -235,6 +229,22 @@ func snapshotOf(e map[string]entry) Snapshot {
 		SessionIdleTimeout:     dur(KeySessionIdleTimeout),
 		SessionAbsoluteTimeout: dur(KeySessionAbsTimeout),
 	}
+}
+
+// signInPossible refuses settings that leave no way to sign in: local
+// sign-in off while GitLab sign-in is incomplete. The Settings page never
+// saves that combination, but an environment seed or a direct database
+// change can produce it. Failing at start, with the exact fix, keeps what
+// the Settings page shows identical to what the server does.
+func signInPossible(st *state) error {
+	if st.snap.LocalLoginEnabled || st.snap.GitLabEnabled() {
+		return nil
+	}
+	fix := "remove SCANOPSIS_LOCAL_LOGIN_ENABLED=false from the environment"
+	if st.entries[KeyLocalLoginEnabled].source == SourceUI {
+		fix = "run DELETE FROM settings WHERE key = 'auth.local_login_enabled' in the database"
+	}
+	return fmt.Errorf("local sign-in is disabled but GitLab sign-in is not fully configured, so nobody could sign in: %s, or configure GitLab sign-in, then start again", fix)
 }
 
 // Current returns the current settings without locking or any query.
@@ -325,8 +335,7 @@ func (s *Service) plan(cur *state, patch map[string]any, actor string, now time.
 			next[c.key] = c.entry
 		}
 	}
-	// Validate what the admin asked for, before the sign-in fail-safe below.
-	validate(snapshotOf(s.build(next).entries), fields)
+	validate(s.build(next).snap, fields)
 	return changes, fields
 }
 

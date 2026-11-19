@@ -254,10 +254,11 @@ Find the case that matches, then follow its steps.
 ### Turn local sign-in on again
 
 Local sign-in can only be off while GitLab sign-in is fully configured; if it
-is not, Scanopsis keeps local sign-in on and logs a warning. You can still end
-up without a way in when local sign-in is off and GitLab sign-in stops working,
-for example because GitLab is down or the client secret is wrong. GitLab then
-shows an error, or the sign-in page reports that GitLab could not be reached.
+is not, the server refuses to start and its log says what to change. You can
+still end up without a way in when local sign-in is off and GitLab sign-in
+stops working, for example because GitLab is down or the client secret is
+wrong. GitLab then shows an error, or the sign-in page reports that GitLab
+could not be reached.
 
 1. If `.env` contains `SCANOPSIS_LOCAL_LOGIN_ENABLED=false`, delete that line.
    Otherwise the value is saved again at the next start.
