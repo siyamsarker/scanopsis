@@ -6,7 +6,9 @@
 // cross-service vulnerability search.
 //
 // The "current state" of a service for a ref is the latest scan per
-// (artifact, kind). Every number returned is read from, or summed over,
+// (artifact, kind). The ref a dashboard shows is the one requested, else the
+// dashboard branch an administrator chose for the service, else the ref with
+// the most recent scan. Every number returned is read from, or summed over,
 // scans, so it traces back to a pipeline, job and commit.
 package findings
 
@@ -87,10 +89,11 @@ type serviceJSON struct {
 	CreatedVia        string    `json:"created_via"`
 	Archived          bool      `json:"archived"`
 	CreatedAt         time.Time `json:"created_at"`
+	DefaultRef        *string   `json:"default_ref"`
 }
 
 func newServiceJSON(id int64, name string, projectID pgtype.Int8, path string, sonarKey pgtype.Text,
-	createdVia string, archived bool, createdAt pgtype.Timestamptz) serviceJSON {
+	createdVia string, archived bool, createdAt pgtype.Timestamptz, defaultRef pgtype.Text) serviceJSON {
 	s := serviceJSON{
 		ID: id, Name: name, GitlabProjectPath: path, CreatedVia: createdVia,
 		Archived: archived, CreatedAt: createdAt.Time,
@@ -100,6 +103,9 @@ func newServiceJSON(id int64, name string, projectID pgtype.Int8, path string, s
 	}
 	if sonarKey.Valid {
 		s.SonarProjectKey = &sonarKey.String
+	}
+	if defaultRef.Valid {
+		s.DefaultRef = &defaultRef.String
 	}
 	return s
 }
@@ -233,17 +239,42 @@ func (f *Findings) refs(ctx context.Context, serviceID int64) ([]string, error) 
 	return refs, nil
 }
 
-// defaultRef returns the ref to use: the requested one, else the ref with the
-// most recent scan, else "" when the service has none.
-func (f *Findings) defaultRef(ctx context.Context, serviceID int64, requested string) (string, error) {
-	if requested != "" {
-		return requested, nil
+// How a ref was chosen, reported as ref_source.
+const (
+	refSourceRequested = "requested" // the ref query parameter
+	refSourceDefault   = "default"   // the dashboard branch an administrator chose
+	refSourceLatest    = "latest"    // the ref with the most recent scan
+)
+
+// pickRef is the rule that decides which ref a dashboard shows, in one place:
+// an explicitly requested ref wins; else the service's chosen dashboard
+// branch, even when it has no scans yet; else refs[0], the ref with the most
+// recent scan, or "" when the service has none. refs is ordered most recent
+// first, as ListRefs returns it. The portfolio applies the same rule in SQL
+// (catalog.portfolioSQL); keep the two in step.
+func pickRef(requested string, chosen pgtype.Text, refs []string) (ref, source string) {
+	switch {
+	case requested != "":
+		return requested, refSourceRequested
+	case chosen.Valid:
+		return chosen.String, refSourceDefault
+	case len(refs) > 0:
+		return refs[0], refSourceLatest
 	}
-	refs, err := f.refs(ctx, serviceID)
-	if err != nil || len(refs) == 0 {
-		return "", err
+	return "", refSourceLatest
+}
+
+// resolveRef returns the ref to show and how it was chosen. It lists the
+// service's refs only when neither a request nor a chosen branch decides.
+func (f *Findings) resolveRef(ctx context.Context, svc store.Service, requested string) (ref, source string, err error) {
+	var refs []string
+	if requested == "" && !svc.DefaultRef.Valid {
+		if refs, err = f.refs(ctx, svc.ID); err != nil {
+			return "", "", err
+		}
 	}
-	return refs[0], nil
+	ref, source = pickRef(requested, svc.DefaultRef, refs)
+	return ref, source, nil
 }
 
 // currentScans returns the current scans of a ref and their ids.

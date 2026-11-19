@@ -269,7 +269,7 @@ const findingsGetService = `-- name: FindingsGetService :one
 
 
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at
+       created_via, archived, created_at, default_ref
 FROM services
 WHERE id = $1
 `
@@ -291,6 +291,7 @@ func (q *Queries) FindingsGetService(ctx context.Context, id int64) (Service, er
 		&i.CreatedVia,
 		&i.Archived,
 		&i.CreatedAt,
+		&i.DefaultRef,
 	)
 	return i, err
 }
@@ -462,7 +463,7 @@ WITH cur AS (
     ORDER BY s.service_id, s.ref, s.artifact_name, s.kind, s.scanned_at DESC, s.id DESC
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,
-       sv.created_via, sv.archived, sv.created_at,
+       sv.created_via, sv.archived, sv.created_at, sv.default_ref,
        cur.ref, cur.artifact_name, cur.scan_id, cur.scanned_at,
        v.pkg_name, v.installed_version, v.fixed_version, v.severity
 FROM cur
@@ -481,6 +482,7 @@ type FindingsSearchRow struct {
 	CreatedVia        string
 	Archived          bool
 	CreatedAt         pgtype.Timestamptz
+	DefaultRef        pgtype.Text
 	Ref               string
 	ArtifactName      string
 	ScanID            int64
@@ -512,6 +514,7 @@ func (q *Queries) FindingsSearch(ctx context.Context, vulnID string) ([]Findings
 			&i.CreatedVia,
 			&i.Archived,
 			&i.CreatedAt,
+			&i.DefaultRef,
 			&i.Ref,
 			&i.ArtifactName,
 			&i.ScanID,

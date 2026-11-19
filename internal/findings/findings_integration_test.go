@@ -655,7 +655,7 @@ func TestTrends(t *testing.T) {
 	eq(t, "feature outside the window", []any{ref, idsOf(ps)}, []any{"feature", []int64{}})
 
 	_, body := get(t, mux, fmt.Sprintf("/api/v1/services/%d/trends", f.empty))
-	if strings.TrimSpace(string(body)) != `{"ref":null,"points":[]}` {
+	if strings.TrimSpace(string(body)) != `{"ref":null,"ref_source":"latest","points":[]}` {
 		t.Errorf("empty = %s", body)
 	}
 	for _, q := range []string{"days=0", "days=366", "days=x"} {

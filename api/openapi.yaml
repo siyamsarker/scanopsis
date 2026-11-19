@@ -478,7 +478,7 @@ paths:
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
     patch:
       tags: [services]
-      summary: Rename, link a SonarQube project key, or archive (admin only).
+      summary: "Rename, link a SonarQube project key, choose the dashboard branch, or archive (admin only)."
       operationId: updateService
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
@@ -510,7 +510,7 @@ paths:
       operationId: getServiceOverview
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
       responses:
         "200": { description: Overview., content: { application/json: { schema: { $ref: "#/components/schemas/Overview" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
@@ -522,7 +522,7 @@ paths:
       operationId: listServiceScans
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
         - { name: before, in: query, description: "Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page.", schema: { type: integer, format: int64 } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
       responses:
@@ -558,7 +558,7 @@ paths:
       operationId: listServiceVulnerabilities
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
         - { name: severity, in: query, description: Comma-separated list., schema: { type: string, example: "CRITICAL,HIGH" } }
         - { name: fixable, in: query, schema: { type: boolean } }
         - { name: suppressed, in: query, description: Include suppressed findings., schema: { type: boolean, default: false } }
@@ -577,7 +577,7 @@ paths:
       operationId: listServiceSecrets
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
       responses:
         "200": { description: Secret findings., content: { application/json: { schema: { $ref: "#/components/schemas/SecretFindingList" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
@@ -589,7 +589,7 @@ paths:
       operationId: getServiceTrends
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
-        - { name: ref, in: query, description: Git ref; defaults to the ref with the most recent scan., schema: { type: string } }
+        - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
         - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 90 } }
       responses:
         "200": { description: "Trend points, oldest first.", content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
@@ -768,7 +768,7 @@ components:
         suppressed: { type: integer }
     Service:
       type: object
-      required: [id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at]
+      required: [id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref]
       properties:
         id: { type: integer, format: int64 }
         name: { type: string }
@@ -778,6 +778,7 @@ components:
         created_via: { type: string, enum: [ingest, manual] }
         archived: { type: boolean }
         created_at: { type: string, format: date-time }
+        default_ref: { type: [string, "null"], description: "The branch (ref) an administrator chose for the dashboards of this service. null when none was chosen; the dashboards then show the ref with the most recent scan. The ref need not have scans yet." }
     ServicePage:
       type: object
       required: [items, next_after]
@@ -799,6 +800,7 @@ components:
         name: { type: string, minLength: 1, maxLength: 200 }
         sonar_project_key: { type: [string, "null"], maxLength: 400, description: null unlinks. }
         archived: { type: boolean }
+        default_ref: { type: [string, "null"], minLength: 1, maxLength: 255, description: "Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet." }
     ScanSummary:
       type: object
       required: [id, service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, trivy_version, scanned_at, received_at, counts, fixable, secrets, suppressed]
@@ -895,12 +897,17 @@ components:
         fix_version: { type: string, description: Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. }
         findings: { type: integer }
         by_severity: { $ref: "#/components/schemas/SeverityCounts" }
+    RefSource:
+      type: string
+      enum: [requested, default, latest]
+      description: "How the ref was chosen: requested (the ref parameter), default (the dashboard branch an administrator chose, even without scans yet) or latest (the ref with the most recent scan)."
     Overview:
       type: object
-      required: [service, ref, refs, artifacts, counts, fixable, secrets, suppressed, new_since_previous, fixed_since_previous, by_class, top_packages, data_at]
+      required: [service, ref, ref_source, refs, artifacts, counts, fixable, secrets, suppressed, new_since_previous, fixed_since_previous, by_class, top_packages, data_at]
       properties:
         service: { $ref: "#/components/schemas/Service" }
-        ref: { type: [string, "null"], description: null when the service has no scans yet. }
+        ref: { type: [string, "null"], description: "The ref shown. null when no ref was requested or chosen and the service has no scans yet." }
+        ref_source: { $ref: "#/components/schemas/RefSource" }
         refs: { type: array, items: { type: string }, description: "Refs with scans, most recent first." }
         artifacts: { type: array, items: { $ref: "#/components/schemas/ScanSummary" }, description: Latest scan per artifact and kind for the ref. }
         counts: { $ref: "#/components/schemas/SeverityCounts" }
@@ -938,9 +945,10 @@ components:
         fixable: { type: integer }
     Trends:
       type: object
-      required: [ref, points]
+      required: [ref, ref_source, points]
       properties:
         ref: { type: [string, "null"] }
+        ref_source: { $ref: "#/components/schemas/RefSource" }
         points: { type: array, items: { $ref: "#/components/schemas/TrendPoint" } }
     Rating:
       type: [string, "null"]
@@ -987,10 +995,11 @@ components:
         history: { type: array, items: { $ref: "#/components/schemas/SonarAnalysis" }, description: "Newest first, including latest." }
     PortfolioItem:
       type: object
-      required: [service, ref, counts, fixable, secrets, last_scan_at, quality_gate_status, reliability_rating, security_rating, maintainability_rating, coverage, last_analysis_at]
+      required: [service, ref, ref_source, counts, fixable, secrets, last_scan_at, quality_gate_status, reliability_rating, security_rating, maintainability_rating, coverage, last_analysis_at]
       properties:
         service: { $ref: "#/components/schemas/Service" }
-        ref: { type: [string, "null"], description: Ref with the most recent scan. }
+        ref: { type: [string, "null"], description: "Ref the numbers come from: the dashboard branch when chosen, else the ref with the most recent scan." }
+        ref_source: { type: string, enum: [default, latest], description: "default: the administrator's chosen dashboard branch; latest: the ref with the most recent scan." }
         counts: { $ref: "#/components/schemas/SeverityCounts" }
         fixable: { type: integer }
         secrets: { type: integer }

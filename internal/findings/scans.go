@@ -29,7 +29,8 @@ type scanPageJSON struct {
 }
 
 // listScans lists the scans of one ref, newest first. Without a ref it uses
-// the ref with the most recent scan, as the contract says.
+// the ref the dashboards show: the chosen dashboard branch, else the ref with
+// the most recent scan.
 func (f *Findings) listScans(w http.ResponseWriter, r *http.Request) {
 	svc, ok := f.service(w, r)
 	if !ok {
@@ -49,7 +50,7 @@ func (f *Findings) listScans(w http.ResponseWriter, r *http.Request) {
 		invalid(w, err.Error())
 		return
 	}
-	ref, err := f.defaultRef(r.Context(), svc.ID, requested)
+	ref, _, err := f.resolveRef(r.Context(), svc, requested)
 	if err != nil {
 		f.internalError(w, r, "cannot pick a ref", err)
 		return
@@ -204,8 +205,9 @@ type trendPointJSON struct {
 }
 
 type trendsJSON struct {
-	Ref    *string          `json:"ref"`
-	Points []trendPointJSON `json:"points"`
+	Ref       *string          `json:"ref"`
+	RefSource string           `json:"ref_source"`
+	Points    []trendPointJSON `json:"points"`
 }
 
 // trends returns one point per scan of a ref within the window, oldest first.
@@ -223,12 +225,12 @@ func (f *Findings) trends(w http.ResponseWriter, r *http.Request) {
 		invalid(w, err.Error())
 		return
 	}
-	ref, err := f.defaultRef(r.Context(), svc.ID, requested)
+	ref, source, err := f.resolveRef(r.Context(), svc, requested)
 	if err != nil {
 		f.internalError(w, r, "cannot pick a ref", err)
 		return
 	}
-	out := trendsJSON{Points: []trendPointJSON{}}
+	out := trendsJSON{Points: []trendPointJSON{}, RefSource: source}
 	if ref == "" {
 		httpapi.WriteJSON(w, http.StatusOK, out)
 		return

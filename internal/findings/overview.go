@@ -25,6 +25,7 @@ type packageImpactJSON struct {
 type overviewJSON struct {
 	Service            serviceJSON           `json:"service"`
 	Ref                *string               `json:"ref"`
+	RefSource          string                `json:"ref_source"`
 	Refs               []string              `json:"refs"`
 	Artifacts          []scanSummaryJSON     `json:"artifacts"`
 	Counts             countsJSON            `json:"counts"`
@@ -53,13 +54,11 @@ func (f *Findings) overview(w http.ResponseWriter, r *http.Request) {
 		f.internalError(w, r, "cannot list refs", err)
 		return
 	}
-	ref := requested
-	if ref == "" && len(refs) > 0 {
-		ref = refs[0]
-	}
+	ref, source := pickRef(requested, svc.DefaultRef, refs)
 	ov := overviewJSON{
 		Service: newServiceJSON(svc.ID, svc.Name, svc.GitlabProjectID, svc.GitlabProjectPath,
-			svc.SonarProjectKey, svc.CreatedVia, svc.Archived, svc.CreatedAt),
+			svc.SonarProjectKey, svc.CreatedVia, svc.Archived, svc.CreatedAt, svc.DefaultRef),
+		RefSource:   source,
 		Refs:        refs,
 		Artifacts:   []scanSummaryJSON{},
 		ByClass:     map[string]countsJSON{},
@@ -70,14 +69,13 @@ func (f *Findings) overview(w http.ResponseWriter, r *http.Request) {
 		f.internalError(w, r, "cannot load current scans", err)
 		return
 	}
+	if ref != "" {
+		ov.Ref = &ref
+	}
 	if len(rows) == 0 {
-		if requested != "" {
-			ov.Ref = &requested
-		}
 		httpapi.WriteJSON(w, http.StatusOK, ov)
 		return
 	}
-	ov.Ref = &ref
 	var newest time.Time
 	for _, row := range rows {
 		s := newScanSummary(row)

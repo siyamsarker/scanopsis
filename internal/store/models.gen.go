@@ -69,6 +69,7 @@ type Service struct {
 	CreatedVia        string
 	Archived          bool
 	CreatedAt         pgtype.Timestamptz
+	DefaultRef        pgtype.Text
 }
 
 type Session struct {

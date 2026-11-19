@@ -93,7 +93,7 @@ func TestValidateUpdate(t *testing.T) {
 		{"empty key", nil, true, ptr(""), nil, false},
 		{"archive", nil, false, nil, ptr(true), true},
 	} {
-		if err := validateUpdate(tc.n, tc.keySet, tc.key, tc.archived); (err == nil) != tc.ok {
+		if err := validateUpdate(tc.n, tc.keySet, tc.key, tc.archived, false, nil); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
 		}
 	}
@@ -206,5 +206,36 @@ func TestActor(t *testing.T) {
 	ctx := auth.WithPrincipal(context.Background(), &auth.Principal{Source: "gitlab", Username: "vera"})
 	if got := c.actor(ctx); got != "gitlab:vera" {
 		t.Errorf("actor = %q", got)
+	}
+}
+
+func TestValidateDefaultRef(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+		ok       bool
+	}{
+		{"main", "main", true},
+		{"  feature/x  ", "feature/x", true},
+		{"v1.2.3", "v1.2.3", true},
+		{"ünï/çødé", "ünï/çødé", true},
+		{strings.Repeat("é", 255), strings.Repeat("é", 255), true},
+		{strings.Repeat("é", 256), "", false},
+		{"", "", false},
+		{" \t ", "", false},
+		{"a\x00b", "", false},
+		{"a\nb", "", false},
+		{"a\x7fb", "", false},
+	} {
+		got, err := validateRef(tc.in)
+		if (err == nil) != tc.ok || got != tc.want {
+			t.Errorf("validateRef(%q) = %q, %v; want %q ok=%v", tc.in, got, err, tc.want, tc.ok)
+		}
+	}
+	if err := validateUpdate(nil, false, nil, nil, true, nil); err != nil {
+		t.Errorf("clearing the default ref alone: %v", err)
+	}
+	bad := "  "
+	if err := validateUpdate(nil, false, nil, nil, true, &bad); err == nil {
+		t.Error("a blank default ref was accepted")
 	}
 }

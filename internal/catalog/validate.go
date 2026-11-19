@@ -14,6 +14,7 @@ const (
 	maxPath = 500
 	maxName = 200
 	maxKey  = 400
+	maxRef  = 255
 )
 
 func hasSpaceOrControl(s string) bool {
@@ -72,9 +73,24 @@ func validateCreate(path string, name, key *string) (string, *string, error) {
 	return n, key, nil
 }
 
-func validateUpdate(name *string, keySet bool, key *string, archived *bool) error {
-	if name == nil && !keySet && archived == nil {
-		return errors.New("provide at least one of name, sonar_project_key and archived")
+// validateRef checks a dashboard branch: after trimming, 1 to 255 characters
+// without control characters. It returns the value to store.
+func validateRef(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || utf8.RuneCountInString(ref) > maxRef {
+		return "", errors.New("default_ref must be 1 to 255 characters")
+	}
+	if strings.IndexFunc(ref, unicode.IsControl) >= 0 {
+		return "", errors.New("default_ref must not contain control characters")
+	}
+	return ref, nil
+}
+
+// validateUpdate checks a service update. ref is the default ref as sent,
+// valid only when refSet and not null.
+func validateUpdate(name *string, keySet bool, key *string, archived *bool, refSet bool, ref *string) error {
+	if name == nil && !keySet && archived == nil && !refSet {
+		return errors.New("provide at least one of name, sonar_project_key, archived and default_ref")
 	}
 	if name != nil {
 		if err := validateName(*name); err != nil {
@@ -82,7 +98,14 @@ func validateUpdate(name *string, keySet bool, key *string, archived *bool) erro
 		}
 	}
 	if keySet && key != nil {
-		return validateKey(*key)
+		if err := validateKey(*key); err != nil {
+			return err
+		}
+	}
+	if refSet && ref != nil {
+		if _, err := validateRef(*ref); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -122,7 +122,7 @@ func (f *Findings) listVulnerabilities(w http.ResponseWriter, r *http.Request) {
 	params.MaxRows = int32(limit) + 1 //nolint:gosec // limit <= 500
 
 	ctx := r.Context()
-	ref, err := f.defaultRef(ctx, svc.ID, requested)
+	ref, _, err := f.resolveRef(ctx, svc, requested)
 	if err != nil {
 		f.internalError(w, r, "cannot pick a ref", err)
 		return
@@ -205,7 +205,7 @@ func (f *Findings) listSecrets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	ref, err := f.defaultRef(ctx, svc.ID, requested)
+	ref, _, err := f.resolveRef(ctx, svc, requested)
 	if err != nil {
 		f.internalError(w, r, "cannot pick a ref", err)
 		return
@@ -268,7 +268,7 @@ func (f *Findings) search(w http.ResponseWriter, r *http.Request) {
 	for _, s := range rows {
 		out.Items = append(out.Items, searchItemJSON{
 			Service: newServiceJSON(s.ID, s.Name, s.GitlabProjectID, s.GitlabProjectPath,
-				s.SonarProjectKey, s.CreatedVia, s.Archived, s.CreatedAt),
+				s.SonarProjectKey, s.CreatedVia, s.Archived, s.CreatedAt, s.DefaultRef),
 			Ref: s.Ref, ArtifactName: s.ArtifactName, ScanID: s.ScanID, ScannedAt: s.ScannedAt.Time,
 			PkgName: s.PkgName, InstalledVersion: s.InstalledVersion, FixedVersion: s.FixedVersion,
 			Severity: s.Severity,

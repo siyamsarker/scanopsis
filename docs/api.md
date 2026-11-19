@@ -467,7 +467,7 @@ Responses:
 
 ### `PATCH /api/v1/services/{id}`
 
-Rename, link a SonarQube project key, or archive (admin only).
+Rename, link a SonarQube project key, choose the dashboard branch, or archive (admin only).
 
 - Operation ID: `updateService`
 - Authentication: Session, admin
@@ -527,7 +527,7 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
-| `ref` | query | no | string | Git ref; defaults to the ref with the most recent scan. |
+| `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 
 Responses:
 
@@ -551,7 +551,7 @@ Parameters:
 | `id` | path | yes | integer (int64) |  |
 | `before` | query | no | integer (int64) | Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page. |
 | `limit` | query | no | integer (minimum 1, maximum 200, default 50) |  |
-| `ref` | query | no | string | Git ref; defaults to the ref with the most recent scan. |
+| `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 
 Responses:
 
@@ -574,7 +574,7 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
-| `ref` | query | no | string | Git ref; defaults to the ref with the most recent scan. |
+| `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 
 Responses:
 
@@ -619,7 +619,7 @@ Parameters:
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
 | `days` | query | no | integer (minimum 1, maximum 365, default 90) |  |
-| `ref` | query | no | string | Git ref; defaults to the ref with the most recent scan. |
+| `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 
 Responses:
 
@@ -646,7 +646,7 @@ Parameters:
 | `fixable` | query | no | boolean |  |
 | `limit` | query | no | integer (minimum 1, maximum 500, default 100) |  |
 | `q` | query | no | string (maxLength 200) | Substring of package name, vulnerability ID or title. |
-| `ref` | query | no | string | Git ref; defaults to the ref with the most recent scan. |
+| `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 | `severity` | query | no | string | Comma-separated list. |
 | `suppressed` | query | no | boolean (default false) | Include suppressed findings. |
 
@@ -965,7 +965,8 @@ Type: object
 | `fixable` | integer | yes |  |
 | `fixed_since_previous` | integer | yes |  |
 | `new_since_previous` | integer | yes |  |
-| `ref` | string or null | yes | null when the service has no scans yet. |
+| `ref` | string or null | yes | The ref shown. null when no ref was requested or chosen and the service has no scans yet. |
+| `ref_source` | [RefSource](#refsource) | yes |  |
 | `refs` | array of string | yes | Refs with scans, most recent first. |
 | `secrets` | integer | yes |  |
 | `service` | [Service](#service) | yes |  |
@@ -1025,7 +1026,8 @@ Type: object
 | `last_scan_at` | string or null (date-time) | yes |  |
 | `maintainability_rating` | [Rating](#rating) | yes |  |
 | `quality_gate_status` | string or null | yes |  |
-| `ref` | string or null | yes | Ref with the most recent scan. |
+| `ref` | string or null | yes | Ref the numbers come from: the dashboard branch when chosen, else the ref with the most recent scan. |
+| `ref_source` | string (one of `default`, `latest`) | yes | default: the administrator's chosen dashboard branch; latest: the ref with the most recent scan. |
 | `reliability_rating` | [Rating](#rating) | yes |  |
 | `secrets` | integer | yes |  |
 | `security_rating` | [Rating](#rating) | yes |  |
@@ -1044,6 +1046,12 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `recovery_codes` | array of string | yes |  |
+
+### RefSource
+
+How the ref was chosen: requested (the ref parameter), default (the dashboard branch an administrator chose, even without scans yet) or latest (the ref with the most recent scan).
+
+Type: string (one of `requested`, `default`, `latest`)
 
 ### Role
 
@@ -1155,6 +1163,7 @@ Type: object
 | `archived` | boolean | yes |  |
 | `created_at` | string (date-time) | yes |  |
 | `created_via` | string (one of `ingest`, `manual`) | yes |  |
+| `default_ref` | string or null | yes | The branch (ref) an administrator chose for the dashboards of this service. null when none was chosen; the dashboards then show the ref with the most recent scan. The ref need not have scans yet. |
 | `gitlab_project_id` | integer or null (int64) | yes |  |
 | `gitlab_project_path` | string | yes |  |
 | `id` | integer (int64) | yes |  |
@@ -1197,6 +1206,7 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `archived` | boolean | no |  |
+| `default_ref` | string or null (minLength 1, maxLength 255) | no | Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet. |
 | `name` | string (minLength 1, maxLength 200) | no |  |
 | `sonar_project_key` | string or null (maxLength 400) | no | null unlinks. |
 
@@ -1346,6 +1356,7 @@ Type: object
 |---|---|---|---|
 | `points` | array of [TrendPoint](#trendpoint) | yes |  |
 | `ref` | string or null | yes |  |
+| `ref_source` | [RefSource](#refsource) | yes |  |
 
 ### TrivyIntegration
 

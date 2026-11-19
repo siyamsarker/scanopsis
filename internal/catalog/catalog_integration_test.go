@@ -132,6 +132,7 @@ type pfItem struct {
 		Name string `json:"name"`
 	} `json:"service"`
 	Ref                   *string  `json:"ref"`
+	RefSource             string   `json:"ref_source"`
 	Counts                counts   `json:"counts"`
 	Fixable               int64    `json:"fixable"`
 	Secrets               int64    `json:"secrets"`
@@ -312,6 +313,7 @@ type svcJSON struct {
 	CreatedVia      string  `json:"created_via"`
 	Archived        bool    `json:"archived"`
 	CreatedAt       string  `json:"created_at"`
+	DefaultRef      *string `json:"default_ref"`
 }
 
 type pageJSON struct {
@@ -618,6 +620,9 @@ func TestPortfolioPerformance(t *testing.T) {
 		       now() - ((30 - j) * interval '1 hour') - (a * interval '1 minute'),
 		       j % 3, j % 5, j % 7, j % 11, j % 2, j % 4, j % 6, '\x1f8b'
 		FROM services s, generate_series(1, 3) a, generate_series(1, 30) j`)
+	// A third of the services have a chosen dashboard branch, so the
+	// measured statement includes both branches of the resolution rule.
+	mustExec(t, pool, `UPDATE services SET default_ref = 'main' WHERE id % 3 = 0`)
 	mustExec(t, pool, `INSERT INTO sonar_analyses (service_id, task_id, analysed_at, quality_gate_status,
 		reliability_rating, security_rating, maintainability_rating, coverage)
 		SELECT s.id, 't-' || s.id || '-' || k, now() - (k * interval '1 day'),
@@ -638,7 +643,7 @@ func TestPortfolioPerformance(t *testing.T) {
 	// j = 30 is the newest (on ref feature-0, since 30 % 3 = 0); three
 	// artifacts at j=30: crit 0, high 0, med 2, low 8, unk 0, fixable 2, secrets 0.
 	it := pf.Items[0]
-	if str(it.Ref) != "feature-0" || it.Counts != (counts{Critical: 0, High: 0, Medium: 6, Low: 24, Unknown: 0}) ||
+	if str(it.Ref) != "feature-0" || it.RefSource != "latest" || it.Counts != (counts{Critical: 0, High: 0, Medium: 6, Low: 24, Unknown: 0}) ||
 		it.Fixable != 6 || it.Secrets != 0 || str(it.QualityGateStatus) == "<nil>" {
 		t.Errorf("first item = %+v", it)
 	}
@@ -668,5 +673,140 @@ func TestPortfolioPerformance(t *testing.T) {
 			rows.Close()
 		}
 		t.Fatalf("p95 %v >= 150ms\n%s", p95, plan.String())
+	}
+}
+
+func TestPortfolioUsesChosenRefPerService(t *testing.T) {
+	c, pool, _ := newCatalog(t, "")
+	at := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	chosen := addService(t, pool, "a-chosen", "g/a", false)
+	addScan(t, pool, scanSeed{svc: chosen, kind: "image", artifact: "x", ref: "main", job: 1, at: at, crit: 1})
+	addScan(t, pool, scanSeed{svc: chosen, kind: "image", artifact: "x", ref: "feature/x", job: 2, at: at.Add(time.Hour), crit: 7})
+	mustExec(t, pool, `UPDATE services SET default_ref = 'main' WHERE id = $1`, chosen)
+	unchosen := addService(t, pool, "b-unchosen", "g/b", false)
+	addScan(t, pool, scanSeed{svc: unchosen, kind: "image", artifact: "x", ref: "main", job: 3, at: at, crit: 1})
+	addScan(t, pool, scanSeed{svc: unchosen, kind: "image", artifact: "x", ref: "feature/x", job: 4, at: at.Add(time.Hour), crit: 7})
+	// A chosen branch without scans shows an empty state, not another branch.
+	empty := addService(t, pool, "c-empty", "g/c", false)
+	addScan(t, pool, scanSeed{svc: empty, kind: "image", artifact: "x", ref: "main", job: 5, at: at, crit: 4})
+	mustExec(t, pool, `UPDATE services SET default_ref = 'release' WHERE id = $1`, empty)
+	// A chosen branch on a service that was never scanned.
+	fresh := addService(t, pool, "d-fresh", "g/d", false)
+	mustExec(t, pool, `UPDATE services SET default_ref = 'main' WHERE id = $1`, fresh)
+
+	pf := decode[pfResponse](t, call(t, c, "getPortfolio", "GET", "/", "", ""), http.StatusOK)
+	if len(pf.Items) != 4 {
+		t.Fatalf("items = %d", len(pf.Items))
+	}
+	for i, w := range []struct {
+		ref, source string
+		crit        int64
+		scanned     bool
+	}{
+		{"main", "default", 1, true},
+		{"feature/x", "latest", 7, true},
+		{"release", "default", 0, false},
+		{"main", "default", 0, false},
+	} {
+		it := pf.Items[i]
+		if str(it.Ref) != w.ref || it.RefSource != w.source || it.Counts.Critical != w.crit || (it.LastScanAt != nil) != w.scanned {
+			t.Errorf("item %d = ref %s source %s crit %d scanned %v, want %+v",
+				i, str(it.Ref), it.RefSource, it.Counts.Critical, it.LastScanAt != nil, w)
+		}
+	}
+	if it := pf.Items[0]; it.Service.ID != chosen {
+		t.Errorf("order: %+v", it)
+	}
+	// An unscanned, unchosen service has no ref.
+	bare := addService(t, pool, "e-bare", "g/e", false)
+	pf = decode[pfResponse](t, call(t, c, "getPortfolio", "GET", "/", "", ""), http.StatusOK)
+	if it := pf.Items[4]; it.Service.ID != bare || it.Ref != nil || it.RefSource != "latest" {
+		t.Errorf("bare = %+v", it)
+	}
+}
+
+func TestUpdateServiceDefaultRef(t *testing.T) {
+	c, _, rec := newCatalog(t, "")
+	s := decode[svcJSON](t, call(t, c, "createService", "POST", "/", `{"gitlab_project_path":"platform/api"}`, ""), http.StatusCreated)
+	if s.DefaultRef != nil {
+		t.Fatalf("new service has a default ref: %v", *s.DefaultRef)
+	}
+	id := fmt.Sprint(s.ID)
+
+	// The ref is trimmed; it need not have scans.
+	u := decode[svcJSON](t, call(t, c, "updateService", "PATCH", "/", `{"default_ref":"  main  "}`, id), http.StatusOK)
+	if u.DefaultRef == nil || *u.DefaultRef != "main" {
+		t.Fatalf("set = %+v", u)
+	}
+	g := decode[svcJSON](t, call(t, c, "getService", "GET", "/", "", id), http.StatusOK)
+	if g.DefaultRef == nil || *g.DefaultRef != "main" {
+		t.Errorf("get = %+v", g)
+	}
+	// Other updates leave it alone.
+	u = decode[svcJSON](t, call(t, c, "updateService", "PATCH", "/", `{"name":"API"}`, id), http.StatusOK)
+	if u.DefaultRef == nil || *u.DefaultRef != "main" {
+		t.Errorf("rename dropped the default ref: %+v", u)
+	}
+	u = decode[svcJSON](t, call(t, c, "updateService", "PATCH", "/", `{"default_ref":"release/1.x"}`, id), http.StatusOK)
+	if u.DefaultRef == nil || *u.DefaultRef != "release/1.x" {
+		t.Errorf("change = %+v", u)
+	}
+	// null clears.
+	u = decode[svcJSON](t, call(t, c, "updateService", "PATCH", "/", `{"default_ref":null}`, id), http.StatusOK)
+	if u.DefaultRef != nil {
+		t.Errorf("clear = %+v", u)
+	}
+
+	// Invalid values are 400 and change nothing.
+	long := strings.Repeat("a", 256)
+	for name, body := range map[string]string{
+		"empty":      `{"default_ref":""}`,
+		"blank":      `{"default_ref":"   "}`,
+		"too long":   fmt.Sprintf(`{"default_ref":%q}`, long),
+		"control":    `{"default_ref":"ma\u0000in"}`,
+		"newline":    `{"default_ref":"ma\nin"}`,
+		"wrong type": `{"default_ref":5}`,
+	} {
+		r := call(t, c, "updateService", "PATCH", "/", body, id)
+		if r.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400: %s", name, r.Code, r.Body.String())
+		}
+	}
+	if r := call(t, c, "updateService", "PATCH", "/", fmt.Sprintf(`{"default_ref":%q}`, long[:255]), id); r.Code != http.StatusOK {
+		t.Errorf("255 characters: %d", r.Code)
+	}
+	if r := call(t, c, "updateService", "PATCH", "/", `{"default_ref":"x"}`, "99999"); r.Code != http.StatusNotFound {
+		t.Errorf("unknown service: %d", r.Code)
+	}
+
+	// Audit: every successful change records the fields and the old and new value.
+	type change struct{ From, To *string }
+	var got []change
+	for _, e := range rec.events {
+		if e.action != audit.ActionServiceUpdated {
+			continue
+		}
+		d, ok := e.detail["default_ref"].(map[string]any)
+		if !ok {
+			if slices.Contains(e.detail["fields"].([]string), "default_ref") {
+				t.Errorf("default_ref listed without old and new value: %+v", e.detail)
+			}
+			continue
+		}
+		if !slices.Equal(e.detail["fields"].([]string), []string{"default_ref"}) {
+			t.Errorf("fields = %v", e.detail["fields"])
+		}
+		got = append(got, change{d["from"].(*string), d["to"].(*string)})
+	}
+	sp := func(v string) *string { return &v }
+	want := []change{{nil, sp("main")}, {sp("main"), sp("release/1.x")}, {sp("release/1.x"), nil}, {nil, sp(long[:255])}}
+	if len(got) != len(want) {
+		t.Fatalf("audit changes = %+v", got)
+	}
+	for i := range want {
+		if (got[i].From == nil) != (want[i].From == nil) || (got[i].To == nil) != (want[i].To == nil) ||
+			(want[i].From != nil && *got[i].From != *want[i].From) || (want[i].To != nil && *got[i].To != *want[i].To) {
+			t.Errorf("change %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }

@@ -449,7 +449,7 @@ export interface paths {
         delete: operations["deleteService"];
         options?: never;
         head?: never;
-        /** Rename, link a SonarQube project key, or archive (admin only). */
+        /** Rename, link a SonarQube project key, choose the dashboard branch, or archive (admin only). */
         patch: operations["updateService"];
         trace?: never;
     };
@@ -749,6 +749,8 @@ export interface components {
             archived: boolean;
             /** Format: date-time */
             created_at: string;
+            /** @description The branch (ref) an administrator chose for the dashboards of this service. null when none was chosen; the dashboards then show the ref with the most recent scan. The ref need not have scans yet. */
+            default_ref: string | null;
         };
         ServicePage: {
             items: components["schemas"]["Service"][];
@@ -767,6 +769,8 @@ export interface components {
             /** @description null unlinks. */
             sonar_project_key?: string | null;
             archived?: boolean;
+            /** @description Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet. */
+            default_ref?: string | null;
         };
         ScanSummary: {
             /** Format: int64 */
@@ -867,10 +871,16 @@ export interface components {
             findings: number;
             by_severity: components["schemas"]["SeverityCounts"];
         };
+        /**
+         * @description How the ref was chosen: requested (the ref parameter), default (the dashboard branch an administrator chose, even without scans yet) or latest (the ref with the most recent scan).
+         * @enum {string}
+         */
+        RefSource: "requested" | "default" | "latest";
         Overview: {
             service: components["schemas"]["Service"];
-            /** @description null when the service has no scans yet. */
+            /** @description The ref shown. null when no ref was requested or chosen and the service has no scans yet. */
             ref: string | null;
+            ref_source: components["schemas"]["RefSource"];
             /** @description Refs with scans, most recent first. */
             refs: string[];
             /** @description Latest scan per artifact and kind for the ref. */
@@ -917,6 +927,7 @@ export interface components {
         };
         Trends: {
             ref: string | null;
+            ref_source: components["schemas"]["RefSource"];
             points: components["schemas"]["TrendPoint"][];
         };
         /**
@@ -964,8 +975,13 @@ export interface components {
         };
         PortfolioItem: {
             service: components["schemas"]["Service"];
-            /** @description Ref with the most recent scan. */
+            /** @description Ref the numbers come from: the dashboard branch when chosen, else the ref with the most recent scan. */
             ref: string | null;
+            /**
+             * @description default: the administrator's chosen dashboard branch; latest: the ref with the most recent scan.
+             * @enum {string}
+             */
+            ref_source: "default" | "latest";
             counts: components["schemas"]["SeverityCounts"];
             fixable: number;
             secrets: number;
@@ -2268,7 +2284,7 @@ export interface operations {
     getServiceOverview: {
         parameters: {
             query?: {
-                /** @description Git ref; defaults to the ref with the most recent scan. */
+                /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
             };
             header?: never;
@@ -2303,7 +2319,7 @@ export interface operations {
     listServiceScans: {
         parameters: {
             query?: {
-                /** @description Git ref; defaults to the ref with the most recent scan. */
+                /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
                 /** @description Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page. */
                 before?: number;
@@ -2414,7 +2430,7 @@ export interface operations {
     listServiceVulnerabilities: {
         parameters: {
             query?: {
-                /** @description Git ref; defaults to the ref with the most recent scan. */
+                /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
                 /** @description Comma-separated list. */
                 severity?: string;
@@ -2467,7 +2483,7 @@ export interface operations {
     listServiceSecrets: {
         parameters: {
             query?: {
-                /** @description Git ref; defaults to the ref with the most recent scan. */
+                /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
             };
             header?: never;
@@ -2502,7 +2518,7 @@ export interface operations {
     getServiceTrends: {
         parameters: {
             query?: {
-                /** @description Git ref; defaults to the ref with the most recent scan. */
+                /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
                 days?: number;
             };

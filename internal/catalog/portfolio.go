@@ -11,15 +11,17 @@ import (
 )
 
 // portfolioSQL returns every active service with its current Trivy state for
-// its default ref (the ref of its most recent scan, ties broken by ref as in
-// ListRefs) and its latest SonarQube analysis, in one statement. The current
+// its dashboard ref and its latest SonarQube analysis, in one statement. The
+// dashboard ref is the branch an administrator chose (default_ref), even when
+// it has no scans yet, else the ref of the most recent scan (ties broken by
+// ref as in ListRefs); findings.pickRef applies the same rule. The current
 // state of a ref is the latest scan per (artifact_name, kind), as in
 // CurrentScans. It is written by hand rather than generated because sqlc
 // types the columns of LEFT JOIN LATERAL subqueries as not null.
 const portfolioSQL = `
 SELECT s.id, s.name, s.gitlab_project_id, s.gitlab_project_path, s.sonar_project_key,
-       s.created_via, s.archived, s.created_at,
-       dr.ref,
+       s.created_via, s.archived, s.created_at, s.default_ref,
+       dr.ref, dr.source,
        COALESCE(cs.critical, 0), COALESCE(cs.high, 0), COALESCE(cs.medium, 0),
        COALESCE(cs.low, 0), COALESCE(cs.unknown, 0), COALESCE(cs.fixable, 0),
        COALESCE(cs.secrets, 0), cs.last_scan_at,
@@ -28,7 +30,12 @@ SELECT s.id, s.name, s.gitlab_project_id, s.gitlab_project_path, s.sonar_project
        NULLIF(sa.maintainability_rating, ''), sa.coverage, sa.analysed_at
 FROM services s
 LEFT JOIN LATERAL (
-    SELECT ref FROM scans WHERE service_id = s.id ORDER BY scanned_at DESC, ref LIMIT 1
+    SELECT COALESCE(s.default_ref, l.ref) AS ref,
+           CASE WHEN s.default_ref IS NOT NULL THEN 'default' ELSE 'latest' END AS source
+    FROM (SELECT NULL::text) base
+    LEFT JOIN LATERAL (
+        SELECT ref FROM scans WHERE service_id = s.id ORDER BY scanned_at DESC, ref LIMIT 1
+    ) l ON s.default_ref IS NULL
 ) dr ON true
 LEFT JOIN LATERAL (
     SELECT sum(c.count_critical)::bigint AS critical, sum(c.count_high)::bigint AS high,
@@ -66,6 +73,7 @@ type severityCounts struct {
 type portfolioItem struct {
 	Service               serviceJSON    `json:"service"`
 	Ref                   *string        `json:"ref"`
+	RefSource             string         `json:"ref_source"`
 	Counts                severityCounts `json:"counts"`
 	Fixable               int64          `json:"fixable"`
 	Secrets               int64          `json:"secrets"`
@@ -99,8 +107,8 @@ func (c *Catalog) getPortfolio(w http.ResponseWriter, r *http.Request) {
 		s := &it.Service
 		var created time.Time
 		if err := rows.Scan(&s.ID, &s.Name, &s.GitLabProjectID, &s.GitLabProjectPath, &s.SonarProjectKey,
-			&s.CreatedVia, &s.Archived, &created,
-			&it.Ref,
+			&s.CreatedVia, &s.Archived, &created, &s.DefaultRef,
+			&it.Ref, &it.RefSource,
 			&it.Counts.Critical, &it.Counts.High, &it.Counts.Medium, &it.Counts.Low, &it.Counts.Unknown,
 			&it.Fixable, &it.Secrets, &it.LastScanAt,
 			&it.QualityGateStatus, &it.ReliabilityRating, &it.SecurityRating, &it.MaintainabilityRating,

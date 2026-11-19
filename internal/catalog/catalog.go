@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/siyamsarker/scanopsis/internal/audit"
@@ -70,6 +71,7 @@ type serviceJSON struct {
 	CreatedVia        string    `json:"created_via"`
 	Archived          bool      `json:"archived"`
 	CreatedAt         time.Time `json:"created_at"`
+	DefaultRef        *string   `json:"default_ref"`
 }
 
 func toService(s store.Service) serviceJSON {
@@ -83,7 +85,18 @@ func toService(s store.Service) serviceJSON {
 	if s.SonarProjectKey.Valid {
 		out.SonarProjectKey = &s.SonarProjectKey.String
 	}
+	if s.DefaultRef.Valid {
+		out.DefaultRef = &s.DefaultRef.String
+	}
 	return out
+}
+
+// textOrNil is the JSON form of a nullable text column.
+func textOrNil(t pgtype.Text) *string {
+	if !t.Valid {
+		return nil
+	}
+	return &t.String
 }
 
 func (c *Catalog) internalError(w http.ResponseWriter, r *http.Request, msg string, err error) {
@@ -262,15 +275,16 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		Name     *string   `json:"name"`
 		Key      optString `json:"sonar_project_key"`
 		Archived *bool     `json:"archived"`
+		Ref      optString `json:"default_ref"`
 	}
 	if !decodeBody(w, r, &in) {
 		return
 	}
-	if err := validateUpdate(in.Name, in.Key.set, in.Key.val, in.Archived); err != nil {
+	if err := validateUpdate(in.Name, in.Key.set, in.Key.val, in.Archived, in.Ref.set, in.Ref.val); err != nil {
 		badRequest(w, err.Error())
 		return
 	}
-	arg := store.UpdateServiceParams{ID: id, SetSonarKey: in.Key.set}
+	arg := store.UpdateServiceParams{ID: id, SetSonarKey: in.Key.set, SetDefaultRef: in.Ref.set}
 	changed := []string{}
 	if in.Name != nil {
 		arg.Name.String, arg.Name.Valid = *in.Name, true
@@ -286,7 +300,14 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		arg.Archived.Bool, arg.Archived.Valid = *in.Archived, true
 		changed = append(changed, "archived")
 	}
-	s, err := c.q.UpdateService(r.Context(), arg)
+	if in.Ref.set {
+		if in.Ref.val != nil {
+			ref, _ := validateRef(*in.Ref.val) // checked above
+			arg.DefaultRef.String, arg.DefaultRef.Valid = ref, true
+		}
+		changed = append(changed, "default_ref")
+	}
+	row, err := c.q.UpdateService(r.Context(), arg)
 	if errors.Is(err, pgx.ErrNoRows) {
 		notFound(w)
 		return
@@ -299,9 +320,14 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, "cannot update service", err)
 		return
 	}
-	c.audit.Record(r.Context(), c.actor(r.Context()), audit.ActionServiceUpdated, map[string]any{
-		"id": s.ID, "gitlab_project_path": s.GitlabProjectPath, "fields": changed,
-	})
+	s := row.Service
+	detail := map[string]any{"id": s.ID, "gitlab_project_path": s.GitlabProjectPath, "fields": changed}
+	if in.Ref.set {
+		detail["default_ref"] = map[string]any{
+			"from": textOrNil(row.PreviousDefaultRef), "to": textOrNil(s.DefaultRef),
+		}
+	}
+	c.audit.Record(r.Context(), c.actor(r.Context()), audit.ActionServiceUpdated, detail)
 	httpapi.WriteJSON(w, http.StatusOK, toService(s))
 }
 

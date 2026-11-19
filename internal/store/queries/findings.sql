@@ -7,7 +7,7 @@
 
 -- name: FindingsGetService :one
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at
+       created_via, archived, created_at, default_ref
 FROM services
 WHERE id = $1;
 
@@ -170,7 +170,7 @@ WITH cur AS (
     ORDER BY s.service_id, s.ref, s.artifact_name, s.kind, s.scanned_at DESC, s.id DESC
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,
-       sv.created_via, sv.archived, sv.created_at,
+       sv.created_via, sv.archived, sv.created_at, sv.default_ref,
        cur.ref, cur.artifact_name, cur.scan_id, cur.scanned_at,
        v.pkg_name, v.installed_version, v.fixed_version, v.severity
 FROM cur
