@@ -22,6 +22,7 @@ import {
 } from './service/Timeline';
 import { TrivyPosture } from './service/TrivyPosture';
 import { SectionError } from './service/parts';
+import { describeRefSource, refChoices } from './service/refSource';
 import { findingsHref, projectUrlFrom } from './service/links';
 
 function NotFound() {
@@ -54,7 +55,7 @@ function Header({ id, refParam }: { id: number; refParam: string | undefined }) 
     scanLinks.data?.pipeline_url ?? scanLinks.data?.commit_url ?? scanLinks.data?.job_url,
   );
   const effectiveRef = refParam ?? overview.data?.ref ?? undefined;
-  const refs = overview.data?.refs ?? [];
+  const refs = refChoices(overview.data?.refs ?? [], effectiveRef);
   const sonarLatest = sonar.data?.latest;
   const sonarUrl = safeExternalUrl(sonarLatest?.project_url);
 
@@ -130,6 +131,12 @@ function Header({ id, refParam }: { id: number; refParam: string | undefined }) 
         }
       />
       <div className="-mt-3 flex flex-wrap gap-x-6 gap-y-1 pb-6">
+        {overview.data?.ref ? (
+          <p className="text-sm text-text-muted" data-testid="ref-source">
+            Showing <Mono value={overview.data.ref} /> ·{' '}
+            {describeRefSource(overview.data.ref_source, overview.data.ref, s.default_ref)}
+          </p>
+        ) : null}
         {overview.data?.data_at ? (
           <Freshness
             at={overview.data.data_at}

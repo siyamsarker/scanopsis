@@ -79,7 +79,35 @@ export function TrivyPosture({ serviceId, gitRef }: { serviceId: number; gitRef?
     );
   }
   const o = query.data;
-  if (o.ref === null || o.artifacts.length === 0) {
+  if (o.ref !== null && o.artifacts.length === 0) {
+    const chosen = o.ref_source === 'default';
+    return (
+      <Card padded={false}>
+        <EmptyState
+          title={`No scans of ${o.ref} yet`}
+          body={
+            (chosen
+              ? 'An administrator chose this branch for the dashboards. '
+              : 'No pipeline on this branch has uploaded a report. ') +
+            (o.refs.length > 0
+              ? 'Other scanned branches are available in the Git ref list.'
+              : 'Scans appear here after a pipeline on it uploads a Trivy report.')
+          }
+          action={
+            <a
+              className="text-brand underline underline-offset-2"
+              href={GITLAB_CI_GUIDE}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Read the GitLab CI guide
+            </a>
+          }
+        />
+      </Card>
+    );
+  }
+  if (o.ref === null) {
     return (
       <Card padded={false}>
         <EmptyState

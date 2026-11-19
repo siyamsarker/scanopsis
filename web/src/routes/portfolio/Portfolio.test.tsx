@@ -46,8 +46,10 @@ function item(
       created_via: 'ingest',
       archived: false,
       created_at: '2026-01-01T00:00:00Z',
+      default_ref: null,
     },
     ref: 'main',
+    ref_source: 'latest',
     counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0, ...counts },
     fixable: 0,
     secrets: 0,
@@ -74,6 +76,7 @@ const delta = item(
   4,
   'delta',
   {
+    ref: null,
     last_scan_at: null,
     quality_gate_status: null,
     reliability_rating: null,
@@ -226,6 +229,33 @@ describe('PortfolioPage', () => {
     // A scan older than seven days is marked stale.
     expect(within(screen.getByText('bravo').closest('li')!).getByText('Stale')).toBeInTheDocument();
     expect(tile.queryByText('Stale')).not.toBeInTheDocument();
+  });
+
+  it('names the branch the numbers come from', async () => {
+    renderPage('/', {
+      ...portfolio,
+      items: [
+        item(1, 'alpha', { ref: 'main', ref_source: 'default' }),
+        item(2, 'bravo', { ref: 'feature/x', ref_source: 'latest' }),
+        item(3, 'charlie', { ref: 'release', ref_source: 'default', last_scan_at: null }),
+      ],
+    });
+    await screen.findByText('alpha');
+    const alpha = within(screen.getByText('alpha').closest('li')!);
+    expect(alpha.getByText('main')).toBeInTheDocument();
+    expect(alpha.getByText('Branch')).toHaveClass('sr-only');
+    expect(alpha.getByText('main').closest('p')).toHaveAttribute(
+      'title',
+      'The dashboard branch an administrator chose',
+    );
+    const bravo = within(screen.getByText('bravo').closest('li')!);
+    expect(bravo.getByText('feature/x').closest('p')).toHaveAttribute(
+      'title',
+      'The latest scanned branch; no dashboard branch is chosen',
+    );
+    // A chosen branch without scans says so, not "No scans yet".
+    const charlie = within(screen.getByText('charlie').closest('li')!);
+    expect(charlie.getByText(/No scans of release yet/)).toBeInTheDocument();
   });
 
   it('shows Not available for unreported metrics and a docs link without scans', async () => {

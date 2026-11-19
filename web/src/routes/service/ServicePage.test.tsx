@@ -41,6 +41,7 @@ const service = {
   created_via: 'ingest',
   archived: false,
   created_at: '2026-01-01T00:00:00Z',
+  default_ref: null,
 };
 
 function scan(id: number, overrides: Record<string, unknown> = {}) {
@@ -68,6 +69,7 @@ function scan(id: number, overrides: Record<string, unknown> = {}) {
 const overview = {
   service,
   ref: 'main',
+  ref_source: 'latest',
   refs: ['main', 'release/1.x'],
   artifacts: [
     scan(11),
@@ -141,6 +143,7 @@ const sonar = {
 
 const trends = {
   ref: 'main',
+  ref_source: 'latest',
   points: [
     {
       scan_id: 1,
@@ -420,6 +423,86 @@ describe('service dashboard', () => {
       expect(screen.getByRole('link', { name: 'Read the SonarQube guide' })).toBeVisible(),
     );
     expect(screen.queryByRole('link', { name: 'Open the Services page' })).not.toBeInTheDocument();
+  });
+
+  it('says the latest scan decides while no dashboard branch is chosen', async () => {
+    setup();
+    expect(await screen.findByTestId('ref-source')).toHaveTextContent(
+      'Showing main · latest scan (no dashboard branch chosen)',
+    );
+  });
+
+  it('says the ref is the dashboard branch an administrator chose', async () => {
+    setup('/services/7', {
+      overrides: (call) => {
+        if (call.path === '/api/v1/services/7')
+          return json(200, { ...service, default_ref: 'main' });
+        if (call.path.startsWith('/api/v1/services/7/overview'))
+          return json(200, {
+            ...overview,
+            ref_source: 'default',
+            service: { ...service, default_ref: 'main' },
+          });
+        return undefined;
+      },
+    });
+    expect(await screen.findByTestId('ref-source')).toHaveTextContent(
+      'Showing main · dashboard branch',
+    );
+  });
+
+  it('keeps a chosen branch without scans in the ref list and says there are no scans of it', async () => {
+    const chosen = { ...service, default_ref: 'release/2.x' };
+    setup('/services/7', {
+      overrides: (call) => {
+        if (call.path === '/api/v1/services/7') return json(200, chosen);
+        if (call.path.startsWith('/api/v1/services/7/overview'))
+          return json(200, {
+            ...overview,
+            service: chosen,
+            ref: 'release/2.x',
+            ref_source: 'default',
+            artifacts: [],
+            data_at: null,
+            top_packages: [],
+          });
+        if (call.path.startsWith('/api/v1/services/7/scans'))
+          return json(200, { items: [], next_before: null });
+        return undefined;
+      },
+    });
+    expect(await screen.findByText('No scans of release/2.x yet')).toBeVisible();
+    expect(screen.queryByText('No Trivy scans yet')).not.toBeInTheDocument();
+    const select = screen.getByLabelText('Git ref');
+    expect(select).toHaveValue('release/2.x');
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['main', 'release/1.x', 'release/2.x']);
+    expect(screen.getByTestId('ref-source')).toHaveTextContent(
+      'Showing release/2.x · dashboard branch',
+    );
+  });
+
+  it('explains a ref picked from the list when a dashboard branch is chosen', async () => {
+    setup('/services/7?ref=release%2F1.x', {
+      overrides: (call) => {
+        if (call.path === '/api/v1/services/7')
+          return json(200, { ...service, default_ref: 'main' });
+        if (call.path.startsWith('/api/v1/services/7/overview'))
+          return json(200, {
+            ...overview,
+            service: { ...service, default_ref: 'main' },
+            ref: 'release/1.x',
+            ref_source: 'requested',
+          });
+        return undefined;
+      },
+    });
+    expect(await screen.findByTestId('ref-source')).toHaveTextContent(
+      'Showing release/1.x · selected (the dashboard branch is main)',
+    );
   });
 
   it('shows the no-scans state', async () => {

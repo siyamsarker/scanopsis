@@ -5,6 +5,7 @@ import { Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useAdminServices, type Service } from '../api/admin';
+import { usePortfolio } from '../api/portfolio';
 import { DataTable } from '../components/DataTable';
 import type { Column } from '../components/tableCore';
 import { Mono } from '../components/Mono';
@@ -16,6 +17,7 @@ import { formatExactTime, relativeTime } from '../format';
 import { primaryButtonClass } from '../ui';
 import { AddServiceForm } from './admin/AddServiceForm';
 import { AdminGate } from './admin/AdminGate';
+import { DashboardBranch } from './admin/DashboardBranch';
 import { ServiceActions } from './admin/ServiceActions';
 
 function ServicesList({ onNotice }: { onNotice: (message: string) => void }) {
@@ -23,6 +25,13 @@ function ServicesList({ onNotice }: { onNotice: (message: string) => void }) {
   const [archived, setArchived] = useState(false);
   const services = useAdminServices({ q, archived }, true);
   const rows = services.data?.pages.flatMap((page) => page.items) ?? [];
+  // The branch each service shows while none is chosen. The portfolio lists active
+  // services only, and the label simply omits the branch when it is not known.
+  const portfolio = usePortfolio();
+  const latest = new Map<number, string>();
+  for (const item of portfolio.data?.items ?? []) {
+    if (item.ref_source === 'latest' && item.ref) latest.set(item.service.id, item.ref);
+  }
 
   const columns: Column<Service>[] = [
     {
@@ -61,6 +70,11 @@ function ServicesList({ onNotice }: { onNotice: (message: string) => void }) {
         ) : (
           <Mono value={s.sonar_project_key} />
         ),
+    },
+    {
+      key: 'dashboard-branch',
+      header: 'Dashboard branch',
+      cell: (s) => <DashboardBranch service={s} latest={latest.get(s.id)} onNotice={onNotice} />,
     },
     {
       key: 'via',
@@ -156,7 +170,7 @@ export function AdminServicesPage() {
   return (
     <AdminGate
       title="Services"
-      subtitle="Add services, link them to SonarQube, archive or delete them."
+      subtitle="Add services, link them to SonarQube, choose the branch their dashboards show, archive or delete them."
       actions={
         !adding && (
           <button type="button" className={primaryButtonClass} onClick={() => setAdding(true)}>

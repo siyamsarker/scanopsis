@@ -1,6 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { GitBranch } from 'lucide-react';
 import { Link } from 'react-router';
 import type { PortfolioItem } from '../../api/portfolio';
 import { RatingBadge, GateBadge, type GateStatus } from '../../components/badges';
@@ -40,6 +41,20 @@ export function ServiceTile({ item, now }: { item: PortfolioItem; now?: Date }) 
             </Link>
           </h3>
           <Mono value={service.gitlab_project_path} truncate className="text-sm text-text-muted" />
+          {item.ref ? (
+            <p
+              className="mt-0.5 flex min-w-0 items-center gap-1 text-xs text-text-muted"
+              title={
+                item.ref_source === 'default'
+                  ? 'The dashboard branch an administrator chose'
+                  : 'The latest scanned branch; no dashboard branch is chosen'
+              }
+            >
+              <GitBranch size={12} strokeWidth={1.5} aria-hidden="true" className="shrink-0" />
+              <span className="sr-only">Branch</span>
+              <Mono value={item.ref} truncate />
+            </p>
+          ) : null}
         </div>
         <GateBadge status={item.quality_gate_status as GateStatus} className="shrink-0" />
       </div>
@@ -54,7 +69,7 @@ export function ServiceTile({ item, now }: { item: PortfolioItem; now?: Date }) 
         </div>
       ) : (
         <p className="rounded-control border border-dashed border-border-strong px-3 py-2 text-sm text-text-muted">
-          No scans yet.{' '}
+          {item.ref ? `No scans of ${item.ref} yet.` : 'No scans yet.'}{' '}
           <TargetLink
             target={{ label: 'Add the upload step', href: CI_GUIDE_URL }}
             className="text-text underline underline-offset-2"

@@ -22,6 +22,7 @@ const pay: Service = {
   created_via: 'ingest',
   archived: false,
   created_at: '2026-11-01T10:00:00Z',
+  default_ref: null,
 };
 const docs: Service = {
   id: 2,
@@ -32,6 +33,7 @@ const docs: Service = {
   created_via: 'manual',
   archived: false,
   created_at: '2026-11-02T10:00:00Z',
+  default_ref: null,
 };
 
 function api(extra?: Handler): Handler {
@@ -72,6 +74,7 @@ describe('admin services page', () => {
       'GitLab project path',
       'GitLab project ID',
       'SonarQube key',
+      'Dashboard branch',
       'Created via',
       'Created',
       'Actions',
@@ -194,6 +197,215 @@ describe('admin services page', () => {
       body: { name: 'Payments API', sonar_project_key: null },
     });
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  describe('dashboard branch', () => {
+    const portfolioItem = (service: Service, ref: string | null, ref_source: string) => ({
+      service,
+      ref,
+      ref_source,
+      counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+      fixable: 0,
+      secrets: 0,
+      last_scan_at: null,
+      quality_gate_status: null,
+      reliability_rating: null,
+      security_rating: null,
+      maintainability_rating: null,
+      coverage: null,
+      last_analysis_at: null,
+    });
+    const overviewOf = (service: Service) => ({
+      service,
+      ref: 'feature/x',
+      ref_source: 'latest',
+      refs: ['feature/x', 'main'],
+      artifacts: [],
+      counts: { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 },
+      fixable: 0,
+      secrets: 0,
+      suppressed: 0,
+      new_since_previous: 0,
+      fixed_since_previous: 0,
+      by_class: {},
+      top_packages: [],
+      data_at: null,
+    });
+    const withBranch: Service = { ...docs, default_ref: 'release' };
+
+    function branchApi(extra?: Handler): Handler {
+      return async (call) => {
+        const custom = await extra?.(call);
+        if (custom) return custom;
+        if (call.path === '/api/v1/portfolio') {
+          return json(200, {
+            items: [
+              portfolioItem(pay, 'feature/x', 'latest'),
+              portfolioItem(withBranch, 'release', 'default'),
+            ],
+            totals: {
+              services: 2,
+              failing_quality_gates: 0,
+              services_with_critical: 0,
+              fixable: 0,
+            },
+            generated_at: '2026-11-19T10:00:00Z',
+          });
+        }
+        if (call.path.startsWith('/api/v1/services/1/overview')) return json(200, overviewOf(pay));
+        if (call.method === 'GET' && call.path.startsWith('/api/v1/services?')) {
+          return json(200, { items: [pay, withBranch], next_after: null });
+        }
+        return undefined;
+      };
+    }
+
+    it('shows the chosen branch, or says the latest scanned branch is shown', async () => {
+      mockFetch(api(branchApi()));
+      renderApp('/admin/services');
+      const table = await screen.findByRole('table');
+      const payRow = within(table).getByRole('row', { name: /Payments/ });
+      await within(payRow).findByText('feature/x');
+      expect(payRow).toHaveTextContent(
+        'Not chosen — showing the latest scanned branch (feature/x)',
+      );
+      expect(
+        within(payRow).getByRole('button', { name: 'Choose dashboard branch of Payments' }),
+      ).toBeInTheDocument();
+      const docsRow = within(table).getByRole('row', { name: /Docs/ });
+      expect(docsRow).toHaveTextContent('release');
+      expect(docsRow).not.toHaveTextContent('Not chosen');
+      expect(
+        within(docsRow).getByRole('button', { name: 'Change dashboard branch of Docs' }),
+      ).toBeInTheDocument();
+    });
+
+    it('still explains an unset branch when the latest branch is unknown', async () => {
+      mockFetch(api());
+      renderApp('/admin/services');
+      const payRow = within(await screen.findByRole('table')).getByRole('row', {
+        name: /Payments/,
+      });
+      expect(payRow).toHaveTextContent('Not chosen — showing the latest scanned branch');
+    });
+
+    it('chooses a branch from the scanned refs and sends it', async () => {
+      const { calls } = mockFetch(
+        api(
+          branchApi((call) =>
+            call.method === 'PATCH' ? json(200, { ...pay, default_ref: 'main' }) : undefined,
+          ),
+        ),
+      );
+      renderApp('/admin/services');
+      await screen.findByRole('link', { name: 'Payments' });
+      fireEvent.click(screen.getByRole('button', { name: 'Choose dashboard branch of Payments' }));
+      const input = screen.getByLabelText('Dashboard branch of Payments');
+      expect(input).toHaveValue('');
+      expect(input).toHaveFocus();
+      // The datalist offers the service's scanned refs.
+      await waitFor(() =>
+        expect(
+          Array.from(
+            document.querySelectorAll(`datalist#${CSS.escape(input.getAttribute('list')!)} option`),
+          ).map((o) => o.getAttribute('value')),
+        ).toEqual(['feature/x', 'main']),
+      );
+      // Clear has nothing to clear while no branch is chosen.
+      expect(
+        screen.getByRole('button', { name: 'Clear dashboard branch of Payments' }),
+      ).toBeDisabled();
+      fireEvent.change(input, { target: { value: '  main ' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save dashboard branch of Payments' }));
+      expect(
+        await screen.findByText('The dashboards of Payments now show main.'),
+      ).toBeInTheDocument();
+      expect(calls.find((c) => c.method === 'PATCH')).toMatchObject({
+        path: '/api/v1/services/1',
+        body: { default_ref: 'main' },
+      });
+      expect(screen.queryByLabelText('Dashboard branch of Payments')).not.toBeInTheDocument();
+    });
+
+    it('accepts a branch without scans and submits on Enter', async () => {
+      const { calls } = mockFetch(
+        api(
+          branchApi((call) =>
+            call.method === 'PATCH' ? json(200, { ...pay, default_ref: 'release/9' }) : undefined,
+          ),
+        ),
+      );
+      renderApp('/admin/services');
+      await screen.findByRole('link', { name: 'Payments' });
+      fireEvent.click(screen.getByRole('button', { name: 'Choose dashboard branch of Payments' }));
+      const input = screen.getByLabelText('Dashboard branch of Payments');
+      fireEvent.change(input, { target: { value: 'release/9' } });
+      fireEvent.submit(input.closest('form')!);
+      await screen.findByText('The dashboards of Payments now show release/9.');
+      expect(calls.find((c) => c.method === 'PATCH')?.body).toEqual({ default_ref: 'release/9' });
+    });
+
+    it('clears the choice with null', async () => {
+      const { calls } = mockFetch(
+        api(
+          branchApi((call) =>
+            call.method === 'PATCH' ? json(200, { ...withBranch, default_ref: null }) : undefined,
+          ),
+        ),
+      );
+      renderApp('/admin/services');
+      await screen.findByRole('link', { name: 'Docs' });
+      fireEvent.click(screen.getByRole('button', { name: 'Change dashboard branch of Docs' }));
+      expect(screen.getByLabelText('Dashboard branch of Docs')).toHaveValue('release');
+      fireEvent.click(screen.getByRole('button', { name: 'Clear dashboard branch of Docs' }));
+      expect(await screen.findByText(/Cleared the dashboard branch of Docs/)).toBeInTheDocument();
+      expect(calls.find((c) => c.method === 'PATCH')).toMatchObject({
+        path: '/api/v1/services/2',
+        body: { default_ref: null },
+      });
+    });
+
+    it('refuses an empty branch and shows the server error inline', async () => {
+      let answer = apiError(400, 'invalid_request', 'default_ref must be 1 to 255 characters');
+      const { calls } = mockFetch(
+        api(branchApi((call) => (call.method === 'PATCH' ? answer : undefined))),
+      );
+      renderApp('/admin/services');
+      await screen.findByRole('link', { name: 'Payments' });
+      fireEvent.click(screen.getByRole('button', { name: 'Choose dashboard branch of Payments' }));
+      const input = screen.getByLabelText('Dashboard branch of Payments');
+      fireEvent.click(screen.getByRole('button', { name: 'Save dashboard branch of Payments' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Enter a branch name');
+      expect(input).toHaveAccessibleDescription(/Enter a branch name/);
+      expect(input).toHaveAttribute('aria-invalid', 'true');
+      expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+
+      fireEvent.change(input, { target: { value: 'x' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save dashboard branch of Payments' }));
+      expect(
+        await screen.findByText('default_ref must be 1 to 255 characters'),
+      ).toBeInTheDocument();
+      // The editor stays open so the value can be corrected.
+      expect(screen.getByLabelText('Dashboard branch of Payments')).toHaveValue('x');
+      answer = json(200, { ...pay, default_ref: 'x' });
+      fireEvent.click(screen.getByRole('button', { name: 'Save dashboard branch of Payments' }));
+      await screen.findByText('The dashboards of Payments now show x.');
+    });
+
+    it('cancels with the button or Escape without sending anything', async () => {
+      const { calls } = mockFetch(api(branchApi()));
+      renderApp('/admin/services');
+      await screen.findByRole('link', { name: 'Payments' });
+      fireEvent.click(screen.getByRole('button', { name: 'Choose dashboard branch of Payments' }));
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Cancel editing the dashboard branch of Payments' }),
+      );
+      expect(screen.queryByLabelText('Dashboard branch of Payments')).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Choose dashboard branch of Payments' }));
+      fireEvent.keyDown(screen.getByLabelText('Dashboard branch of Payments'), { key: 'Escape' });
+      expect(screen.queryByLabelText('Dashboard branch of Payments')).not.toBeInTheDocument();
+      expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+    });
   });
 
   it('archives after explaining the effect', async () => {

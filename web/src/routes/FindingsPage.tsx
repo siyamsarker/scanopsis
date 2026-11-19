@@ -15,6 +15,7 @@ import { PageHeader } from '../components/layout';
 import { EmptyState, ErrorState, Skeleton, SkeletonTable } from '../components/states';
 import { TabPanel, Tabs } from '../components/Tabs';
 import { parseFilters } from './findings/model';
+import { refChoices } from './service/refSource';
 import { FixTab } from './findings/FixTab';
 import { SecretsTab } from './findings/SecretsTab';
 import { VulnerabilitiesTab } from './findings/VulnerabilitiesTab';
@@ -155,16 +156,20 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
               label="Ref"
               value={gitRef ?? ''}
               onChange={(value) => setParam('ref', value)}
-              options={data.refs.map((r) => ({ value: r, label: r }))}
+              options={refChoices(data.refs, gitRef).map((r) => ({ value: r, label: r }))}
             />
           ) : undefined
         }
       />
-      {gitRef === undefined ? (
+      {gitRef === undefined || data.artifacts.length === 0 ? (
         <div className="rounded-card border border-border bg-surface">
           <EmptyState
-            title="No scans yet"
-            body="Findings appear here after the first pipeline uploads a scan."
+            title={gitRef === undefined ? 'No scans yet' : `No scans of ${gitRef} yet`}
+            body={
+              gitRef === undefined
+                ? 'Findings appear here after the first pipeline uploads a scan.'
+                : 'Findings appear here after a pipeline on this branch uploads a scan.'
+            }
           />
         </div>
       ) : (

@@ -35,10 +35,14 @@ export function useService(id: number) {
   });
 }
 
-/** Trivy posture for a ref; without a ref the server picks the most recently scanned one. */
-export function useOverview(id: number, ref: string | undefined) {
+/**
+ * Trivy posture for a ref. Without a ref the server picks the service's dashboard
+ * branch, else the most recently scanned one; `ref_source` says which.
+ */
+export function useOverview(id: number, ref: string | undefined, enabled = true) {
   return useQuery({
     queryKey: keys.overview(id, ref),
+    enabled,
     queryFn: async () =>
       unwrap(
         await api.GET('/api/v1/services/{id}/overview', {

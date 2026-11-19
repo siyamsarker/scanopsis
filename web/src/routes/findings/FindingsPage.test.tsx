@@ -14,11 +14,13 @@ const SERVICE = {
   created_via: 'ingest',
   archived: false,
   created_at: '2026-01-01T00:00:00Z',
+  default_ref: null,
 };
 
 const OVERVIEW = {
   service: SERVICE,
   ref: 'main',
+  ref_source: 'latest',
   refs: ['main', 'release'],
   artifacts: [
     {
@@ -524,5 +526,30 @@ describe('findings explorer', () => {
     );
     renderApp('/services/5/findings');
     expect(await screen.findByText('No scans yet')).toBeInTheDocument();
+  });
+
+  it('says there are no scans of a chosen branch and keeps it in the ref list', async () => {
+    mockFetch(
+      api((c) =>
+        c.path.startsWith('/api/v1/services/5/overview')
+          ? json(200, {
+              ...OVERVIEW,
+              ref: 'release/2.x',
+              ref_source: 'default',
+              artifacts: [],
+              data_at: null,
+            })
+          : undefined,
+      ),
+    );
+    renderApp('/services/5/findings');
+    expect(await screen.findByText('No scans of release/2.x yet')).toBeInTheDocument();
+    const select = screen.getByRole('combobox', { name: 'Ref' });
+    expect(select).toHaveValue('release/2.x');
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.textContent),
+    ).toEqual(['main', 'release', 'release/2.x']);
   });
 });

@@ -3,6 +3,7 @@
 
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, unwrap, type ApiError } from './client';
+import { portfolioKey } from './portfolio';
 import type { components } from './schema.gen';
 
 export type Service = components['schemas']['Service'];
@@ -57,7 +58,14 @@ export function useUpdateService() {
   return useMutation<Service, ApiError, { id: number; body: ServiceUpdate }>({
     mutationFn: async ({ id, body }) =>
       unwrap(await api.PATCH('/api/v1/services/{id}', { params: { path: { id } }, body })),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: servicesKey }),
+    // A changed dashboard branch changes what every dashboard of the service shows.
+    onSuccess: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: servicesKey }),
+        queryClient.invalidateQueries({ queryKey: portfolioKey }),
+        queryClient.invalidateQueries({ queryKey: ['service'] }),
+        queryClient.invalidateQueries({ queryKey: ['findings'] }),
+      ]),
   });
 }
 
