@@ -1,0 +1,354 @@
+// Copyright 2026 The Scanopsis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package httpapi
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/siyamsarker/scanopsis/internal/store"
+)
+
+func TestRBACMatrix(t *testing.T) {
+	login := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	e := newEnv(t, func(d *Deps) {
+		d.LocalLogin, d.GitLabLogin, d.GitLabCallback = login, login, login
+	})
+	tests := []struct {
+		method, target, body string
+		anon, viewer, admin  int
+	}{
+		{"GET", "/healthz", "", 200, 200, 200},
+		{"GET", "/readyz", "", 200, 200, 200},
+		{"GET", "/api/v1/version", "", 200, 200, 200},
+		{"GET", "/api/v1/auth/methods", "", 200, 200, 200},
+		{"GET", "/api/v1/auth/gitlab/login", "", 204, 204, 204},
+		{"GET", "/api/v1/auth/gitlab/callback", "", 204, 204, 204},
+		{"POST", "/api/v1/auth/local/login", "{}", 204, 204, 204},
+		{"POST", "/api/v1/auth/logout", "", 204, 204, 204},
+		{"GET", "/api/v1/me", "", 401, 200, 200},
+		{"GET", "/api/v1/users", "", 401, 403, 200},
+		{"PATCH", "/api/v1/users/3", `{"role":"viewer"}`, 401, 403, 200},
+	}
+	for _, tt := range tests {
+		for i, role := range []string{"", "viewer", "admin"} {
+			want := []int{tt.anon, tt.viewer, tt.admin}[i]
+			t.Run(tt.method+" "+tt.target+" as "+role, func(t *testing.T) {
+				rec := e.do(tt.method, tt.target, role, tt.body)
+				if rec.Code != want {
+					t.Fatalf("status = %d, want %d; body %s", rec.Code, want, rec.Body.String())
+				}
+				switch want {
+				case 401:
+					assertError(t, rec, 401, "unauthenticated")
+				case 403:
+					assertError(t, rec, 403, "forbidden")
+				}
+			})
+		}
+	}
+}
+
+func TestRBACMatrixCoversEveryRoute(t *testing.T) {
+	// Guards the matrix above: every registered route must appear in it.
+	covered := map[string]bool{
+		"GET /healthz": true, "GET /readyz": true, "GET /api/v1/version": true,
+		"GET /api/v1/auth/methods": true, "GET /api/v1/auth/gitlab/login": true,
+		"GET /api/v1/auth/gitlab/callback": true, "POST /api/v1/auth/local/login": true,
+		"POST /api/v1/auth/logout": true, "GET /api/v1/me": true, "GET /api/v1/users": true,
+		"PATCH /api/v1/users/{id}": true,
+	}
+	s := &server{}
+	for _, rt := range s.routes() {
+		if !covered[rt.method+" "+rt.pattern] {
+			t.Errorf("route %s %s is missing from TestRBACMatrix", rt.method, rt.pattern)
+		}
+	}
+	if len(covered) != len(s.routes()) {
+		t.Errorf("matrix lists %d routes, server registers %d", len(covered), len(s.routes()))
+	}
+}
+
+func TestErrorMessages(t *testing.T) {
+	e := newEnv(t, nil)
+	if m := assertError(t, e.do("GET", "/api/v1/me", "", ""), 401, "unauthenticated").Message; m != "Sign in to continue." {
+		t.Errorf("401 message = %q", m)
+	}
+	if m := assertError(t, e.do("GET", "/api/v1/users", "viewer", ""), 403, "forbidden").Message; m != "This action requires the admin role." {
+		t.Errorf("403 message = %q", m)
+	}
+}
+
+func TestHealthAndReady(t *testing.T) {
+	e := newEnv(t, nil)
+	rec := e.do("GET", "/healthz", "", "")
+	if rec.Code != 200 || rec.Body.String() != `{"status":"ok"}`+"\n" || rec.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("healthz = %d %q %q", rec.Code, rec.Body.String(), rec.Header().Get("Content-Type"))
+	}
+	rec = e.do("GET", "/readyz", "", "")
+	if rec.Code != 200 || rec.Body.String() != `{"status":"ready"}`+"\n" {
+		t.Fatalf("readyz = %d %q", rec.Code, rec.Body.String())
+	}
+
+	e = newEnv(t, func(d *Deps) { d.DB = fakePinger{err: errors.New("dial tcp 10.0.0.5: password=hunter2")} })
+	rec = e.do("GET", "/readyz", "", "")
+	if rec.Code != 503 || rec.Body.String() != `{"status":"not_ready","reason":"database unreachable"}`+"\n" {
+		t.Fatalf("readyz failing = %d %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(e.logs.String(), "hunter2") {
+		t.Error("ping error should be logged")
+	}
+}
+
+func TestVersion(t *testing.T) {
+	rec := newEnv(t, nil).do("GET", "/api/v1/version", "", "")
+	if got := decode[BuildInfo](t, rec); got != (BuildInfo{Version: "1.2.3", Commit: "abc123", Go: "go1.27"}) {
+		t.Fatalf("version = %+v", got)
+	}
+}
+
+func TestAuthMethods(t *testing.T) {
+	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	for _, tt := range []struct {
+		local, gitlab http.Handler
+		want          string
+	}{
+		{nil, nil, `{"gitlab":false,"local":false}`},
+		{h, nil, `{"gitlab":false,"local":true}`},
+		{nil, h, `{"gitlab":true,"local":false}`},
+	} {
+		e := newEnv(t, func(d *Deps) { d.LocalLogin, d.GitLabLogin = tt.local, tt.gitlab })
+		if got := strings.TrimSpace(e.do("GET", "/api/v1/auth/methods", "", "").Body.String()); got != tt.want {
+			t.Errorf("methods = %s, want %s", got, tt.want)
+		}
+	}
+}
+
+func TestDisabledLoginsAreNotEnabled(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, r := range [][2]string{
+		{"GET", "/api/v1/auth/gitlab/login"},
+		{"GET", "/api/v1/auth/gitlab/callback"},
+		{"POST", "/api/v1/auth/local/login"},
+	} {
+		assertError(t, e.do(r[0], r[1], "", "{}"), 404, "not_enabled")
+	}
+}
+
+func TestLoginHandlersAreDelegated(t *testing.T) {
+	redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://gitlab.example.com/auth?x=1", http.StatusFound)
+	})
+	e := newEnv(t, func(d *Deps) { d.GitLabLogin, d.GitLabCallback, d.LocalLogin = redirect, redirect, redirect })
+	rec := e.do("GET", "/api/v1/auth/gitlab/login?return_to=/x", "", "")
+	if rec.Code != 302 || rec.Header().Get("Location") != "https://gitlab.example.com/auth?x=1" {
+		t.Fatalf("login = %d %v", rec.Code, rec.Header())
+	}
+	if rec := e.do("POST", "/api/v1/auth/local/login", "", `{}`); rec.Code != 302 {
+		t.Fatalf("local login = %d", rec.Code)
+	}
+}
+
+func TestLogout(t *testing.T) {
+	e := newEnv(t, nil)
+	if rec := e.do("POST", "/api/v1/auth/logout", "viewer", ""); rec.Code != 204 || rec.Body.Len() != 0 {
+		t.Fatalf("logout = %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := e.do("POST", "/api/v1/auth/logout", "", ""); rec.Code != 204 {
+		t.Fatalf("anonymous logout = %d", rec.Code)
+	}
+	want := []auditEvent{{"vera", "logout", nil}, {"", "logout", nil}}
+	if !reflect.DeepEqual(e.audit.events, want) {
+		t.Fatalf("audit = %+v, want %+v", e.audit.events, want)
+	}
+	if e.sessions.ended != 2 {
+		t.Fatalf("End called %d times, want 2", e.sessions.ended)
+	}
+}
+
+func TestLogoutEndFailure(t *testing.T) {
+	e := newEnv(t, nil)
+	e.sessions.endError = errors.New("db down")
+	assertError(t, e.do("POST", "/api/v1/auth/logout", "viewer", ""), 500, "internal_error")
+	if len(e.audit.events) != 0 {
+		t.Fatalf("no audit expected on failure, got %+v", e.audit.events)
+	}
+}
+
+func TestMe(t *testing.T) {
+	e := newEnv(t, nil)
+	e.users.users[1].LastLoginAt = pgtype.Timestamptz{Time: testTime, Valid: true}
+	rec := e.do("GET", "/api/v1/me", "viewer", "")
+	want := `{"id":2,"source":"gitlab","username":"vera","name":"VERA","email":"vera@example.com","role":"viewer",` +
+		`"created_at":"2026-03-01T12:00:00Z","last_login_at":"2026-03-01T12:00:00Z"}` + "\n"
+	if rec.Code != 200 || rec.Body.String() != want {
+		t.Fatalf("me = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = e.do("GET", "/api/v1/me", "admin", "")
+	if !strings.Contains(rec.Body.String(), `"last_login_at":null`) {
+		t.Fatalf("never-signed-in user should have null last_login_at: %s", rec.Body.String())
+	}
+
+	e.users.getErr = errors.New("boom")
+	assertError(t, e.do("GET", "/api/v1/me", "admin", ""), 500, "internal_error")
+	e.users.getErr = nil
+	e.users.users = nil // the principal's row was deleted
+	assertError(t, e.do("GET", "/api/v1/me", "admin", ""), 401, "unauthenticated")
+}
+
+func TestListUsersPaging(t *testing.T) {
+	e := newEnv(t, nil)
+	ids := func(p userPage) []int64 {
+		out := []int64{}
+		for _, u := range p.Items {
+			out = append(out, u.ID)
+		}
+		return out
+	}
+
+	p := decode[userPage](t, e.do("GET", "/api/v1/users?limit=2", "admin", ""))
+	if !reflect.DeepEqual(ids(p), []int64{1, 2}) || p.NextAfter == nil || *p.NextAfter != 2 {
+		t.Fatalf("page 1 = %v next %v", ids(p), p.NextAfter)
+	}
+	if e.users.lastParams.MaxRows != 3 || e.users.lastParams.AfterID != 0 {
+		t.Fatalf("store params = %+v, want limit+1 rows", e.users.lastParams)
+	}
+	p = decode[userPage](t, e.do("GET", "/api/v1/users?limit=2&after=2", "admin", ""))
+	if !reflect.DeepEqual(ids(p), []int64{3}) || p.NextAfter != nil {
+		t.Fatalf("page 2 = %v next %v", ids(p), p.NextAfter)
+	}
+	// Exactly limit rows left: no next page.
+	p = decode[userPage](t, e.do("GET", "/api/v1/users?limit=3", "admin", ""))
+	if len(p.Items) != 3 || p.NextAfter != nil {
+		t.Fatalf("exact page = %v next %v", ids(p), p.NextAfter)
+	}
+	e.do("GET", "/api/v1/users", "admin", "")
+	if e.users.lastParams.MaxRows != 51 {
+		t.Fatalf("default MaxRows = %d, want 51", e.users.lastParams.MaxRows)
+	}
+	rec := e.do("GET", "/api/v1/users?after=99", "admin", "")
+	if got := rec.Body.String(); got != `{"items":[],"next_after":null}`+"\n" {
+		t.Fatalf("empty page = %s", got)
+	}
+}
+
+func TestListUsersValidation(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, q := range []string{"after=-1", "after=x", "limit=0", "limit=201", "limit=-5", "limit=abc", "limit=1.5"} {
+		assertError(t, e.do("GET", "/api/v1/users?"+q, "admin", ""), 400, "invalid_parameter")
+	}
+	for _, q := range []string{"limit=1", "limit=200", "after=0"} {
+		if rec := e.do("GET", "/api/v1/users?"+q, "admin", ""); rec.Code != 200 {
+			t.Errorf("%s: status %d", q, rec.Code)
+		}
+	}
+	e.users.listErr = errors.New("boom")
+	assertError(t, e.do("GET", "/api/v1/users", "admin", ""), 500, "internal_error")
+}
+
+func TestUpdateUser(t *testing.T) {
+	e := newEnv(t, nil)
+	rec := e.do("PATCH", "/api/v1/users/3", "admin", `{"role":"admin"}`)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d %s", rec.Code, rec.Body.String())
+	}
+	if u := decode[userJSON](t, rec); u.ID != 3 || u.Role != "admin" || u.Username != "wes" {
+		t.Fatalf("user = %+v", u)
+	}
+	want := []auditEvent{{"root", "user.role_changed", map[string]any{
+		"user_id": int64(3), "username": "wes", "from": "viewer", "to": "admin",
+	}}}
+	if !reflect.DeepEqual(e.audit.events, want) {
+		t.Fatalf("audit = %+v, want %+v", e.audit.events, want)
+	}
+}
+
+func TestUpdateUserValidation(t *testing.T) {
+	e := newEnv(t, nil)
+	tests := []struct{ name, target, body string }{
+		{"bad id", "/api/v1/users/abc", `{"role":"admin"}`},
+		{"zero id", "/api/v1/users/0", `{"role":"admin"}`},
+		{"negative id", "/api/v1/users/-4", `{"role":"admin"}`},
+		{"empty body", "/api/v1/users/3", ``},
+		{"not json", "/api/v1/users/3", `role=admin`},
+		{"unknown role", "/api/v1/users/3", `{"role":"owner"}`},
+		{"missing role", "/api/v1/users/3", `{}`},
+		{"unknown field", "/api/v1/users/3", `{"role":"admin","name":"x"}`},
+		{"trailing data", "/api/v1/users/3", `{"role":"admin"}{"role":"viewer"}`},
+		{"oversized", "/api/v1/users/3", `{"role":"admin","pad":"` + strings.Repeat("a", 9<<10) + `"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertError(t, e.do("PATCH", tt.target, "admin", tt.body), 400, "invalid_request")
+		})
+	}
+	if len(e.audit.events) != 0 || e.users.users[2].Role != "viewer" {
+		t.Fatal("invalid requests must not change anything")
+	}
+}
+
+func TestUpdateUserStoreErrors(t *testing.T) {
+	e := newEnv(t, nil)
+	assertError(t, e.do("PATCH", "/api/v1/users/42", "admin", `{"role":"admin"}`), 404, "not_found")
+
+	e.users.setErr = store.ErrLastAdmin
+	msg := assertError(t, e.do("PATCH", "/api/v1/users/1", "admin", `{"role":"viewer"}`), 409, "last_admin").Message
+	if msg != "At least one administrator must remain. Promote another user first." {
+		t.Fatalf("message = %q", msg)
+	}
+	e.users.setErr = store.ErrNotFound // deleted between read and write
+	assertError(t, e.do("PATCH", "/api/v1/users/1", "admin", `{"role":"viewer"}`), 404, "not_found")
+	e.users.setErr = errors.New("boom")
+	assertError(t, e.do("PATCH", "/api/v1/users/1", "admin", `{"role":"viewer"}`), 500, "internal_error")
+	e.users.setErr = nil
+	e.users.getErr = errors.New("boom")
+	assertError(t, e.do("PATCH", "/api/v1/users/1", "admin", `{"role":"viewer"}`), 500, "internal_error")
+	if len(e.audit.events) != 0 {
+		t.Fatalf("failed changes must not be audited: %+v", e.audit.events)
+	}
+}
+
+func TestUnknownAndWrongMethodAPI(t *testing.T) {
+	e := newEnv(t, nil)
+	assertError(t, e.do("GET", "/api/v1/nope", "admin", ""), 404, "not_found")
+	assertError(t, e.do("GET", "/api/", "", ""), 404, "not_found")
+	assertError(t, e.do("GET", "/api/v1/users/3/extra", "admin", ""), 404, "not_found")
+
+	rec := e.do("DELETE", "/api/v1/me", "admin", "")
+	assertError(t, rec, 405, "method_not_allowed")
+	if rec.Header().Get("Allow") != "GET" {
+		t.Fatalf("Allow = %q", rec.Header().Get("Allow"))
+	}
+	assertError(t, e.do("GET", "/api/v1/auth/logout", "", ""), 405, "method_not_allowed")
+	assertError(t, e.do("POST", "/api/v1/users/3", "admin", ""), 405, "method_not_allowed")
+}
+
+func TestMatchPattern(t *testing.T) {
+	if matchPattern("/a/{id}", "/a/") || matchPattern("/a/{id}", "/a") || !matchPattern("/a/{id}", "/a/7") {
+		t.Fatal("wildcard matching is wrong")
+	}
+}
+
+func TestBodyLimit(t *testing.T) {
+	var readErr error
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, readErr = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNoContent)
+	})
+	e := newEnv(t, func(d *Deps) { d.LocalLogin = h })
+	e.do("POST", "/api/v1/auth/local/login", "", strings.Repeat("a", 1<<20))
+	if readErr != nil {
+		t.Fatalf("1 MiB body should be accepted: %v", readErr)
+	}
+	e.do("POST", "/api/v1/auth/local/login", "", strings.Repeat("a", 1<<20+1))
+	if readErr == nil {
+		t.Fatal("body over 1 MiB should be rejected")
+	}
+}
