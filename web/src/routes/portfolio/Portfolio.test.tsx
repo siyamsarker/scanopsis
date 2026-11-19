@@ -232,9 +232,11 @@ describe('PortfolioPage', () => {
     renderPage();
     await screen.findByText('delta');
     const tile = within(screen.getByText('delta').closest('li')!);
-    expect(tile.getAllByText('Not available')).toHaveLength(4);
-    expect(tile.getByText('Coverage')).toHaveTextContent('Not available');
-    expect(tile.getByText('Last analysis: Not available')).toBeInTheDocument();
+    // One calm line replaces the rating chips, coverage and last analysis.
+    expect(tile.getByText('No SonarQube analysis yet')).toBeInTheDocument();
+    expect(tile.queryByText('Not available')).not.toBeInTheDocument();
+    expect(tile.queryByText('Coverage')).not.toBeInTheDocument();
+    expect(tile.queryByText(/Last analysis/)).not.toBeInTheDocument();
     expect(tile.getByText(/No scans yet/)).toBeInTheDocument();
     const link = tile.getByRole('link', { name: 'Add the upload step' });
     expect(link).toHaveAttribute(

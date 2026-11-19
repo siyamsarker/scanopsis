@@ -27,6 +27,7 @@ function findingLinks(id: number): SeverityLinks {
 export function ServiceTile({ item, now }: { item: PortfolioItem; now?: Date }) {
   const { service, counts } = item;
   const scanned = item.last_scan_at !== null;
+  const analysed = item.last_analysis_at !== null;
   return (
     <li
       className={`${TILE_BOX} flex flex-col gap-4 rounded-card border border-border bg-surface p-5 shadow-[inset_0_1px_0_color-mix(in_srgb,var(--text)_5%,transparent)] transition-colors duration-150 ease-out hover:border-border-strong`}
@@ -61,18 +62,24 @@ export function ServiceTile({ item, now }: { item: PortfolioItem; now?: Date }) 
         </p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <RatingBadge label="Reliability" rating={item.reliability_rating} />
-        <RatingBadge label="Security" rating={item.security_rating} />
-        <RatingBadge label="Maintainability" rating={item.maintainability_rating} />
-      </div>
+      {analysed ? (
+        <>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <RatingBadge label="Reliability" rating={item.reliability_rating} />
+            <RatingBadge label="Security" rating={item.security_rating} />
+            <RatingBadge label="Maintainability" rating={item.maintainability_rating} />
+          </div>
 
-      <p className="text-sm text-text-muted">
-        Coverage{' '}
-        <span className="font-medium text-text tabular-nums">
-          {item.coverage === null ? 'Not available' : formatPercent(item.coverage)}
-        </span>
-      </p>
+          <p className="text-sm text-text-muted">
+            Coverage{' '}
+            <span className="font-medium text-text tabular-nums">
+              {item.coverage === null ? 'Not available' : formatPercent(item.coverage)}
+            </span>
+          </p>
+        </>
+      ) : (
+        <p className="text-sm text-text-muted">No SonarQube analysis yet</p>
+      )}
 
       <div className="mt-auto flex flex-col gap-1">
         {item.last_scan_at ? (
@@ -85,9 +92,7 @@ export function ServiceTile({ item, now }: { item: PortfolioItem; now?: Date }) 
         ) : null}
         {item.last_analysis_at ? (
           <Freshness at={item.last_analysis_at} prefix="Last analysis" now={now} />
-        ) : (
-          <span className="text-sm text-text-muted">Last analysis: Not available</span>
-        )}
+        ) : null}
       </div>
     </li>
   );
