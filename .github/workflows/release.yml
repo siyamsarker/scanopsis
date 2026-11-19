@@ -1,0 +1,147 @@
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Publishes a release when a version tag (vX.Y.Z) is pushed: runs the checks,
+# builds the multi-architecture image, pushes it to ghcr.io, writes an SBOM per
+# architecture, and creates the GitHub release.
+#
+# A manual run (workflow_dispatch) is always a dry run: it builds everything,
+# but logs in nowhere, pushes nothing and creates no release.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build, without the leading v. It needs a section in CHANGELOG.md."
+        required: true
+        type: string
+
+# Read-only by default. Only the release job below may write.
+permissions:
+  contents: read
+
+# A second tag waits for the first; a release is never cancelled half way.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: "1.27.4"
+  # Update both values together with the copy in ci.yml.
+  TRIVY_VERSION: "0.76.2"
+  TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+  IMAGE_REPO: ghcr.io/siyamsarker/scanopsis
+
+jobs:
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history, to check that the tag is on main.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Determine and check the version
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = push ]; then
+            case "$REF_NAME" in v[0-9]*) version=${REF_NAME#v} ;; *) echo "::error::tag $REF_NAME is not vX.Y.Z"; exit 1 ;; esac
+          else
+            version=$INPUT_VERSION
+          fi
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::version '$version' is not X.Y.Z"
+            exit 1
+          fi
+          # Fails when CHANGELOG.md has no non-empty "## [$version]" section.
+          bash scripts/release-notes.sh "$version" >/dev/null
+          if [ "$EVENT" = push ]; then
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+              { echo "::error::tag $REF_NAME is not on main"; exit 1; }
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make check
+      - run: make test-integration
+        env:
+          TESTCONTAINERS_RYUK_DISABLED: "true"
+
+  release:
+    name: Build and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+      packages: write # push the image to ghcr.io
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Trivy
+        run: |
+          set -euo pipefail
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          archive="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -fsSLO "${base}/${archive}"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum -c -
+          mkdir trivy
+          tar -xzf "$archive" -C trivy trivy
+          sudo install -m 0755 trivy/trivy /usr/local/bin/trivy
+      - name: Log in to ghcr.io
+        if: env.DRY_RUN == 'false'
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REGISTRY_USER: ${{ github.actor }}
+        run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$REGISTRY_USER" --password-stdin
+      - name: Build image, SBOMs, notes and checksums
+        run: bash scripts/release-build.sh "$VERSION"
+      - name: Show the image digest
+        run: |
+          {
+            echo "### Release v$VERSION (dry run: $DRY_RUN)"
+            echo
+            cat bin/release/release-notes.md
+            echo
+            echo '```'
+            cat bin/release/checksums.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: Create the GitHub release
+        if: env.DRY_RUN == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          flags=()
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "v$VERSION" "${flags[@]}" \
+            --verify-tag \
+            --title "v$VERSION" \
+            --notes-file bin/release/release-notes.md \
+            bin/release/checksums.txt bin/release/scanopsis-*.cdx.json
+      - name: Log out of ghcr.io
+        if: always() && env.DRY_RUN == 'false'
+        run: docker logout ghcr.io
