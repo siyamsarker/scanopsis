@@ -185,10 +185,11 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	ip := i.clientIP(r)
 	var claims *Claims // nil until the token is verified
 	// admitted is set once the token, the namespace allow-list and the
-	// protected-ref check have passed: the project is one this instance
-	// accepts. Until then a rejection can be caused by anyone who can get an
-	// ID token from the GitLab instance, so its audit records are bounded per
-	// client address.
+	// protected-ref check have passed and an allow-list is set: the project
+	// is one this instance chose to accept. Until then, and always without an
+	// allow-list, a rejection can be caused by anyone who can get an ID token
+	// from the GitLab instance, so its audit records are bounded per client
+	// address.
 	admitted := false
 
 	reject := func(status int, code, message string, extra ...any) {
@@ -250,7 +251,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 			"Only protected branches and tags may upload, and "+claims.Ref+" is not protected.")
 		return
 	}
-	admitted = true
+	admitted = len(snap.IngestAllowedNamespaces) > 0
 
 	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
 		reject(http.StatusUnsupportedMediaType, codeMediaType, "Content-Type must be application/json.")
@@ -282,7 +283,8 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 
 	// A report can take up to limit bytes compressed and as many parsed, so
 	// only a few are processed at once. The slot is held until the scan is
-	// stored.
+	// stored; the server's read timeout bounds how long a slow client can
+	// keep it while sending the body.
 	select {
 	case i.sem <- struct{}{}:
 		defer func() { <-i.sem }()
@@ -362,7 +364,9 @@ func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Add
 			return
 		}
 	}
-	i.audit.Record(ctx, actor, audit.ActionIngestRejected, detail)
+	// The request may already be over (a client that stopped waiting for a
+	// slot), so the record does not depend on it.
+	i.audit.Record(context.WithoutCancel(ctx), actor, audit.ActionIngestRejected, detail)
 	i.log.WarnContext(ctx, "upload rejected", attrs...)
 }
 

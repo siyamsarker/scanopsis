@@ -34,7 +34,12 @@ type recorder struct {
 	events []auditEvent
 }
 
-func (r *recorder) Record(_ context.Context, actor, action string, detail map[string]any) {
+// Record drops the event when ctx is done, as the database write of the real
+// recorder fails then.
+func (r *recorder) Record(ctx context.Context, actor, action string, detail map[string]any) {
+	if ctx.Err() != nil {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, auditEvent{actor, action, detail})

@@ -261,10 +261,13 @@ before the allowed namespaces and protected refs are checked (an invalid token,
 GitLab unreachable, a namespace not allowed, a ref not protected). The audit log
 records at most 10 of those rejections per client address at once and then one
 more per minute; the others are answered the same way but appear only in the
-server log at debug level. Every later rejection (media type, kind, report too
-large or invalid, archived service, service conflict, busy) comes from a project
-the instance accepts and is always recorded. A rate-limited request (`429`) is never recorded. The
-"Recorded rejections" number on the Integrations page counts what was recorded.
+server log at debug level. When allowed namespaces are set, every later
+rejection (media type, kind, report too large or invalid, archived service,
+service conflict, busy) comes from a project you chose to accept and is always
+recorded. Without allowed namespaces any project can get that far, so these
+rejections are bounded per client address in the same way. A rate-limited
+request (`429`) is never recorded. The "Recorded rejections" number on the
+Integrations page counts what was recorded.
 
 ## What the dashboard shows
 

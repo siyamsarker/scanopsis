@@ -14,6 +14,7 @@ import (
 // that come after the allow-list checks: they are all recorded.
 func TestIngestAdmittedRejectionsAreAlwaysAudited(t *testing.T) {
 	e := newHEnv(t, nil)
+	e.cfg.set(func(s *settings.Snapshot) { s.IngestAllowedNamespaces = []string{"platform"} })
 	const n = 3 * DefaultAuditBurst
 	for range n {
 		if w := e.do(req{body: []byte(`{"SchemaVersion":`)}); w.Code != 400 || errCode(t, w) != "invalid_report" {
@@ -56,5 +57,19 @@ func TestIngestRejectionsBeforeTheAllowListAreBounded(t *testing.T) {
 				t.Errorf("%d audit rows, want %d", got, DefaultAuditBurst)
 			}
 		})
+	}
+}
+
+// Without an allow-list every project of the GitLab instance gets past the
+// checks, so its rejections stay bounded per address.
+func TestIngestRejectionsWithoutAnAllowListAreBounded(t *testing.T) {
+	e := newHEnv(t, nil)
+	for range 3 * DefaultAuditBurst {
+		if w := e.do(req{body: []byte(`{"SchemaVersion":`)}); w.Code != 400 || errCode(t, w) != "invalid_report" {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+	}
+	if got := len(e.audit.list()); got != DefaultAuditBurst {
+		t.Errorf("%d audit rows, want %d", got, DefaultAuditBurst)
 	}
 }
