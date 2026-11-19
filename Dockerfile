@@ -18,10 +18,9 @@ ARG TARGETARCH
 ARG VERSION=dev
 ARG COMMIT=unknown
 WORKDIR /src
-# go.sum is optional only until the module has its first dependency (the glob
-# matches nothing when it is absent); copying the module files first keeps the
-# download layer cached across source changes.
-COPY go.mod go.su[m] ./
+# Copying the module files first keeps the download layer cached across
+# source changes.
+COPY go.mod go.sum ./
 RUN go mod download && go mod verify
 COPY . .
 # The embedded web interface must be in place before the binary is compiled.
