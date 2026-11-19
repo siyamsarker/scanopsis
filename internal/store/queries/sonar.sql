@@ -1,0 +1,60 @@
+-- Copyright 2026 The Scanopsis Authors
+-- SPDX-License-Identifier: Apache-2.0
+
+-- name: SonarServiceByGitlabProject :one
+SELECT id FROM services WHERE gitlab_project_id = $1;
+
+-- name: SonarServiceByKey :one
+SELECT id FROM services WHERE sonar_project_key = $1;
+
+-- name: SonarServiceKey :one
+SELECT sonar_project_key FROM services WHERE id = $1;
+
+-- name: SonarLinkedServices :many
+SELECT id, sonar_project_key::text AS sonar_project_key
+FROM services
+WHERE sonar_project_key IS NOT NULL AND NOT archived
+ORDER BY id;
+
+-- InsertSonarDelivery records a delivery as pending; zero rows mean the task
+-- ID was delivered before.
+-- name: InsertSonarDelivery :execrows
+INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail)
+VALUES ($1, $2, $3, 'failed', 'pending')
+ON CONFLICT (task_id) DO NOTHING;
+
+-- name: FinishSonarDelivery :exec
+UPDATE sonar_deliveries
+SET outcome = $2, service_id = $3, detail = $4
+WHERE task_id = $1;
+
+-- name: InsertSonarAnalysis :exec
+INSERT INTO sonar_analyses (
+    service_id, task_id, analysis_key, analysed_at, revision, quality_gate_status,
+    gate_conditions, measures, mode, reliability_rating, security_rating,
+    maintainability_rating, security_review_rating, coverage,
+    duplicated_lines_density, gitlab_pipeline_id, received_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+)
+ON CONFLICT (task_id) DO NOTHING;
+
+-- name: SonarAnalysisKnown :one
+SELECT EXISTS (
+    SELECT 1 FROM sonar_analyses WHERE service_id = $1 AND analysis_key = $2
+) AS known;
+
+-- name: ListSonarAnalyses :many
+SELECT * FROM sonar_analyses
+WHERE service_id = $1
+ORDER BY analysed_at DESC, id DESC
+LIMIT $2;
+
+-- name: ListSonarDeliveries :many
+SELECT task_id, project_key, received_at, outcome, service_id, detail
+FROM sonar_deliveries
+ORDER BY received_at DESC, id DESC
+LIMIT 50;
+
+-- name: LastSonarDeliveryAt :one
+SELECT max(received_at)::timestamptz AS last_at FROM sonar_deliveries;
