@@ -7,12 +7,14 @@ import { LoginPage } from './routes/LoginPage';
 import { NotFoundPage } from './routes/NotFoundPage';
 import { ProtectedLayout } from './routes/ProtectedLayout';
 import { SetupGate } from './routes/SetupGate';
+import { SetupPage } from './routes/SetupPage';
 import { UsersPage } from './routes/UsersPage';
 
 export function App() {
   return (
     <Routes>
       <Route element={<SetupGate />}>
+        <Route path="/setup" element={<SetupPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route element={<ProtectedLayout />}>
           <Route index element={<HomePage />} />

@@ -7,6 +7,7 @@ const control =
   'min-h-10 rounded-control border border-border-strong bg-bg px-3 py-2 text-text transition-colors duration-150 ease-out hover:border-text-muted';
 
 export const inputClass = `${control} w-full`;
+export const monoInputClass = `${control} w-full font-mono`;
 export const selectClass = `${control} disabled:opacity-60`;
 
 const button =
