@@ -74,6 +74,14 @@ For operators:
 - [Operations](docs/operations.md): health checks, logs, administration
   commands, recovering access, backup and restore
 - [Docker Compose files](deploy/compose/README.md)
+- [Deployment](docs/deployment.md): reverse proxy and TLS, internal certificate
+  authority, sizing, upgrades and rollback
+- [Troubleshooting](docs/troubleshooting.md): symptoms, causes and fixes
+- [Architecture](docs/architecture.md): components, data flows, data model
+- [Security](docs/security.md): threat model, controls, hardening checklist
+- [Verifying the numbers](docs/verification.md): the accuracy check against
+  Trivy and SonarQube
+- [API reference](docs/api.md): generated from the OpenAPI document
 
 For contributors and project policy:
 
