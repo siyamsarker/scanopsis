@@ -3,26 +3,40 @@
 Scanopsis is a small, self-hosted dashboard that shows SonarQube and Trivy
 results from your GitLab CI/CD pipelines in one view.
 
-> **Status:** early development. Sign-in with two-factor authentication,
-> first-run setup, user management, the settings page, Trivy uploads from
-> GitLab CI and the SonarQube integration work, and the API serves the
-> results. The web pages that display scan results are not built yet, so do
-> not rely on it for production use.
+> **Status:** not released yet. All features below work and are tested end to
+> end, but no release image is published and the accuracy check with real
+> pipeline data is still open.
 
-## Planned features
+![The service dashboard in the dark theme: Trivy findings by severity next to the SonarQube quality gate, ratings and coverage](docs/images/service-dark.png)
 
-- Sign-in with GitLab (OpenID Connect) and a local administrator account for
-  recovery.
-- Trivy image and secret scan results uploaded from GitLab CI jobs and
-  authenticated with GitLab CI/CD ID tokens, so no shared secret is needed.
-- SonarQube quality gate, ratings, coverage and duplication, received through
-  signed webhooks and the SonarQube Web API.
-- A portfolio of all services, a dashboard per service with trends across
-  pipelines, and a findings explorer with cross-service CVE lookup.
-- One container plus PostgreSQL.
+## Features
 
-Every number on the dashboard will be traceable to the pipeline, job and commit
-that produced it.
+- **One view of both tools.** A portfolio of all services with open
+  vulnerabilities, quality gate and freshness; a dashboard per service with
+  trends across pipelines; a findings explorer with a "fix first" list of
+  packages; and a CVE search across services.
+- **Trivy uploads without shared secrets.** GitLab CI jobs upload image and
+  secret scan reports, authenticated with GitLab CI/CD ID tokens. You can limit
+  uploads to namespaces and to protected branches and tags.
+- **SonarQube.** Quality gate, ratings, coverage and duplication, received
+  through signed webhooks and the SonarQube Web API, with a periodic sync.
+- **Sign-in.** GitLab (OpenID Connect) and local accounts, with mandatory
+  two-factor authentication (TOTP and recovery codes) for everyone. First-run
+  setup is protected by a one-time token, and an admin command recovers access.
+- **Operations.** Settings seeded from the environment and editable later on a
+  settings page, secrets encrypted in the database, an audit log and a
+  configurable retention period.
+- **Small footprint.** One container image under 30 MB plus PostgreSQL. It starts
+  in well under a second and uses about 10 MiB of memory when idle.
+
+Every number on the dashboard is traceable to the pipeline, job and commit
+that produced it. The interface has a dark and a light theme and works on
+phones.
+
+<p>
+  <img src="docs/images/portfolio-dark.png" alt="The portfolio in the dark theme, with a card per service" width="68%">
+  <img src="docs/images/portfolio-light-phone.png" alt="The portfolio in the light theme on a phone" width="22%">
+</p>
 
 Scanopsis works with SonarQube and Trivy. It is not affiliated with or endorsed
 by SonarSource, Aqua Security or GitLab.
