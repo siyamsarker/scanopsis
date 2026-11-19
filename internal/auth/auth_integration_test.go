@@ -145,7 +145,7 @@ func TestIntegrationLoginCookieAuthenticateEndCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Authenticate: %v", err)
 	}
-	if p.Username != "root" || p.Role != RoleAdmin || p.Source != SourceLocal || p.UserID == 0 || !p.IsAdmin() {
+	if p.Username != "root" || p.Role != RoleAdmin || p.Source != SourceLocal || p.UserID == 0 || p.IsAdmin() || p.MFAVerified {
 		t.Fatalf("principal %+v", p)
 	}
 	if n := e.count(t, "SELECT count(*) FROM users WHERE username = 'root' AND last_login_at IS NOT NULL"); n != 1 {

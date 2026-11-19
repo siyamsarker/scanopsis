@@ -19,6 +19,9 @@ const (
 	ActionLogout          = "logout"
 	ActionUserCreated     = "user.created"
 	ActionRoleChanged     = "user.role_changed"
+	ActionMFAEnrolled     = "mfa.enrolled"
+	ActionMFAVerified     = "mfa.verified"
+	ActionMFAFailed       = "mfa.failed"
 	ActionMFAReset        = "mfa.reset"
 	ActionSettingsChanged = "settings.changed"
 )

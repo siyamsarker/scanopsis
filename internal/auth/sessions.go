@@ -36,6 +36,7 @@ type SessionStore interface {
 	TouchSession(ctx context.Context, arg store.TouchSessionParams) error
 	DeleteSession(ctx context.Context, idHash []byte) error
 	DeleteExpiredSessions(ctx context.Context, arg store.DeleteExpiredSessionsParams) (int64, error)
+	MarkSessionMFAVerified(ctx context.Context, idHash []byte) error
 }
 
 // SessionOptions configures Sessions. A session ends after Idle without a
@@ -164,7 +165,21 @@ func (s *Sessions) Authenticate(r *http.Request) (*Principal, error) {
 		Name:     u.Name,
 		Email:    u.Email,
 		Role:     Role(u.Role),
+
+		SessionID:          id,
+		MFAEnrolled:        u.TotpEnabledAt.Valid,
+		MFAVerified:        row.Session.MfaVerified,
+		MustChangePassword: u.MustChangePassword,
 	}, nil
+}
+
+// MarkMFAVerified records that the session identified by sessionID (a
+// Principal's SessionID) has passed the second factor.
+func (s *Sessions) MarkMFAVerified(ctx context.Context, sessionID []byte) error {
+	if err := s.store.MarkSessionMFAVerified(ctx, sessionID); err != nil {
+		return fmt.Errorf("mark session verified: %w", err)
+	}
+	return nil
 }
 
 // End deletes the request's session, if any, and clears the cookie.

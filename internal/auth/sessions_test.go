@@ -4,6 +4,7 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
@@ -55,6 +57,7 @@ type fakeSessionStore struct {
 	getErr   error
 	delErr   error
 	createFn error
+	markErr  error
 	now      func() time.Time
 }
 
@@ -64,6 +67,8 @@ func newFakeSessionStore() *fakeSessionStore {
 		users: map[int64]store.User{
 			7: {ID: 7, Source: SourceGitLab, Username: "ada", Name: "Ada L", Email: "ada@example.com", Role: store.RoleAdmin},
 			8: {ID: 8, Source: SourceLocal, Username: "vic", Role: store.RoleViewer},
+			9: {ID: 9, Source: SourceLocal, Username: "eve", Role: store.RoleViewer, MustChangePassword: true,
+				TotpEnabledAt: pgtype.Timestamptz{Time: time.Unix(1, 0), Valid: true}},
 		},
 	}
 }
@@ -111,6 +116,16 @@ func (f *fakeSessionStore) DeleteSession(_ context.Context, id []byte) error {
 	}
 	f.deleted = append(f.deleted, id)
 	delete(f.sessions, string(id))
+	return nil
+}
+
+func (f *fakeSessionStore) MarkSessionMFAVerified(_ context.Context, id []byte) error {
+	if f.markErr != nil {
+		return f.markErr
+	}
+	s := f.sessions[string(id)]
+	s.MfaVerified = true
+	f.sessions[string(id)] = s
 	return nil
 }
 
@@ -295,14 +310,54 @@ func TestAuthenticateSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Principal{UserID: 7, Source: SourceGitLab, Username: "ada", Name: "Ada L", Email: "ada@example.com", Role: RoleAdmin}
-	if *p != want || !p.IsAdmin() {
-		t.Fatalf("principal %+v; want %+v", *p, want)
+	tok, _ := base64.RawURLEncoding.DecodeString(c.Value)
+	sum := sha256.Sum256(tok)
+	if p.UserID != 7 || p.Source != SourceGitLab || p.Username != "ada" || p.Name != "Ada L" ||
+		p.Email != "ada@example.com" || p.Role != RoleAdmin {
+		t.Fatalf("principal %+v", *p)
+	}
+	if !bytes.Equal(p.SessionID, sum[:]) {
+		t.Fatalf("SessionID %x; want sha256(token) %x", p.SessionID, sum)
+	}
+	if p.MFAEnrolled || p.MFAVerified || p.MustChangePassword || p.Complete() || p.IsAdmin() {
+		t.Fatalf("a new session must start without the second factor: %+v", *p)
 	}
 	c = start(t, s, 8, nil)
 	p, err = s.Authenticate(requestWith(c))
 	if err != nil || p.Role != RoleViewer || p.IsAdmin() || p.Source != SourceLocal {
 		t.Fatalf("viewer principal %+v, %v", p, err)
+	}
+}
+
+func TestAuthenticateFillsMFAFields(t *testing.T) {
+	s, _, _ := newTestSessions(t, true)
+	c := start(t, s, 9, nil)
+	p, err := s.Authenticate(requestWith(c))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.MFAEnrolled || p.MFAVerified || !p.MustChangePassword {
+		t.Fatalf("principal %+v; want enrolled, unverified, must change password", *p)
+	}
+	if err := s.MarkMFAVerified(context.Background(), p.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	p, err = s.Authenticate(requestWith(c))
+	if err != nil || !p.MFAVerified || p.Complete() {
+		t.Fatalf("after MarkMFAVerified: %+v, %v (password change still pending, so not complete)", p, err)
+	}
+	// Another session of the same user stays unverified.
+	other, _ := s.Authenticate(requestWith(start(t, s, 9, nil)))
+	if other.MFAVerified {
+		t.Fatal("MarkMFAVerified leaked to another session")
+	}
+}
+
+func TestMarkMFAVerifiedError(t *testing.T) {
+	s, fs, _ := newTestSessions(t, true)
+	fs.markErr = errors.New("db down")
+	if err := s.MarkMFAVerified(context.Background(), []byte("x")); err == nil || !errors.Is(err, fs.markErr) {
+		t.Fatalf("err %v; want wrapped db error", err)
 	}
 }
 
