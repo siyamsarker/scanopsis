@@ -229,6 +229,24 @@ describe('findings explorer', () => {
     ]);
   });
 
+  it('keeps every column header and gives the version cell its full values in a title', async () => {
+    mockFetch(api());
+    renderApp('/services/5/findings');
+    await summary('7 vulnerabilities, 6 fixable');
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
+      'Severity',
+      'Vulnerability',
+      'Package',
+      'Installed → fixed',
+      'Target',
+      'Artifact',
+      'First seen',
+      'Status',
+    ]);
+    expect(screen.getByTitle('3.0.1 → 3.0.10, 3.1.2')).toBeInTheDocument();
+    expect(screen.getByTitle('1.2.9 → No fix')).toBeInTheDocument();
+  });
+
   it('re-sorts by package when the header is activated', async () => {
     mockFetch(api());
     renderApp('/services/5/findings');

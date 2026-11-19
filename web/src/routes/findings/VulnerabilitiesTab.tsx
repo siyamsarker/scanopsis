@@ -117,14 +117,14 @@ export function VulnerabilitiesTab({
     {
       key: 'severity',
       header: 'Severity',
-      width: 'w-32 shrink-0',
+      width: 'w-28 shrink-0',
       sortKey: 'severity',
       cell: (v) => <SeverityBadge severity={v.severity} />,
     },
     {
       key: 'vuln',
       header: 'Vulnerability',
-      width: 'w-48 shrink-0',
+      width: 'w-44 shrink-0',
       cell: (v) => <AdvisoryLink vuln={v} />,
     },
     {
@@ -147,9 +147,12 @@ export function VulnerabilitiesTab({
     {
       key: 'versions',
       header: 'Installed → fixed',
-      width: 'w-64 shrink-0',
+      width: 'w-96 shrink-0',
       cell: (v) => (
-        <span className="flex min-w-0 items-center gap-1.5">
+        <span
+          className="flex min-w-0 items-center gap-1.5"
+          title={`${v.installed_version} → ${isFixable(v) ? v.fixed_version : 'No fix'}`}
+        >
           <Mono value={v.installed_version} truncate />
           <span aria-hidden="true" className="text-text-muted">
             →
@@ -166,19 +169,19 @@ export function VulnerabilitiesTab({
     {
       key: 'target',
       header: 'Target',
-      width: 'w-56 shrink-0',
+      width: 'w-48 shrink-0',
       cell: (v) => <span title={v.target}>{v.target}</span>,
     },
     {
       key: 'artifact',
       header: 'Artifact',
-      width: 'w-44 shrink-0',
+      width: 'w-56 shrink-0',
       cell: (v) => <span title={v.artifact_name}>{v.artifact_name}</span>,
     },
     {
       key: 'seen',
       header: 'First seen',
-      width: 'w-36 shrink-0',
+      width: 'w-32 shrink-0',
       sortKey: 'seen',
       cell: (v) => (
         <time dateTime={v.first_seen_at} title={formatExactTime(v.first_seen_at)}>
@@ -189,7 +192,7 @@ export function VulnerabilitiesTab({
     {
       key: 'status',
       header: 'Status',
-      width: 'w-64 shrink-0',
+      width: 'w-56 shrink-0',
       cell: (v) => <StatusCell vuln={v} />,
     },
   ];
@@ -303,7 +306,7 @@ export function VulnerabilitiesTab({
         loading={loading}
         onRowActivate={setOpen}
         heightClass="h-[70vh]"
-        minWidthClass="min-w-[80rem]"
+        minWidthClass="min-w-[103rem]"
         empty={
           rows.length === 0 ? (
             <EmptyState
