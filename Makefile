@@ -5,6 +5,7 @@
 # globally and every contributor and CI job uses the same version.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.10.0
+SQLC          := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 GO_LICENSES   := go run github.com/google/go-licenses/v2@v2.0.1
 ACTIONLINT    := go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
@@ -21,7 +22,7 @@ COMMIT  ?= $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | $(
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 IMAGE   ?= scanopsis:dev
 
-.PHONY: help check fmt fmt-check lint test vuln build web-install web-lint web-test web-build web image clean headers test-scripts licenses actionlint
+.PHONY: generate generate-check test-integration help check fmt fmt-check lint test vuln build web-install web-lint web-test web-build web image clean headers test-scripts licenses actionlint
 
 help: ## List available targets
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -39,6 +40,16 @@ lint: ## Lint Go code
 
 test: ## Run Go tests with the race detector
 	go test -race -count=1 ./...
+
+test-integration: ## Run Go integration tests against PostgreSQL in Docker
+	go test -race -count=1 -tags integration ./...
+
+generate: ## Regenerate Go code from SQL queries and web API types from the OpenAPI document
+	cd internal/store && $(SQLC) generate
+	cd web && npm run generate
+
+generate-check: generate ## Fail if generated code is out of date
+	git diff --exit-code -- internal/store web/src/api
 
 vuln: ## Check Go dependencies for known vulnerabilities
 	$(GOVULNCHECK) ./...
