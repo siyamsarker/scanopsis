@@ -74,6 +74,7 @@ var rbacRoutes = []struct {
 	{"GET", "/api/v1/services/3/trends", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/services/3/sonar", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/search/vulnerabilities?id=CVE-2024-3094", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/admin/audit", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 	{"GET", "/api/v1/admin/integrations/trivy", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 	{"GET", "/api/v1/admin/integrations/sonarqube", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 }
@@ -478,7 +479,7 @@ var featureIDs = []string{
 	"ingestTrivy", "sonarWebhook", "getPortfolio", "listServices", "createService", "getService",
 	"updateService", "deleteService", "getServiceOverview", "listServiceScans", "getScan", "getScanDiff",
 	"listServiceVulnerabilities", "listServiceSecrets", "getServiceTrends", "getServiceSonar",
-	"searchVulnerabilities", "getTrivyIntegration", "getSonarIntegration",
+	"searchVulnerabilities", "getTrivyIntegration", "getSonarIntegration", "listAuditEvents",
 }
 
 func TestFeatureNotEnabled(t *testing.T) {

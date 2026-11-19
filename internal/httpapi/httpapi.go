@@ -154,6 +154,7 @@ func (s *server) routes() []route {
 		{"GET", "/api/v1/services/{id}/trends", s.requireComplete(s.feature("getServiceTrends"))},
 		{"GET", "/api/v1/services/{id}/sonar", s.requireComplete(s.feature("getServiceSonar"))},
 		{"GET", "/api/v1/search/vulnerabilities", s.requireComplete(s.feature("searchVulnerabilities"))},
+		{"GET", "/api/v1/admin/audit", s.requireAdmin(s.feature("listAuditEvents"))},
 		{"GET", "/api/v1/admin/integrations/trivy", s.requireAdmin(s.feature("getTrivyIntegration"))},
 		{"GET", "/api/v1/admin/integrations/sonarqube", s.requireAdmin(s.feature("getSonarIntegration"))},
 		{"DELETE", "/api/v1/users/{id}/mfa", s.requireAdmin(http.HandlerFunc(s.resetMFA))},
