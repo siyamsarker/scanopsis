@@ -253,7 +253,8 @@ export function registerDashboardFlows(session: Session): void {
     await expect(m).toContainText('Source tree');
     await expect(m).toContainText('Secret scan');
     await expect(m).toContainText(current.artifact);
-    await expect(m).toContainText(plural(sum(current.counts), 'finding'));
+    await expect(m).toContainText(plural(sum(current.counts), 'vulnerability', 'vulnerabilities'));
+    await expect(m).toContainText('2 secrets');
 
     // No SonarQube project is linked in this stack.
     await expect(m).toContainText('SonarQube posture');
