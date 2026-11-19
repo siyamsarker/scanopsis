@@ -171,6 +171,12 @@ func (f *mfaFixture) do(t *testing.T, h http.Handler, body string) *httptest.Res
 	r = r.WithContext(WithPrincipal(r.Context(), p))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
+	// A promoted session comes with a new cookie: follow it, as a browser does.
+	for _, c := range w.Result().Cookies() {
+		if c.Name == f.cookie.Name {
+			f.cookie = c
+		}
+	}
 	return w
 }
 
@@ -747,5 +753,62 @@ func TestRecoveryCodesAreUniqueAndUniform(t *testing.T) {
 			}
 			seen[c] = true
 		}
+	}
+}
+
+func TestMFAVerifyReplacesTheSessionToken(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	old := *f.cookie
+	before, err := f.sessions.Authenticate(requestWith(&old))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := f.sstore.sessions[string(before.SessionID)].ExpiresAt
+
+	w := f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("verify: %d %s", w.Code, w.Body)
+	}
+	if f.cookie.Value == old.Value {
+		t.Fatal("verify did not issue a new session cookie")
+	}
+	if _, err := f.sessions.Authenticate(requestWith(&old)); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("old cookie after verify: %v; want ErrNoSession", err)
+	}
+	after, err := f.sessions.Authenticate(requestWith(f.cookie))
+	if err != nil || after.UserID != before.UserID || !after.MFAVerified {
+		t.Fatalf("new cookie: %+v, %v", after, err)
+	}
+	if got := f.sstore.sessions[string(after.SessionID)].ExpiresAt; !got.Time.Equal(expires.Time) {
+		t.Fatalf("expiry %v; want the original %v", got.Time, expires.Time)
+	}
+}
+
+func TestMFAConfirmReplacesTheSessionToken(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrol(t)
+	old := *f.cookie
+	w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusOK {
+		t.Fatalf("confirm: %d %s", w.Code, w.Body)
+	}
+	if _, err := f.sessions.Authenticate(requestWith(&old)); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("old cookie after confirm: %v; want ErrNoSession", err)
+	}
+	if !f.verified(t) {
+		t.Fatal("the new cookie is not a verified session")
+	}
+}
+
+func TestMFAWrongCodeKeepsTheSessionToken(t *testing.T) {
+	f := newMFAFixture(t)
+	f.enrolled(t)
+	old := *f.cookie
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody("000000")); w.Code != http.StatusUnauthorized {
+		t.Fatalf("verify: %d", w.Code)
+	}
+	if f.cookie.Value != old.Value || f.verified(t) {
+		t.Fatal("a wrong code changed the session")
 	}
 }

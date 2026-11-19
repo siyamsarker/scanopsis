@@ -119,14 +119,19 @@ func (f *fakeSessionStore) DeleteSession(_ context.Context, id []byte) error {
 	return nil
 }
 
-func (f *fakeSessionStore) MarkSessionMFAVerified(_ context.Context, id []byte) error {
+func (f *fakeSessionStore) PromoteSession(_ context.Context, a store.PromoteSessionParams) (pgtype.Timestamptz, error) {
 	if f.markErr != nil {
-		return f.markErr
+		return pgtype.Timestamptz{}, f.markErr
 	}
-	s := f.sessions[string(id)]
+	s, ok := f.sessions[string(a.OldIDHash)]
+	if !ok {
+		return pgtype.Timestamptz{}, pgx.ErrNoRows
+	}
+	delete(f.sessions, string(a.OldIDHash))
+	s.IDHash = a.NewIDHash
 	s.MfaVerified = true
-	f.sessions[string(id)] = s
-	return nil
+	f.sessions[string(a.NewIDHash)] = s
+	return s.ExpiresAt, nil
 }
 
 func (f *fakeSessionStore) DeleteExpiredSessions(_ context.Context, a store.DeleteExpiredSessionsParams) (int64, error) {
@@ -339,25 +344,66 @@ func TestAuthenticateFillsMFAFields(t *testing.T) {
 	if !p.MFAEnrolled || p.MFAVerified || !p.MustChangePassword {
 		t.Fatalf("principal %+v; want enrolled, unverified, must change password", *p)
 	}
-	if err := s.MarkMFAVerified(context.Background(), p.SessionID); err != nil {
+	rec := httptest.NewRecorder()
+	if err := s.PromoteMFAVerified(context.Background(), rec, p.SessionID); err != nil {
 		t.Fatal(err)
-	}
-	p, err = s.Authenticate(requestWith(c))
-	if err != nil || !p.MFAVerified || p.Complete() {
-		t.Fatalf("after MarkMFAVerified: %+v, %v (password change still pending, so not complete)", p, err)
 	}
 	// Another session of the same user stays unverified.
 	other, _ := s.Authenticate(requestWith(start(t, s, 9, nil)))
 	if other.MFAVerified {
-		t.Fatal("MarkMFAVerified leaked to another session")
+		t.Fatal("PromoteMFAVerified leaked to another session")
+	}
+	p, err = s.Authenticate(requestWith(rec.Result().Cookies()[0]))
+	if err != nil || !p.MFAVerified || p.Complete() {
+		t.Fatalf("after PromoteMFAVerified: %+v, %v (password change still pending, so not complete)", p, err)
 	}
 }
 
-func TestMarkMFAVerifiedError(t *testing.T) {
+func TestPromoteMFAVerifiedReplacesTheToken(t *testing.T) {
+	s, fs, clk := newTestSessions(t, false)
+	old := start(t, s, 8, nil)
+	before, err := s.Authenticate(requestWith(old))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := fs.sessions[string(before.SessionID)]
+	clk.Advance(20 * time.Minute)
+
+	rec := httptest.NewRecorder()
+	if err := s.PromoteMFAVerified(context.Background(), rec, before.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != CookieName(false) || cookies[0].Value == old.Value || !cookies[0].HttpOnly {
+		t.Fatalf("cookies %+v; want one new session cookie", cookies)
+	}
+	if !cookies[0].Expires.Equal(created.ExpiresAt.Time.Truncate(time.Second)) {
+		t.Fatalf("cookie expires %v; want the original %v", cookies[0].Expires, created.ExpiresAt.Time)
+	}
+	if _, err := s.Authenticate(requestWith(old)); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("old cookie after promotion: %v; want ErrNoSession", err)
+	}
+	after, err := s.Authenticate(requestWith(cookies[0]))
+	if err != nil || after.UserID != before.UserID || !after.MFAVerified {
+		t.Fatalf("new cookie: %+v, %v", after, err)
+	}
+	if got := fs.sessions[string(after.SessionID)]; !got.ExpiresAt.Time.Equal(created.ExpiresAt.Time) {
+		t.Fatalf("expiry %v; want the original %v (the absolute timeout does not restart)", got.ExpiresAt.Time, created.ExpiresAt.Time)
+	}
+	if len(fs.sessions) != 1 {
+		t.Fatalf("%d sessions; want the old row gone", len(fs.sessions))
+	}
+}
+
+func TestPromoteMFAVerifiedError(t *testing.T) {
 	s, fs, _ := newTestSessions(t, true)
 	fs.markErr = errors.New("db down")
-	if err := s.MarkMFAVerified(context.Background(), []byte("x")); err == nil || !errors.Is(err, fs.markErr) {
+	rec := httptest.NewRecorder()
+	if err := s.PromoteMFAVerified(context.Background(), rec, []byte("x")); err == nil || !errors.Is(err, fs.markErr) {
 		t.Fatalf("err %v; want wrapped db error", err)
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("a cookie was set although promotion failed")
 	}
 }
 

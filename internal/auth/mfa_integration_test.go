@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -65,6 +66,12 @@ func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
 		}
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+		// A promoted session comes with a new cookie: follow it, as a browser does.
+		for _, nc := range w.Result().Cookies() {
+			if nc.Name == c.Name {
+				*c = *nc
+			}
+		}
 		return w
 	}
 	principal := func(c *http.Cookie) *Principal {
@@ -132,8 +139,16 @@ func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
 	}
 	clk.Advance(30 * time.Second)
 	next := code(enr.Secret, clk.Now())
+	beforeVerify := *c2
 	if w := call(m.VerifyHandler(), c2, next); w.Code != http.StatusNoContent {
 		t.Fatalf("verify: %d %s", w.Code, w.Body)
+	}
+	// The token the session had before the second factor no longer works.
+	if _, err := sessions.Authenticate(requestWith(&beforeVerify)); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("pre-verification cookie after verify: %v; want ErrNoSession", err)
+	}
+	if c2.Value == beforeVerify.Value {
+		t.Fatal("verify kept the session token")
 	}
 	if p := principal(c2); !p.MFAVerified || !p.Complete() {
 		t.Fatalf("after verify %+v", *p)

@@ -128,13 +128,26 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 	return i, err
 }
 
-const markSessionMFAVerified = `-- name: MarkSessionMFAVerified :exec
-UPDATE sessions SET mfa_verified = true WHERE id_hash = $1
+const promoteSession = `-- name: PromoteSession :one
+UPDATE sessions SET id_hash = $1, mfa_verified = true
+WHERE id_hash = $2
+RETURNING expires_at
 `
 
-func (q *Queries) MarkSessionMFAVerified(ctx context.Context, idHash []byte) error {
-	_, err := q.db.Exec(ctx, markSessionMFAVerified, idHash)
-	return err
+type PromoteSessionParams struct {
+	NewIDHash []byte
+	OldIDHash []byte
+}
+
+// PromoteSession gives a session that has passed the second factor a new
+// token hash and marks it verified, in one statement: the old hash stops
+// working at once and the expiry, creation and last-seen times stay. No row
+// means the old session no longer exists.
+func (q *Queries) PromoteSession(ctx context.Context, arg PromoteSessionParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, promoteSession, arg.NewIDHash, arg.OldIDHash)
+	var expires_at pgtype.Timestamptz
+	err := row.Scan(&expires_at)
+	return expires_at, err
 }
 
 const touchSession = `-- name: TouchSession :exec

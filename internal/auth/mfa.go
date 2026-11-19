@@ -181,7 +181,7 @@ func (m *MFA) ConfirmEnrollmentHandler() http.Handler {
 			m.fail(w, r, "cannot enable two-factor authentication", err)
 			return
 		}
-		if err := m.sessions.MarkMFAVerified(ctx, p.SessionID); err != nil {
+		if err := m.sessions.PromoteMFAVerified(ctx, w, p.SessionID); err != nil {
 			m.fail(w, r, "cannot mark session verified", err)
 			return
 		}
@@ -240,7 +240,7 @@ func (m *MFA) VerifyHandler() http.Handler {
 			m.rejected(w, r, p, method)
 			return
 		}
-		if err := m.sessions.MarkMFAVerified(ctx, p.SessionID); err != nil {
+		if err := m.sessions.PromoteMFAVerified(ctx, w, p.SessionID); err != nil {
 			m.fail(w, r, "cannot mark session verified", err)
 			return
 		}

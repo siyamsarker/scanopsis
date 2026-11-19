@@ -23,8 +23,14 @@ DELETE FROM sessions WHERE id_hash = $1;
 -- name: DeleteExpiredSessions :execrows
 DELETE FROM sessions WHERE expires_at <= @now OR last_seen_at <= @idle_cutoff;
 
--- name: MarkSessionMFAVerified :exec
-UPDATE sessions SET mfa_verified = true WHERE id_hash = $1;
+-- PromoteSession gives a session that has passed the second factor a new
+-- token hash and marks it verified, in one statement: the old hash stops
+-- working at once and the expiry, creation and last-seen times stay. No row
+-- means the old session no longer exists.
+-- name: PromoteSession :one
+UPDATE sessions SET id_hash = @new_id_hash, mfa_verified = true
+WHERE id_hash = @old_id_hash
+RETURNING expires_at;
 
 -- name: DeleteUserSessions :exec
 DELETE FROM sessions WHERE user_id = $1;

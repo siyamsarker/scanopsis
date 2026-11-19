@@ -37,7 +37,7 @@ type SessionStore interface {
 	TouchSession(ctx context.Context, arg store.TouchSessionParams) error
 	DeleteSession(ctx context.Context, idHash []byte) error
 	DeleteExpiredSessions(ctx context.Context, arg store.DeleteExpiredSessionsParams) (int64, error)
-	MarkSessionMFAVerified(ctx context.Context, idHash []byte) error
+	PromoteSession(ctx context.Context, arg store.PromoteSessionParams) (pgtype.Timestamptz, error)
 }
 
 // SessionOptions configures Sessions. A session ends after Idle without a
@@ -187,12 +187,21 @@ func (s *Sessions) Authenticate(r *http.Request) (*Principal, error) {
 	}, nil
 }
 
-// MarkMFAVerified records that the session identified by sessionID (a
-// Principal's SessionID) has passed the second factor.
-func (s *Sessions) MarkMFAVerified(ctx context.Context, sessionID []byte) error {
-	if err := s.store.MarkSessionMFAVerified(ctx, sessionID); err != nil {
-		return fmt.Errorf("mark session verified: %w", err)
+// PromoteMFAVerified records that the session identified by sessionID (a
+// Principal's SessionID) has passed the second factor, and replaces its token:
+// the cookie set on w carries a new random token, and the one the request
+// came with stops working. A token captured before the second factor is
+// therefore never a full session. The session keeps its original expiry.
+func (s *Sessions) PromoteMFAVerified(ctx context.Context, w http.ResponseWriter, sessionID []byte) error {
+	token := make([]byte, tokenBytes)
+	if _, err := rand.Read(token); err != nil {
+		return fmt.Errorf("generate session token: %w", err)
 	}
+	expires, err := s.store.PromoteSession(ctx, store.PromoteSessionParams{NewIDHash: hashToken(token), OldIDHash: sessionID})
+	if err != nil {
+		return fmt.Errorf("promote session: %w", err)
+	}
+	http.SetCookie(w, s.cookie(base64.RawURLEncoding.EncodeToString(token), expires.Time, 0))
 	return nil
 }
 
