@@ -384,7 +384,7 @@ paths:
         application/json`), optionally gzip-compressed (`Content-Encoding:
         gzip`). A repeated upload for the same job, artifact and kind replaces
         the earlier one. Rejections are written to the audit log, except rate-limited requests (429),
-        and at most a bounded number per client address.
+        and at most a bounded number per client address for requests without a valid token.
       operationId: ingestTrivy
       security: [ { ciIdToken: [] } ]
       parameters:
@@ -1057,7 +1057,7 @@ components:
         configured: { type: boolean, description: The GitLab URL is set, so ID tokens can be verified. }
         last_upload_at: { type: [string, "null"], format: date-time }
         uploads_24h: { type: integer }
-        rejections_24h: { type: integer, description: Recorded rejections in the last 24 hours. Rate-limited requests are not recorded and the number of recorded rejections per client address is bounded. }
+        rejections_24h: { type: integer, description: Recorded rejections in the last 24 hours. Rate-limited requests are not recorded and the number of recorded rejections per client address is bounded for requests without a valid token. }
         recent_rejections:
           type: array
           maxItems: 20

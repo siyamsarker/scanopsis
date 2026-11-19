@@ -277,8 +277,9 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 
 // reject answers with an error, writes the audit event and logs it. claims is
 // nil when the token was not valid. extra are log attributes for the server
-// log only. At most a bounded number of rejections per client address are
-// audited and logged as a warning; the others are logged at debug level. The
+// log only. Rejections without a verified token are audited and logged as a
+// warning for at most a bounded number per client address, and logged at debug
+// level beyond that; rejections with verified claims are always recorded. The
 // response is the same either way.
 func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Addr, claims *Claims, status int, code, message string, extra ...any) {
 	httpapi.WriteError(w, status, code, message)
@@ -291,9 +292,13 @@ func (i *Ingest) reject(ctx context.Context, w http.ResponseWriter, ip netip.Add
 		attrs = append(attrs, "project", claims.ProjectPath, "job_id", claims.JobID)
 	}
 	attrs = append(attrs, extra...)
-	if ok, _ := i.auditLimit.Allow(limitKey(ip)); !ok {
-		i.log.DebugContext(ctx, "upload rejected; not recorded: too many rejections from this address", attrs...)
-		return
+	// Only a rejection without a verified token is free to cause. One with
+	// verified claims needed a valid GitLab ID token, so it is always recorded.
+	if claims == nil {
+		if ok, _ := i.auditLimit.Allow(limitKey(ip)); !ok {
+			i.log.DebugContext(ctx, "upload rejected; not recorded: too many rejections from this address", attrs...)
+			return
+		}
 	}
 	i.audit.Record(ctx, actor, audit.ActionIngestRejected, detail)
 	i.log.WarnContext(ctx, "upload rejected", attrs...)

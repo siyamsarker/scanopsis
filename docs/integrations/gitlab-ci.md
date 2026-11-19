@@ -248,10 +248,11 @@ which jobs are accepted. Set them in **Settings**, or with environment variables
 
 A rejected upload is answered with 403 and recorded in the audit log as
 `ingest.rejected`, with the reason and, when the token was valid, the project
-path. A rejection needs no valid credentials, so the audit log records at most
-10 rejections per client address at once and then one more per minute; the
-other rejections are answered the same way but appear only in the server log
-at debug level. A rate-limited request (`429`) is never recorded. The
+path. A request without a valid ID token needs no credentials, so the audit log
+records at most 10 of those rejections per client address at once and then one
+more per minute; the others are answered the same way but appear only in the
+server log at debug level. Every rejection of a request with a valid token is
+recorded. A rate-limited request (`429`) is never recorded. The
 "Recorded rejections" number on the Integrations page counts what was recorded.
 
 ## What the dashboard shows
