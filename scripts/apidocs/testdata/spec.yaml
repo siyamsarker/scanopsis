@@ -1,0 +1,115 @@
+openapi: 3.1.0
+info:
+  title: Example API
+  version: 1.2.3
+  description: |
+    A small API used to test the documentation generator.
+paths:
+  /healthz:
+    get:
+      summary: Liveness probe.
+      operationId: healthz
+      security: []
+      responses:
+        "200":
+          description: Running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
+  /api/v1/items:
+    get:
+      summary: List items.
+      operationId: listItems
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 }, description: Page size. }
+        - { name: after, in: query, schema: { type: integer, format: int64 } }
+      responses:
+        "200":
+          description: One page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ItemPage" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    post:
+      summary: Add an item (admin only).
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Item" }
+      responses:
+        "201": { description: Created. }
+        "403": { description: Not an admin., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/upload:
+    post:
+      summary: Upload a report.
+      description: Authenticated with the job token.
+      operationId: upload
+      security: [ { token: [] } ]
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, description: A report. }
+      responses:
+        "201": { description: Stored. }
+  /api/v1/hook:
+    post:
+      summary: Webhook target.
+      description: |
+        Verified with the X-Example-HMAC-SHA256 header (hex HMAC-SHA256 of the body).
+      operationId: hook
+      security: []
+      responses:
+        "202": { description: Accepted. }
+  /api/v1/admin/log:
+    get:
+      tags: [admin]
+      summary: The log.
+      operationId: log
+      responses:
+        "200": { description: The log. }
+components:
+  securitySchemes:
+    token:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    session:
+      type: apiKey
+      in: cookie
+      name: session
+  responses:
+    Unauthenticated:
+      description: No valid session.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code]
+          properties:
+            code: { type: string, description: Stable code. }
+    Status:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, ready] }
+    Item:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 20 }
+        tags: { type: array, items: { type: string } }
+        owner: { type: [string, "null"] }
+    ItemPage:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/Item" } }
+        extra:
+          allOf:
+            - { $ref: "#/components/schemas/Status" }
+security:
+  - session: []
