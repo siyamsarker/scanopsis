@@ -134,10 +134,18 @@ func (f *fixture) audit(ago time.Duration) int64 {
 		INSERT INTO audit_log (at, actor, action) VALUES ($1, 'a', 'x') RETURNING id`, f.now.Add(-ago))
 }
 
+// ownRows leaves out the audit events the job writes about its own runs.
+func ownRows(table string) string {
+	if table == "audit_log" {
+		return " WHERE actor <> '" + AuditActor + "'"
+	}
+	return ""
+}
+
 // remaining lists the labels of every row left in table.
 func (f *fixture) remaining(table string) []string {
 	f.t.Helper()
-	rows, err := f.pool.Query(context.Background(), "SELECT id FROM "+table)
+	rows, err := f.pool.Query(context.Background(), "SELECT id FROM "+table+ownRows(table))
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -161,7 +169,7 @@ func (f *fixture) remaining(table string) []string {
 func (f *fixture) count(table string) int {
 	f.t.Helper()
 	var n int
-	if err := f.pool.QueryRow(context.Background(), "SELECT count(*) FROM "+table).Scan(&n); err != nil {
+	if err := f.pool.QueryRow(context.Background(), "SELECT count(*) FROM "+table+ownRows(table)).Scan(&n); err != nil {
 		f.t.Fatal(err)
 	}
 	return n
@@ -601,4 +609,40 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+func TestRunThatDeletesIsAudited(t *testing.T) {
+	f := newFixture(t)
+	svc := f.service("payments")
+	f.scan(svc, "main", "app", "image", 200*day)
+	f.scan(svc, "main", "app", "image", 100*day)
+	f.scan(svc, "main", "app", "image", 1*day)
+	f.audit(400 * day)
+	r := f.job1(newSettings(90))
+	if res := r.RunOnce(context.Background()); res.Scans != 2 || res.AuditEvents != 1 || res.FailedSteps != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	var action string
+	var detail map[string]any
+	err := f.pool.QueryRow(context.Background(),
+		`SELECT action, detail FROM audit_log WHERE actor = $1`, AuditActor).Scan(&action, &detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action != "retention.deleted" || detail["scans"] != float64(2) || detail["audit_events"] != float64(1) ||
+		detail["retention_days"] != float64(90) || detail["sonar_analyses"] != float64(0) {
+		t.Errorf("event = %s %v", action, detail)
+	}
+
+	// A run that deletes nothing writes no event.
+	if res := r.RunOnce(context.Background()); res.Scans != 0 || res.AuditEvents != 0 {
+		t.Fatalf("second run = %+v", res)
+	}
+	var n int
+	if err := f.pool.QueryRow(context.Background(), `SELECT count(*) FROM audit_log WHERE actor = $1`, AuditActor).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("retention events = %d, want 1", n)
+	}
 }

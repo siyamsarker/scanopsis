@@ -36,4 +36,5 @@ export const auditActions: Record<string, string> = {
   'service.updated': 'Service updated',
   'service.deleted': 'Service deleted',
   'ingest.rejected': 'Upload rejected',
+  'retention.deleted': 'Old data deleted',
 };

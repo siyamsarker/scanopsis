@@ -35,6 +35,10 @@ const (
 	ActionServiceCreated = "service.created"
 	ActionServiceUpdated = "service.updated"
 	ActionServiceDeleted = "service.deleted"
+
+	// Data retention. The actor is "retention"; the detail carries the
+	// period, the cutoffs and how many rows of each kind were deleted.
+	ActionRetentionDeleted = "retention.deleted"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.

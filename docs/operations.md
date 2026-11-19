@@ -370,6 +370,12 @@ names the step and the error. The rows deleted before the error stay deleted,
 and the next run continues from there. When another server holds the lock, the
 run is skipped and logs only at the `debug` level.
 
+A run that deleted anything also writes an audit event, **Old data deleted**
+(`retention.deleted`, actor `retention`), with the period, the two cutoffs
+and the number of rows deleted of each kind. Open **Audit log** and filter by
+this action to see the history of deletions, including how many audit events
+were removed.
+
 ## Backup and restore
 
 Back up two things, and keep them apart:

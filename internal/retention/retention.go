@@ -14,6 +14,7 @@ package retention
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/settings"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
@@ -172,6 +174,15 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 		}
 	}
 
+	// A run that deleted anything is itself audited, so the deletion of old
+	// audit events stays visible in the audit log.
+	if res.Scans+res.SonarAnalyses+res.SonarDeliveries+res.AuditEvents > 0 {
+		if err := recordRun(ctx, q, res); err != nil {
+			res.FailedSteps++
+			r.log.WarnContext(ctx, "data retention could not write its audit event", "error", err)
+		}
+	}
+
 	res.Duration = r.now().Sub(start)
 	r.log.InfoContext(ctx, "data retention run finished",
 		"retention_days", res.RetentionDays,
@@ -182,6 +193,25 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 		"failed_steps", res.FailedSteps,
 		"duration", res.Duration.Round(time.Millisecond).String())
 	return res
+}
+
+// AuditActor is the actor of the audit event a run writes.
+const AuditActor = "retention"
+
+func recordRun(ctx context.Context, q *store.Queries, res Result) error {
+	detail, err := json.Marshal(map[string]any{
+		"retention_days":   res.RetentionDays,
+		"scan_cutoff":      res.ScanCutoff.UTC().Format(time.RFC3339),
+		"audit_cutoff":     res.AuditCutoff.UTC().Format(time.RFC3339),
+		"scans":            res.Scans,
+		"sonar_analyses":   res.SonarAnalyses,
+		"sonar_deliveries": res.SonarDeliveries,
+		"audit_events":     res.AuditEvents,
+	})
+	if err != nil {
+		return err
+	}
+	return q.InsertAudit(ctx, store.InsertAuditParams{Actor: AuditActor, Action: audit.ActionRetentionDeleted, Detail: detail})
 }
 
 func ts(t time.Time) pgtype.Timestamptz { return pgtype.Timestamptz{Time: t, Valid: true} }
