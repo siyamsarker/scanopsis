@@ -54,9 +54,10 @@ type localLogin struct {
 
 // NewLocalLogin returns the handler for POST /api/v1/auth/local/login.
 // Callers should use NewRateLimiter(12*time.Second, 10, nil) for both
-// limiters: byAddr limits attempts per client network (an IPv4 address or an
-// IPv6 /64) and byUser per lower-cased username, each to ten attempts and
-// then five per minute.
+// limiters: byAddr limits every attempt per client network (an IPv4 address or
+// an IPv6 /64) and byUser the failed password checks per username (as given),
+// each to ten attempts and then five per minute. A correct password is never
+// refused because of the byUser limit.
 // Server-side failures are logged to log (nil discards them).
 func NewLocalLogin(users LocalUserStore, sessions SessionStarter, audit AuditRecorder, clientIP func(*http.Request) netip.Addr, byAddr, byUser *RateLimiter, log *slog.Logger) http.Handler {
 	if log == nil {
@@ -88,13 +89,6 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// Per-username limit, checked before any password is verified, so that
-	// many addresses cannot guess one account's password.
-	if ok, wait := h.byUser.Allow(strings.ToLower(username)); !ok {
-		tooManyAttempts(w, max(waitAddr, wait))
-		return
-	}
-
 	user, err := h.users.GetLocalUserByUsername(r.Context(), username)
 	found := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) && !errors.Is(err, store.ErrNotFound) {
@@ -116,6 +110,14 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !found || !user.PasswordHash.Valid || verr != nil || !match {
 		h.audit.Record(r.Context(), "local:"+username, audit.ActionLoginFailed, h.detail(username, ip))
+		// Only failed verifications are charged to the account, so that
+		// attempts from elsewhere can never lock the real user out: a
+		// correct password is not refused. The key is the exact name used
+		// for the lookup.
+		if ok, wait := h.byUser.Allow(username); !ok {
+			tooManyAttempts(w, max(waitAddr, wait))
+			return
+		}
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "Wrong username or password.")
 		return
 	}
@@ -135,8 +137,13 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// retryAfterSeconds rounds wait up to whole seconds, at least one.
+func retryAfterSeconds(wait time.Duration) int {
+	return max(1, int(math.Ceil(wait.Seconds())))
+}
+
 func tooManyAttempts(w http.ResponseWriter, wait time.Duration) {
-	secs := max(1, int(math.Ceil(wait.Seconds())))
+	secs := retryAfterSeconds(wait)
 	w.Header().Set("Retry-After", strconv.Itoa(secs))
 	writeError(w, http.StatusTooManyRequests, "too_many_attempts",
 		"Too many sign-in attempts. Wait "+strconv.Itoa(secs)+" seconds and try again.")

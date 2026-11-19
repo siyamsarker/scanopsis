@@ -460,7 +460,7 @@ func TestLocalLoginAuditsUnknownUserUnderGivenName(t *testing.T) {
 	}
 }
 
-func TestLocalLoginRateLimitPerUsername(t *testing.T) {
+func TestLocalLoginRateLimitPerUsernameChargesOnlyFailures(t *testing.T) {
 	f := newLoginFixture(t, 12*time.Second, 2)
 	addr := func(i int) string { return "198.51.100." + string(rune('0'+i)) + ":1000" }
 	for i := range 2 {
@@ -468,21 +468,46 @@ func TestLocalLoginRateLimitPerUsername(t *testing.T) {
 			t.Fatalf("status %d within the burst", w.Code)
 		}
 	}
-	f.calls = nil
-	// A third address, a different case: same account, so limited before any hashing.
-	w := f.do(http.MethodPost, creds("ADMIN", goodPass), addr(3))
+	// The account's budget of failures is spent: further wrong guesses from
+	// any address get 429 ...
+	w := f.do(http.MethodPost, creds(goodUser, "wrong"), addr(3))
 	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "12" {
 		t.Fatalf("status %d Retry-After %q; want 429 and 12", w.Code, w.Header().Get("Retry-After"))
 	}
 	if code, _ := errorCode(t, w); code != "too_many_attempts" {
 		t.Fatalf("code %q", code)
 	}
-	if len(f.calls) != 0 || len(f.users.lookups) != 2 {
-		t.Fatal("a username-limited request was looked up or hashed")
+	if len(f.start.started) != 0 {
+		t.Fatal("a wrong password started a session")
 	}
-	// Another account from that address is fine.
-	if w := f.do(http.MethodPost, creds("other", "x"), addr(3)); w.Code != http.StatusUnauthorized {
+	// ... but the correct password is never refused, so nobody can lock the
+	// real user out from outside.
+	if w := f.do(http.MethodPost, creds(goodUser, goodPass), addr(4)); w.Code != http.StatusNoContent {
+		t.Fatalf("correct password after the bucket was exhausted: status %d; want 204", w.Code)
+	}
+	if !reflect.DeepEqual(f.start.started, []int64{42}) {
+		t.Fatalf("started %v", f.start.started)
+	}
+	// The bucket is keyed by the exact username: another spelling is another key.
+	if w := f.do(http.MethodPost, creds("ADMIN", "wrong"), addr(5)); w.Code != http.StatusUnauthorized {
+		t.Fatalf("other spelling: status %d; want 401", w.Code)
+	}
+	if w := f.do(http.MethodPost, creds("other", "x"), addr(6)); w.Code != http.StatusUnauthorized {
 		t.Fatalf("other user: status %d", w.Code)
+	}
+}
+
+func TestLocalLoginSuccessDoesNotSpendTheUsernameBudget(t *testing.T) {
+	f := newLoginFixture(t, time.Hour, 1)
+	for i := range 3 {
+		addr := "198.51.100." + string(rune('1'+i)) + ":1000"
+		if w := f.do(http.MethodPost, creds(goodUser, goodPass), addr); w.Code != http.StatusNoContent {
+			t.Fatalf("sign-in %d: status %d", i, w.Code)
+		}
+	}
+	// The single failure token is still there.
+	if w := f.do(http.MethodPost, creds(goodUser, "wrong"), "198.51.100.9:1000"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d; want 401", w.Code)
 	}
 }
 
