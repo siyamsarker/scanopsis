@@ -413,6 +413,19 @@ func TestIngestNotConfigured(t *testing.T) {
 	}
 }
 
+func TestIngestGitLabUnreachable(t *testing.T) {
+	e := newHEnv(t, nil)
+	// Nothing listens on port 1: the signing keys cannot be fetched.
+	e.cfg.set(func(s *settings.Snapshot) { s.GitLabURL = "http://127.0.0.1:1" })
+	w := e.do(req{body: []byte(`{}`)})
+	if w.Code != 503 || errCode(t, w) != "gitlab_unavailable" || !strings.Contains(w.Body.String(), "could not fetch the signing keys") {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if len(e.audit.list()) != 0 {
+		t.Error("an unreachable GitLab is not a rejected upload and must not be audited")
+	}
+}
+
 // The GitLab URL setting is read on every request.
 func TestIngestFollowsSettings(t *testing.T) {
 	e := newHEnv(t, nil)

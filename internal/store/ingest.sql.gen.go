@@ -12,9 +12,15 @@ import (
 )
 
 const adoptServiceByPath = `-- name: AdoptServiceByPath :one
+WITH old AS (
+    SELECT id, gitlab_project_path FROM services
+    WHERE lower(gitlab_project_path) = lower($2) AND gitlab_project_id IS NULL AND NOT archived
+    FOR UPDATE
+)
 UPDATE services SET gitlab_project_id = $1, gitlab_project_path = $2
-WHERE lower(gitlab_project_path) = lower($2) AND gitlab_project_id IS NULL AND NOT archived
-RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at
+FROM old
+WHERE services.id = old.id
+RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, old.gitlab_project_path AS previous_path
 `
 
 type AdoptServiceByPathParams struct {
@@ -22,21 +28,28 @@ type AdoptServiceByPathParams struct {
 	ProjectPath string
 }
 
+type AdoptServiceByPathRow struct {
+	Service      Service
+	PreviousPath string
+}
+
 // A service added by an administrator learns its project ID from the first
 // upload whose token names its path, in any letter case, and takes GitLab's
 // spelling of the path. Archived services are left alone.
-func (q *Queries) AdoptServiceByPath(ctx context.Context, arg AdoptServiceByPathParams) (Service, error) {
+// The previous spelling is returned for the audit record.
+func (q *Queries) AdoptServiceByPath(ctx context.Context, arg AdoptServiceByPathParams) (AdoptServiceByPathRow, error) {
 	row := q.db.QueryRow(ctx, adoptServiceByPath, arg.ProjectID, arg.ProjectPath)
-	var i Service
+	var i AdoptServiceByPathRow
 	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.GitlabProjectID,
-		&i.GitlabProjectPath,
-		&i.SonarProjectKey,
-		&i.CreatedVia,
-		&i.Archived,
-		&i.CreatedAt,
+		&i.Service.ID,
+		&i.Service.Name,
+		&i.Service.GitlabProjectID,
+		&i.Service.GitlabProjectPath,
+		&i.Service.SonarProjectKey,
+		&i.Service.CreatedVia,
+		&i.Service.Archived,
+		&i.Service.CreatedAt,
+		&i.PreviousPath,
 	)
 	return i, err
 }

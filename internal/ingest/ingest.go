@@ -39,16 +39,18 @@ const (
 const (
 	codeNotConfigured = "ingest_not_configured"
 	codeInvalidToken  = "invalid_token"
-	codeNamespace     = "namespace_not_allowed"
-	codeRefProtected  = "ref_not_protected"
-	codeMediaType     = "unsupported_media_type"
-	codeTooLarge      = "report_too_large"
-	codeInvalidReport = "invalid_report"
-	codeNotTrivy      = "not_a_trivy_report"
-	codeRateLimited   = "too_many_requests"
-	codeInvalidParam  = "invalid_parameter"
-	codeConflict      = "service_conflict"
-	codeArchived      = "service_archived"
+	// codeGitLabUnavailable: GitLab's signing keys could not be fetched.
+	codeGitLabUnavailable = "gitlab_unavailable"
+	codeNamespace         = "namespace_not_allowed"
+	codeRefProtected      = "ref_not_protected"
+	codeMediaType         = "unsupported_media_type"
+	codeTooLarge          = "report_too_large"
+	codeInvalidReport     = "invalid_report"
+	codeNotTrivy          = "not_a_trivy_report"
+	codeRateLimited       = "too_many_requests"
+	codeInvalidParam      = "invalid_parameter"
+	codeConflict          = "service_conflict"
+	codeArchived          = "service_archived"
 )
 
 // Options configure an Ingest.
@@ -150,7 +152,11 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	claims, te := i.ver.verify(ctx, gitlabURL, r.Header.Get("Authorization"))
 	if te != nil {
 		if te.unavailable {
+			// Not the pipeline's fault: say so instead of calling the token
+			// invalid, and do not record it as a rejected upload.
 			i.log.Error("cannot fetch GitLab signing keys", "gitlab_url", gitlabURL)
+			httpapi.WriteError(w, http.StatusServiceUnavailable, codeGitLabUnavailable, te.msg+" Try again later.")
+			return
 		}
 		reject(http.StatusUnauthorized, codeInvalidToken, te.msg)
 		return

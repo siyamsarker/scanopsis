@@ -771,6 +771,19 @@ func TestIntegrationPathCaseDifference(t *testing.T) {
 		if path != "platform/payments-api" || pid != 42 {
 			t.Errorf("path %q id %d", path, pid)
 		}
+		// The audit record shows both changes, with the previous spelling.
+		var detail string
+		if err := e.pool.QueryRow(context.Background(), `SELECT detail::text FROM audit_log WHERE action='service.updated'`).Scan(&detail); err != nil {
+			t.Fatal(err)
+		}
+		var d map[string]any
+		_ = json.Unmarshal([]byte(detail), &d)
+		want := map[string]any{"id": float64(id), "gitlab_project_path": "platform/payments-api",
+			"fields": []any{"gitlab_project_id", "gitlab_project_path"}, "old_gitlab_project_path": "Platform/Payments-API",
+			"gitlab_project_id": 42.0, "reason": "adopted by the first verified upload"}
+		if !jsonEqual(d, want) {
+			t.Errorf("audit detail = %s", detail)
+		}
 	})
 	t.Run("archived manual service in another case", func(t *testing.T) {
 		e := newIEnv(t, nil)

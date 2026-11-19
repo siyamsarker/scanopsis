@@ -16,9 +16,16 @@ SELECT * FROM services WHERE lower(gitlab_project_path) = lower($1);
 -- A service added by an administrator learns its project ID from the first
 -- upload whose token names its path, in any letter case, and takes GitLab's
 -- spelling of the path. Archived services are left alone.
+-- The previous spelling is returned for the audit record.
+WITH old AS (
+    SELECT id, gitlab_project_path FROM services
+    WHERE lower(gitlab_project_path) = lower(@project_path) AND gitlab_project_id IS NULL AND NOT archived
+    FOR UPDATE
+)
 UPDATE services SET gitlab_project_id = @project_id, gitlab_project_path = @project_path
-WHERE lower(gitlab_project_path) = lower(@project_path) AND gitlab_project_id IS NULL AND NOT archived
-RETURNING *;
+FROM old
+WHERE services.id = old.id
+RETURNING sqlc.embed(services), old.gitlab_project_path AS previous_path;
 
 -- name: RenameServicePath :execrows
 -- Follows a renamed or transferred project. Does nothing when another

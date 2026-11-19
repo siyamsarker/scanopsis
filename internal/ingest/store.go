@@ -196,13 +196,20 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 		return svc, false, fmt.Errorf("find service: %w", err)
 	}
 
-	svc, err = q.AdoptServiceByPath(ctx, store.AdoptServiceByPathParams{ProjectID: projectID, ProjectPath: c.ProjectPath})
+	adopted, err := q.AdoptServiceByPath(ctx, store.AdoptServiceByPathParams{ProjectID: projectID, ProjectPath: c.ProjectPath})
+	svc = adopted.Service
 	switch {
 	case err == nil:
-		detail, err := json.Marshal(map[string]any{
+		d := map[string]any{
 			"id": svc.ID, "gitlab_project_path": svc.GitlabProjectPath, "fields": []string{"gitlab_project_id"},
 			"gitlab_project_id": c.ProjectID, "reason": "adopted by the first verified upload",
-		})
+		}
+		if adopted.PreviousPath != svc.GitlabProjectPath {
+			// The administrator's spelling was replaced by GitLab's.
+			d["fields"] = []string{"gitlab_project_id", "gitlab_project_path"}
+			d["old_gitlab_project_path"] = adopted.PreviousPath
+		}
+		detail, err := json.Marshal(d)
 		if err == nil {
 			err = q.InsertAudit(ctx, store.InsertAuditParams{Actor: "ci:" + c.ProjectPath, Action: audit.ActionServiceUpdated, Detail: detail})
 		}
