@@ -423,7 +423,7 @@ seconds from request to the `201` answer.
 
 At 3,000 uploads a day, the average is two a minute, so memory stays close to
 the idle value. Give the Scanopsis container a limit of 256 MiB. The database
-container needs more: plan 1 GiB or more of RAM for PostgreSQL, so that it can
+container needs more: reserve 1 GiB or more of RAM for PostgreSQL, so that it can
 keep its working set in memory.
 
 The rate limit for uploads is 60 at once per client address and then one a
@@ -493,8 +493,8 @@ Retention also keeps the latest scan of every service, ref, artifact and kind
 beyond the period. For 500 services with a few refs each, that adds well under
 1 GB.
 
-Plan the disk for the estimate plus 50% for indexes growth, write-ahead log and
-vacuum, and plan the same space again for backups. Shorten `retention.days` if
+Size the disk for the estimate plus 50% for index growth, write-ahead log and
+vacuum, and reserve the same space again for backups. Shorten `retention.days` if
 you do not need the history: the database size scales with it. Most pipelines
 scan fewer images than one per pipeline, or scan only the main branch, which
 makes the real figure lower. Count your own: the number of uploads a day is on
