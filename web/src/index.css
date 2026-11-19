@@ -286,6 +286,16 @@ body {
   outline-offset: 2px;
 }
 
+[data-roving='row']:focus-visible {
+  outline-offset: -2px;
+}
+
+/* A quiet row highlight that works on both light and dark surfaces. */
+.hover-tint:hover,
+.hover-tint:focus-visible {
+  background-color: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
 /*
  * Chart tooltips. echarts builds the tooltip as HTML, and inline style
  * attributes are blocked by the CSP, so our formatters emit these classes.
