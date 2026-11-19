@@ -136,15 +136,27 @@ const gridCols = {
   5: 'sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5',
 } as const;
 
-/** A responsive grid on a 16 px gap: one column on phones, `cols` on wide screens. */
+/**
+ * A responsive grid on a 16 px gap for stat tiles: two columns on phones (one with
+ * `single`, for tiles whose content cannot fit half a phone), `cols` on wider screens.
+ */
 export function Grid({
   cols = 3,
+  single = false,
   children,
   className = '',
 }: {
   cols?: keyof typeof gridCols;
+  /** One column below the sm breakpoint instead of two. */
+  single?: boolean;
   children: ReactNode;
   className?: string;
 }) {
-  return <div className={`grid grid-cols-1 gap-4 ${gridCols[cols]} ${className}`}>{children}</div>;
+  return (
+    <div
+      className={`grid ${single ? 'grid-cols-1' : 'grid-cols-2'} gap-4 ${gridCols[cols]} ${className}`}
+    >
+      {children}
+    </div>
+  );
 }

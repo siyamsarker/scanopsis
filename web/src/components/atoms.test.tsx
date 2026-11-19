@@ -296,6 +296,22 @@ describe('layout', () => {
     expect(screen.getByRole('button', { name: 'Rescan' })).toBeInTheDocument();
   });
 
+  it('lays stat tiles out in two columns on phones unless single is set', () => {
+    render(
+      <>
+        <Grid cols={4}>
+          <span>a</span>
+        </Grid>
+        <Grid cols={4} single>
+          <span>b</span>
+        </Grid>
+      </>,
+    );
+    expect(screen.getByText('a').parentElement).toHaveClass('grid-cols-2', 'xl:grid-cols-4');
+    expect(screen.getByText('b').parentElement).toHaveClass('grid-cols-1', 'sm:grid-cols-2');
+    expect(screen.getByText('b').parentElement).not.toHaveClass('grid-cols-2');
+  });
+
   it('labels a section by its heading and a card by its header', () => {
     render(
       <Section title="Trend">
