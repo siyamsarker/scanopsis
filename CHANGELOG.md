@@ -21,5 +21,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Read API for the portfolio, per-service overview, scans, new and fixed findings between scans, vulnerabilities, secret findings, trends and a cross-service vulnerability search.
 - SonarQube integration: signed webhooks, quality gate, ratings, coverage and duplication read with a read-only token, a periodic reconciliation, support for MQR and Standard modes, and integration health pages for administrators.
 - Guides for uploading from GitLab CI (including a scan script that keeps an existing pipeline gate) and for connecting SonarQube.
+- Web interface for the results: a portfolio of all services (grid and treemap), a dashboard per service with Trivy and SonarQube posture, trends and recent scans, a findings explorer with a "fix first" list and secret findings, a scan page with the changes since the previous scan, and a cross-service CVE search. Dark and light themes; works on phones.
+- Administration pages for services, users, integration health and the audit log.
+- Data retention: scan history, SonarQube analyses and deliveries are kept for a configurable number of days (`retention.days`, default 90), always keeping the latest scan of every service, ref, artifact and kind; audit events are kept for 365 days. Each run that deletes data is recorded in the audit log.
+- Coverage thresholds for the backend and the web interface (`make coverage`), a performance check of start-up time, memory, bundle size and response times (`make perf`), and a release workflow that publishes a multi-architecture image with SBOMs and checksums.
+
+### Security
+
+- Ten wrong second-factor codes in a row lock two-factor sign-in for the account until an administrator resets it, and sign the account out everywhere.
+- A session gets a new token once the second factor passes.
+- After repeated wrong passwords for an account, local sign-in is refused for a short time even with the right password, so the limit does not reveal a correct guess.
+- Failed sign-ins for a username that matches no account no longer record the typed name.
+- Changing the GitLab or SonarQube URL requires entering the matching secret again, so a stored secret is never sent to a new address.
+- Rejected uploads that need no allowed project are recorded in the audit log at most a few times per client address, and rate-limited uploads are not recorded.
+- At most four uploads are processed at once, and the server warns at start when every project of the GitLab instance may upload.
+- Upload error responses no longer contain the GitLab URL or upstream error text.
+- Release images must pass the vulnerability and secret scans before they are published, and npm dependencies are installed without running their install scripts.
 
 [Unreleased]: https://github.com/siyamsarker/scanopsis/commits/main
