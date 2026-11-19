@@ -483,8 +483,17 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Too many attempts from this address. Retry-After gives seconds. */
+            /** @description Too many attempts from this network or for this username. Retry-After gives seconds. */
             429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The server is busy hashing other passwords and the request ended while waiting. Try again. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
