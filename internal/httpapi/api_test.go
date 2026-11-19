@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -56,6 +57,25 @@ var rbacRoutes = []struct {
 		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 	{"PATCH", "/api/v1/settings", "{}", [6]string{
 		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"POST", "/api/v1/ingest/trivy", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/hooks/sonarqube", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"GET", "/api/v1/portfolio", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/services", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"POST", "/api/v1/services", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/services/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"PATCH", "/api/v1/services/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"DELETE", "/api/v1/services/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/services/3/overview", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/services/3/scans", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/scans/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/scans/3/diff", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/services/3/vulnerabilities", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/services/3/secrets", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/services/3/trends", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/services/3/sonar", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/search/vulnerabilities?id=CVE-2024-3094", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/admin/integrations/trivy", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/admin/integrations/sonarqube", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 }
 
 func TestRBACMatrix(t *testing.T) {
@@ -68,6 +88,10 @@ func TestRBACMatrix(t *testing.T) {
 					d.LocalLogin, d.GitLabLogin, d.GitLabCallback = ok, ok, ok
 					d.Setup, d.MFAVerify, d.MFAStartEnrollment, d.MFAConfirmEnrollment = ok, ok, ok, ok
 					d.PasswordChange, d.SettingsList, d.SettingsUpdate = ok, ok, ok
+					d.Features = map[string]http.Handler{}
+					for _, id := range featureIDs {
+						d.Features[id] = ok
+					}
 				})
 				rec := e.do(tt.method, tt.target, role, tt.body)
 				status, code, _ := strings.Cut(tt.want[i], ":")
@@ -85,11 +109,11 @@ func TestRBACMatrix(t *testing.T) {
 func TestRBACMatrixCoversEveryRoute(t *testing.T) {
 	// Guards the matrix above: every registered route must appear in it.
 	covered := map[string]bool{}
+	ids := regexp.MustCompile(`/[0-9]+(/|$)`)
 	for _, tt := range rbacRoutes {
-		covered[tt.method+" "+strings.NewReplacer("/3/", "/{id}/").Replace(tt.target)] = true
+		path, _, _ := strings.Cut(tt.target, "?")
+		covered[tt.method+" "+ids.ReplaceAllString(path, "/{id}$1")] = true
 	}
-	covered["PATCH /api/v1/users/{id}"] = true
-	delete(covered, "PATCH /api/v1/users/3")
 	s := &server{}
 	for _, rt := range s.routes() {
 		if !covered[rt.method+" "+rt.pattern] {
@@ -447,5 +471,36 @@ func TestNotEnabled(t *testing.T) {
 	if rec.Code != 404 || !strings.Contains(rec.Body.String(), `"code":"not_enabled"`) ||
 		!strings.Contains(rec.Body.String(), "GitLab sign-in is not enabled on this server.") {
 		t.Fatalf("NotEnabled = %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+var featureIDs = []string{
+	"ingestTrivy", "sonarWebhook", "getPortfolio", "listServices", "createService", "getService",
+	"updateService", "deleteService", "getServiceOverview", "listServiceScans", "getScan", "getScanDiff",
+	"listServiceVulnerabilities", "listServiceSecrets", "getServiceTrends", "getServiceSonar",
+	"searchVulnerabilities", "getTrivyIntegration", "getSonarIntegration",
+}
+
+func TestFeatureNotEnabled(t *testing.T) {
+	e := newEnv(t, nil)
+	assertError(t, e.do("GET", "/api/v1/portfolio", "viewer", ""), 404, "not_enabled")
+	assertError(t, e.do("POST", "/api/v1/ingest/trivy", "", ""), 404, "not_enabled")
+}
+
+func TestIngestBodyIsNotCappedByTheAPILimit(t *testing.T) {
+	var got int64
+	e := newEnv(t, func(d *Deps) {
+		d.Features = map[string]http.Handler{"ingestTrivy": http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n, err := io.Copy(io.Discard, r.Body)
+			if err != nil {
+				t.Errorf("reading the upload: %v", err)
+			}
+			got = n
+			w.WriteHeader(http.StatusCreated)
+		})}
+	})
+	big := strings.Repeat("x", 3<<20) // larger than the 1 MiB API limit
+	if rec := e.do("POST", "/api/v1/ingest/trivy", "", big); rec.Code != http.StatusCreated || got != int64(len(big)) {
+		t.Fatalf("status %d, handler read %d bytes, want %d", rec.Code, got, len(big))
 	}
 }

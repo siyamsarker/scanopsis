@@ -77,6 +77,12 @@ type Deps struct {
 	SettingsList         http.Handler
 	SettingsUpdate       http.Handler
 
+	// Features maps OpenAPI operation IDs (for example "ingestTrivy",
+	// "getPortfolio") to the handlers of the scan and SonarQube endpoints.
+	// The router applies the session and role checks; a missing entry
+	// answers 404 not_enabled.
+	Features map[string]http.Handler
+
 	Assets fs.FS // built web interface rooted at index.html; nil when not built
 	Build  BuildInfo
 	Secure bool // the public URL is https
@@ -90,6 +96,12 @@ type route struct {
 
 type server struct {
 	Deps
+}
+
+// feature returns the handler registered for an operation ID, or a 404
+// not_enabled handler when there is none.
+func (s *server) feature(operationID string) http.Handler {
+	return s.optional(s.Features[operationID], "This feature")
 }
 
 // New returns the handler serving the API, the probes and the web interface.
@@ -122,6 +134,28 @@ func (s *server) routes() []route {
 		{"POST", "/api/v1/auth/mfa/enrollment/confirm", s.requireFirstFactor(s.optional(s.MFAConfirmEnrollment, "Two-factor authentication"))},
 		{"GET", "/api/v1/settings", s.requireAdmin(s.optional(s.SettingsList, "Settings"))},
 		{"PATCH", "/api/v1/settings", s.requireAdmin(s.optional(s.SettingsUpdate, "Settings"))},
+
+		// Uploads and webhooks authenticate themselves (CI ID token, HMAC).
+		{"POST", "/api/v1/ingest/trivy", s.feature("ingestTrivy")},
+		{"POST", "/api/v1/hooks/sonarqube", s.feature("sonarWebhook")},
+
+		{"GET", "/api/v1/portfolio", s.requireComplete(s.feature("getPortfolio"))},
+		{"GET", "/api/v1/services", s.requireComplete(s.feature("listServices"))},
+		{"POST", "/api/v1/services", s.requireAdmin(s.feature("createService"))},
+		{"GET", "/api/v1/services/{id}", s.requireComplete(s.feature("getService"))},
+		{"PATCH", "/api/v1/services/{id}", s.requireAdmin(s.feature("updateService"))},
+		{"DELETE", "/api/v1/services/{id}", s.requireAdmin(s.feature("deleteService"))},
+		{"GET", "/api/v1/services/{id}/overview", s.requireComplete(s.feature("getServiceOverview"))},
+		{"GET", "/api/v1/services/{id}/scans", s.requireComplete(s.feature("listServiceScans"))},
+		{"GET", "/api/v1/scans/{id}", s.requireComplete(s.feature("getScan"))},
+		{"GET", "/api/v1/scans/{id}/diff", s.requireComplete(s.feature("getScanDiff"))},
+		{"GET", "/api/v1/services/{id}/vulnerabilities", s.requireComplete(s.feature("listServiceVulnerabilities"))},
+		{"GET", "/api/v1/services/{id}/secrets", s.requireComplete(s.feature("listServiceSecrets"))},
+		{"GET", "/api/v1/services/{id}/trends", s.requireComplete(s.feature("getServiceTrends"))},
+		{"GET", "/api/v1/services/{id}/sonar", s.requireComplete(s.feature("getServiceSonar"))},
+		{"GET", "/api/v1/search/vulnerabilities", s.requireComplete(s.feature("searchVulnerabilities"))},
+		{"GET", "/api/v1/admin/integrations/trivy", s.requireAdmin(s.feature("getTrivyIntegration"))},
+		{"GET", "/api/v1/admin/integrations/sonarqube", s.requireAdmin(s.feature("getSonarIntegration"))},
 		{"DELETE", "/api/v1/users/{id}/mfa", s.requireAdmin(http.HandlerFunc(s.resetMFA))},
 		{"GET", "/api/v1/users", s.requireAdmin(http.HandlerFunc(s.listUsers))},
 		{"PATCH", "/api/v1/users/{id}", s.requireAdmin(http.HandlerFunc(s.updateUser))},
