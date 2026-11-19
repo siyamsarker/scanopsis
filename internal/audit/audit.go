@@ -14,12 +14,13 @@ import (
 
 // Event actions. Detail values must never contain secrets.
 const (
-	ActionLoginSucceeded = "login.succeeded"
-	ActionLoginFailed    = "login.failed"
-	ActionLogout         = "logout"
-	ActionUserCreated    = "user.created"
-	ActionRoleChanged    = "user.role_changed"
-	ActionMFAReset       = "mfa.reset"
+	ActionLoginSucceeded  = "login.succeeded"
+	ActionLoginFailed     = "login.failed"
+	ActionLogout          = "logout"
+	ActionUserCreated     = "user.created"
+	ActionRoleChanged     = "user.role_changed"
+	ActionMFAReset        = "mfa.reset"
+	ActionSettingsChanged = "settings.changed"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.

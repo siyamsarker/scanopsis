@@ -1,0 +1,395 @@
+// Copyright 2026 The Scanopsis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package settings
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/siyamsarker/scanopsis/internal/audit"
+	"github.com/siyamsarker/scanopsis/internal/auth"
+	"github.com/siyamsarker/scanopsis/internal/secretbox"
+	"github.com/siyamsarker/scanopsis/internal/store"
+)
+
+// Setting sources.
+const (
+	SourceDefault = "default"
+	SourceEnv     = "env"
+	SourceUI      = "ui"
+)
+
+// Snapshot is an immutable view of the settings. Slices must not be
+// modified by callers.
+type Snapshot struct {
+	GitLabURL           string
+	GitLabClientID      string
+	GitLabClientSecret  string
+	GitLabAllowedGroups []string
+	LocalLoginEnabled   bool
+
+	SessionIdleTimeout     time.Duration
+	SessionAbsoluteTimeout time.Duration
+}
+
+// GitLabEnabled reports whether GitLab sign-in is fully configured.
+func (s Snapshot) GitLabEnabled() bool {
+	return s.GitLabURL != "" && s.GitLabClientID != "" && s.GitLabClientSecret != ""
+}
+
+// Store is the persistence the service needs; *store.Queries satisfies it.
+type Store interface {
+	ListSettings(ctx context.Context) ([]store.Setting, error)
+	SeedSetting(ctx context.Context, arg store.SeedSettingParams) error
+	UpsertSetting(ctx context.Context, arg store.UpsertSettingParams) error
+	DeleteSetting(ctx context.Context, key string) error
+}
+
+// entry is the effective state of one setting.
+type entry struct {
+	value     any // canonical value; the plaintext for secrets
+	source    string
+	updatedBy string
+	updatedAt time.Time
+	stored    bool // backed by a database row
+}
+
+// state is immutable once published.
+type state struct {
+	entries map[string]entry
+	snap    Snapshot
+}
+
+// Service serves the settings. It is safe for concurrent use.
+type Service struct {
+	st    Store
+	tx    func(ctx context.Context, fn func(Store) error) error
+	box   *secretbox.Box
+	audit auth.AuditRecorder
+	log   *slog.Logger
+	seeds map[string]any // canonical env values
+
+	cur atomic.Pointer[state]
+
+	mu        sync.Mutex // serialises updates and guards callbacks
+	callbacks []func(Snapshot)
+}
+
+func purpose(key string) string { return "setting:" + key }
+
+// New seeds environment values for keys without a row, loads all rows and
+// builds the first snapshot. tx runs fn with a Store bound to a transaction.
+func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Store) error) error, box *secretbox.Box, seeds map[string]any, rec auth.AuditRecorder, log *slog.Logger) (*Service, error) {
+	s := &Service{st: st, tx: tx, box: box, audit: rec, log: log, seeds: map[string]any{}}
+	for key, raw := range seeds {
+		d, ok := definitionByKey[key]
+		if !ok {
+			return nil, fmt.Errorf("unknown setting %q in the environment seeds", key)
+		}
+		v, err := coerce(d, raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s from %s: %w", key, d.EnvVar, err)
+		}
+		s.seeds[key] = v
+	}
+
+	rows, err := st.ListSettings(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load settings: %w", err)
+	}
+	have := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		have[r.Key] = true
+	}
+	seeded := false
+	for _, d := range Definitions { // deterministic order
+		v, ok := s.seeds[d.Key]
+		if !ok || have[d.Key] {
+			continue
+		}
+		p, err := s.encode(d, v)
+		if err != nil {
+			return nil, err
+		}
+		if err := st.SeedSetting(ctx, store.SeedSettingParams{Key: d.Key, Value: p.value, SecretEnc: p.secret}); err != nil {
+			return nil, fmt.Errorf("seed setting %s: %w", d.Key, err)
+		}
+		seeded = true
+	}
+	if seeded {
+		if rows, err = st.ListSettings(ctx); err != nil {
+			return nil, fmt.Errorf("load settings: %w", err)
+		}
+	}
+
+	stored := make(map[string]entry, len(rows))
+	for _, r := range rows {
+		d, ok := definitionByKey[r.Key]
+		if !ok {
+			log.Warn("ignoring unknown setting in the database", "key", r.Key)
+			continue
+		}
+		e, err := s.decode(d, r)
+		if err != nil {
+			return nil, err
+		}
+		stored[r.Key] = e
+	}
+	stt := s.build(stored)
+	s.cur.Store(stt)
+	return s, nil
+}
+
+type payload struct{ value, secret []byte }
+
+func (s *Service) encode(d Definition, v any) (payload, error) {
+	if d.Secret {
+		sealed, err := s.box.Seal([]byte(v.(string)), purpose(d.Key))
+		if err != nil {
+			return payload{}, fmt.Errorf("encrypt setting %s: %w", d.Key, err)
+		}
+		return payload{secret: sealed}, nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return payload{}, fmt.Errorf("encode setting %s: %w", d.Key, err)
+	}
+	return payload{value: b}, nil
+}
+
+func (s *Service) decode(d Definition, r store.Setting) (entry, error) {
+	e := entry{source: r.Source, updatedBy: r.UpdatedBy, stored: true}
+	if r.UpdatedAt.Valid {
+		e.updatedAt = r.UpdatedAt.Time
+	}
+	if d.Secret {
+		b, err := s.box.Open(r.SecretEnc, purpose(d.Key))
+		if err != nil {
+			return entry{}, fmt.Errorf("setting %s cannot be decrypted: SCANOPSIS_SECRET_KEY changed or is wrong", d.Key)
+		}
+		e.value = string(b)
+		return e, nil
+	}
+	var raw any
+	if err := json.Unmarshal(r.Value, &raw); err != nil {
+		return entry{}, fmt.Errorf("setting %s has an unreadable stored value: %w", d.Key, err)
+	}
+	v, err := coerce(d, raw)
+	if err != nil {
+		return entry{}, fmt.Errorf("setting %s has an invalid stored value: %w", d.Key, err)
+	}
+	e.value = v
+	return e, nil
+}
+
+// build merges stored rows over the env seeds and defaults.
+func (s *Service) build(stored map[string]entry) *state {
+	entries := make(map[string]entry, len(Definitions))
+	for _, d := range Definitions {
+		entries[d.Key] = s.effective(d, stored)
+	}
+	return &state{entries: entries, snap: snapshotOf(entries)}
+}
+
+func (s *Service) effective(d Definition, stored map[string]entry) entry {
+	if e, ok := stored[d.Key]; ok {
+		return e
+	}
+	if v, ok := s.seeds[d.Key]; ok {
+		return entry{value: v, source: SourceEnv}
+	}
+	v := d.Default
+	if !d.Secret {
+		v, _ = coerce(d, d.Default) // canonical form; definitions are valid
+	}
+	return entry{value: v, source: SourceDefault}
+}
+
+func snapshotOf(e map[string]entry) Snapshot {
+	dur := func(key string) time.Duration {
+		d, _ := time.ParseDuration(e[key].value.(string)) // canonical
+		return d
+	}
+	return Snapshot{
+		GitLabURL:              e[KeyGitLabURL].value.(string),
+		GitLabClientID:         e[KeyGitLabClientID].value.(string),
+		GitLabClientSecret:     e[KeyGitLabClientSecret].value.(string),
+		GitLabAllowedGroups:    e[KeyGitLabAllowedGroups].value.([]string),
+		LocalLoginEnabled:      e[KeyLocalLoginEnabled].value.(bool),
+		SessionIdleTimeout:     dur(KeySessionIdleTimeout),
+		SessionAbsoluteTimeout: dur(KeySessionAbsTimeout),
+	}
+}
+
+// Current returns the current settings without locking or any query.
+func (s *Service) Current() Snapshot { return s.cur.Load().snap }
+
+// OnChange registers fn, called with the new snapshot after every successful
+// update, in registration order.
+func (s *Service) OnChange(fn func(Snapshot)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.callbacks = append(s.callbacks, fn)
+}
+
+// validate checks the rules that span several settings and adds one message
+// per offending key to fields without replacing earlier messages.
+func validate(snap Snapshot, fields map[string]string) {
+	add := func(key, msg string) {
+		if _, ok := fields[key]; !ok {
+			fields[key] = msg
+		}
+	}
+	gl := map[string]bool{
+		KeyGitLabURL:          snap.GitLabURL != "",
+		KeyGitLabClientID:     snap.GitLabClientID != "",
+		KeyGitLabClientSecret: snap.GitLabClientSecret != "",
+	}
+	if gl[KeyGitLabURL] || gl[KeyGitLabClientID] || gl[KeyGitLabClientSecret] {
+		for _, key := range []string{KeyGitLabURL, KeyGitLabClientID, KeyGitLabClientSecret} {
+			if !gl[key] {
+				add(key, "Required when other GitLab settings are set.")
+			}
+		}
+	}
+	if !snap.LocalLoginEnabled && !snap.GitLabEnabled() {
+		add(KeyLocalLoginEnabled, "Local sign-in can be disabled only when GitLab sign-in is fully configured.")
+	}
+	if snap.SessionIdleTimeout < MinIdleTimeout {
+		add(KeySessionIdleTimeout, "Must be at least 5m.")
+	}
+	if snap.SessionAbsoluteTimeout < snap.SessionIdleTimeout {
+		add(KeySessionAbsTimeout, "Must not be shorter than the idle timeout.")
+	}
+}
+
+// change is one validated key of a patch.
+type change struct {
+	key   string
+	reset bool
+	entry entry
+}
+
+// plan validates a patch (key -> decoded JSON, nil meaning reset) against
+// the current state and returns the changes in definition order, or the
+// problems per key.
+func (s *Service) plan(cur *state, patch map[string]any, actor string, now time.Time) ([]change, map[string]string) {
+	fields := map[string]string{}
+	var changes []change
+	for key, raw := range patch {
+		d, ok := definitionByKey[key]
+		if !ok {
+			fields[key] = "Unknown setting."
+			continue
+		}
+		if raw == nil {
+			changes = append(changes, change{key: key, reset: true})
+			continue
+		}
+		v, err := coerce(d, raw)
+		if err != nil {
+			fields[key] = err.Error()
+			continue
+		}
+		changes = append(changes, change{key: key, entry: entry{value: v, source: SourceUI, updatedBy: actor, updatedAt: now, stored: true}})
+	}
+	slices.SortFunc(changes, func(a, b change) int { return compareKeys(a.key, b.key) })
+
+	// Validate the whole resulting snapshot.
+	next := make(map[string]entry, len(Definitions))
+	for k, e := range cur.entries {
+		if e.stored {
+			next[k] = e
+		}
+	}
+	for _, c := range changes {
+		if c.reset {
+			delete(next, c.key)
+		} else {
+			next[c.key] = c.entry
+		}
+	}
+	validate(s.build(next).snap, fields)
+	return changes, fields
+}
+
+func compareKeys(a, b string) int {
+	return slices.IndexFunc(Definitions, func(d Definition) bool { return d.Key == a }) -
+		slices.IndexFunc(Definitions, func(d Definition) bool { return d.Key == b })
+}
+
+// update applies a patch atomically. It returns the problems per key when
+// the patch is not valid; nothing changes in that case.
+func (s *Service) update(ctx context.Context, patch map[string]any, actor string) (map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cur := s.cur.Load()
+	now := time.Now().UTC()
+	changes, fields := s.plan(cur, patch, actor, now)
+	if len(fields) > 0 {
+		return fields, nil
+	}
+	if len(changes) == 0 {
+		return nil, nil
+	}
+
+	writes := make([]store.UpsertSettingParams, 0, len(changes))
+	keys := make([]string, 0, len(changes))
+	for _, c := range changes {
+		keys = append(keys, c.key)
+		if c.reset {
+			continue
+		}
+		p, err := s.encode(definitionByKey[c.key], c.entry.value)
+		if err != nil {
+			return nil, err
+		}
+		writes = append(writes, store.UpsertSettingParams{Key: c.key, Value: p.value, SecretEnc: p.secret, UpdatedBy: actor})
+	}
+	err := s.tx(ctx, func(q Store) error {
+		for _, c := range changes {
+			if c.reset {
+				if err := q.DeleteSetting(ctx, c.key); err != nil {
+					return err
+				}
+			}
+		}
+		for _, w := range writes {
+			if err := q.UpsertSetting(ctx, w); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("save settings: %w", err)
+	}
+
+	stored := make(map[string]entry, len(Definitions))
+	for k, e := range cur.entries {
+		if e.stored {
+			stored[k] = e
+		}
+	}
+	for _, c := range changes {
+		if c.reset {
+			delete(stored, c.key)
+		} else {
+			stored[c.key] = c.entry
+		}
+	}
+	next := s.build(stored)
+	s.cur.Store(next)
+	for _, fn := range s.callbacks {
+		fn(next.snap)
+	}
+	s.audit.Record(ctx, actor, audit.ActionSettingsChanged, map[string]any{"keys": keys})
+	return nil, nil
+}
