@@ -294,6 +294,82 @@ could not be reached.
 Sign in as a local administrator. If you lost the password or the phone, use
 the commands above first.
 
+## Data retention
+
+Scanopsis deletes old data once a day so that the database does not grow
+without limit.
+
+### What is kept
+
+- Scan history for the number of days in the `retention.days` setting. The
+  default is 90.
+- The latest scan of every service, ref, artifact and kind, however old. A
+  branch that nobody has scanned for two years still shows its last result.
+  Older scans of the same service, ref, artifact and kind are deleted when
+  they are older than the period.
+- The latest SonarQube analysis of every service, however old.
+- Audit events for 365 days. This period is fixed and has no setting. If you
+  set `retention.days` above 365, audit events are kept for that many days
+  instead, so they are never kept for a shorter time than scan history.
+
+### What is deleted
+
+Each run deletes, in this order:
+
+1. Scans that are older than the period and are not the latest of their
+   service, ref, artifact and kind. Their findings are deleted with them.
+2. SonarQube analyses that are older than the period and are not the latest
+   of their service.
+3. SonarQube webhook deliveries that are older than the period. This includes
+   deliveries that never finished.
+4. Audit events that are older than 365 days, or older than the period if
+   that is longer.
+
+A scan is as old as its `scanned_at` time, which is when Trivy ran, not when
+the report arrived. A scan that is exactly as old as the period is kept.
+
+### When it runs
+
+The first run starts one minute after the server starts. After that, it runs
+every 24 hours. The server stays available while it runs. It deletes at most
+1,000 rows at a time, each in its own short transaction, and uses one
+database connection. If you run more than one Scanopsis server against the
+same database, only one of them runs the cleanup at a time; the others skip
+that run.
+
+### Change the period
+
+Open **Settings**, find **Retention**, enter a whole number from 7 to 3650
+and select **Save changes**. You can also seed the value with
+`SCANOPSIS_RETENTION_DAYS` before the first start. After the first start, the
+database value wins, as for the other settings. See
+[runtime settings](configuration.md#runtime-settings).
+
+The new value applies from the next run. Saving it does not start a run. If
+you shorten the period, the next run deletes everything that is now outside
+it, in batches, so the first run after a large reduction can take longer than
+usual.
+
+Deleted data cannot be brought back, except by restoring a [backup](#backup-and-restore).
+
+### Check the last run
+
+Each run writes one line at the `info` level when it finishes:
+
+```sh
+docker compose logs scanopsis | grep "data retention"
+```
+
+```text
+{"time":"2026-11-19T04:01:12.318Z","level":"INFO","msg":"data retention run finished","retention_days":90,"scans_deleted":41200,"sonar_analyses_deleted":3100,"sonar_deliveries_deleted":3100,"audit_events_deleted":12,"failed_steps":0,"duration":"48.2s"}
+```
+
+`failed_steps` is the number of the four steps above that stopped with an
+error. For each one, a separate `WARN` line `data retention step failed`
+names the step and the error. The rows deleted before the error stay deleted,
+and the next run continues from there. When another server holds the lock, the
+run is skipped and logs only at the `debug` level.
+
 ## Backup and restore
 
 Back up two things, and keep them apart:

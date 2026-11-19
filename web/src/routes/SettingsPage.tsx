@@ -24,15 +24,21 @@ import { formatRelative } from './UsersPage';
 
 type Draft = string | boolean;
 
-const groups = ['GitLab', 'Sign-in', 'Sessions', 'Scan uploads', 'SonarQube'] as const;
+const groups = ['GitLab', 'Sign-in', 'Sessions', 'Scan uploads', 'SonarQube', 'Retention'] as const;
 
 function groupOf(key: string): (typeof groups)[number] {
   if (key.startsWith('gitlab.')) return 'GitLab';
   if (key.startsWith('session')) return 'Sessions';
   if (key.startsWith('ingest.')) return 'Scan uploads';
   if (key.startsWith('sonar.')) return 'SonarQube';
+  if (key.startsWith('retention.')) return 'Retention';
   return 'Sign-in';
 }
+
+/** Limits of integer settings; the server enforces the same ones. */
+const integerBounds: Record<string, { min: number; max: number }> = {
+  'retention.days': { min: 7, max: 3650 },
+};
 
 const sourceLabels = { default: 'Default', env: 'Environment', ui: 'Set here' } as const;
 
@@ -41,6 +47,7 @@ function shown(setting: Setting): Draft {
   const { value } = setting;
   if (setting.type === 'boolean') return value === true;
   if (Array.isArray(value)) return value.join('\n');
+  if (typeof value === 'number') return String(value);
   return typeof value === 'string' ? value : '';
 }
 
@@ -51,7 +58,14 @@ function toValue(setting: Setting, draft: Draft): SettingValue {
       .map((line) => line.trim())
       .filter(Boolean);
   }
-  return typeof draft === 'boolean' ? draft : draft.trim();
+  if (typeof draft === 'boolean') return draft;
+  const text = draft.trim();
+  if (setting.type === 'integer') {
+    // A value that is not a number goes to the server as text, which names the problem.
+    const n = Number(text);
+    return text !== '' && Number.isFinite(n) ? n : text;
+  }
+  return text;
 }
 
 function SourceBadge({ source }: { source: Setting['source'] }) {
@@ -131,6 +145,22 @@ function Control({
       />
     );
   }
+  if (setting.type === 'integer') {
+    const bounds = integerBounds[setting.key];
+    return (
+      <input
+        {...common}
+        type="number"
+        inputMode="numeric"
+        step={1}
+        min={bounds?.min}
+        max={bounds?.max}
+        value={String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        className={monoInputClass}
+      />
+    );
+  }
   return (
     <input
       {...common}
@@ -187,6 +217,9 @@ function SettingRow({ setting, draft, willReset, error, onDraft, onReset }: RowP
           )}
           {setting.type === 'duration' && ' Use a duration such as 8h or 30m.'}
           {setting.type === 'string_list' && ' One entry per line.'}
+          {setting.type === 'integer' &&
+            integerBounds[setting.key] &&
+            ` Use a whole number from ${integerBounds[setting.key].min} to ${integerBounds[setting.key].max}.`}
           {setting.secret && ' The saved value is never shown.'}
         </p>
       </div>

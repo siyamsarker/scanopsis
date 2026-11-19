@@ -123,6 +123,99 @@ describe('settings page', () => {
     ]);
   });
 
+  describe('integer settings', () => {
+    const retention = setting({
+      key: 'retention.days',
+      type: 'integer',
+      description: 'Days of scan history',
+      value: 90,
+      env_var: 'SCANOPSIS_RETENTION_DAYS',
+    });
+    const withRetention = [...initial, retention];
+
+    it('shows a number input with its limits in a Retention group', async () => {
+      mockFetch(settingsApi(undefined, withRetention));
+      renderApp('/settings');
+      const input = await screen.findByLabelText('Days of scan history');
+      expect(input).toHaveAttribute('type', 'number');
+      expect(input).toHaveAttribute('min', '7');
+      expect(input).toHaveAttribute('max', '3650');
+      expect(input).toHaveAttribute('step', '1');
+      expect(input).toHaveValue(90);
+      expect(screen.getByText(/Use a whole number from 7 to 3650/)).toBeVisible();
+      expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+        'GitLab',
+        'Sign-in',
+        'Sessions',
+        'Retention',
+      ]);
+    });
+
+    it('sends the value as a number', async () => {
+      const { calls } = mockFetch(
+        settingsApi(() => json(200, { items: withRetention }), withRetention),
+      );
+      renderApp('/settings');
+      fireEvent.change(await screen.findByLabelText('Days of scan history'), {
+        target: { value: '365' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await screen.findByText(/Settings saved/);
+      expect(patches(calls)[0].body).toEqual({ 'retention.days': 365 });
+    });
+
+    it('does not send a value outside the limits', async () => {
+      const { calls } = mockFetch(
+        settingsApi(() => json(200, { items: withRetention }), withRetention),
+      );
+      renderApp('/settings');
+      const input = await screen.findByLabelText('Days of scan history');
+      fireEvent.change(input, { target: { value: '3' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      expect((input as HTMLInputElement).validity.rangeUnderflow).toBe(true);
+      expect(patches(calls)).toHaveLength(0);
+      fireEvent.change(input, { target: { value: '4000' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      expect((input as HTMLInputElement).validity.rangeOverflow).toBe(true);
+      expect(patches(calls)).toHaveLength(0);
+    });
+
+    it('shows a message the server returns for the setting', async () => {
+      mockFetch(
+        settingsApi(
+          () =>
+            json(400, {
+              error: {
+                code: 'invalid_settings',
+                message: 'Some settings are not valid.',
+                fields: { 'retention.days': 'Must be a whole number from 7 to 3650.' },
+              },
+            }),
+          withRetention,
+        ),
+      );
+      renderApp('/settings');
+      const input = await screen.findByLabelText('Days of scan history');
+      fireEvent.change(input, { target: { value: '30' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      expect(await screen.findByText('Must be a whole number from 7 to 3650.')).toBeVisible();
+      expect(input).toHaveAttribute('aria-invalid', 'true');
+    });
+
+    it('sends an empty or non-numeric entry as text for the server to reject', async () => {
+      const { calls } = mockFetch(
+        settingsApi(() => json(200, { items: withRetention }), withRetention),
+      );
+      renderApp('/settings');
+      fireEvent.change(await screen.findByLabelText('Days of scan history'), {
+        target: { value: '' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+      await screen.findByText(/Settings saved/);
+      expect(patches(calls)[0].body).toEqual({ 'retention.days': '' });
+    });
+  });
+
   it('renders an input for each type with its source', async () => {
     mockFetch(settingsApi());
     renderApp('/settings');

@@ -89,8 +89,11 @@ invalid.
 | `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | secret | not set | | Token of a SonarQube user with Browse permission on the projects. Stored encrypted and never shown again. |
 | `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | secret | not set | | Secret of the SonarQube webhook. Deliveries without a valid signature are rejected. Stored encrypted and never shown again. |
 | `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | duration | `15m` | `5m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. |
+| `retention.days` | `SCANOPSIS_RETENTION_DAYS` | integer | `90` | `180` | How many days scan history, SonarQube analyses and SonarQube deliveries are kept. A whole number from `7` to `3650`. The latest scan of every service, ref, artifact and kind, and the latest analysis of every service, are kept however old they are. See [data retention](operations.md#data-retention). |
 
-Durations are written with units, such as `30m`, `8h` or `1h30m`.
+Durations are written with units, such as `30m`, `8h` or `1h30m`. Integers are
+written as plain whole numbers, such as `90`; a value with a fraction, with
+units or outside the range is rejected.
 
 ### Rules that span several settings
 
@@ -115,6 +118,10 @@ rule at start. See the warning below.
   5m."
 - The absolute timeout is not shorter than the idle timeout. The page shows
   "Must not be shorter than the idle timeout."
+- The retention period is a whole number of days from 7 to 3650. The page
+  shows "Must be a whole number from 7 to 3650." In the environment, an invalid
+  `SCANOPSIS_RETENTION_DAYS` stops the server at start with the same range in
+  the message.
 
 If GitLab sign-in is not fully configured, Scanopsis does not offer it on the
 sign-in page and does not contact GitLab.
@@ -138,6 +145,9 @@ sign-in page and does not contact GitLab.
   sessions that already exist.
 - The absolute timeout is fixed when a session starts. A change affects
   sessions that start afterwards.
+- The retention period is read at the start of each cleanup run, so a change
+  applies from the next run. It does not start a run. See
+  [data retention](operations.md#data-retention).
 
 ## File variants and Docker secrets
 

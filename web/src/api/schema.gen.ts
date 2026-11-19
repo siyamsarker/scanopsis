@@ -1092,12 +1092,12 @@ export interface components {
             /** @example gitlab.allowed_groups */
             key: string;
             /** @enum {string} */
-            type: "string" | "url" | "boolean" | "duration" | "string_list";
+            type: "string" | "url" | "boolean" | "duration" | "string_list" | "integer";
             secret: boolean;
             /** @enum {string} */
             source: "default" | "env" | "ui";
             /** @description Current value; always null for secrets. */
-            value: null | string | boolean | string[];
+            value: null | string | boolean | number | string[];
             /** @description For secrets */
             is_set: boolean;
             /** @description Environment variable that seeds this setting. */
@@ -1111,7 +1111,7 @@ export interface components {
             items: components["schemas"]["Setting"][];
         };
         SettingUpdate: {
-            [key: string]: null | string | boolean | string[];
+            [key: string]: null | string | boolean | number | string[];
         };
         SettingsError: {
             error: {
