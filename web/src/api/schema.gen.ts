@@ -903,6 +903,8 @@ export interface components {
         TrendPoint: {
             /** Format: int64 */
             scan_id: number;
+            /** @enum {string} */
+            kind: "image" | "secret-fs";
             /** Format: date-time */
             scanned_at: string;
             /** Format: int64 */

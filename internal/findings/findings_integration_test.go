@@ -636,6 +636,11 @@ func TestTrends(t *testing.T) {
 		t.Errorf("ref = %s", ref)
 	}
 	eq(t, "all points oldest first", idsOf(ps), []int64{f.s1, f.s2, f.w0, f.r0, f.w1, f.s3, f.r1})
+	kinds := []string{}
+	for _, p := range ps {
+		kinds = append(kinds, p.Kind)
+	}
+	eq(t, "point kinds", kinds, []string{"image", "image", "image", "secret-fs", "image", "image", "secret-fs"})
 	s3 := ps[5]
 	eq(t, "s3 point", []any{s3.ArtifactName, s3.Counts, s3.Fixable, s3.GitlabPipelineID > 1000, len(s3.CommitSha), unix(s3.ScannedAt)},
 		[]any{"web", countsJSON{High: 2, Low: 2}, 4, true, 40, unix(at(f.base, day))})

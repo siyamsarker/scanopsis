@@ -587,7 +587,7 @@ func (q *Queries) FindingsSecrets(ctx context.Context, scanIds []int64) ([]Findi
 }
 
 const findingsTrends = `-- name: FindingsTrends :many
-SELECT id, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name,
+SELECT id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name,
        count_critical, count_high, count_medium, count_low, count_unknown, count_fixable
 FROM scans
 WHERE service_id = $1 AND ref = $2 AND scanned_at >= $3
@@ -602,6 +602,7 @@ type FindingsTrendsParams struct {
 
 type FindingsTrendsRow struct {
 	ID               int64
+	Kind             string
 	ScannedAt        pgtype.Timestamptz
 	GitlabPipelineID int64
 	CommitSha        string
@@ -625,6 +626,7 @@ func (q *Queries) FindingsTrends(ctx context.Context, arg FindingsTrendsParams) 
 		var i FindingsTrendsRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.Kind,
 			&i.ScannedAt,
 			&i.GitlabPipelineID,
 			&i.CommitSha,

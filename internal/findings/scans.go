@@ -194,6 +194,7 @@ func (f *Findings) scanDiff(w http.ResponseWriter, r *http.Request) {
 
 type trendPointJSON struct {
 	ScanID           int64      `json:"scan_id"`
+	Kind             string     `json:"kind"`
 	ScannedAt        time.Time  `json:"scanned_at"`
 	GitlabPipelineID int64      `json:"gitlab_pipeline_id"`
 	CommitSha        string     `json:"commit_sha"`
@@ -243,7 +244,7 @@ func (f *Findings) trends(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, row := range rows {
 		out.Points = append(out.Points, trendPointJSON{
-			ScanID: row.ID, ScannedAt: row.ScannedAt.Time, GitlabPipelineID: row.GitlabPipelineID,
+			ScanID: row.ID, Kind: row.Kind, ScannedAt: row.ScannedAt.Time, GitlabPipelineID: row.GitlabPipelineID,
 			CommitSha: row.CommitSha, ArtifactName: row.ArtifactName,
 			Counts: countsJSON{
 				Critical: int(row.CountCritical), High: int(row.CountHigh), Medium: int(row.CountMedium),

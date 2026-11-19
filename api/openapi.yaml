@@ -924,9 +924,10 @@ components:
         unchanged: { type: integer }
     TrendPoint:
       type: object
-      required: [scan_id, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable]
+      required: [scan_id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable]
       properties:
         scan_id: { type: integer, format: int64 }
+        kind: { type: string, enum: [image, secret-fs] }
         scanned_at: { type: string, format: date-time }
         gitlab_pipeline_id: { type: integer, format: int64 }
         commit_sha: { type: string }

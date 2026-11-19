@@ -143,6 +143,7 @@ const trends = {
   points: [
     {
       scan_id: 1,
+      kind: 'image',
       scanned_at: '2026-11-10T10:00:00Z',
       gitlab_pipeline_id: 801,
       commit_sha: 'aaaaaaaabbbbbbbb',
@@ -152,6 +153,7 @@ const trends = {
     },
     {
       scan_id: 2,
+      kind: 'image',
       scanned_at: '2026-11-11T10:00:00Z',
       gitlab_pipeline_id: 802,
       commit_sha: 'ccccccccdddddddd',
@@ -440,12 +442,13 @@ describe('service dashboard', () => {
   });
 
   it('leaves secret scans out of the trends chart and says so', async () => {
+    // The server marks each trend point with its scan kind.
     setup('/services/7', {
       overrides: (call) =>
-        call.path.startsWith('/api/v1/services/7/scans')
+        call.path.startsWith('/api/v1/services/7/trends')
           ? json(200, {
-              items: [scan(1), scan(2, { kind: 'secret-fs', artifact_name: '.' })],
-              next_before: null,
+              ...trends,
+              points: [trends.points[0], { ...trends.points[1], kind: 'secret-fs' }],
             })
           : undefined,
     });

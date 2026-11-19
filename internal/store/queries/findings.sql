@@ -151,7 +151,7 @@ WHERE f.scan_id = ANY(@scan_ids::bigint[])
 ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 ELSE 4 END, f.id;
 
 -- name: FindingsTrends :many
-SELECT id, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name,
+SELECT id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name,
        count_critical, count_high, count_medium, count_low, count_unknown, count_fixable
 FROM scans
 WHERE service_id = @service_id AND ref = @ref AND scanned_at >= @since
