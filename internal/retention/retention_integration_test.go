@@ -559,3 +559,46 @@ func TestRunWithoutAConnection(t *testing.T) {
 		t.Fatalf("result = %+v, log %s", res, buf.String())
 	}
 }
+
+func TestRunSchedulesRepeatedRuns(t *testing.T) {
+	f := newFixture(t)
+	svc := f.service("svc")
+	f.scan(svc, "main", "web", "image", 100*day)
+	f.scan(svc, "main", "web", "image", 1*day)
+	var buf syncBuffer
+	r := New(f.pool, newSettings(30), slog.New(slog.NewTextHandler(&buf, nil)))
+	r.firstDelay, r.interval = 10*time.Millisecond, 20*time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	deadline := time.Now().Add(20 * time.Second)
+	for strings.Count(buf.String(), "data retention run finished") < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("fewer than two runs happened; log: %s", buf.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if got := f.count("scans"); got != 1 {
+		t.Fatalf("scans remaining = %d, want 1", got)
+	}
+}
+
+// syncBuffer is a bytes.Buffer safe for a logger and a reader at once.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
