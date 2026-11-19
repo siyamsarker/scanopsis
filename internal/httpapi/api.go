@@ -88,6 +88,15 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, apiError{apiErrorBody{Code: code, Message: message}})
 }
 
+// WriteJSON writes v as a JSON response with Cache-Control: no-store. Feature
+// packages use it so that every API response has the same form.
+func WriteJSON(w http.ResponseWriter, status int, v any) { writeJSON(w, status, v) }
+
+// WriteError writes the API's standard error body {"error":{"code","message"}}.
+func WriteError(w http.ResponseWriter, status int, code, message string) {
+	writeError(w, status, code, message)
+}
+
 func (s *server) internalError(w http.ResponseWriter, r *http.Request, msg string, err error) {
 	s.Log.ErrorContext(r.Context(), msg, "error", err)
 	writeError(w, http.StatusInternalServerError, "internal_error", "Something went wrong. Try again later.")

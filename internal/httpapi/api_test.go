@@ -504,3 +504,17 @@ func TestIngestBodyIsNotCappedByTheAPILimit(t *testing.T) {
 		t.Fatalf("status %d, handler read %d bytes, want %d", rec.Code, got, len(big))
 	}
 }
+
+func TestExportedWriters(t *testing.T) {
+	rec := httptest.NewRecorder()
+	WriteError(rec, http.StatusTeapot, "some_code", "Some message.")
+	if rec.Code != http.StatusTeapot || rec.Header().Get("Cache-Control") != "no-store" ||
+		strings.TrimSpace(rec.Body.String()) != `{"error":{"code":"some_code","message":"Some message."}}` {
+		t.Fatalf("WriteError = %d %q %q", rec.Code, rec.Header(), rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	WriteJSON(rec, http.StatusCreated, map[string]int{"n": 1})
+	if rec.Code != http.StatusCreated || rec.Header().Get("Content-Type") != "application/json" || strings.TrimSpace(rec.Body.String()) != `{"n":1}` {
+		t.Fatalf("WriteJSON = %d %q", rec.Code, rec.Body.String())
+	}
+}
