@@ -586,8 +586,9 @@ func TestIngestScanTimeIsNeverInTheFuture(t *testing.T) {
 		logged        string
 	}{
 		{"future", now.Add(time.Hour).Format(time.RFC3339), now, "in the future"},
-		{"just past the skew", now.Add(6 * time.Minute).Format(time.RFC3339), now, "in the future"},
-		{"within the skew", now.Add(4 * time.Minute).Format(time.RFC3339), now.Add(4 * time.Minute), ""},
+		{"one minute ahead", now.Add(time.Minute).Format(time.RFC3339), now, "in the future"},
+		{"one second ahead", now.Add(time.Second).Format(time.RFC3339), now, "in the future"},
+		{"exactly now", now.Format(time.RFC3339), now, ""},
 		{"past", now.Add(-48 * time.Hour).Format(time.RFC3339), now.Add(-48 * time.Hour), ""},
 		{"missing", "", now, "no usable CreatedAt"},
 		{"unparsable", "yesterday", now, "no usable CreatedAt"},

@@ -10,8 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -696,5 +699,82 @@ func TestParseArtifactNameBound(t *testing.T) {
 	rep, err := Parse(strings.NewReader(`{"SchemaVersion":2,"ArtifactName":"` + strings.Repeat("a", 10_000) + `"}`))
 	if err != nil || len(rep.ArtifactName) != maxArtifactLen {
 		t.Fatalf("%d %v", len(rep.ArtifactName), err)
+	}
+}
+
+// Unknown fields, however large, are skipped without being held in memory and
+// without affecting the result.
+func TestParseSkipsLargeUnknownFields(t *testing.T) {
+	// One unknown value of about 24 MB: nested arrays and objects.
+	var unknown strings.Builder
+	unknown.WriteString(`[`)
+	for i := 0; i < 160_000; i++ {
+		if i > 0 {
+			unknown.WriteString(`,`)
+		}
+		unknown.WriteString(`{"a":[1,2,[3,[4,{"b":"` + strings.Repeat("x", 100) + `"}]]],"c":null,"d":true}`)
+	}
+	unknown.WriteString(`]`)
+	if unknown.Len() < 20<<20 {
+		t.Fatalf("setup: %d bytes", unknown.Len())
+	}
+	doc := `{"Future":` + unknown.String() + `,"SchemaVersion":2,"ArtifactName":"a",
+	  "Results":[{"Target":"t","Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH"}]}]}`
+
+	// Sample the heap while parsing. A value read into memory (a
+	// json.RawMessage, say) would need at least its own size, and more while
+	// its buffer grows.
+	debug.SetGCPercent(10)
+	defer debug.SetGCPercent(100)
+	runtime.GC()
+	var base runtime.MemStats
+	runtime.ReadMemStats(&base)
+	var peak atomic.Uint64
+	stop, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		var m runtime.MemStats
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			runtime.ReadMemStats(&m)
+			if m.HeapAlloc > peak.Load() {
+				peak.Store(m.HeapAlloc)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	rep, err := Parse(strings.NewReader(doc))
+	close(stop)
+	<-done
+	if err != nil || len(rep.Vulns) != 1 || rep.Counts.High != 1 || rep.Vulns[0].Target != "t" {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	if grew := int64(peak.Load()) - int64(base.HeapAlloc); grew > 8<<20 {
+		t.Errorf("the heap grew by %d MB while skipping %d MB", grew>>20, unknown.Len()>>20)
+	}
+}
+
+func TestParseSkipsUnknownFieldsEverywhere(t *testing.T) {
+	u := `[1,{"a":[2,{"b":null}],"c":"s"},[[]],"x",true,null,{}]`
+	doc := `{"A":` + u + `,"SchemaVersion":2,"B":{"x":` + u + `},"ArtifactName":"a","Trivy":{"Version":"1","Z":` + u + `},
+	  "Results":[{"Q":` + u + `,"Target":"t","Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH","CVSS":` + u + `,"References":[` + u + `]}],
+	  "Secrets":[{"RuleID":"r","Severity":"LOW","Code":` + u + `}],"Z":7,"Y":"s","X":null,"W":false}],"Last":` + u + `}`
+	rep, err := Parse(strings.NewReader(doc))
+	if err != nil || rep.Counts.High != 1 || rep.Counts.Secrets != 1 || rep.TrivyVersion != "1" || rep.Vulns[0].Target != "t" {
+		t.Fatalf("%+v %v", rep, err)
+	}
+	// A syntax error inside an unknown value is still found.
+	for _, bad := range []string{
+		`{"SchemaVersion":2,"ArtifactName":"a","Future":[1,{"a":}]}`,
+		`{"SchemaVersion":2,"ArtifactName":"a","Future":[1,2`,
+		`{"SchemaVersion":2,"ArtifactName":"a","Results":[{"Future":{"a":[}}]}`,
+	} {
+		if _, err := Parse(strings.NewReader(bad)); !errors.Is(err, ErrInvalidJSON) {
+			t.Errorf("%s: err = %v", bad, err)
+		}
 	}
 }

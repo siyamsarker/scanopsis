@@ -31,9 +31,6 @@ import (
 const DefaultMaxReportBytes = 64 << 20
 
 const (
-	// maxClockSkew is how far after the server's clock a report's CreatedAt
-	// may be before it is replaced by the server time.
-	maxClockSkew = 5 * time.Minute
 	// maxRefLen bounds ref, which is in an index (scans_current_idx).
 	maxRefLen = 1024
 )
@@ -212,13 +209,15 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 
 	now := i.opts.Now()
 	scanned := rep.CreatedAt
-	// The uploader controls CreatedAt. A time in the past only makes the scan
-	// look older, but one in the future would keep it "current" for ever.
+	// The uploader controls CreatedAt: scanned_at is the earlier of it and the
+	// server time. A time in the past only makes the scan look older, but one
+	// in the future would keep it "current" for ever and order it after real,
+	// later scans.
 	switch {
 	case scanned.IsZero():
 		scanned = now
 		i.log.InfoContext(ctx, "report has no usable CreatedAt; using the server time", "project", claims.ProjectPath, "job_id", claims.JobID)
-	case scanned.After(now.Add(maxClockSkew)):
+	case scanned.After(now):
 		i.log.InfoContext(ctx, "report CreatedAt is in the future; using the server time",
 			"project", claims.ProjectPath, "job_id", claims.JobID, "created_at", scanned.UTC().Format(time.RFC3339))
 		scanned = now

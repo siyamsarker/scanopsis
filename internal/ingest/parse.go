@@ -107,8 +107,8 @@ type Report struct {
 }
 
 // The wire types list only what is stored. Fields not listed (Match, Code,
-// descriptions, CVSS data and so on) are skipped by the decoder and never
-// held in memory.
+// descriptions, CVSS data and so on) are skipped token by token while reading
+// (see skipValue) and are never held in memory, however large they are.
 type wireResult struct {
 	Target          string
 	Class           string
@@ -217,8 +217,7 @@ func parse(r io.Reader, maxFindings int) (*Report, error) {
 		case "results":
 			err = p.results(&haveResult)
 		default:
-			var skip json.RawMessage
-			err = p.value(&skip)
+			err = p.skipValue()
 		}
 		if err != nil {
 			return nil, err
@@ -228,8 +227,7 @@ func parse(r io.Reader, maxFindings int) (*Report, error) {
 		return nil, classify(err)
 	}
 	// Anything but white space after the value makes the body invalid.
-	var extra json.RawMessage
-	switch err := p.dec.Decode(&extra); {
+	switch _, err := p.dec.Token(); {
 	case errors.Is(err, io.EOF):
 	case err == nil:
 		return nil, fmt.Errorf("%w: unexpected data after the report", ErrInvalidJSON)
@@ -317,7 +315,22 @@ func (p *parser) wrongShape(want string) {
 	}
 }
 
-// skip reads to the end of the object whose opening brace was just read.
+// skipValue reads the next value and drops it. Scalars are dropped as they
+// are read; an object or array is read token by token to its end, so a large
+// unknown value is never held in memory.
+func (p *parser) skipValue() error {
+	tok, err := p.dec.Token()
+	if err != nil {
+		return classify(err)
+	}
+	if _, ok := tok.(json.Delim); ok {
+		return p.skip()
+	}
+	return nil
+}
+
+// skip reads to the end of the object or array whose opening delimiter was
+// just read.
 func (p *parser) skip() error {
 	for depth := 1; depth > 0; {
 		tok, err := p.dec.Token()
@@ -408,8 +421,7 @@ func (p *parser) result() error {
 				return add()
 			})
 		default:
-			var skip json.RawMessage
-			err = p.value(&skip)
+			err = p.skipValue()
 		}
 		if err != nil {
 			return err
