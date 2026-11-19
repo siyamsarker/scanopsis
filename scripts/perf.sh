@@ -114,7 +114,8 @@ record "idle memory" "${mem_mib} MiB" "< ${memory_limit_mib} MiB" "$(within "$me
 # API p95 < 150 ms, 20 MB ingest < 3 s) and run without the race detector, so
 # the numbers are real.
 echo "== performance tests"
-export TESTCONTAINERS_RYUK_DISABLED=${TESTCONTAINERS_RYUK_DISABLED:-true}
+# The test containers are removed by the testcontainers reaper. CI disables
+# it (TESTCONTAINERS_RYUK_DISABLED) because its runners are discarded.
 go_status=ok
 go test -count=1 -tags integration -v \
   -run 'TestPortfolioPerformance|TestReadPerformance|TestIntegrationIngest20MB' \
