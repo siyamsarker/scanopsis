@@ -147,6 +147,7 @@ Type: object
 |---|---|---|---|
 | `name` | string (maxLength 20) | yes |  |
 | `owner` | string or null | no |  |
+| `parent` | [Status](#status) or null | no |  |
 | `tags` | array of string | no |  |
 
 ### ItemPage

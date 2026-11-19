@@ -104,6 +104,7 @@ components:
         name: { type: string, maxLength: 20 }
         tags: { type: array, items: { type: string } }
         owner: { type: [string, "null"] }
+        parent: { oneOf: [ { $ref: "#/components/schemas/Status" }, { type: "null" } ] }
     ItemPage:
       type: object
       properties:

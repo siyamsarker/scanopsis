@@ -317,6 +317,15 @@ func (g *gen) typeOf(s object) string {
 		}
 		return strings.Join(parts, " + ")
 	}
+	for _, key := range []string{"oneOf", "anyOf"} {
+		if alts := list(s[key]); len(alts) > 0 {
+			var parts []string
+			for _, a := range alts {
+				parts = append(parts, g.typeOf(obj(a)))
+			}
+			return strings.Join(parts, " or ")
+		}
+	}
 	var t string
 	switch v := s["type"].(type) {
 	case string:

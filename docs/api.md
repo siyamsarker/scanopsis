@@ -1186,7 +1186,7 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `history` | array of [SonarAnalysis](#sonaranalysis) | yes | Newest first |
-| `latest` | any | yes |  |
+| `latest` | [SonarAnalysis](#sonaranalysis) or null | yes |  |
 | `sonar_project_key` | string or null | yes |  |
 
 ### ServiceUpdate
@@ -1214,7 +1214,7 @@ Type: object
 | `type` | string (one of `string`, `url`, `boolean`, `duration`, `string_list`, `integer`) | yes |  |
 | `updated_at` | string or null (date-time) | no |  |
 | `updated_by` | string or null | no |  |
-| `value` | any | yes | Current value; always null for secrets. |
+| `value` | null or string or boolean or integer or array of string | yes | Current value; always null for secrets. |
 
 ### SettingList
 
@@ -1226,7 +1226,7 @@ Type: object
 
 ### SettingUpdate
 
-Type: map of any
+Type: map of null or string or boolean or integer or array of string
 
 ### SettingsError
 
