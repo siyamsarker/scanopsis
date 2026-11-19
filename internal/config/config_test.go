@@ -81,7 +81,6 @@ func TestLoadFull(t *testing.T) {
 		"SCANOPSIS_GITLAB_CLIENT_ID", "client",
 		"SCANOPSIS_GITLAB_CLIENT_SECRET_FILE", "/run/secrets/gitlab",
 		"SCANOPSIS_GITLAB_ALLOWED_GROUPS", "platform, security/appsec",
-		"SCANOPSIS_ADMIN_USERNAMES", "alice,bob",
 		"SCANOPSIS_LOCAL_LOGIN_ENABLED", "false",
 		"SCANOPSIS_LOCAL_ADMIN_USERNAME", "root",
 		"SCANOPSIS_LOCAL_ADMIN_PASSWORD_FILE", "/run/secrets/admin",
@@ -120,8 +119,8 @@ func TestLoadFull(t *testing.T) {
 	if g.URL != "https://gitlab.example.com" || g.ClientID != "client" || g.ClientSecret != "s3cret" {
 		t.Errorf("GitLab = %+v", g)
 	}
-	if strings.Join(g.AllowedGroups, "|") != "platform|security/appsec" || strings.Join(g.AdminUsernames, "|") != "alice|bob" {
-		t.Errorf("GitLab lists = %v %v", g.AllowedGroups, g.AdminUsernames)
+	if strings.Join(g.AllowedGroups, "|") != "platform|security/appsec" {
+		t.Errorf("GitLab AllowedGroups = %v", g.AllowedGroups)
 	}
 	if c.LocalLogin || c.LocalAdminUsername != "root" || c.LocalAdminPassword != "correct horse battery" {
 		t.Errorf("local = %v %q %q", c.LocalLogin, c.LocalAdminUsername, c.LocalAdminPassword)

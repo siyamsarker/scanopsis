@@ -205,12 +205,11 @@ func (q *Queries) TouchLastLogin(ctx context.Context, id int64) error {
 const upsertGitLabUser = `-- name: UpsertGitLabUser :one
 INSERT INTO users (source, gitlab_user_id, username, name, email, role, last_login_at)
 VALUES ('gitlab', $1, $2, $3, $4,
-        CASE WHEN $5::boolean THEN 'admin' ELSE 'viewer' END, now())
+        'viewer', now())
 ON CONFLICT (gitlab_user_id) DO UPDATE
 SET username      = EXCLUDED.username,
     name          = EXCLUDED.name,
     email         = EXCLUDED.email,
-    role          = CASE WHEN $5::boolean THEN 'admin' ELSE users.role END,
     last_login_at = now()
 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at
 `
@@ -220,19 +219,16 @@ type UpsertGitLabUserParams struct {
 	Username     string
 	Name         string
 	Email        string
-	ForceAdmin   bool
 }
 
-// UpsertGitLabUser records a GitLab sign-in. A new user gets the viewer role
-// unless force_admin is set; an existing user keeps their role unless
-// force_admin is set, in which case they become an admin.
+// UpsertGitLabUser records a GitLab sign-in. A new user always gets the
+// viewer role; an existing user keeps their role.
 func (q *Queries) UpsertGitLabUser(ctx context.Context, arg UpsertGitLabUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, upsertGitLabUser,
 		arg.GitlabUserID,
 		arg.Username,
 		arg.Name,
 		arg.Email,
-		arg.ForceAdmin,
 	)
 	var i User
 	err := row.Scan(

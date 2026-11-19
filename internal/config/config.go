@@ -52,11 +52,10 @@ type Config struct {
 type GitLab struct {
 	// URL is the GitLab base URL without a trailing slash. It is also the
 	// OpenID Connect issuer.
-	URL            string
-	ClientID       string
-	ClientSecret   string
-	AllowedGroups  []string
-	AdminUsernames []string
+	URL           string
+	ClientID      string
+	ClientSecret  string
+	AllowedGroups []string
 }
 
 // Secure reports whether Scanopsis is served over HTTPS, which decides the
@@ -256,10 +255,9 @@ func (l *loader) publicURL(name string) *url.URL {
 func (l *loader) gitlab() *GitLab {
 	u := l.baseURL("GITLAB_URL")
 	g := &GitLab{
-		ClientID:       l.str("GITLAB_CLIENT_ID", ""),
-		ClientSecret:   l.secret("GITLAB_CLIENT_SECRET"),
-		AllowedGroups:  l.list("GITLAB_ALLOWED_GROUPS"),
-		AdminUsernames: l.list("ADMIN_USERNAMES"),
+		ClientID:      l.str("GITLAB_CLIENT_ID", ""),
+		ClientSecret:  l.secret("GITLAB_CLIENT_SECRET"),
+		AllowedGroups: l.list("GITLAB_ALLOWED_GROUPS"),
 	}
 	if u == nil && l.str("GITLAB_URL", "") == "" {
 		if g.ClientID != "" || g.ClientSecret != "" || len(g.AllowedGroups) > 0 {

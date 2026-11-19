@@ -221,44 +221,32 @@ func (e *env) wantNoSignIn() {
 }
 
 func TestSuccessfulSignIn(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		admins []string
-		want   bool
-	}{
-		{"viewer", []string{"bob"}, false},
-		{"forced admin", []string{"bob", "alice"}, true},
-		{"admin match is exact", []string{"Alice", "alice2"}, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			e := newEnv(t, func(o *auth.GitLabOptions) { o.AdminUsernames = tc.admins })
-			rec := e.signIn("/services?tab=scans")
-			e.wantRedirect(rec, "/services?tab=scans")
-			if c := e.cookieNamed(rec, "session"); c == nil || c.Value != "started" {
-				t.Error("session cookie was not set")
-			}
-			if len(e.users.calls) != 1 {
-				t.Fatalf("upserts = %d", len(e.users.calls))
-			}
-			got := e.users.calls[0]
-			want := store.UpsertGitLabUserParams{
-				GitlabUserID: got.GitlabUserID, Username: "alice", Name: "Alice Example",
-				Email: "alice@example.com", ForceAdmin: tc.want,
-			}
-			if !got.GitlabUserID.Valid || got.GitlabUserID.Int64 != 42 || !reflect.DeepEqual(got, want) {
-				t.Errorf("upsert = %+v, want %+v", got, want)
-			}
-			if !reflect.DeepEqual(e.sessions.users, []int64{1042}) {
-				t.Errorf("sessions started for %v, want [1042]", e.sessions.users)
-			}
-			wantEvents := []event{{"alice", "login.succeeded", map[string]any{"method": "gitlab", "username": "alice", "ip": "192.0.2.10"}}}
-			if !reflect.DeepEqual(e.audit.events, wantEvents) {
-				t.Errorf("audit = %+v, want %+v", e.audit.events, wantEvents)
-			}
-			if e.fake.UserinfoCalls() != 0 {
-				t.Error("userinfo called although no allow-list is set")
-			}
-		})
+	e := newEnv(t, nil)
+	rec := e.signIn("/services?tab=scans")
+	e.wantRedirect(rec, "/services?tab=scans")
+	if c := e.cookieNamed(rec, "session"); c == nil || c.Value != "started" {
+		t.Error("session cookie was not set")
+	}
+	if len(e.users.calls) != 1 {
+		t.Fatalf("upserts = %d", len(e.users.calls))
+	}
+	got := e.users.calls[0]
+	want := store.UpsertGitLabUserParams{
+		GitlabUserID: got.GitlabUserID, Username: "alice", Name: "Alice Example",
+		Email: "alice@example.com",
+	}
+	if !got.GitlabUserID.Valid || got.GitlabUserID.Int64 != 42 || !reflect.DeepEqual(got, want) {
+		t.Errorf("upsert = %+v, want %+v", got, want)
+	}
+	if !reflect.DeepEqual(e.sessions.users, []int64{1042}) {
+		t.Errorf("sessions started for %v, want [1042]", e.sessions.users)
+	}
+	wantEvents := []event{{"gitlab:alice", "login.succeeded", map[string]any{"method": "gitlab", "username": "alice", "gitlab_user_id": int64(42), "ip": "192.0.2.10"}}}
+	if !reflect.DeepEqual(e.audit.events, wantEvents) {
+		t.Errorf("audit = %+v, want %+v", e.audit.events, wantEvents)
+	}
+	if e.fake.UserinfoCalls() != 0 {
+		t.Error("userinfo called although no allow-list is set")
 	}
 }
 
@@ -440,7 +428,7 @@ func TestGroupAllowList(t *testing.T) {
 			}
 			e.wantRedirect(rec, "/login?error=group_not_allowed")
 			e.wantNoSignIn()
-			want := []event{{"alice", "login.failed", map[string]any{"method": "gitlab", "username": "alice", "reason": "group_not_allowed", "ip": "192.0.2.10"}}}
+			want := []event{{"gitlab:alice", "login.failed", map[string]any{"method": "gitlab", "username": "alice", "gitlab_user_id": int64(42), "reason": "group_not_allowed", "ip": "192.0.2.10"}}}
 			if !reflect.DeepEqual(e.audit.events, want) {
 				t.Errorf("audit = %+v, want %+v", e.audit.events, want)
 			}
@@ -486,7 +474,7 @@ func TestStoreAndSessionErrors(t *testing.T) {
 		e := newEnv(t, nil)
 		e.users.err = errors.New("db down")
 		e.wantRedirect(e.signIn(""), "/login?error=login_failed")
-		want := []event{{"alice", "login.failed", map[string]any{"method": "gitlab", "username": "alice", "reason": "login_failed", "ip": "192.0.2.10"}}}
+		want := []event{{"gitlab:alice", "login.failed", map[string]any{"method": "gitlab", "username": "alice", "gitlab_user_id": int64(42), "reason": "login_failed", "ip": "192.0.2.10"}}}
 		if !reflect.DeepEqual(e.audit.events, want) {
 			t.Errorf("audit = %+v", e.audit.events)
 		}

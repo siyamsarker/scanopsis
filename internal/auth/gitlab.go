@@ -66,8 +66,6 @@ type GitLabOptions struct {
 	// paths, compared case-sensitively; members of a subgroup also match). Empty
 	// allows any GitLab user.
 	AllowedGroups []string
-	// AdminUsernames always get the admin role (exact, case-sensitive match).
-	AdminUsernames []string
 	// HTTPClient is used for discovery, keys, token and userinfo requests. Nil
 	// means http.DefaultClient.
 	HTTPClient *http.Client
@@ -226,6 +224,7 @@ type failure struct {
 	code     string
 	err      error
 	username string
+	gitlabID int64
 	// verified is true once the ID token was verified; only then is the
 	// failure worth an audit event (before that, anyone can forge requests).
 	verified bool
@@ -244,24 +243,16 @@ func (g *GitLab) CallbackHandler() http.Handler {
 		if f != nil {
 			g.log.WarnContext(ctx, "GitLab sign-in failed", "reason", f.code, "error", f.err)
 			if f.verified {
-				detail := map[string]any{"method": "gitlab", "reason": f.code, "ip": g.clientIP(r).String()}
-				if f.username != "" {
-					detail["username"] = f.username
-				}
-				g.audit.Record(ctx, actor(f.username), audit.ActionLoginFailed, detail)
+				g.audit.Record(ctx, "gitlab:"+f.username, audit.ActionLoginFailed, map[string]any{
+					"method": "gitlab", "reason": f.code, "ip": g.clientIP(r).String(),
+					"username": f.username, "gitlab_user_id": f.gitlabID,
+				})
 			}
 			http.Redirect(w, r, "/login?error="+url.QueryEscape(f.code), http.StatusFound)
 			return
 		}
 		http.Redirect(w, r, returnTo, http.StatusFound) //nolint:gosec // returnTo passed sanitizeReturnTo
 	})
-}
-
-func actor(username string) string {
-	if username == "" {
-		return "unknown"
-	}
-	return username
 }
 
 // gitlabClaims are the ID token claims Scanopsis uses.
@@ -329,7 +320,7 @@ func (g *GitLab) complete(w http.ResponseWriter, r *http.Request) (string, *fail
 	}
 	// From here on the identity is authentic: failures are audited.
 	fail := func(code string, err error) (string, *failure) {
-		return "", &failure{code: code, err: err, username: username, verified: true}
+		return "", &failure{code: code, err: err, username: username, gitlabID: id, verified: true}
 	}
 
 	if len(g.opts.AllowedGroups) > 0 {
@@ -347,7 +338,6 @@ func (g *GitLab) complete(w http.ResponseWriter, r *http.Request) (string, *fail
 		Username:     username,
 		Name:         claims.Name,
 		Email:        claims.Email,
-		ForceAdmin:   contains(g.opts.AdminUsernames, username),
 	})
 	if err != nil {
 		return fail(loginFailed, fmt.Errorf("store user: %w", err))
@@ -355,8 +345,8 @@ func (g *GitLab) complete(w http.ResponseWriter, r *http.Request) (string, *fail
 	if err := g.sessions.Start(w, r, user.ID); err != nil {
 		return fail(loginFailed, fmt.Errorf("start session: %w", err))
 	}
-	g.audit.Record(r.Context(), username, audit.ActionLoginSucceeded,
-		map[string]any{"method": "gitlab", "username": username, "ip": g.clientIP(r).String()})
+	g.audit.Record(r.Context(), "gitlab:"+username, audit.ActionLoginSucceeded,
+		map[string]any{"method": "gitlab", "username": username, "gitlab_user_id": id, "ip": g.clientIP(r).String()})
 	return c.ReturnTo, nil
 }
 
@@ -388,15 +378,6 @@ func groupAllowed(groups, allowed []string) bool {
 			if g == a || strings.HasPrefix(g, a+"/") {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
 		}
 	}
 	return false

@@ -46,14 +46,13 @@ func mustLocal(t *testing.T, q *store.Queries, name, role string) store.User {
 	return u
 }
 
-func upsert(t *testing.T, q *store.Queries, id int64, username string, force bool) store.User {
+func upsert(t *testing.T, q *store.Queries, id int64, username string) store.User {
 	t.Helper()
 	u, err := q.UpsertGitLabUser(context.Background(), store.UpsertGitLabUserParams{
 		GitlabUserID: pgtype.Int8{Int64: id, Valid: true},
 		Username:     username,
 		Name:         "Name " + username,
 		Email:        username + "@example.com",
-		ForceAdmin:   force,
 	})
 	if err != nil {
 		t.Fatalf("UpsertGitLabUser: %v", err)
@@ -136,7 +135,7 @@ func TestSchemaConstraints(t *testing.T) {
 	})
 	t.Run("gitlab shares local username", func(t *testing.T) {
 		mustLocal(t, q, "shared", "viewer")
-		g := upsert(t, q, 500, "shared", false)
+		g := upsert(t, q, 500, "shared")
 		if g.Source != "gitlab" || g.Username != "shared" {
 			t.Errorf("unexpected user %+v", g)
 		}
@@ -230,7 +229,7 @@ func TestLocalUserRoundTrip(t *testing.T) {
 		t.Errorf("GetLocalUserByUsername unknown: %v", err)
 	}
 	// A GitLab user is not returned as a local user.
-	upsert(t, q, 1, "gl-only", false)
+	upsert(t, q, 1, "gl-only")
 	if _, err := q.GetLocalUserByUsername(ctx, "gl-only"); !errors.Is(err, pgx.ErrNoRows) {
 		t.Errorf("gitlab user returned as local: %v", err)
 	}
@@ -257,9 +256,11 @@ func TestCountAdmins(t *testing.T) {
 	count(0)
 	mustLocal(t, q, "a1", "admin")
 	count(1)
-	upsert(t, q, 1, "g", true)
-	count(2)
-	upsert(t, q, 2, "g2", false)
+	g := upsert(t, q, 1, "g")
+	count(1)
+	if _, err := q.SetUserRole(context.Background(), store.SetUserRoleParams{ID: g.ID, Role: "admin"}); err != nil {
+		t.Fatal(err)
+	}
 	count(2)
 }
 
@@ -271,7 +272,7 @@ func TestUpsertGitLabUser(t *testing.T) {
 
 	t.Run("new viewer", func(t *testing.T) {
 		before := time.Now().Add(-time.Minute)
-		u := upsert(t, q, 10, "newbie", false)
+		u := upsert(t, q, 10, "newbie")
 		if u.Role != "viewer" || u.Source != "gitlab" || u.GitlabUserID != (pgtype.Int8{Int64: 10, Valid: true}) ||
 			u.Username != "newbie" || u.Name != "Name newbie" || u.Email != "newbie@example.com" || u.PasswordHash.Valid {
 			t.Errorf("unexpected user %+v", u)
@@ -280,13 +281,8 @@ func TestUpsertGitLabUser(t *testing.T) {
 			t.Errorf("last_login_at not set: %+v", u.LastLoginAt)
 		}
 	})
-	t.Run("new admin", func(t *testing.T) {
-		if u := upsert(t, q, 11, "boss", true); u.Role != "admin" {
-			t.Errorf("role = %s, want admin", u.Role)
-		}
-	})
 	t.Run("existing viewer updated", func(t *testing.T) {
-		first := upsert(t, q, 12, "old", false)
+		first := upsert(t, q, 12, "old")
 		// Push last_login_at into the past so the update is observable.
 		if _, err := pool.Exec(ctx, `UPDATE users SET last_login_at = $2 WHERE id = $1`, first.ID, ts(baseTime)); err != nil {
 			t.Fatal(err)
@@ -308,23 +304,23 @@ func TestUpsertGitLabUser(t *testing.T) {
 		}
 	})
 	t.Run("existing admin stays admin", func(t *testing.T) {
-		upsert(t, q, 13, "adm", true)
-		if u := upsert(t, q, 13, "adm", false); u.Role != "admin" {
-			t.Errorf("role = %s, want admin", u.Role)
+		u := upsert(t, q, 13, "adm")
+		if _, err := q.SetUserRole(ctx, store.SetUserRoleParams{ID: u.ID, Role: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+		if got := upsert(t, q, 13, "adm"); got.Role != "admin" {
+			t.Errorf("role = %s, want admin", got.Role)
 		}
 	})
-	t.Run("existing viewer promoted by force", func(t *testing.T) {
-		upsert(t, q, 14, "promo", false)
-		if u := upsert(t, q, 14, "promo", true); u.Role != "admin" {
-			t.Errorf("role = %s, want admin", u.Role)
+	t.Run("demoted admin stays viewer", func(t *testing.T) {
+		u := upsert(t, q, 15, "dem")
+		if _, err := q.SetUserRole(ctx, store.SetUserRoleParams{ID: u.ID, Role: "admin"}); err != nil {
+			t.Fatal(err)
 		}
-	})
-	t.Run("demoted admin stays viewer without force", func(t *testing.T) {
-		u := upsert(t, q, 15, "dem", true)
 		if _, err := q.SetUserRole(ctx, store.SetUserRoleParams{ID: u.ID, Role: "viewer"}); err != nil {
 			t.Fatal(err)
 		}
-		if got := upsert(t, q, 15, "dem", false); got.Role != "viewer" {
+		if got := upsert(t, q, 15, "dem"); got.Role != "viewer" {
 			t.Errorf("role = %s, want viewer", got.Role)
 		}
 	})
