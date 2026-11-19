@@ -1,0 +1,751 @@
+// Copyright 2026 The Scanopsis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package auth
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"net/url"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pquerna/otp/totp"
+
+	"github.com/siyamsarker/scanopsis/internal/audit"
+	"github.com/siyamsarker/scanopsis/internal/secretbox"
+	"github.com/siyamsarker/scanopsis/internal/store"
+)
+
+var _ MFAStore = (*store.Queries)(nil)
+
+// fakeMFAStore mirrors the semantics of the SQL queries in memory.
+type fakeMFAStore struct {
+	user     store.User
+	codes    map[string]bool // hex-less string(hash) -> used
+	getErr   error
+	setErr   error
+	enableEr error
+	useErr   error
+	delErr   error
+	insErr   error
+	recErr   error
+}
+
+func (f *fakeMFAStore) GetUser(_ context.Context, id int64) (store.User, error) {
+	if f.getErr != nil {
+		return store.User{}, f.getErr
+	}
+	if id != f.user.ID {
+		return store.User{}, pgx.ErrNoRows
+	}
+	return f.user, nil
+}
+
+func (f *fakeMFAStore) SetPendingTOTP(_ context.Context, a store.SetPendingTOTPParams) error {
+	if f.setErr != nil {
+		return f.setErr
+	}
+	f.user.TotpSecretEnc = a.SecretEnc
+	f.user.TotpEnabledAt = pgtype.Timestamptz{}
+	f.user.TotpLastStep = 0
+	return nil
+}
+
+func (f *fakeMFAStore) EnableTOTP(_ context.Context, a store.EnableTOTPParams) error {
+	if f.enableEr != nil {
+		return f.enableEr
+	}
+	if f.user.TotpSecretEnc != nil {
+		f.user.TotpEnabledAt = pgtype.Timestamptz{Time: time.Unix(1, 0), Valid: true}
+		f.user.TotpLastStep = a.LastStep
+	}
+	return nil
+}
+
+func (f *fakeMFAStore) UseTOTPStep(_ context.Context, a store.UseTOTPStepParams) (int64, error) {
+	if f.useErr != nil {
+		return 0, f.useErr
+	}
+	if f.user.TotpLastStep < a.Step {
+		f.user.TotpLastStep = a.Step
+		return f.user.ID, nil
+	}
+	return 0, pgx.ErrNoRows
+}
+
+func (f *fakeMFAStore) DeleteRecoveryCodes(context.Context, int64) error {
+	if f.delErr != nil {
+		return f.delErr
+	}
+	f.codes = map[string]bool{}
+	return nil
+}
+
+func (f *fakeMFAStore) InsertRecoveryCode(_ context.Context, a store.InsertRecoveryCodeParams) error {
+	if f.insErr != nil {
+		return f.insErr
+	}
+	if f.codes == nil {
+		f.codes = map[string]bool{}
+	}
+	f.codes[string(a.CodeHash)] = false
+	return nil
+}
+
+func (f *fakeMFAStore) UseRecoveryCode(_ context.Context, a store.UseRecoveryCodeParams) (int64, error) {
+	if f.recErr != nil {
+		return 0, f.recErr
+	}
+	if used, ok := f.codes[string(a.CodeHash)]; ok && !used {
+		f.codes[string(a.CodeHash)] = true
+		return a.UserID, nil
+	}
+	return 0, pgx.ErrNoRows
+}
+
+type mfaFixture struct {
+	mfa      *MFA
+	store    *fakeMFAStore
+	sessions *Sessions
+	sstore   *fakeSessionStore
+	audit    *fakeAudit
+	clock    *fakeClock
+	box      *secretbox.Box
+	logs     *bytes.Buffer
+	limiter  *RateLimiter
+	cookie   *http.Cookie
+}
+
+const mfaUserID = 8 // "vic", a local user in fakeSessionStore
+
+func newMFAFixture(t *testing.T) *mfaFixture {
+	t.Helper()
+	key := bytes.Repeat([]byte{7}, secretbox.KeySize)
+	box, err := secretbox.New(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ss, clk := newTestSessions(t, true)
+	f := &mfaFixture{
+		store:    &fakeMFAStore{user: store.User{ID: mfaUserID, Source: SourceLocal, Username: "vic"}},
+		sessions: s,
+		sstore:   ss,
+		audit:    &fakeAudit{},
+		clock:    clk,
+		box:      box,
+		logs:     &bytes.Buffer{},
+		limiter:  NewRateLimiter(30*time.Second, 5, clk.Now),
+	}
+	f.mfa = NewMFA(f.store, s, f.audit, func(*http.Request) netip.Addr { return netip.MustParseAddr("203.0.113.9") }, MFAOptions{
+		Issuer:  "Scanopsis",
+		Box:     box,
+		Limiter: f.limiter,
+		Now:     clk.Now,
+		Logger:  slog.New(slog.NewTextHandler(f.logs, nil)),
+	})
+	f.cookie = start(t, s, mfaUserID, nil)
+	return f
+}
+
+// do calls h with the session's principal in the context.
+func (f *mfaFixture) do(t *testing.T, h http.Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := newRequest(http.MethodPost, "/", strings.NewReader(body))
+	p, err := f.sessions.Authenticate(requestWith(f.cookie))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r = r.WithContext(WithPrincipal(r.Context(), p))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w
+}
+
+func (f *mfaFixture) enrol(t *testing.T) (secret string, w *httptest.ResponseRecorder) {
+	t.Helper()
+	w = f.do(t, f.mfa.StartEnrollmentHandler(), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("start: %d %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Secret string `json:"secret"`
+		URI    string `json:"otpauth_uri"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	return resp.Secret, w
+}
+
+func (f *mfaFixture) codeAt(t *testing.T, secret string, at time.Time) string {
+	t.Helper()
+	c, err := totp.GenerateCode(secret, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func codeBody(c string) string { return fmt.Sprintf(`{"code":%q}`, c) }
+
+// enrolled completes enrolment and returns the secret and recovery codes.
+func (f *mfaFixture) enrolled(t *testing.T) (string, []string) {
+	t.Helper()
+	secret, _ := f.enrol(t)
+	w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusOK {
+		t.Fatalf("confirm: %d %s", w.Code, w.Body)
+	}
+	var resp struct {
+		Codes []string `json:"recovery_codes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh sign-in: unverified session, as after the first factor.
+	f.cookie = start(t, f.sessions, mfaUserID, nil)
+	f.clock.Advance(time.Minute) // a later step than the one used to enrol
+	return secret, resp.Codes
+}
+
+func errCode(t *testing.T, w *httptest.ResponseRecorder) string {
+	t.Helper()
+	var e struct {
+		Error struct{ Code string }
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &e); err != nil {
+		t.Fatalf("body %q: %v", w.Body, err)
+	}
+	return e.Error.Code
+}
+
+func (f *mfaFixture) verified(t *testing.T) bool {
+	t.Helper()
+	p, err := f.sessions.Authenticate(requestWith(f.cookie))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p.MFAVerified
+}
+
+func TestMFAStartEnrollment(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, w := f.enrol(t)
+	if w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("headers %v", w.Header())
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	u, err := url.Parse(resp["otpauth_uri"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if u.Scheme != "otpauth" || u.Host != "totp" || u.Path != "/Scanopsis:local:vic" {
+		t.Fatalf("uri %s", u)
+	}
+	if q.Get("secret") != secret || q.Get("issuer") != "Scanopsis" || q.Get("algorithm") != "SHA1" ||
+		q.Get("digits") != "6" || q.Get("period") != "30" {
+		t.Fatalf("query %v", q)
+	}
+	if len(secret) != 32 || strings.Contains(secret, "=") { // 20 bytes -> 32 base32 characters
+		t.Fatalf("secret %q", secret)
+	}
+
+	// The secret round-trips: a code generated from it confirms.
+	w = f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusOK {
+		t.Fatalf("confirm %d %s", w.Code, w.Body)
+	}
+}
+
+func TestMFASecretStoredEncryptedAndBound(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrol(t)
+	enc := f.store.user.TotpSecretEnc
+	if len(enc) == 0 || bytes.Contains(enc, []byte(secret)) {
+		t.Fatal("secret stored in the clear")
+	}
+	got, err := f.box.Open(enc, "totp:8")
+	if err != nil || string(got) != secret {
+		t.Fatalf("open: %q, %v", got, err)
+	}
+	for _, purpose := range []string{"totp:9", "totp:", "setting:totp:8"} {
+		if _, err := f.box.Open(enc, purpose); !errors.Is(err, secretbox.ErrDecrypt) {
+			t.Fatalf("purpose %q: %v; want ErrDecrypt", purpose, err)
+		}
+	}
+}
+
+func TestMFAStartEnrollmentReplacesPendingAndRejectsEnrolled(t *testing.T) {
+	f := newMFAFixture(t)
+	s1, _ := f.enrol(t)
+	s2, _ := f.enrol(t)
+	if s1 == s2 {
+		t.Fatal("pending secret not replaced")
+	}
+	// The old secret no longer confirms.
+	w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(f.codeAt(t, s1, f.clock.Now())))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("old secret: %d", w.Code)
+	}
+	f.enrolled(t)
+	w = f.do(t, f.mfa.StartEnrollmentHandler(), "")
+	if w.Code != http.StatusConflict || errCode(t, w) != "mfa_already_enrolled" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+}
+
+func TestMFAConfirmErrors(t *testing.T) {
+	f := newMFAFixture(t)
+	h := f.mfa.ConfirmEnrollmentHandler()
+
+	w := f.do(t, h, codeBody("123456"))
+	if w.Code != http.StatusConflict || errCode(t, w) != "mfa_enrollment_not_started" {
+		t.Fatalf("not started: %d %s", w.Code, w.Body)
+	}
+
+	secret, _ := f.enrol(t)
+	good := f.codeAt(t, secret, f.clock.Now())
+	wrong := "000000"
+	if good == wrong {
+		wrong = "111111"
+	}
+	w = f.do(t, h, codeBody(wrong))
+	if w.Code != http.StatusUnauthorized || errCode(t, w) != "invalid_code" {
+		t.Fatalf("wrong code: %d %s", w.Code, w.Body)
+	}
+	if f.store.user.TotpEnabledAt.Valid || len(f.store.codes) != 0 || f.verified(t) {
+		t.Fatal("state changed by a wrong code")
+	}
+
+	for _, body := range []string{``, `{}`, `{"code":""}`, `{"code":1}`, `{"code":"1","x":2}`, `{"code":"1"}{}`, `[`,
+		`{"code":"` + strings.Repeat("1", 65) + `"}`, `{"code":"` + strings.Repeat("1", 2000) + `"}`} {
+		f.mfa.opts.Limiter = NewRateLimiter(30*time.Second, 5, f.clock.Now)
+		w = f.do(t, h, body)
+		if w.Code != http.StatusBadRequest || errCode(t, w) != "invalid_request" {
+			t.Fatalf("body %.20q: %d %s", body, w.Code, w.Body)
+		}
+	}
+
+	f.mfa.opts.Limiter = NewRateLimiter(30*time.Second, 5, f.clock.Now)
+	w = f.do(t, h, codeBody(good))
+	if w.Code != http.StatusOK {
+		t.Fatalf("good code: %d %s", w.Code, w.Body)
+	}
+	w = f.do(t, h, codeBody(good))
+	if w.Code != http.StatusConflict || errCode(t, w) != "mfa_already_enrolled" {
+		t.Fatalf("already enrolled: %d %s", w.Code, w.Body)
+	}
+}
+
+var recoveryFormat = regexp.MustCompile(`^[abcdefghjkmnpqrstuvwxyz23456789]{5}-[abcdefghjkmnpqrstuvwxyz23456789]{5}$`)
+
+func TestMFAConfirmIssuesRecoveryCodes(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrol(t)
+	// Old codes from a previous enrolment are replaced.
+	f.store.codes = map[string]bool{"stale": false}
+	now := f.clock.Now()
+	w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(f.codeAt(t, secret, now)))
+	if w.Code != http.StatusOK || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("%d %v", w.Code, w.Header())
+	}
+	var resp struct {
+		Codes []string `json:"recovery_codes"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Codes) != 10 {
+		t.Fatalf("%d codes", len(resp.Codes))
+	}
+	seen := map[string]bool{}
+	for _, c := range resp.Codes {
+		if !recoveryFormat.MatchString(c) {
+			t.Fatalf("code %q has the wrong format", c)
+		}
+		if seen[c] {
+			t.Fatalf("duplicate code %q", c)
+		}
+		seen[c] = true
+		h := sha256.Sum256([]byte(strings.ReplaceAll(c, "-", "")))
+		if used, ok := f.store.codes[string(h[:])]; !ok || used {
+			t.Fatalf("hash of %q not stored unused", c)
+		}
+	}
+	if len(f.store.codes) != 10 {
+		t.Fatalf("%d stored hashes; want exactly 10 (stale code deleted)", len(f.store.codes))
+	}
+	for k := range f.store.codes {
+		if len(k) != sha256.Size {
+			t.Fatalf("stored value of %d bytes is not a SHA-256", len(k))
+		}
+	}
+	if !f.store.user.TotpEnabledAt.Valid || f.store.user.TotpLastStep != now.Unix()/30 {
+		t.Fatalf("user %+v; want enabled with last_step %d", f.store.user, now.Unix()/30)
+	}
+	if !f.verified(t) {
+		t.Fatal("session not marked verified")
+	}
+	want := []auditEvent{{"local:vic", audit.ActionMFAEnrolled, map[string]any{"method": "totp", "ip": "203.0.113.9"}}}
+	if fmt.Sprint(f.audit.events) != fmt.Sprint(want) {
+		t.Fatalf("audit %v; want %v", f.audit.events, want)
+	}
+}
+
+func TestMFAVerifyTOTPSkew(t *testing.T) {
+	cases := []struct {
+		offset time.Duration
+		ok     bool
+	}{
+		{0, true}, {-30 * time.Second, true}, {30 * time.Second, true},
+		{-60 * time.Second, false}, {60 * time.Second, false}, {-90 * time.Second, false}, {5 * time.Minute, false},
+	}
+	for _, c := range cases {
+		t.Run(c.offset.String(), func(t *testing.T) {
+			f := newMFAFixture(t)
+			secret, _ := f.enrolled(t)
+			// Align to the middle of a step so that offsets are whole steps.
+			f.clock.Advance(time.Duration(30-f.clock.Now().Unix()%30) * time.Second)
+			f.clock.Advance(15 * time.Second)
+			code := f.codeAt(t, secret, f.clock.Now().Add(c.offset))
+			w := f.do(t, f.mfa.VerifyHandler(), codeBody(code))
+			if c.ok {
+				if w.Code != http.StatusNoContent || !f.verified(t) {
+					t.Fatalf("%d %s", w.Code, w.Body)
+				}
+			} else if w.Code != http.StatusUnauthorized || errCode(t, w) != "invalid_code" || f.verified(t) {
+				t.Fatalf("%d %s", w.Code, w.Body)
+			}
+		})
+	}
+}
+
+func TestMFAVerifyReplay(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	code := f.codeAt(t, secret, f.clock.Now())
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(code)); w.Code != http.StatusNoContent {
+		t.Fatalf("first use: %d %s", w.Code, w.Body)
+	}
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(code)); w.Code != http.StatusUnauthorized || errCode(t, w) != "invalid_code" {
+		t.Fatalf("replay: %d %s", w.Code, w.Body)
+	}
+	// An earlier step than the one used is also rejected, a later one works.
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now().Add(-30*time.Second)))); w.Code != http.StatusUnauthorized {
+		t.Fatalf("older step: %d", w.Code)
+	}
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now().Add(30*time.Second)))); w.Code != http.StatusNoContent {
+		t.Fatalf("newer step: %d", w.Code)
+	}
+}
+
+func TestMFAEnrolmentStepCannotBeReplayedAtVerify(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrol(t)
+	code := f.codeAt(t, secret, f.clock.Now())
+	if w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(code)); w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+	f.cookie = start(t, f.sessions, mfaUserID, nil)
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(code)); w.Code != http.StatusUnauthorized {
+		t.Fatalf("code used to enrol accepted again: %d", w.Code)
+	}
+}
+
+func TestMFAVerifyCodeSpacing(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	code := f.codeAt(t, secret, f.clock.Now())
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(code[:3]+" "+code[3:])); w.Code != http.StatusNoContent {
+		t.Fatalf("spaced code: %d", w.Code)
+	}
+}
+
+func TestMFARecoveryCode(t *testing.T) {
+	f := newMFAFixture(t)
+	_, codes := f.enrolled(t)
+	h := f.mfa.VerifyHandler()
+
+	// Case and hyphen do not matter.
+	typed := strings.ToUpper(strings.ReplaceAll(codes[0], "-", ""))
+	if w := f.do(t, h, codeBody(typed)); w.Code != http.StatusNoContent || !f.verified(t) {
+		t.Fatalf("recovery code: %d %s", w.Code, w.Body)
+	}
+	if w := f.do(t, h, codeBody(codes[0])); w.Code != http.StatusUnauthorized || errCode(t, w) != "invalid_code" {
+		t.Fatalf("second use: %d %s", w.Code, w.Body)
+	}
+	if w := f.do(t, h, codeBody(codes[1])); w.Code != http.StatusNoContent {
+		t.Fatalf("another code: %d", w.Code)
+	}
+	// Wrong shapes and unknown codes fail without touching the store.
+	for _, bad := range []string{"abcde-fghjk", "ABCDE", "0o1li-0o1li", "abcde-fghjk-mnpqr", "12345", "1234567"} {
+		f.mfa.opts.Limiter = NewRateLimiter(30*time.Second, 5, f.clock.Now)
+		if w := f.do(t, h, codeBody(bad)); w.Code != http.StatusUnauthorized || errCode(t, w) != "invalid_code" {
+			t.Fatalf("%q: %d", bad, w.Code)
+		}
+	}
+	last := f.audit.events[len(f.audit.events)-1]
+	if last.Action != audit.ActionMFAFailed || last.Detail["method"] != "recovery_code" {
+		t.Fatalf("last audit %+v", last)
+	}
+}
+
+func TestMFAVerifyRequiresEnrolment(t *testing.T) {
+	f := newMFAFixture(t)
+	w := f.do(t, f.mfa.VerifyHandler(), codeBody("123456"))
+	if w.Code != http.StatusConflict || errCode(t, w) != "mfa_enrollment_required" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	// A pending (unconfirmed) enrolment is not an enrolment.
+	f.enrol(t)
+	w = f.do(t, f.mfa.VerifyHandler(), codeBody("123456"))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("pending: %d", w.Code)
+	}
+}
+
+func TestMFARateLimit(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	h := f.mfa.VerifyHandler()
+	for i := range 5 {
+		if w := f.do(t, h, codeBody("000000")); w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d", i+1, w.Code)
+		}
+	}
+	// Even a correct code is refused while limited.
+	w := f.do(t, h, codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "30" || errCode(t, w) != "too_many_attempts" {
+		t.Fatalf("%d retry-after %q %s", w.Code, w.Header().Get("Retry-After"), w.Body)
+	}
+	f.clock.Advance(30 * time.Second)
+	if w := f.do(t, h, codeBody(f.codeAt(t, secret, f.clock.Now()))); w.Code != http.StatusNoContent {
+		t.Fatalf("after waiting: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestMFARateLimitOnConfirmIsPerUser(t *testing.T) {
+	f := newMFAFixture(t)
+	f.enrol(t)
+	h := f.mfa.ConfirmEnrollmentHandler()
+	for range 5 {
+		f.do(t, h, codeBody("000000"))
+	}
+	if w := f.do(t, h, codeBody("000000")); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("%d", w.Code)
+	}
+	if ok, _ := f.limiter.Allow("99"); !ok {
+		t.Fatal("another user is limited too")
+	}
+}
+
+func TestMFADecryptFailure(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	otherBox, _ := secretbox.New(bytes.Repeat([]byte{9}, secretbox.KeySize))
+	f.mfa.opts.Box = otherBox // wrong SCANOPSIS_SECRET_KEY
+	w := f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusInternalServerError || errCode(t, w) != "internal_error" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if !strings.Contains(f.logs.String(), "cannot decrypt TOTP secret; check SCANOPSIS_SECRET_KEY") {
+		t.Fatalf("log %q", f.logs)
+	}
+	if f.verified(t) {
+		t.Fatal("verified despite failure")
+	}
+
+	// Same on confirm.
+	f2 := newMFAFixture(t)
+	secret2, _ := f2.enrol(t)
+	f2.mfa.opts.Box = otherBox
+	w = f2.do(t, f2.mfa.ConfirmEnrollmentHandler(), codeBody(f2.codeAt(t, secret2, f2.clock.Now())))
+	if w.Code != http.StatusInternalServerError || !strings.Contains(f2.logs.String(), "check SCANOPSIS_SECRET_KEY") {
+		t.Fatalf("confirm: %d %q", w.Code, f2.logs)
+	}
+}
+
+func TestMFACorruptSecretIsInternalError(t *testing.T) {
+	f := newMFAFixture(t)
+	f.enrolled(t)
+	// A valid ciphertext of something that is not base32.
+	f.store.user.TotpSecretEnc, _ = f.box.Seal([]byte("not base32!"), "totp:8")
+	w := f.do(t, f.mfa.VerifyHandler(), codeBody("123456"))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("%d", w.Code)
+	}
+}
+
+func TestMFAAuditAndLogsNeverContainCodesOrSecrets(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrol(t)
+	enrolCode := f.codeAt(t, secret, f.clock.Now())
+	f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody("000001"))
+	_, codes := func() (string, []string) {
+		w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(enrolCode))
+		var r struct {
+			C []string `json:"recovery_codes"`
+		}
+		_ = json.Unmarshal(w.Body.Bytes(), &r)
+		return "", r.C
+	}()
+	f.cookie = start(t, f.sessions, mfaUserID, nil)
+	f.clock.Advance(time.Minute)
+	good := f.codeAt(t, secret, f.clock.Now())
+	f.do(t, f.mfa.VerifyHandler(), codeBody("000002"))
+	f.do(t, f.mfa.VerifyHandler(), codeBody("zzzzz-zzzzz"))
+	f.do(t, f.mfa.VerifyHandler(), codeBody(good))
+	f.do(t, f.mfa.VerifyHandler(), codeBody(codes[0]))
+
+	var actions []string
+	for _, e := range f.audit.events {
+		actions = append(actions, e.Action)
+		if e.Actor != "local:vic" {
+			t.Fatalf("actor %q", e.Actor)
+		}
+	}
+	wantActions := "mfa.failed mfa.enrolled mfa.failed mfa.failed mfa.verified mfa.verified"
+	if strings.Join(actions, " ") != wantActions {
+		t.Fatalf("actions %v; want %s", actions, wantActions)
+	}
+	if f.audit.events[4].Detail["method"] != "totp" || f.audit.events[5].Detail["method"] != "recovery_code" {
+		t.Fatalf("methods %v", f.audit.events)
+	}
+	dump := fmt.Sprint(f.audit.events) + f.logs.String()
+	secrets := append([]string{secret, enrolCode, good, "000001", "000002", "zzzzz-zzzzz", string(f.store.user.TotpSecretEnc)}, codes...)
+	for _, s := range secrets {
+		if strings.Contains(dump, s) || strings.Contains(dump, strings.ReplaceAll(s, "-", "")) && len(s) == 11 {
+			t.Fatalf("audit or log output contains %q", s)
+		}
+	}
+}
+
+func TestMFANoPrincipalAndMethod(t *testing.T) {
+	f := newMFAFixture(t)
+	for _, h := range []http.Handler{f.mfa.StartEnrollmentHandler(), f.mfa.ConfirmEnrollmentHandler(), f.mfa.VerifyHandler()} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, newRequest(http.MethodPost, "/", strings.NewReader(codeBody("123456"))))
+		if w.Code != http.StatusUnauthorized || errCode(t, w) != "unauthenticated" {
+			t.Fatalf("%d %s", w.Code, w.Body)
+		}
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, newRequest(http.MethodGet, "/", nil))
+		if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Allow") != "POST" {
+			t.Fatalf("GET: %d", w.Code)
+		}
+	}
+}
+
+func TestMFAStoreErrors(t *testing.T) {
+	boom := errors.New("boom")
+	steps := map[string]struct {
+		set  func(*fakeMFAStore)
+		call func(*mfaFixture) http.Handler
+		pre  func(*testing.T, *mfaFixture) string // returns body
+	}{
+		"get user": {func(s *fakeMFAStore) { s.getErr = boom }, func(f *mfaFixture) http.Handler { return f.mfa.VerifyHandler() },
+			func(*testing.T, *mfaFixture) string { return codeBody("123456") }},
+		"set pending": {func(s *fakeMFAStore) { s.setErr = boom }, func(f *mfaFixture) http.Handler { return f.mfa.StartEnrollmentHandler() },
+			func(*testing.T, *mfaFixture) string { return "" }},
+		"delete codes": {func(s *fakeMFAStore) { s.delErr = boom }, func(f *mfaFixture) http.Handler { return f.mfa.ConfirmEnrollmentHandler() },
+			confirmBody},
+		"insert code": {func(s *fakeMFAStore) { s.insErr = boom }, func(f *mfaFixture) http.Handler { return f.mfa.ConfirmEnrollmentHandler() },
+			confirmBody},
+		"enable": {func(s *fakeMFAStore) { s.enableEr = boom }, func(f *mfaFixture) http.Handler { return f.mfa.ConfirmEnrollmentHandler() },
+			confirmBody},
+		"use step": {func(s *fakeMFAStore) { s.useErr = boom }, func(f *mfaFixture) http.Handler { return f.mfa.VerifyHandler() },
+			verifyBody},
+		"use recovery": {func(s *fakeMFAStore) { s.recErr = boom }, func(f *mfaFixture) http.Handler { return f.mfa.VerifyHandler() },
+			func(t *testing.T, f *mfaFixture) string { f.enrolled(t); return codeBody("abcde-fghjk") }},
+	}
+	for name, c := range steps {
+		t.Run(name, func(t *testing.T) {
+			f := newMFAFixture(t)
+			body := c.pre(t, f)
+			c.set(f.store)
+			w := f.do(t, c.call(f), body)
+			if w.Code != http.StatusInternalServerError || errCode(t, w) != "internal_error" {
+				t.Fatalf("%d %s", w.Code, w.Body)
+			}
+			if !strings.Contains(f.logs.String(), "boom") {
+				t.Fatalf("error not logged: %q", f.logs)
+			}
+			if f.verified(t) {
+				t.Fatal("session verified despite an error")
+			}
+		})
+	}
+}
+
+func confirmBody(t *testing.T, f *mfaFixture) string {
+	secret, _ := f.enrol(t)
+	return codeBody(f.codeAt(t, secret, f.clock.Now()))
+}
+
+func verifyBody(t *testing.T, f *mfaFixture) string {
+	secret, _ := f.enrolled(t)
+	return codeBody(f.codeAt(t, secret, f.clock.Now()))
+}
+
+func TestMFAMarkVerifiedFailure(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrol(t)
+	f.sstore.markErr = errors.New("boom")
+	w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("confirm: %d", w.Code)
+	}
+	if len(f.audit.events) != 0 {
+		t.Fatalf("audit recorded: %v", f.audit.events)
+	}
+}
+
+func TestMFAVerifyMarkVerifiedFailure(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	f.sstore.markErr = errors.New("boom")
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(f.codeAt(t, secret, f.clock.Now()))); w.Code != http.StatusInternalServerError {
+		t.Fatalf("verify: %d", w.Code)
+	}
+	if len(f.audit.events) != 1 { // only the enrolment
+		t.Fatalf("audit %v", f.audit.events)
+	}
+}
+
+func TestMFADefaults(t *testing.T) {
+	m := NewMFA(&fakeMFAStore{}, nil, &fakeAudit{}, nil, MFAOptions{})
+	if m.opts.Now == nil || m.opts.Logger == nil {
+		t.Fatal("defaults not set")
+	}
+}
+
+func TestRecoveryCodesAreUniqueAndUniform(t *testing.T) {
+	seen := map[string]bool{}
+	for range 200 {
+		codes, hashes, err := newRecoveryCodes()
+		if err != nil || len(codes) != 10 || len(hashes) != 10 {
+			t.Fatal(err, len(codes))
+		}
+		for _, c := range codes {
+			if seen[c] {
+				t.Fatalf("code %q generated twice in 2000 codes", c)
+			}
+			seen[c] = true
+		}
+	}
+}

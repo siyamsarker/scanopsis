@@ -1,0 +1,194 @@
+// Copyright 2026 The Scanopsis Authors
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build integration
+
+package auth
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pquerna/otp/totp"
+
+	"github.com/siyamsarker/scanopsis/internal/audit"
+	"github.com/siyamsarker/scanopsis/internal/clientip"
+	"github.com/siyamsarker/scanopsis/internal/secretbox"
+	"github.com/siyamsarker/scanopsis/internal/store"
+	"github.com/siyamsarker/scanopsis/internal/store/storetest"
+)
+
+func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
+	ctx := context.Background()
+	pool := storetest.New(t)
+	q := store.New(pool)
+	clk := &movingClock{}
+	sessions := NewSessions(q, SessionOptions{Idle: testIdle, Absolute: testAbsolute, Secure: true, Now: clk.Now})
+	box, err := secretbox.New(bytes.Repeat([]byte{3}, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := audit.New(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m := NewMFA(q, sessions, rec, clientip.New(nil).IP, MFAOptions{
+		Issuer: "Scanopsis", Box: box, Limiter: NewRateLimiter(30*time.Second, 50, nil), Now: clk.Now,
+	})
+
+	user, err := q.CreateLocalUser(ctx, store.CreateLocalUserParams{Username: "root", Role: store.RoleAdmin, PasswordHash: pgtype.Text{String: "x", Valid: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// signIn starts a fresh session (first factor only) and returns its cookie.
+	signIn := func() *http.Cookie {
+		w := httptest.NewRecorder()
+		if err := sessions.Start(w, newRequest(http.MethodPost, "/", nil), user.ID); err != nil {
+			t.Fatal(err)
+		}
+		return w.Result().Cookies()[0]
+	}
+	call := func(h http.Handler, c *http.Cookie, body string) *httptest.ResponseRecorder {
+		r := newRequest(http.MethodPost, "/", strings.NewReader(body))
+		r.RemoteAddr = "203.0.113.9:1234"
+		r.AddCookie(c)
+		p, err := sessions.Authenticate(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r.WithContext(WithPrincipal(r.Context(), p)))
+		return w
+	}
+	principal := func(c *http.Cookie) *Principal {
+		p, err := sessions.Authenticate(requestWith(c))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	code := func(secret string, at time.Time) string {
+		c, err := totp.GenerateCode(secret, at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return codeBody(c)
+	}
+
+	// Enrol.
+	c1 := signIn()
+	if p := principal(c1); p.MFAEnrolled || p.MFAVerified || p.Complete() {
+		t.Fatalf("new session %+v", *p)
+	}
+	w := call(m.VerifyHandler(), c1, codeBody("123456"))
+	if w.Code != http.StatusConflict || errCode(t, w) != "mfa_enrollment_required" {
+		t.Fatalf("verify before enrolment: %d %s", w.Code, w.Body)
+	}
+	w = call(m.StartEnrollmentHandler(), c1, "")
+	var enr struct{ Secret string }
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &enr) != nil {
+		t.Fatalf("start: %d %s", w.Code, w.Body)
+	}
+	stored, err := q.GetUser(ctx, user.ID)
+	if err != nil || bytes.Contains(stored.TotpSecretEnc, []byte(enr.Secret)) || stored.TotpEnabledAt.Valid {
+		t.Fatalf("stored user %+v, %v", stored, err)
+	}
+	w = call(m.ConfirmEnrollmentHandler(), c1, code(enr.Secret, clk.Now()))
+	var rc struct {
+		Codes []string `json:"recovery_codes"`
+	}
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &rc) != nil || len(rc.Codes) != 10 {
+		t.Fatalf("confirm: %d %s", w.Code, w.Body)
+	}
+	if p := principal(c1); !p.MFAEnrolled || !p.MFAVerified || !p.Complete() {
+		t.Fatalf("after confirm %+v", *p)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM recovery_codes WHERE user_id = $1 AND used_at IS NULL", user.ID).Scan(&n); err != nil || n != 10 {
+		t.Fatalf("%d recovery codes stored, %v", n, err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM recovery_codes WHERE code_hash = $1", []byte(strings.ReplaceAll(rc.Codes[0], "-", ""))).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("recovery code stored in the clear (%d), %v", n, err)
+	}
+	w = call(m.StartEnrollmentHandler(), c1, "")
+	if w.Code != http.StatusConflict || errCode(t, w) != "mfa_already_enrolled" {
+		t.Fatalf("start again: %d %s", w.Code, w.Body)
+	}
+
+	// A new sign-in: the enrolment code is a replay, the next step's code works once.
+	c2 := signIn()
+	if p := principal(c2); !p.MFAEnrolled || p.MFAVerified || p.Complete() {
+		t.Fatalf("second session %+v", *p)
+	}
+	if w := call(m.VerifyHandler(), c2, code(enr.Secret, clk.Now())); w.Code != http.StatusUnauthorized || errCode(t, w) != "invalid_code" {
+		t.Fatalf("enrolment code replayed: %d %s", w.Code, w.Body)
+	}
+	clk.Advance(30 * time.Second)
+	next := code(enr.Secret, clk.Now())
+	if w := call(m.VerifyHandler(), c2, next); w.Code != http.StatusNoContent {
+		t.Fatalf("verify: %d %s", w.Code, w.Body)
+	}
+	if p := principal(c2); !p.MFAVerified || !p.Complete() {
+		t.Fatalf("after verify %+v", *p)
+	}
+	c3 := signIn()
+	if w := call(m.VerifyHandler(), c3, next); w.Code != http.StatusUnauthorized {
+		t.Fatalf("replay: %d %s", w.Code, w.Body)
+	}
+	if principal(c3).MFAVerified {
+		t.Fatal("replayed code verified the session")
+	}
+
+	// Recovery code: once, case and hyphen insensitive.
+	typed := codeBody(strings.ToUpper(strings.ReplaceAll(rc.Codes[3], "-", "")))
+	if w := call(m.VerifyHandler(), c3, typed); w.Code != http.StatusNoContent || !principal(c3).MFAVerified {
+		t.Fatalf("recovery: %d %s", w.Code, w.Body)
+	}
+	c4 := signIn()
+	if w := call(m.VerifyHandler(), c4, codeBody(rc.Codes[3])); w.Code != http.StatusUnauthorized {
+		t.Fatalf("recovery code reused: %d", w.Code)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM recovery_codes WHERE user_id = $1 AND used_at IS NULL", user.ID).Scan(&n); err != nil || n != 9 {
+		t.Fatalf("%d unused recovery codes; want 9, %v", n, err)
+	}
+
+	// Audit trail: no code or secret in it.
+	rows, err := pool.Query(ctx, "SELECT action, detail::text FROM audit_log ORDER BY id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var actions []string
+	for rows.Next() {
+		var a, d string
+		if err := rows.Scan(&a, &d); err != nil {
+			t.Fatal(err)
+		}
+		actions = append(actions, a)
+		for _, s := range append([]string{enr.Secret, next}, rc.Codes...) {
+			if strings.Contains(d, s) {
+				t.Fatalf("audit detail %s contains a secret", d)
+			}
+		}
+	}
+	want := "mfa.enrolled mfa.failed mfa.verified mfa.failed mfa.verified mfa.failed"
+	if got := strings.Join(actions, " "); got != want {
+		t.Fatalf("audit actions %q; want %q", got, want)
+	}
+
+	// After an administrator's reset the user can enrol again.
+	if err := store.ResetMFA(ctx, pool, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	c5 := signIn()
+	if w := call(m.StartEnrollmentHandler(), c5, ""); w.Code != http.StatusOK {
+		t.Fatalf("enrol after reset: %d %s", w.Code, w.Body)
+	}
+}
