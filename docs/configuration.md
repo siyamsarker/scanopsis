@@ -108,13 +108,12 @@ rule at start. See the warning below.
 If GitLab sign-in is not fully configured, Scanopsis does not offer it on the
 sign-in page and does not contact GitLab.
 
-> **Warning:** do not set `SCANOPSIS_LOCAL_LOGIN_ENABLED=false` in the
-> environment unless GitLab sign-in is already configured and working. The
-> server accepts it at start even without GitLab, and then nobody can sign in:
-> the sign-in page says that no sign-in method is enabled. The same happens if
-> GitLab sign-in is disabled, or GitLab is down, after you turned local
-> sign-in off on the Settings page. To recover, see
-> [recovering access](operations.md#recovering-access-when-locked-out).
+> **Note:** local sign-in can only be off while GitLab sign-in is fully
+> configured. If `SCANOPSIS_LOCAL_LOGIN_ENABLED=false` is set while GitLab
+> sign-in is incomplete, Scanopsis keeps local sign-in on and logs a warning,
+> so administrators can still sign in. If you turn local sign-in off and
+> GitLab later stops working (GitLab is down, or the client secret is wrong),
+> nobody can sign in. To recover, see [recovering access](operations.md#recovering-access-when-locked-out).
 
 ### When changes apply
 

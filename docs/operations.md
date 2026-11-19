@@ -248,16 +248,16 @@ Find the case that matches, then follow its steps.
 | A local user forgot the password | Run `reset-password`. If the user also lost the phone, run `reset-2fa` as well. |
 | The only administrator lost both password and phone | Run `reset-password root` and `reset-2fa local:root` (use the real user name). Sign in with the temporary password, enrol again, and set a new password. |
 | A GitLab user cannot sign in | Check the [troubleshooting table](integrations/gitlab-sso.md#troubleshooting). Local sign-in still works for local accounts while GitLab is down. |
-| Nobody can sign in because local sign-in is off, and GitLab sign-in does not work | Turn local sign-in on again in the database, as described next. |
+| Local sign-in is off and GitLab sign-in does not work | Turn local sign-in on again in the database, as described next. |
 | The server does not start and the log mentions `SCANOPSIS_SECRET_KEY` | See [the secret key](configuration.md#the-secret-key). |
 
 ### Turn local sign-in on again
 
-The Settings page refuses to turn local sign-in off unless GitLab sign-in is
-fully configured. You can still end up without a way in, for example when
-GitLab is down, or when `SCANOPSIS_LOCAL_LOGIN_ENABLED=false` was set in the
-environment. The sign-in page then says that no sign-in method is enabled, or
-GitLab shows an error.
+Local sign-in can only be off while GitLab sign-in is fully configured; if it
+is not, Scanopsis keeps local sign-in on and logs a warning. You can still end
+up without a way in when local sign-in is off and GitLab sign-in stops working,
+for example because GitLab is down or the client secret is wrong. GitLab then
+shows an error, or the sign-in page reports that GitLab could not be reached.
 
 1. If `.env` contains `SCANOPSIS_LOCAL_LOGIN_ENABLED=false`, delete that line.
    Otherwise the value is saved again at the next start.

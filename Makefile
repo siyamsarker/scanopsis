@@ -44,7 +44,7 @@ test: ## Run Go tests with the race detector
 test-integration: ## Run Go integration tests against PostgreSQL in Docker
 	go test -race -count=1 -tags integration ./...
 
-generate: ## Regenerate Go code from SQL queries and web API types from the OpenAPI document
+generate: web-install ## Regenerate Go code from SQL queries and web API types from the OpenAPI document
 	cd internal/store && $(SQLC) generate
 	cd web && npm run generate
 
