@@ -195,7 +195,16 @@ func (s *Service) build(stored map[string]entry) *state {
 	for _, d := range Definitions {
 		entries[d.Key] = s.effective(d, stored)
 	}
-	return &state{entries: entries, snap: snapshotOf(entries)}
+	snap := snapshotOf(entries)
+	// Fail safe: with local sign-in off and GitLab sign-in incomplete nobody
+	// could sign in. The Settings page refuses that combination, but an
+	// environment seed or a direct database change can still produce it, so
+	// local sign-in stays available until GitLab sign-in is configured.
+	if !snap.LocalLoginEnabled && !snap.GitLabEnabled() {
+		snap.LocalLoginEnabled = true
+		s.log.Warn("local sign-in is disabled but GitLab sign-in is not fully configured; keeping local sign-in enabled so that administrators can still sign in")
+	}
+	return &state{entries: entries, snap: snap}
 }
 
 func (s *Service) effective(d Definition, stored map[string]entry) entry {
@@ -316,7 +325,8 @@ func (s *Service) plan(cur *state, patch map[string]any, actor string, now time.
 			next[c.key] = c.entry
 		}
 	}
-	validate(s.build(next).snap, fields)
+	// Validate what the admin asked for, before the sign-in fail-safe below.
+	validate(snapshotOf(s.build(next).entries), fields)
 	return changes, fields
 }
 

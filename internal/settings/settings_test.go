@@ -660,3 +660,18 @@ func TestConcurrentReadsDuringUpdates(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+func TestLocalSignInStaysOnWithoutGitLab(t *testing.T) {
+	// An environment seed (not validated by the Settings page) disables local
+	// sign-in while GitLab is not configured: nobody could sign in.
+	e := newEnv(t, map[string]any{KeyLocalLoginEnabled: false})
+	if !e.svc.Current().LocalLoginEnabled {
+		t.Fatal("local sign-in disabled without GitLab sign-in: everyone is locked out")
+	}
+	// With GitLab fully configured the seed takes effect.
+	seeds := gitlabSeeds()
+	seeds[KeyLocalLoginEnabled] = false
+	if newEnv(t, seeds).svc.Current().LocalLoginEnabled {
+		t.Fatal("local sign-in stays enabled although GitLab sign-in is configured")
+	}
+}
