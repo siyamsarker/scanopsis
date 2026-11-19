@@ -114,8 +114,9 @@ the values of secret settings.
 
 Security events, such as sign-ins, failed sign-ins, role changes, setting
 changes and the commands in this page, are written to the `audit_log` table in
-the database, not to the log. Until the web interface shows them, read them
-with SQL:
+the database, not to the log. Administrators read them on the **Audit log**
+page, newest first, filtered by action or actor. When the web interface is
+not available, for example while you recover access, read them with SQL:
 
 ```sh
 docker compose exec db psql -U scanopsis -d scanopsis \

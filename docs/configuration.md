@@ -55,8 +55,8 @@ All variables start with `SCANOPSIS_`. An empty value counts as not set.
 | `SCANOPSIS_LOG_LEVEL` | text | `info` | `debug` | Log verbosity: `debug`, `info`, `warn` or `error`. |
 | `SCANOPSIS_SECRET_KEY` | secret | none, required | output of `openssl rand -base64 32` | Base64 encoding of exactly 32 random bytes. Encrypts secrets in the database. Use `SCANOPSIS_SECRET_KEY_FILE` instead in the Compose deployment. See [the secret key](#the-secret-key). |
 
-The database URL, the secret key and the GitLab client secret can also be
-given as files. See [file variants and Docker secrets](#file-variants-and-docker-secrets).
+The database URL, the secret key, the GitLab client secret, the SonarQube
+token and the SonarQube webhook secret can also be given as files. See [file variants and Docker secrets](#file-variants-and-docker-secrets).
 
 If any variable is invalid, the server does not start. It prints
 `configuration error:` followed by one line for every problem, so you can fix
@@ -157,7 +157,7 @@ sign-in page and does not contact GitLab.
 
 ## File variants and Docker secrets
 
-Three variables accept a `_FILE` variant. The variant holds the path of a file
+Five variables accept a `_FILE` variant. The variant holds the path of a file
 whose content is the value:
 
 | Variable | File variant |
@@ -192,8 +192,9 @@ encrypted in the database.
 kinds of data in the database:
 
 - The two-factor (TOTP) secret of every user.
-- Secrets you enter on the Settings page, which today is the GitLab client
-  secret.
+- The secret settings: the GitLab client secret, the SonarQube token and the
+  SonarQube webhook secret, whether they came from the environment or the
+  Settings page.
 
 Everything else is stored as it is, and passwords are stored as Argon2id
 hashes that do not use the key.
@@ -227,12 +228,12 @@ manager or secrets vault, and write down which backup it belongs to.
    and run `docker compose up -d --force-recreate scanopsis`. This is the
    only way that loses nothing.
 2. **If the key is gone for good,** you must discard the data it protected:
-   1. Delete the saved GitLab client secret. The server cannot start while it
-      is unreadable, so remove it in the database:
+   1. Delete the saved secret settings. The server cannot start while one of
+      them is unreadable, so remove them in the database:
 
       ```sh
       docker compose exec db psql -U scanopsis -d scanopsis \
-        -c "DELETE FROM settings WHERE key = 'gitlab.client_secret'"
+        -c "DELETE FROM settings WHERE secret_enc IS NOT NULL"
       ```
 
    2. Put the new key in `secrets/secret_key` and start the server with
@@ -241,8 +242,11 @@ manager or secrets vault, and write down which backup it belongs to.
       the [administration command](operations.md#reset-two-factor-authentication),
       one account at a time. Each user enrols again at the next sign-in.
    4. Sign in as the local administrator, enrol two-factor authentication
-      again, and enter the GitLab client secret again on the Settings page.
-      GitLab sign-in stays off until you do, because the secret is missing.
+      again, and enter the GitLab client secret, the SonarQube token and the
+      SonarQube webhook secret again on the Settings page. GitLab sign-in and
+      the SonarQube integration stay off until you do. If these values are
+      still set in the environment, the server seeds them again at start
+      instead.
 
 ## Rate limits
 

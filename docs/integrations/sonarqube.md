@@ -73,6 +73,12 @@ in clear text. Scanopsis logs a warning ("the SonarQube token is sent without
 TLS") when it starts with, or is changed to, a plain `http://` URL. Use `https://`
 unless the network between the two servers is fully trusted.
 
+When you change the SonarQube URL on the Settings page, enter the token again
+in the same save. Scanopsis refuses a new URL without it ("Enter this value
+again when you change the URL, so the stored one is never sent to a new
+address."), so a stored token is never sent to an address it was not entered
+for.
+
 Scanopsis does not follow a redirect from SonarQube to another scheme or host,
 so the token cannot be sent elsewhere. If your SonarQube URL redirects (for
 example from `http` to `https`, or to another host name), configure the final
