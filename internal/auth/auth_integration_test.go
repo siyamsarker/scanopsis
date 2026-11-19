@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/siyamsarker/scanopsis/internal/audit"
@@ -68,14 +69,18 @@ func newIntegrationEnv(t *testing.T) *integrationEnv {
 	return &integrationEnv{pool: pool, q: q, sessions: sessions, clock: clk, login: login}
 }
 
-func (e *integrationEnv) bootstrap(t *testing.T, username, password string) bool {
+// addAdmin creates a local administrator.
+func (e *integrationEnv) addAdmin(t *testing.T, username, password string) {
 	t.Helper()
-	rec := audit.New(e.q, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	created, err := BootstrapAdmin(context.Background(), e.q, rec, username, password)
+	hash, err := HashPassword(context.Background(), password)
 	if err != nil {
-		t.Fatalf("BootstrapAdmin: %v", err)
+		t.Fatal(err)
 	}
-	return created
+	if _, err := e.q.CreateLocalUser(context.Background(), store.CreateLocalUserParams{
+		Username: username, Role: store.RoleAdmin, PasswordHash: pgtype.Text{String: hash, Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (e *integrationEnv) signIn(t *testing.T, user, pass string, existing *http.Cookie) *httptest.ResponseRecorder {
@@ -101,9 +106,7 @@ func (e *integrationEnv) count(t *testing.T, query string, args ...any) int {
 
 func TestIntegrationLoginCookieAuthenticateEndCycle(t *testing.T) {
 	e := newIntegrationEnv(t)
-	if !e.bootstrap(t, "root", "initial-pass") {
-		t.Fatal("bootstrap did not create the administrator")
-	}
+	e.addAdmin(t, "root", "initial-pass")
 
 	// Wrong password and unknown user: 401, no session.
 	for _, u := range []string{"root", "ghost"} {
@@ -171,7 +174,7 @@ func TestIntegrationLoginCookieAuthenticateEndCycle(t *testing.T) {
 		t.Fatalf("%d sessions left after End", n)
 	}
 
-	// Audit trail: bootstrap, two failures, one success; never the password.
+	// Audit trail: two failures, one success; never the password.
 	rows, err := e.pool.Query(context.Background(), "SELECT actor, action, detail FROM audit_log ORDER BY id")
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +201,7 @@ func TestIntegrationLoginCookieAuthenticateEndCycle(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"user.created", "login.failed", "login.failed", "login.succeeded"}
+	want := []string{"login.failed", "login.failed", "login.succeeded"}
 	if strings.Join(actions, ",") != strings.Join(want, ",") {
 		t.Fatalf("audit actions %v; want %v", actions, want)
 	}
@@ -209,7 +212,7 @@ func TestIntegrationLoginCookieAuthenticateEndCycle(t *testing.T) {
 
 func TestIntegrationLoginReplacesExistingSession(t *testing.T) {
 	e := newIntegrationEnv(t)
-	e.bootstrap(t, "root", "initial-pass")
+	e.addAdmin(t, "root", "initial-pass")
 	first := e.signIn(t, "root", "initial-pass", nil).Result().Cookies()[0]
 	second := e.signIn(t, "root", "initial-pass", first).Result().Cookies()[0]
 	if first.Value == second.Value {
@@ -227,7 +230,7 @@ func TestIntegrationLoginReplacesExistingSession(t *testing.T) {
 
 func TestIntegrationSessionLifetimes(t *testing.T) {
 	e := newIntegrationEnv(t)
-	e.bootstrap(t, "root", "initial-pass")
+	e.addAdmin(t, "root", "initial-pass")
 	auth := func(c *http.Cookie) error {
 		r := newRequest(http.MethodGet, "/", nil)
 		r.AddCookie(c)
@@ -271,7 +274,7 @@ func TestIntegrationSessionLifetimes(t *testing.T) {
 // moves the clock needs its own environment.
 func TestIntegrationAbsoluteExpiry(t *testing.T) {
 	e := newIntegrationEnv(t)
-	e.bootstrap(t, "root", "initial-pass")
+	e.addAdmin(t, "root", "initial-pass")
 	auth := func(c *http.Cookie) error {
 		r := newRequest(http.MethodGet, "/", nil)
 		r.AddCookie(c)
@@ -291,38 +294,6 @@ func TestIntegrationAbsoluteExpiry(t *testing.T) {
 	e.clock.Advance(31 * time.Minute)
 	if err := auth(c); !errors.Is(err, ErrNoSession) {
 		t.Fatalf("session outlived the absolute limit: %v", err)
-	}
-}
-
-func TestIntegrationBootstrapCreatesOneAdminAndIsIdempotent(t *testing.T) {
-	e := newIntegrationEnv(t)
-	if e.bootstrap(t, "root", "") {
-		t.Fatal("created an admin without a password")
-	}
-	if n := e.count(t, "SELECT count(*) FROM users"); n != 0 {
-		t.Fatalf("%d users without a password", n)
-	}
-	if !e.bootstrap(t, "root", "initial-pass") {
-		t.Fatal("first call did not create the administrator")
-	}
-	if e.bootstrap(t, "root", "initial-pass") || e.bootstrap(t, "other", "another-pass") {
-		t.Fatal("a later call created another administrator")
-	}
-	if n := e.count(t, "SELECT count(*) FROM users"); n != 1 {
-		t.Fatalf("%d users; want 1", n)
-	}
-	if n := e.count(t, "SELECT count(*) FROM users WHERE role = 'admin' AND source = 'local' AND username = 'root'"); n != 1 {
-		t.Fatalf("admin row missing")
-	}
-	if n := e.count(t, "SELECT count(*) FROM audit_log WHERE action = 'user.created' AND detail->>'reason' = 'bootstrap'"); n != 1 {
-		t.Fatalf("%d bootstrap audit events; want 1", n)
-	}
-	u, err := e.q.GetLocalUserByUsername(context.Background(), "root")
-	if err != nil || !u.PasswordHash.Valid {
-		t.Fatalf("GetLocalUserByUsername: %+v, %v", u, err)
-	}
-	if ok, err := VerifyPassword(context.Background(), u.PasswordHash.String, "initial-pass"); err != nil || !ok {
-		t.Fatalf("stored hash does not verify: %v, %v", ok, err)
 	}
 }
 

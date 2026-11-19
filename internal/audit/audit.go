@@ -24,6 +24,9 @@ const (
 	ActionMFAFailed       = "mfa.failed"
 	ActionMFAReset        = "mfa.reset"
 	ActionSettingsChanged = "settings.changed"
+	ActionSetupCompleted  = "setup.completed"
+	ActionPasswordChanged = "user.password_changed"
+	ActionPasswordReset   = "user.password_reset"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.
