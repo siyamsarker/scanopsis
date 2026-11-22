@@ -156,7 +156,7 @@ export function PaletteButton({
       className="flex min-h-10 w-full items-center gap-2.5 rounded-inner border border-line bg-sunken px-3 text-left text-body-s text-text-faint transition-[border-color,color] duration-micro hover:border-line-strong hover:text-text-muted"
     >
       <Search size={16} strokeWidth={1.75} aria-hidden="true" />
-      <span className="flex-1">Search or jump to</span>
+      <span className="min-w-0 flex-1 truncate whitespace-nowrap">Search or jump to</span>
       <span className="flex gap-0.5" aria-hidden="true">
         <Kbd>{mod}</Kbd>
         <Kbd>K</Kbd>
