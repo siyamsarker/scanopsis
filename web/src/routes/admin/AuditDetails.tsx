@@ -27,6 +27,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { formatExactTime } from '../../format';
 import { auditActions, rejectionLabels } from './labels';
 import { settingLabel } from './settingLabels';
 
@@ -458,6 +459,9 @@ function clip(text: string) {
   return text.length > MAX ? `${text.slice(0, MAX)}…` : text;
 }
 
+/** An RFC 3339 time as the server writes it: "2026-08-24T15:58:51Z". */
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
 /** Detail keys the sentence did not use, as quiet "key value" pairs. */
 export function AuditDetails({ detail, used = [] }: { detail: Detail; used?: string[] }) {
   const entries = Object.entries(detail).filter(([key]) => !used.includes(key));
@@ -465,10 +469,23 @@ export function AuditDetails({ detail, used = [] }: { detail: Detail; used?: str
   return (
     <dl className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-small">
       {entries.map(([key, value]) => {
+        const term = key === 'ip' ? 'Address' : key.replace(/_/g, ' ');
+        if (typeof value === 'string' && TIMESTAMP.test(value)) {
+          return (
+            <div key={key} className="flex min-w-0 gap-1.5">
+              <dt className="text-text-faint">{term}</dt>
+              <dd className="m-0 min-w-0 text-text-muted tabular-nums">
+                <time dateTime={value} title={value}>
+                  {formatExactTime(value)}
+                </time>
+              </dd>
+            </div>
+          );
+        }
         const full = show(value);
         return (
           <div key={key} className="flex min-w-0 gap-1.5">
-            <dt className="text-text-faint">{key === 'ip' ? 'Address' : key.replace(/_/g, ' ')}</dt>
+            <dt className="text-text-faint">{term}</dt>
             <dd
               className="m-0 min-w-0 font-mono break-all text-text-muted"
               title={full.length > MAX ? full : undefined}

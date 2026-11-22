@@ -361,4 +361,13 @@ describe('audit wording', () => {
       'user agent',
     ]);
   });
+
+  it('shows a time in a detail as a date, with the exact value in the tooltip', () => {
+    render(<AuditDetails detail={{ scan_cutoff: '2026-08-24T15:58:51Z', raw_reports: 32 }} />);
+    const time = screen.getByText((_, el) => el?.tagName === 'TIME');
+    expect(time).toHaveAttribute('dateTime', '2026-08-24T15:58:51Z');
+    expect(time).toHaveAttribute('title', '2026-08-24T15:58:51Z');
+    expect(time.textContent).toMatch(/^24 Aug 2026, \d{2}:\d{2} /);
+    expect(screen.getByText('32')).toBeInTheDocument();
+  });
 });
