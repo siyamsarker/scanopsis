@@ -156,9 +156,9 @@ export function SummaryBand({
   return (
     <section
       aria-label="Summary"
-      className="panel mb-8 grid overflow-hidden lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"
+      className="panel mb-8 grid grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]"
     >
-      <div className="flex flex-col gap-4 p-5 sm:p-6">
+      <div className="flex min-w-0 flex-col gap-4 p-5 sm:p-6">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-body-s font-medium text-text-muted">Portfolio risk</h2>
           <Tooltip

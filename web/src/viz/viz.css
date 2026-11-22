@@ -735,6 +735,11 @@ a.viz-seg[data-tip]:focus-visible::after {
 .viz-heat-empty p {
   margin: 0;
 }
+/* The containing block of the visually hidden labels in the cells: without it
+   they are placed against the page and widen it past a phone screen. */
+.viz-heat-scroll {
+  position: relative;
+}
 .viz-heat-scroll[data-bounded] {
   overflow: auto;
   overscroll-behavior: contain;
