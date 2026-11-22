@@ -87,14 +87,19 @@ func (f *fixture) service(name string) int64 {
 
 // scan inserts a scan scannedAgo old, with one vulnerability and one secret finding.
 func (f *fixture) scan(svc int64, ref, artifact, kind string, scannedAgo time.Duration) int64 {
+	return f.scanP(svc, ref, artifact, kind, scannedAgo, false)
+}
+
+// scanP is scan with the protection flag of the ref.
+func (f *fixture) scanP(svc int64, ref, artifact, kind string, scannedAgo time.Duration, protected bool) int64 {
 	f.t.Helper()
 	f.job++
 	label := fmt.Sprintf("%d/%s/%s/%s/%dh", svc, ref, artifact, kind, int(scannedAgo.Hours()))
 	id := f.insertID("scans", label, `
 		INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 		                   commit_sha, schema_version, scanned_at, raw_report)
-		VALUES ($1, $2, $3, 1, $4, $5, false, 'abc', 2, $6, '\x00') RETURNING id`,
-		svc, kind, artifact, f.job, ref, f.now.Add(-scannedAgo))
+		VALUES ($1, $2, $3, 1, $4, $5, $7, 'abc', 2, $6, '\x1f8b') RETURNING id`,
+		svc, kind, artifact, f.job, ref, f.now.Add(-scannedAgo), protected)
 	f.exec(`INSERT INTO vulnerabilities (scan_id, target, class, pkg_name, vuln_id, severity)
 	        VALUES ($1, 't', 'os-pkgs', 'p', 'CVE-1', 'HIGH')`, id)
 	f.exec(`INSERT INTO secret_findings (scan_id, target, rule_id, severity) VALUES ($1, 't', 'r', 'HIGH')`, id)
@@ -194,7 +199,7 @@ func h(d time.Duration) string { return fmt.Sprintf("%dh", int(d.Hours())) }
 // seedScans creates the scan scenario for a 30-day retention and returns the
 // labels that must remain after one run.
 func seedScans(f *fixture) (keep []string, deleted int) {
-	a, b := f.service("svc-a"), f.service("svc-b")
+	a, b, c := f.service("svc-a"), f.service("svc-b"), f.service("svc-c")
 	lbl := func(svc int64, ref, art, kind string, ago time.Duration) string {
 		return fmt.Sprintf("%d/%s/%s/%s/%s", svc, ref, art, kind, h(ago))
 	}
@@ -214,23 +219,25 @@ func seedScans(f *fixture) (keep []string, deleted int) {
 	add(a, "main", "web", "image", 1*day, true)
 	// The only scan of a key is kept however old.
 	add(a, "main", "web", "secret-fs", 200*day, true)
-	// The latest of a key is kept even when it is older than the period,
-	// and what is older still is deleted.
+	// The latest scan of an unprotected ref that is not the one the
+	// dashboards show expires with the period, like everything older.
 	add(a, "feature", "web", "image", 100*day, false)
-	add(a, "feature", "web", "image", 90*day, true)
+	add(a, "feature", "web", "image", 90*day, false)
 	// Another artifact and another service are independent keys.
 	add(a, "main", "api", "image", 31*day, false)
 	add(a, "main", "api", "image", 29*day, true)
 	add(b, "main", "web", "image", 500*day, false)
 	add(b, "main", "web", "image", 29*day, true)
-	add(b, "release", "web", "image", 400*day, true)
+	add(b, "release", "web", "image", 400*day, false)
 	add(b, "main", "web", "secret-fs", 300*day, false)
 	add(b, "main", "web", "secret-fs", 299*day, true)
 
-	// Two scans with the same scanned_at: only the one with the higher id is latest.
+	// Two scans with the same scanned_at: only the one with the higher id is
+	// latest. The ref is the only one of its service, so the dashboards show
+	// it and its latest scan is kept.
 	tie := f.now.Add(-50 * day)
-	f.scanAt(a, "tie", "web", "image", tie, "tie/low-id")
-	f.scanAt(a, "tie", "web", "image", tie, "tie/high-id")
+	f.scanAt(c, "tie", "web", "image", tie, "tie/low-id")
+	f.scanAt(c, "tie", "web", "image", tie, "tie/high-id")
 	keep = append(keep, "tie/high-id")
 	deleted++
 	return keep, deleted
@@ -302,11 +309,11 @@ func TestRunWithMoreThanOneBatch(t *testing.T) {
 	                           commit_sha, schema_version, scanned_at, raw_report)
 	        SELECT $1, 'image', 'web', 1, g, 'main', false, 'abc', 2, $2::timestamptz - interval '100 days' + g * interval '1 second', '\x00'
 	        FROM generate_series(1, $3) g`, svc, f.now, n)
-	// Old latest-only scans sit between the deletable ones in time and must be skipped, not retried forever.
+	// Old scans that are kept (protected refs) sit between the deletable ones in time and must be skipped, not retried forever.
 	for i := range 30 {
 		f.exec(`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 		                           commit_sha, schema_version, scanned_at, raw_report)
-		        VALUES ($1, 'image', 'web', 1, 100000 + $2, $3, false, 'abc', 2, $4::timestamptz - interval '100 days' + $2 * interval '80 seconds', '\x00')`,
+		        VALUES ($1, 'image', 'web', 1, 100000 + $2, $3, true, 'abc', 2, $4::timestamptz - interval '100 days' + $2 * interval '80 seconds', '\x00')`,
 			other, i, fmt.Sprintf("branch-%d", i), f.now)
 	}
 	f.exec(`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
@@ -318,7 +325,7 @@ func TestRunWithMoreThanOneBatch(t *testing.T) {
 		t.Fatalf("result = %+v, want %d scans", res, n)
 	}
 	if got := f.count("scans"); got != 31 {
-		t.Fatalf("scans remaining = %d, want 31 (30 latest-only + the newest of main)", got)
+		t.Fatalf("scans remaining = %d, want 31 (30 protected + the newest of main)", got)
 	}
 }
 
@@ -644,5 +651,202 @@ func TestRunThatDeletesIsAudited(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("retention events = %d, want 1", n)
+	}
+}
+
+// currentScansFixture seeds the cases of the retention rule and returns the
+// scans that must remain after a run with a 90 day period.
+func currentScansFixture(f *fixture) (keep []string) {
+	lbl := func(svc int64, ref, art string, ago time.Duration) string {
+		return fmt.Sprintf("%d/%s/%s/image/%s", svc, ref, art, h(ago))
+	}
+	add := func(svc int64, ref, art string, ago time.Duration, protected, keepIt bool) {
+		f.scanP(svc, ref, art, "image", ago, protected)
+		if keepIt {
+			keep = append(keep, lbl(svc, ref, art, ago))
+		}
+	}
+
+	// A: the chosen dashboard branch is main. Its latest scan is kept however
+	// old; a protected ref keeps its latest scan too; an unprotected branch
+	// that is not the dashboard branch does not, and the older scans of main
+	// expire.
+	a := f.service("chosen")
+	f.exec(`UPDATE services SET default_ref = 'main' WHERE id = $1`, a)
+	add(a, "main", "web", 300*day, false, false)
+	add(a, "main", "web", 200*day, false, true)
+	add(a, "release", "web", 150*day, true, true)
+	add(a, "feat-x", "web", 100*day, false, false)
+	add(a, "feat-x", "web", 95*day, false, false)
+	add(a, "feat-y", "web", 20*day, false, true) // inside the period
+	add(a, "old-branch", "web", 400*day, false, false)
+
+	// B: no dashboard branch is chosen, so the dashboards show the ref of the
+	// most recent scan, dev, with its latest scan per artifact. Another ref
+	// is not shown and expires.
+	b := f.service("fallback")
+	add(b, "dev", "web", 95*day, false, false)
+	add(b, "dev", "web", 3*day, false, true)
+	add(b, "dev", "api", 200*day, false, true) // part of the displayed state, however old
+	add(b, "hotfix", "web", 150*day, false, false)
+
+	// C: a dashboard branch with no scans: nothing is displayed, so the other
+	// unprotected refs expire.
+	c := f.service("empty-branch")
+	f.exec(`UPDATE services SET default_ref = 'main' WHERE id = $1`, c)
+	add(c, "feat-z", "web", 120*day, false, false)
+
+	// D: two refs share the time of the most recent scan: the dashboards show
+	// the one that sorts first (ListRefs), the other expires.
+	d := f.service("tie")
+	tie := f.now.Add(-100 * day)
+	f.scanAt(d, "b-ref", "web", "image", tie, "tie/b-ref")
+	f.scanAt(d, "a-ref", "web", "image", tie, "tie/a-ref")
+	keep = append(keep, "tie/a-ref")
+
+	// E: the only scan of a service that is not the dashboard branch and not
+	// protected: it is what the dashboards show, so it stays.
+	e := f.service("only")
+	add(e, "solo", "web", 500*day, false, true)
+	return keep
+}
+
+func TestRunKeepsOnlyTheScansThatAreCurrent(t *testing.T) {
+	for _, batch := range []int32{1, 3, BatchSize} {
+		t.Run(fmt.Sprintf("batch %d", batch), func(t *testing.T) {
+			f := newFixture(t)
+			keep := currentScansFixture(f)
+			total := f.count("scans")
+			r := f.job1(newSettings(90))
+			r.batch = batch
+			res := r.RunOnce(context.Background())
+			if res.FailedSteps != 0 || res.Scans != int64(total-len(keep)) {
+				t.Fatalf("result = %+v, want %d scans deleted", res, total-len(keep))
+			}
+			f.expect("scans", keep...)
+			// A second run changes nothing.
+			if again := r.RunOnce(context.Background()); again.Scans != 0 {
+				t.Errorf("second run deleted %d scans", again.Scans)
+			}
+			f.expect("scans", keep...)
+		})
+	}
+}
+
+// The scans that make up the displayed state of every service are never
+// deleted: what the dashboards show before a run is what they show after it.
+func TestRunKeepsTheDisplayedState(t *testing.T) {
+	f := newFixture(t)
+	currentScansFixture(f)
+	displayed := func() string {
+		rows, err := f.pool.Query(context.Background(), `
+			SELECT s.id, COALESCE(s.default_ref, (SELECT l.ref FROM scans l WHERE l.service_id = s.id ORDER BY l.scanned_at DESC, l.ref LIMIT 1)) AS ref
+			FROM services s ORDER BY s.id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var id int64
+			var ref *string
+			if err := rows.Scan(&id, &ref); err != nil {
+				t.Fatal(err)
+			}
+			if ref == nil {
+				continue
+			}
+			cur, err := f.pool.Query(context.Background(), `
+				SELECT DISTINCT ON (artifact_name, kind) id FROM scans WHERE service_id = $1 AND ref = $2
+				ORDER BY artifact_name, kind, scanned_at DESC, id DESC`, id, *ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for cur.Next() {
+				var sid int64
+				if err := cur.Scan(&sid); err != nil {
+					t.Fatal(err)
+				}
+				out = append(out, f.labels[fmt.Sprintf("scans:%d", sid)])
+			}
+			cur.Close()
+		}
+		slices.Sort(out)
+		return strings.Join(out, ",")
+	}
+	before := displayed()
+	if before == "" {
+		t.Fatal("nothing is displayed before the run")
+	}
+	f.job1(newSettings(90)).RunOnce(context.Background())
+	if after := displayed(); after != before {
+		t.Errorf("displayed scans changed:\n before %s\n after  %s", before, after)
+	}
+}
+
+// emptied lists the labels of the scans whose raw report was cleared.
+func (f *fixture) emptied() []string {
+	f.t.Helper()
+	rows, err := f.pool.Query(context.Background(), `SELECT id FROM scans WHERE octet_length(raw_report) = 0`)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			f.t.Fatal(err)
+		}
+		out = append(out, f.labels[fmt.Sprintf("scans:%d", id)])
+	}
+	slices.Sort(out)
+	return out
+}
+
+func TestRunClearsTheRawReportOfScansThatAreNotCurrent(t *testing.T) {
+	for _, batch := range []int32{1, 2, BatchSize} {
+		t.Run(fmt.Sprintf("batch %d", batch), func(t *testing.T) {
+			f := newFixture(t)
+			a := f.service("svc")
+			f.exec(`UPDATE services SET default_ref = 'main' WHERE id = $1`, a)
+			name := func(ref string, ago time.Duration) string { return fmt.Sprintf("%d/%s/web/image/%s", a, ref, h(ago)) }
+			f.scan(a, "main", "web", "image", 80*day)       // not current, older than 30 days: cleared
+			f.scan(a, "main", "web", "image", 40*day)       // not current, older than 30 days: cleared
+			f.scan(a, "main", "web", "image", 20*day)       // not current, younger than 30 days: kept
+			f.scan(a, "main", "web", "image", 10*day)       // current: kept
+			f.scan(a, "feat", "web", "image", 45*day)       // latest of an unprotected branch: cleared
+			f.scan(a, "feat2", "web", "image", 5*day)       // latest of a branch, younger than 30 days: kept
+			f.scanP(a, "rel", "web", "image", 60*day, true) // latest of a protected ref: current, kept
+			f.scan(a, "gone", "web", "image", 120*day)      // older than the retention period: deleted, not cleared
+			f.scan(a, "gone", "web", "image", 119*day)
+
+			r := f.job1(newSettings(90))
+			r.batch = batch
+			res := r.RunOnce(context.Background())
+			if res.FailedSteps != 0 || res.RawReports != 3 || res.Scans != 2 {
+				t.Fatalf("result = %+v, want 2 scans deleted and 3 raw reports cleared", res)
+			}
+			want := []string{name("main", 80*day), name("main", 40*day), name("feat", 45*day)}
+			slices.Sort(want)
+			if got := f.emptied(); !slices.Equal(got, want) {
+				t.Errorf("cleared:\n got %v\nwant %v", got, want)
+			}
+			// The rows and their findings stay; only the report is empty.
+			if got := f.count("scans"); got != 7 {
+				t.Errorf("scans = %d, want 7", got)
+			}
+			if again := r.RunOnce(context.Background()); again.RawReports != 0 {
+				t.Errorf("second run cleared %d", again.RawReports)
+			}
+			var detail map[string]any
+			if err := f.pool.QueryRow(context.Background(),
+				`SELECT detail FROM audit_log WHERE actor = $1 ORDER BY id LIMIT 1`, AuditActor).Scan(&detail); err != nil {
+				t.Fatal(err)
+			}
+			if detail["raw_reports"] != float64(3) {
+				t.Errorf("audit detail = %v", detail)
+			}
+		})
 	}
 }

@@ -328,6 +328,10 @@ audit log as `service.updated`, with the previous and the new branch. The
 cross-service CVE search lists the findings of every branch and is not
 affected.
 
+The dashboard branch is also the branch whose latest scans [data
+retention](#data-retention) never deletes. The latest scan of any other
+unprotected branch expires with the retention period.
+
 ## Data retention
 
 Scanopsis deletes old data once a day so that the database does not grow
@@ -337,30 +341,78 @@ without limit.
 
 - Scan history for the number of days in the `retention.days` setting. The
   default is 90.
-- The latest scan of every service, ref, artifact and kind, however old. A
-  branch that nobody has scanned for two years still shows its last result.
-  Older scans of the same service, ref, artifact and kind are deleted when
-  they are older than the period.
+- The **current scans**, however old. A scan is current when it is the latest
+  scan of its service, ref, artifact and kind, and one of these holds:
+  - its ref is the **dashboard branch** an administrator chose for the service
+    (see [choose the dashboard branch](#choose-the-dashboard-branch-of-a-service));
+  - its ref was **protected** when the scan ran (the scan's `ref_protected`
+    flag);
+  - the service has no chosen dashboard branch, and its ref is the one the
+    dashboards then show: the ref of the service's most recent scan (when two
+    refs share that time, the one that sorts first).
+
+  So what a dashboard shows is never deleted, and the last scan of every
+  protected branch stays. A branch that nobody has scanned for two years still
+  shows its last result if it is the dashboard branch or protected.
+- Every other scan expires after the period, **including the latest scan of an
+  unprotected branch that is not the dashboard branch**. This keeps the
+  database from growing with short-lived feature branches. If you want the
+  last result of a branch to stay, choose it as the dashboard branch, or
+  protect it in GitLab.
 - The latest SonarQube analysis of every service, however old.
 - Audit events for 365 days. This period is fixed and has no setting. If you
   set `retention.days` above 365, audit events are kept for that many days
   instead, so they are never kept for a shorter time than scan history.
+- The original Trivy report of a scan for 30 days, unless the scan is
+  current. See [original reports](#original-reports).
+
+The set of current scans is read at the start of each batch, so a dashboard
+branch you choose while a run is in progress protects its scans from then on.
+If you change the dashboard branch of a service, the scans of the old branch
+expire at the next run once they are older than the period.
 
 ### What is deleted
 
-Each run deletes, in this order:
+Each run does these steps, in this order:
 
-1. Scans that are older than the period and are not the latest of their
-   service, ref, artifact and kind. Their findings are deleted with them.
-2. SonarQube analyses that are older than the period and are not the latest
+1. Scans that are older than the period and are not current. Their findings are
+   deleted with them.
+2. The stored original report of scans that are older than 30 days and not
+   current (it is emptied; the scan and its findings stay). The 30 days are
+   fixed and have no setting.
+3. SonarQube analyses that are older than the period and are not the latest
    of their service.
-3. SonarQube webhook deliveries that are older than the period. This includes
+4. SonarQube webhook deliveries that are older than the period. This includes
    deliveries that never finished.
-4. Audit events that are older than 365 days, or older than the period if
+5. Audit events that are older than 365 days, or older than the period if
    that is longer.
 
 A scan is as old as its `scanned_at` time, which is when Trivy ran, not when
 the report arrived. A scan that is exactly as old as the period is kept.
+
+### Original reports
+
+Scanopsis stores the compressed report as uploaded with each scan. It is not
+shown anywhere; it is there so you can check a number against what Trivy wrote.
+It is also most of the database and of every backup, so it is kept for 30 days
+for scans that are not current, and for as long as the scan is current.
+
+To get the original report of a scan, use the scan ID (the number in the scan
+URL or in the API, for example `42`):
+
+```sh
+docker compose exec scanopsis /scanopsis admin export-report 42 > report.json
+```
+
+The command writes the decompressed JSON to standard output, so you can
+compare it with `trivy convert` (see [verification](verification.md)). For a
+scan whose report was cleared, it prints `the original report of scan 42 was
+cleared by data retention` to standard error and exits with status 1.
+
+Emptying a report frees its space for new data in the same database; PostgreSQL
+gives the space back to the operating system only after a `VACUUM FULL`, which
+locks the table while it runs. Autovacuum, which runs by default, makes the
+space reusable without any action.
 
 ### When it runs
 
@@ -395,11 +447,11 @@ docker compose logs scanopsis | grep "data retention"
 ```
 
 ```text
-{"time":"2026-11-19T04:01:12.318Z","level":"INFO","msg":"data retention run finished","retention_days":90,"scans_deleted":41200,"sonar_analyses_deleted":3100,"sonar_deliveries_deleted":3100,"audit_events_deleted":12,"failed_steps":0,"duration":"48.2s"}
+{"time":"2026-11-19T04:01:12.318Z","level":"INFO","msg":"data retention run finished","retention_days":90,"scans_deleted":41200,"raw_reports_cleared":9800,"sonar_analyses_deleted":3100,"sonar_deliveries_deleted":3100,"audit_events_deleted":12,"failed_steps":0,"duration":"48.2s"}
 ```
 
-`failed_steps` is the number of the four steps above that stopped with an
-error. For each one, a separate `WARN` line `data retention step failed`
+`failed_steps` is the number of the steps above that stopped with an
+error. `raw_reports_cleared` is the number of original reports emptied. For each one, a separate `WARN` line `data retention step failed`
 names the step and the error. The rows deleted before the error stay deleted,
 and the next run continues from there. When another server holds the lock, the
 run is skipped and logs only at the `debug` level.

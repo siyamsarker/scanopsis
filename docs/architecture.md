@@ -152,7 +152,8 @@ flowchart LR
     H --> J[JSON]
 ```
 
-Reads never load the stored raw report. The portfolio and the service pages are
+Reads never load the stored raw report; only `scanopsis admin export-report`
+does, on request. The portfolio and the service pages are
 computed in SQL from the counts kept on each scan row and from the latest
 SonarQube analysis. See [current state](#what-current-means).
 
@@ -184,7 +185,7 @@ starts (`internal/store/migrations`). The tables:
 | `settings` | The runtime settings. Plain values are JSON. Secret values are stored encrypted. Each row records whether the value came from the environment or from the Settings page, who changed it and when. |
 | `audit_log` | Security events: actor, action and a JSON detail. |
 | `services` | One service per GitLab project: name, GitLab project ID and path, optional SonarQube project key, how it was created (`ingest` or `manual`), and whether it is archived. |
-| `scans` | One Trivy report for one artifact in one CI job. Holds the pipeline, job, ref, protection flag, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity, fixable, secrets and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`). A job, artifact and kind exist once per service. |
+| `scans` | One Trivy report for one artifact in one CI job. Holds the pipeline, job, ref, protection flag, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity, fixable, secrets and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`, emptied by retention 30 days after the scan unless it is current). A job, artifact and kind exist once per service. |
 | `vulnerabilities` | The vulnerabilities of a scan: target, class, package, installed and fixed version, ID, severity, status, title, link, and whether and why Trivy suppressed it. |
 | `secret_findings` | The secret findings of a scan: target, rule, category, severity and line numbers. The matched text is never stored. |
 | `sonar_analyses` | One SonarQube analysis of a linked service: the quality gate and its conditions, every measure as reported, the mode (`mqr` or `standard`), the normalised ratings, coverage and duplication (empty when not reported). |
@@ -202,7 +203,7 @@ All jobs run inside the Scanopsis process. There is no separate worker.
 | Session clean-up | Every hour | Deletes sessions that passed their absolute or idle expiry. |
 | SonarQube workers | Continuously | Four workers process queued webhook deliveries (up to 500 wait; a delivery that finds the queue full stays pending for the next sync). They run apart from the sync. |
 | SonarQube sync | Every sync interval, checked every 10 seconds; default 15 minutes, minimum 1 minute | Reads the newest analysis of every linked project, marks deliveries that stayed pending for more than 10 minutes as interrupted, and stops early when SonarQube does not answer. Runs under an advisory lock held on its own connection; no pooled connection is held while SonarQube is called. |
-| Retention | One minute after start, then every 24 hours | Deletes scan history older than the retention period, keeping the latest scan per ref and artifact. A run that deletes anything writes an audit event. See [data retention](operations.md#data-retention). |
+| Retention | One minute after start, then every 24 hours | Deletes scan history older than the retention period, except the current scans (the latest scans of the dashboard branch, of protected refs and of the ref shown when no branch is chosen). Empties the stored original report of scans that are not current after 30 days. A run that deletes anything writes an audit event. See [data retention](operations.md#data-retention). |
 
 ## What "current" means
 
@@ -234,7 +235,7 @@ and a job that is retried replaces only itself.
 | **No GitLab API token.** Scanopsis stores no personal or project access token for GitLab. The only GitLab credential it keeps is the secret of the sign-in application, encrypted. | A stored token is a credential to protect, rotate and scope. Scanopsis needs only three things from GitLab: sign-in (a user signs in themselves), group membership (read with that user's own token during sign-in), and signing keys (public). |
 | **GitLab CI ID tokens for uploads.** | GitLab creates a short-lived token for each job and signs it. Scanopsis checks the signature against the public keys of your GitLab. There is no shared upload secret to create, store or leak, and the token proves the project, pipeline, job, ref and commit. |
 | **Current state follows the Trivy report time.** | The dashboards describe what Trivy found and when. Using the report time makes the result independent of upload order and network delays. |
-| **Raw report kept compressed.** | The compressed original lets you check any number against what Trivy wrote, and process it again if the parser changes. |
+| **Raw report kept compressed, for a limited time.** | The compressed original lets you check any number against what Trivy wrote: `scanopsis admin export-report` writes it out for `trivy convert`. No page or API reads it, and it is most of the database and of every backup, so retention empties it 30 days after the scan unless the scan is current. A cleared report cannot be exported. |
 | **Settings seeded from the environment, then owned by the database.** | A new deployment can start from a file. Afterwards administrators change settings without a restart, and an old environment file cannot silently undo their changes. See [configuration](configuration.md#two-kinds-of-settings). |
 | **Mandatory two-factor authentication.** | Scanopsis shows vulnerability data for every service. Every account, including GitLab accounts, enrols a TOTP app. |
 | **One binary and one database.** | The load is small: a few thousand uploads a day. Fewer parts means fewer things to run, secure and upgrade. |

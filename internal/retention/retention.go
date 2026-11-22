@@ -3,9 +3,16 @@
 
 // Package retention deletes old data on a schedule: scan history, SonarQube
 // analyses and deliveries after the configured number of days, and audit
-// events after a fixed longer period. The latest scan of every service, ref,
-// artifact and kind, and the latest analysis of every service, are always
-// kept, however old.
+// events after a fixed longer period. The latest analysis of every service is
+// always kept, however old.
+//
+// A scan is kept however old (it is "current") only when it is the latest of
+// its service, ref, artifact and kind and its ref is the service's dashboard
+// branch, was protected, or is the ref the dashboards show for a service
+// without a chosen branch. Every other scan expires with the retention period,
+// including the latest scan of a branch nobody has chosen. The compressed
+// original report of a scan that is not current is cleared after a fixed 30
+// days.
 //
 // Work is bounded: every delete statement removes at most BatchSize rows and
 // commits on its own, so no statement runs long or locks many rows, and one
@@ -34,6 +41,10 @@ const (
 	// or the scan retention when that is longer.
 	AuditRetention = 365 * 24 * time.Hour
 
+	// RawReportRetention is the fixed age after which the stored original
+	// report of a scan that is not current is cleared.
+	RawReportRetention = 30 * 24 * time.Hour
+
 	// firstRunDelay is the wait between start and the first run.
 	firstRunDelay = time.Minute
 	// runInterval is the time between runs.
@@ -55,11 +66,13 @@ type Result struct {
 	// Skipped is true when another instance held the lock.
 	Skipped         bool
 	Scans           int64
+	RawReports      int64
 	SonarAnalyses   int64
 	SonarDeliveries int64
 	AuditEvents     int64
 	FailedSteps     int
 	ScanCutoff      time.Time
+	RawReportCutoff time.Time
 	AuditCutoff     time.Time
 	Duration        time.Duration
 	RetentionDays   int
@@ -118,6 +131,7 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 	days := r.cfg.Current().RetentionDays
 	res := Result{RetentionDays: min(max(days, settings.MinRetentionDays), settings.MaxRetentionDays)}
 	res.ScanCutoff, res.AuditCutoff = cutoffs(start, days)
+	res.RawReportCutoff = start.Add(-RawReportRetention)
 
 	conn, err := r.pool.Acquire(ctx)
 	if err != nil {
@@ -153,6 +167,7 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 		run  func() (int64, error)
 	}{
 		{"scans", &res.Scans, func() (int64, error) { return r.deleteScans(ctx, q, res.ScanCutoff) }},
+		{"raw reports", &res.RawReports, func() (int64, error) { return r.clearRawReports(ctx, q, res.RawReportCutoff) }},
 		{"sonar analyses", &res.SonarAnalyses, func() (int64, error) { return r.deleteAnalyses(ctx, q, res.ScanCutoff) }},
 		{"sonar deliveries", &res.SonarDeliveries, func() (int64, error) {
 			return r.deleteOldest(ctx, func(n int32) (int64, error) {
@@ -176,7 +191,7 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 
 	// A run that deleted anything is itself audited, so the deletion of old
 	// audit events stays visible in the audit log.
-	if res.Scans+res.SonarAnalyses+res.SonarDeliveries+res.AuditEvents > 0 {
+	if res.Scans+res.RawReports+res.SonarAnalyses+res.SonarDeliveries+res.AuditEvents > 0 {
 		if err := recordRun(ctx, q, res); err != nil {
 			res.FailedSteps++
 			r.log.WarnContext(ctx, "data retention could not write its audit event", "error", err)
@@ -187,6 +202,7 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 	r.log.InfoContext(ctx, "data retention run finished",
 		"retention_days", res.RetentionDays,
 		"scans_deleted", res.Scans,
+		"raw_reports_cleared", res.RawReports,
 		"sonar_analyses_deleted", res.SonarAnalyses,
 		"sonar_deliveries_deleted", res.SonarDeliveries,
 		"audit_events_deleted", res.AuditEvents,
@@ -200,13 +216,15 @@ const AuditActor = "retention"
 
 func recordRun(ctx context.Context, q *store.Queries, res Result) error {
 	detail, err := json.Marshal(map[string]any{
-		"retention_days":   res.RetentionDays,
-		"scan_cutoff":      res.ScanCutoff.UTC().Format(time.RFC3339),
-		"audit_cutoff":     res.AuditCutoff.UTC().Format(time.RFC3339),
-		"scans":            res.Scans,
-		"sonar_analyses":   res.SonarAnalyses,
-		"sonar_deliveries": res.SonarDeliveries,
-		"audit_events":     res.AuditEvents,
+		"retention_days":    res.RetentionDays,
+		"scan_cutoff":       res.ScanCutoff.UTC().Format(time.RFC3339),
+		"audit_cutoff":      res.AuditCutoff.UTC().Format(time.RFC3339),
+		"scans":             res.Scans,
+		"raw_reports":       res.RawReports,
+		"raw_report_cutoff": res.RawReportCutoff.UTC().Format(time.RFC3339),
+		"sonar_analyses":    res.SonarAnalyses,
+		"sonar_deliveries":  res.SonarDeliveries,
+		"audit_events":      res.AuditEvents,
 	})
 	if err != nil {
 		return err
@@ -233,9 +251,9 @@ func (c *cursor) advance(at pgtype.Timestamptz, id int64) {
 	}
 }
 
-// deleteScans deletes expired, non-latest scans in batches. Each batch
-// resumes after the newest scan the previous one deleted, so the latest
-// scans that are skipped are not examined again.
+// deleteScans deletes expired scans that are not current in batches. Each
+// batch resumes after the newest scan the previous one deleted, so the
+// current scans that are skipped are not examined again.
 func (r *Retention) deleteScans(ctx context.Context, q *store.Queries, cutoff time.Time) (int64, error) {
 	cur := cursor{at: beginning()}
 	var total int64
@@ -245,6 +263,29 @@ func (r *Retention) deleteScans(ctx context.Context, q *store.Queries, cutoff ti
 		})
 		if err != nil {
 			return total, fmt.Errorf("delete scans: %w", err)
+		}
+		for _, row := range rows {
+			cur.advance(row.ScannedAt, row.ID)
+		}
+		total += int64(len(rows))
+		if len(rows) < int(r.batch) {
+			return total, nil
+		}
+	}
+	return total, ctx.Err()
+}
+
+// clearRawReports empties the stored original report of scans older than
+// cutoff that are not current, in batches paged like deleteScans.
+func (r *Retention) clearRawReports(ctx context.Context, q *store.Queries, cutoff time.Time) (int64, error) {
+	cur := cursor{at: beginning()}
+	var total int64
+	for ctx.Err() == nil {
+		rows, err := q.ClearExpiredRawReports(ctx, store.ClearExpiredRawReportsParams{
+			AfterAt: cur.at, AfterID: cur.id, Cutoff: ts(cutoff), BatchSize: r.batch,
+		})
+		if err != nil {
+			return total, fmt.Errorf("clear raw reports: %w", err)
 		}
 		for _, row := range rows {
 			cur.advance(row.ScannedAt, row.ID)

@@ -1,27 +1,51 @@
 -- Copyright 2026 The Scanopsis Authors
 -- SPDX-License-Identifier: Apache-2.0
 
--- Data retention. Every statement deletes at most @batch_size rows, so no
--- statement holds locks for long. "Latest" matches the current-state
--- queries: the newest (scanned_at, id) of a (service, ref, artifact, kind).
+-- Data retention. Every statement deletes or changes at most @batch_size
+-- rows, so no statement holds locks for long. "Latest" matches the
+-- current-state queries: the newest (scanned_at, id) of a (service, ref,
+-- artifact, kind).
+--
+-- A scan is "kept" (never expires, and keeps its raw report) when it is the
+-- latest of its (service, ref, artifact, kind) and one of these holds:
+--   * its ref is the service's chosen dashboard branch (services.default_ref);
+--   * the scan's ref was protected (scans.ref_protected);
+--   * the service has no chosen dashboard branch and the scan's ref is the
+--     ref the dashboards then show: the ref of the service's most recent
+--     scan, ties broken by ref (see ListRefs and findings.pickRef).
+-- Every other scan expires, including the latest scan of an unprotected ref
+-- that is not the dashboard branch. The two statements below repeat the same
+-- condition; keep them in step with each other and with pickRef.
 
 -- DeleteExpiredScans deletes the oldest scans that are older than @cutoff
--- and have a newer scan with the same service, ref, artifact and kind; their
--- findings go with them (ON DELETE CASCADE). Scans at or before the
--- (@after_at, @after_id) position are not looked at again, so the latest
--- scans that are skipped are not re-examined by every batch. It returns the
--- position of each deleted scan.
+-- and are not kept; their findings go with them (ON DELETE CASCADE). Scans at
+-- or before the (@after_at, @after_id) position are not looked at again, so
+-- the kept scans that are skipped are not re-examined by every batch. It
+-- returns the position of each deleted scan.
 -- name: DeleteExpiredScans :many
 WITH doomed AS (
     SELECT s.id, s.scanned_at
     FROM scans s
     WHERE (s.scanned_at, s.id) > (@after_at::timestamptz, @after_id::bigint)
       AND s.scanned_at < @cutoff::timestamptz
-      AND EXISTS (
-          SELECT 1 FROM scans n
-          WHERE n.service_id = s.service_id AND n.ref = s.ref
-            AND n.artifact_name = s.artifact_name AND n.kind = s.kind
-            AND (n.scanned_at, n.id) > (s.scanned_at, s.id)
+      AND (
+          EXISTS (
+              SELECT 1 FROM scans n
+              WHERE n.service_id = s.service_id AND n.ref = s.ref
+                AND n.artifact_name = s.artifact_name AND n.kind = s.kind
+                AND (n.scanned_at, n.id) > (s.scanned_at, s.id)
+          )
+          OR NOT (
+              s.ref_protected
+              OR EXISTS (
+                  SELECT 1 FROM services sv
+                  WHERE sv.id = s.service_id
+                    AND (sv.default_ref = s.ref
+                         OR (sv.default_ref IS NULL AND s.ref = (
+                             SELECT l.ref FROM scans l WHERE l.service_id = sv.id
+                             ORDER BY l.scanned_at DESC, l.ref LIMIT 1)))
+              )
+          )
       )
     ORDER BY s.scanned_at, s.id
     LIMIT @batch_size::int
@@ -29,6 +53,44 @@ WITH doomed AS (
 DELETE FROM scans
 WHERE id IN (SELECT id FROM doomed)
 RETURNING id, scanned_at;
+
+-- ClearExpiredRawReports empties raw_report (the compressed original report)
+-- of scans that are older than @cutoff and are not kept (see above). An empty
+-- value means the report was cleared. Paging is as in DeleteExpiredScans.
+-- name: ClearExpiredRawReports :many
+WITH todo AS (
+    SELECT s.id, s.scanned_at
+    FROM scans s
+    WHERE (s.scanned_at, s.id) > (@after_at::timestamptz, @after_id::bigint)
+      AND s.scanned_at < @cutoff::timestamptz
+      AND octet_length(s.raw_report) > 0
+      AND (
+          EXISTS (
+              SELECT 1 FROM scans n
+              WHERE n.service_id = s.service_id AND n.ref = s.ref
+                AND n.artifact_name = s.artifact_name AND n.kind = s.kind
+                AND (n.scanned_at, n.id) > (s.scanned_at, s.id)
+          )
+          OR NOT (
+              s.ref_protected
+              OR EXISTS (
+                  SELECT 1 FROM services sv
+                  WHERE sv.id = s.service_id
+                    AND (sv.default_ref = s.ref
+                         OR (sv.default_ref IS NULL AND s.ref = (
+                             SELECT l.ref FROM scans l WHERE l.service_id = sv.id
+                             ORDER BY l.scanned_at DESC, l.ref LIMIT 1)))
+              )
+          )
+      )
+    ORDER BY s.scanned_at, s.id
+    LIMIT @batch_size::int
+)
+UPDATE scans
+SET raw_report = ''::bytea
+FROM todo
+WHERE scans.id = todo.id
+RETURNING scans.id, scans.scanned_at;
 
 -- DeleteExpiredSonarAnalyses is the same for SonarQube analyses; the latest
 -- analysis of each service is kept.
