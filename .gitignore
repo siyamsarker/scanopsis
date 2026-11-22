@@ -26,3 +26,6 @@ coverage/
 
 # Output of `go build ./cmd/scanopsis` in the repository root.
 /scanopsis
+
+# TypeScript incremental build state.
+*.tsbuildinfo
