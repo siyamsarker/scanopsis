@@ -1301,16 +1301,29 @@ requests queued for a connection for as long as the queries ahead of them took,
 seconds on a loaded database, and nothing told the client or the proxy that
 the server was overloaded.
 
+A request with a body is read in full before it takes a slot, so a slow client
+holds no slot while it sends. One client address may hold at most a quarter of
+the slots (4 of 16; an IPv4 address whole, an IPv6 address by its `/64`), so
+one client cannot take them all; its further requests wait the same 3 seconds
+and then get `503 busy`. Behind a proxy that is not listed in
+`SCANOPSIS_TRUSTED_PROXIES` every user has the proxy's address and shares that
+quarter, so set it (see [configuration](configuration.md)).
+
 Not counted are `/healthz`, `/readyz`, the web interface files and the Trivy
 upload, which has its own admission by memory (see above). `/readyz` checks the
 database over a connection of its own, so a busy server stays ready and an
 orchestrator does not restart it. That connection is one more than
-`pool_max_conns` for `max_connections` on the database.
+`pool_max_conns` for `max_connections` on the database. The real check runs at
+most once per second; callers within that second, and callers that arrive
+while a check is running, share its result, so a database that hangs cannot
+pile up probe requests, and each caller is answered `503` within 2 seconds at
+most.
 
-Measured with the test in `cmd/scanopsis` (a pool of 4, every connection held
-by a lock, 100 readers at once): 4 requests were waiting in the database, the
-other 96 were answered `503 busy` after 3.0 seconds, and `/readyz` answered
-`200` in 5 ms at the 95th percentile throughout.
+Measured with the test in `cmd/scanopsis` (a pool of 16, every connection held
+by a lock, 100 readers from one address at once): 4 requests (the share of one
+address) were waiting in the database, the other 96 were answered `503 busy`
+after 3.0 seconds, and `/readyz` answered `200` in 0.5 ms at the 95th
+percentile throughout.
 
 A client should retry a `503 busy` after the time in `Retry-After`. If you see
 it regularly, the database is the limit, not the pool: look for slow

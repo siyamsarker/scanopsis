@@ -17,6 +17,8 @@ info:
     as it has database connections. When all are busy a request waits a few
     seconds and is then answered `503` with the code `busy` and a
     `Retry-After` header (seconds). Nothing was done: retry the request.
+    One client address may hold at most a quarter of the slots, so one client
+    cannot use them all.
     The probes, the web interface and the Trivy upload are not counted.
 servers:
   - url: /

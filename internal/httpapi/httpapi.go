@@ -114,6 +114,7 @@ type route struct {
 
 type server struct {
 	Deps
+	ready readyCache
 }
 
 // feature returns the handler registered for an operation ID, or a 404
@@ -199,8 +200,8 @@ func (s *server) handler(routes []route) http.Handler {
 	}))
 
 	var h http.Handler = mux
-	h = limitBody(h)
 	h = s.limitConcurrency(h)
+	h = limitBody(h) // outside the limiter: the body it buffers is already bounded
 	h = csrf.Handler(h)
 	h = s.securityHeaders(h)
 	h = s.logRequests(h)

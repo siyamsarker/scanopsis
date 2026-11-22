@@ -4,12 +4,30 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+const ipHeader = "X-Test-IP"
+
+// ipFromHeader gives each test client its own address.
+func ipFromHeader(r *http.Request) netip.Addr {
+	if v := r.Header.Get(ipHeader); v != "" {
+		return netip.MustParseAddr(v)
+	}
+	return netip.MustParseAddr("192.0.2.7")
+}
 
 // gate is a handler that holds every request until released and counts how
 // many are inside at once.
@@ -38,35 +56,40 @@ func (g *gate) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	WriteJSON(w, http.StatusOK, statusBody{Status: "ok"})
 }
 
-// With 100 concurrent readers and room for 4, no more than 4 run at once, the
-// rest are answered 503 busy with Retry-After after the short wait instead of
-// queueing, and a slot is free again once its request is done.
+func limited(g http.Handler, limit int, wait time.Duration) func(*Deps) {
+	return func(d *Deps) {
+		d.MaxConcurrent = limit
+		d.BusyWait = wait
+		d.ClientIP = ipFromHeader
+		d.Features = map[string]http.Handler{"getPortfolio": g, "ingestTrivy": g}
+	}
+}
+
+func ip(i int) string { return fmt.Sprintf("198.51.100.%d", i) }
+
+// With 100 readers, each from its own address, and room for 4, no more than 4
+// run at once, the rest are answered 503 busy with Retry-After after the short
+// wait instead of queueing, and the slots are returned afterwards.
 func TestConcurrencyLimitAnswersBusy(t *testing.T) {
 	const limit, readers = 4, 100
 	g := newGate()
-	e := newEnv(t, func(d *Deps) {
-		d.MaxConcurrent = limit
-		d.BusyWait = 50 * time.Millisecond
-		d.Features = map[string]http.Handler{"getPortfolio": g}
-	})
+	e := newEnv(t, limited(g, limit, 50*time.Millisecond))
 
 	recs := make([]*httptest.ResponseRecorder, readers)
 	var wg sync.WaitGroup
 	for i := range readers {
-		wg.Go(func() { recs[i] = e.do("GET", "/api/v1/portfolio", "viewer", "") })
+		wg.Go(func() { recs[i] = e.do("GET", "/api/v1/portfolio", "viewer", "", ipHeader, ip(i+1)) })
 	}
 	for range limit {
-		<-g.entered // the admitted requests are inside
+		<-g.entered
 	}
-
-	// The probes, the web interface and the Trivy upload are not counted:
-	// they are answered while every slot is taken.
+	// The probes and the web interface are not counted.
 	for _, target := range []string{"/healthz", "/readyz", "/", "/assets/app.js"} {
 		if rec := e.do("GET", target, "", ""); rec.Code != 200 {
 			t.Errorf("GET %s with every slot taken = %d, want 200", target, rec.Code)
 		}
 	}
-	time.Sleep(200 * time.Millisecond) // longer than BusyWait: the waiting requests give up
+	time.Sleep(200 * time.Millisecond) // longer than the wait: the others give up
 	close(g.release)
 	wg.Wait()
 
@@ -85,42 +108,29 @@ func TestConcurrencyLimitAnswersBusy(t *testing.T) {
 			t.Errorf("unexpected status %d", rec.Code)
 		}
 	}
-	if ok != limit || busy != readers-limit {
-		t.Errorf("%d answered 200 and %d answered 503, want %d and %d", ok, busy, limit, readers-limit)
-	}
-	if g.peak != limit {
-		t.Errorf("peak concurrency = %d, want %d", g.peak, limit)
+	if ok != limit || busy != readers-limit || g.peak != limit {
+		t.Errorf("%d served, %d busy, peak %d; want %d, %d, %d", ok, busy, g.peak, limit, readers-limit, limit)
 	}
 
-	// Slots are returned: new requests are served again.
 	g2 := newGate()
 	close(g2.release)
-	e2 := newEnv(t, func(d *Deps) {
-		d.MaxConcurrent = 1
-		d.BusyWait = 50 * time.Millisecond
-		d.Features = map[string]http.Handler{"getPortfolio": g2}
-	})
+	e2 := newEnv(t, limited(g2, 1, 50*time.Millisecond))
 	for range 3 {
 		if rec := e2.do("GET", "/api/v1/portfolio", "viewer", ""); rec.Code != 200 {
-			t.Fatalf("sequential request = %d, want 200: the slot was not released", rec.Code)
+			t.Fatalf("sequential request = %d: the slot was not released", rec.Code)
 		}
 	}
 }
 
-// A request that waits for a slot is served as soon as one frees up, without
-// waiting for the full BusyWait.
+// A request that waits for a slot is served as soon as one frees up.
 func TestConcurrencyLimitWaitsForASlot(t *testing.T) {
 	g := newGate()
-	e := newEnv(t, func(d *Deps) {
-		d.MaxConcurrent = 1
-		d.BusyWait = 5 * time.Second
-		d.Features = map[string]http.Handler{"getPortfolio": g}
-	})
+	e := newEnv(t, limited(g, 1, 5*time.Second))
 	var first, second *httptest.ResponseRecorder
 	var wg sync.WaitGroup
-	wg.Go(func() { first = e.do("GET", "/api/v1/portfolio", "viewer", "") })
+	wg.Go(func() { first = e.do("GET", "/api/v1/portfolio", "viewer", "", ipHeader, ip(1)) })
 	<-g.entered
-	wg.Go(func() { second = e.do("GET", "/api/v1/portfolio", "viewer", "") })
+	wg.Go(func() { second = e.do("GET", "/api/v1/portfolio", "viewer", "", ipHeader, ip(2)) })
 	time.Sleep(50 * time.Millisecond)
 	close(g.release)
 	wg.Wait()
@@ -129,8 +139,150 @@ func TestConcurrencyLimitWaitsForASlot(t *testing.T) {
 	}
 }
 
-// The upload is admitted by the ingest package, not counted here: it is
-// served while every slot is taken, and it does not take one.
+// One address holds at most a quarter of the slots: with 8 slots, 2. Its other
+// requests are answered 503 busy, while another address is still served.
+func TestConcurrencyLimitCapsOneClient(t *testing.T) {
+	const limit = 8
+	g := newGate()
+	e := newEnv(t, limited(g, limit, 100*time.Millisecond))
+
+	const greedy = 20
+	recs := make([]*httptest.ResponseRecorder, greedy)
+	var wg sync.WaitGroup
+	for i := range greedy {
+		wg.Go(func() { recs[i] = e.do("GET", "/api/v1/portfolio", "viewer", "", ipHeader, ip(1)) })
+	}
+	for range limit / 4 {
+		<-g.entered
+	}
+	time.Sleep(300 * time.Millisecond) // the rest of the greedy client gives up
+	// Another address is served while the first still holds its share.
+	var other *httptest.ResponseRecorder
+	wg.Go(func() { other = e.do("GET", "/api/v1/portfolio", "viewer", "", ipHeader, ip(2)) })
+	<-g.entered
+	close(g.release)
+	wg.Wait()
+
+	ok, busy := 0, 0
+	for _, rec := range recs {
+		switch rec.Code {
+		case 200:
+			ok++
+		case 503:
+			busy++
+		}
+	}
+	if ok != limit/4 || busy != greedy-limit/4 {
+		t.Errorf("greedy client: %d served, %d busy, want %d and %d", ok, busy, limit/4, greedy-limit/4)
+	}
+	if other.Code != 200 {
+		t.Errorf("another address = %d, want 200", other.Code)
+	}
+	if g.peak > limit/4+1 {
+		t.Errorf("peak %d: one client held more than its share", g.peak)
+	}
+}
+
+func TestClientKey(t *testing.T) {
+	k := func(s string) string {
+		p, ok := clientKey(netip.MustParseAddr(s))
+		if !ok {
+			return "-"
+		}
+		return p.String()
+	}
+	for in, want := range map[string]string{
+		"192.0.2.7":                  "192.0.2.7/32",
+		"::ffff:192.0.2.7":           "192.0.2.7/32",
+		"2001:db8:1:2:aaaa:bbbb:1:2": "2001:db8:1:2::/64",
+		"2001:db8:1:2:cccc:dddd:3:4": "2001:db8:1:2::/64",
+	} {
+		if got := k(in); got != want {
+			t.Errorf("clientKey(%s) = %s, want %s", in, got, want)
+		}
+	}
+	if _, ok := clientKey(netip.Addr{}); ok {
+		t.Error("an invalid address has a key")
+	}
+}
+
+// A client that sends its body slowly holds no slot while it does.
+func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
+	var inHandler atomic.Int32
+	read := make(chan string, 1)
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inHandler.Add(1)
+		b, _ := io.ReadAll(r.Body)
+		read <- string(b)
+		inHandler.Add(-1)
+		WriteJSON(w, http.StatusOK, statusBody{Status: "ok"})
+	})
+	e := newEnv(t, func(d *Deps) {
+		d.MaxConcurrent = 1
+		d.BusyWait = 50 * time.Millisecond
+		d.Features = map[string]http.Handler{"createService": h, "getPortfolio": h}
+	})
+	srv := httptest.NewServer(e.h)
+	defer srv.Close()
+
+	// A request whose body arrives slowly: the header is sent, the body is not.
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	_, _ = fmt.Fprintf(conn, "POST /api/v1/services HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n"+
+		"Content-Type: application/json\r\n%s: admin\r\n\r\n12345", roleHeader)
+	time.Sleep(200 * time.Millisecond)
+	if inHandler.Load() != 0 {
+		t.Fatal("the handler ran before the body was complete")
+	}
+
+	// With the only slot free, another request is served at once.
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/portfolio", nil)
+	req.Header.Set(roleHeader, "viewer")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("request while another sends its body slowly = %d, want 200", resp.StatusCode)
+	}
+	<-read // drain the GET's (empty) body
+
+	// The rest of the body arrives: the buffered request runs with all of it.
+	_, _ = io.WriteString(conn, "67890")
+	select {
+	case got := <-read:
+		if got != "1234567890" {
+			t.Errorf("handler read %q, want the whole body", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the slow request did not complete")
+	}
+}
+
+// A body that is too large still reaches the handler as an error it can
+// answer, as without the limiter.
+func TestConcurrencyLimitKeepsBodyErrors(t *testing.T) {
+	var gotErr error
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, gotErr = io.ReadAll(r.Body)
+		WriteJSON(w, http.StatusOK, statusBody{Status: "ok"})
+	})
+	e := newEnv(t, func(d *Deps) {
+		d.MaxConcurrent = 4
+		d.Features = map[string]http.Handler{"createService": h}
+	})
+	e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody+10))
+	var tooBig *http.MaxBytesError
+	if !errors.As(gotErr, &tooBig) {
+		t.Errorf("handler read error = %v, want a MaxBytesError", gotErr)
+	}
+}
+
+// The upload is admitted by the ingest package, not counted here.
 func TestConcurrencyLimitSkipsUpload(t *testing.T) {
 	hold := newGate()
 	up := newGate()
@@ -167,4 +319,68 @@ func TestConcurrencyLimitDisabledByDefault(t *testing.T) {
 	}
 	close(g.release)
 	wg.Wait()
+}
+
+type hangingPinger struct{ calls atomic.Int32 }
+
+func (h *hangingPinger) Ping(ctx context.Context) error {
+	h.calls.Add(1)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// Many concurrent /readyz calls against a database check that hangs share one
+// check: it runs once, nobody queues behind it, every caller is answered 503
+// within the readiness timeout, and the result is then reused for a second.
+func TestReadyzSharesOneHangingCheck(t *testing.T) {
+	p := &hangingPinger{}
+	e := newEnv(t, func(d *Deps) { d.DB = p })
+	const callers = 200
+	codes := make([]int, callers)
+	var wg sync.WaitGroup
+	start := time.Now()
+	for i := range callers {
+		wg.Go(func() { codes[i] = e.do("GET", "/readyz", "", "").Code })
+	}
+	wg.Wait()
+	if d := time.Since(start); d > readyTimeout+time.Second {
+		t.Errorf("callers took %v, want about the readiness timeout of %v", d, readyTimeout)
+	}
+	for i, c := range codes {
+		if c != 503 {
+			t.Fatalf("caller %d got %d, want 503", i, c)
+		}
+	}
+	if n := p.calls.Load(); n != 1 {
+		t.Errorf("the database check ran %d times, want once", n)
+	}
+	// Within a second the answer comes from the cache, instantly.
+	start = time.Now()
+	if rec := e.do("GET", "/readyz", "", ""); rec.Code != 503 || time.Since(start) > 100*time.Millisecond || p.calls.Load() != 1 {
+		t.Errorf("cached answer: %d in %v after %d checks", rec.Code, time.Since(start), p.calls.Load())
+	}
+}
+
+type countingPinger struct{ calls atomic.Int32 }
+
+func (c *countingPinger) Ping(context.Context) error { c.calls.Add(1); return nil }
+
+// A healthy database is checked at most once per second, however often
+// /readyz is called.
+func TestReadyzChecksOncePerSecond(t *testing.T) {
+	p := &countingPinger{}
+	e := newEnv(t, func(d *Deps) { d.DB = p })
+	for range 50 {
+		if rec := e.do("GET", "/readyz", "", ""); rec.Code != 200 {
+			t.Fatalf("readyz = %d", rec.Code)
+		}
+	}
+	if n := p.calls.Load(); n != 1 {
+		t.Errorf("%d checks for 50 calls within a second, want 1", n)
+	}
+	time.Sleep(readyCacheTTL + 100*time.Millisecond)
+	e.do("GET", "/readyz", "", "")
+	if n := p.calls.Load(); n != 2 {
+		t.Errorf("%d checks after the cache expired, want 2", n)
+	}
 }

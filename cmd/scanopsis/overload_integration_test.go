@@ -29,13 +29,14 @@ import (
 // such read inside the database, each holding a pooled connection.
 func TestIntegrationOverloadAnswersBusyAndStaysReady(t *testing.T) {
 	const (
-		poolSize = 4
+		poolSize = 16
+		share    = poolSize / 4 // one client address may hold a quarter of the slots
 		readers  = 100
 	)
 	pool := storetest.New(t)
 	addr := freeAddr(t)
 	cfg, err := config.Load(env(map[string]string{
-		"SCANOPSIS_DATABASE_URL": dbURL(t, pool) + "&pool_max_conns=4",
+		"SCANOPSIS_DATABASE_URL": dbURL(t, pool) + "&pool_max_conns=16",
 		"SCANOPSIS_PUBLIC_URL":   "http://" + addr,
 		"SCANOPSIS_LISTEN_ADDR":  addr,
 		"SCANOPSIS_SECRET_KEY":   base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)),
@@ -156,9 +157,9 @@ func TestIntegrationOverloadAnswersBusyAndStaysReady(t *testing.T) {
 			t.Errorf("unexpected status %d", r.code)
 		}
 	}
-	t.Logf("%d readers, pool of %d: %d served, %d answered 503 busy (slowest %v)", readers, poolSize, ok, busy, slowest.Round(time.Millisecond))
-	if ok != poolSize || busy != readers-poolSize {
-		t.Errorf("%d served and %d answered 503, want %d and %d", ok, busy, poolSize, readers-poolSize)
+	t.Logf("%d readers, pool of %d, %d per client: %d served, %d answered 503 busy (slowest %v)", readers, poolSize, share, ok, busy, slowest.Round(time.Millisecond))
+	if ok != share || busy != readers-share {
+		t.Errorf("%d served and %d answered 503, want %d and %d", ok, busy, share, readers-share)
 	}
 	if slowest > 5*time.Second {
 		t.Errorf("a busy answer took %v, want about 3 s", slowest)

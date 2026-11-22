@@ -15,7 +15,7 @@ Scanopsis has two endpoints for monitoring. Neither needs a sign-in.
 
 Use `/healthz` to decide whether to restart the container. Use `/readyz` to
 decide whether to send traffic to it. `/readyz` checks the database over one
-connection that is not part of the pool, so it still answers `200` while the
+connection that is not part of the pool, so (and because the real check runs at most once a second) it still answers `200` while the
 server is busy with requests and answers some of them with `503 busy` (see
 [overload](deployment.md#overload)); it fails only when the database cannot be
 reached. That connection counts against `max_connections` of the database, in

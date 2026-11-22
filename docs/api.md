@@ -5,7 +5,7 @@
 This page lists every endpoint of the HTTP API, generated from the OpenAPI
 document `api/openapi.yaml`. API version: 0.1.0.
 
-JSON API of Scanopsis. Every endpoint under /api/v1 except the authentication endpoints requires a session cookie. State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers). The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. The probes, the web interface and the Trivy upload are not counted.
+JSON API of Scanopsis. Every endpoint under /api/v1 except the authentication endpoints requires a session cookie. State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers). The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. One client address may hold at most a quarter of the slots, so one client cannot use them all. The probes, the web interface and the Trivy upload are not counted.
 
 ## Authentication
 

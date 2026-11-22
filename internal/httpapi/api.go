@@ -114,8 +114,14 @@ func (s *server) healthz(w http.ResponseWriter, _ *http.Request) {
 func (s *server) readyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), readyTimeout)
 	defer cancel()
-	if err := s.DB.Ping(ctx); err != nil {
-		s.Log.ErrorContext(r.Context(), "readiness check failed", "error", err)
+	err := s.ready.check(ctx, func(ctx context.Context) error {
+		err := s.DB.Ping(ctx)
+		if err != nil {
+			s.Log.ErrorContext(ctx, "readiness check failed", "error", err)
+		}
+		return err
+	})
+	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, statusBody{Status: "not_ready", Reason: "database unreachable"})
 		return
 	}
