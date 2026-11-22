@@ -128,7 +128,7 @@ docker compose exec db psql -U scanopsis -d scanopsis \
 -------------------------------+--------------+------------------+-----------------------------------------------------------------------------------------------
  2026-11-19 04:09:06.246826+00 | cli          | mfa.reset        | {"source": "gitlab", "username": "alice"}
  2026-11-19 04:09:00.699604+00 | gitlab:alice | login.succeeded  | {"ip": "172.18.0.1", "method": "gitlab", "username": "alice", "gitlab_user_id": 101}
- 2026-11-19 04:09:00.627176+00 | local:root   | settings.changed | {"keys": ["gitlab.client_secret"]}
+ 2026-11-19 04:09:00.627176+00 | local:root   | settings.changed | {"keys": ["gitlab.client_secret"], "changes": [{"key": "gitlab.client_secret", "changed": true}]}
 ```
 
 ### Log level

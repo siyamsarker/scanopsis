@@ -487,6 +487,31 @@ func (s *Service) update(ctx context.Context, patch map[string]any, actor string
 	for _, fn := range s.callbacks {
 		fn(next.snap)
 	}
-	s.audit.Record(ctx, actor, audit.ActionSettingsChanged, map[string]any{"keys": keys})
+	s.audit.Record(ctx, actor, audit.ActionSettingsChanged, map[string]any{
+		"keys": keys, "changes": auditChanges(cur, next, changes),
+	})
 	return nil, nil
+}
+
+// auditChanges describes each change for the audit log: the effective value
+// before and after for ordinary settings, and only that it changed for a
+// secret, whose value never reaches the log. A reset is marked as such; its
+// "to" is the value that applies afterwards (from the environment or the
+// default).
+func auditChanges(cur, next *state, changes []change) []map[string]any {
+	out := make([]map[string]any, 0, len(changes))
+	for _, c := range changes {
+		item := map[string]any{"key": c.key}
+		if c.reset {
+			item["reset"] = true
+		}
+		if definitionByKey[c.key].Secret {
+			item["changed"] = true
+		} else {
+			item["from"] = cur.entries[c.key].value
+			item["to"] = next.entries[c.key].value
+		}
+		out = append(out, item)
+	}
+	return out
 }

@@ -127,11 +127,13 @@ it in the code.
 
 ### Audit log
 
-Sign-ins, failed sign-ins, role changes, two-factor events (including
+Sign-ins, failed sign-ins, role changes, users disabled, enabled or deleted,
+sessions ended by their user (`session.revoked`), two-factor events (including
 `mfa.locked`), setting changes, service changes, rejected uploads, every
 retention run that deleted data (`retention.deleted`), and the administration
 commands are written to the `audit_log` table, with the actor, the action and a detail that never
-contains a secret. A failed sign-in for a user name that matches no account is
+contains a secret. A `settings.changed` event lists, for every changed setting,
+the value before and after; for a secret it records only that it changed. A failed sign-in for a user name that matches no account is
 recorded as `local:unknown`, because it may be a password typed into the wrong
 field. Administrators read it on the **Audit** page. Writing an
 event never blocks the action: a failure is logged instead. Old events are

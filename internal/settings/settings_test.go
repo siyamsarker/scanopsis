@@ -354,14 +354,21 @@ func TestUpdateAppliesAndAudits(t *testing.T) {
 	}
 	ev := e.rec.events[0]
 	wantKeys := []string{"gitlab.url", "gitlab.client_id", "gitlab.client_secret", "gitlab.allowed_groups", "auth.local_login_enabled", "session.idle_timeout", "session.absolute_timeout"}
-	if ev.actor != "local:alice" || ev.action != "settings.changed" || !reflect.DeepEqual(ev.detail, map[string]any{"keys": wantKeys}) {
+	wantChanges := []map[string]any{
+		{"key": "gitlab.url", "from": "", "to": "https://gitlab.example.com"},
+		{"key": "gitlab.client_id", "from": "", "to": "cid"},
+		{"key": "gitlab.client_secret", "changed": true},
+		{"key": "gitlab.allowed_groups", "from": []string{}, "to": []string{"a", "b/c"}},
+		{"key": "auth.local_login_enabled", "from": true, "to": false},
+		{"key": "session.idle_timeout", "from": "30m", "to": "1h30m"},
+		{"key": "session.absolute_timeout", "from": "12h", "to": "36h"},
+	}
+	if ev.actor != "local:alice" || ev.action != "settings.changed" ||
+		!reflect.DeepEqual(ev.detail, map[string]any{"keys": wantKeys, "changes": wantChanges}) {
 		t.Errorf("event = %+v", ev)
 	}
-	dump := fmt.Sprintf("%+v", ev)
-	for _, leak := range []string{"topsecret-xyz", "cid", "gitlab.example.com", "36h"} {
-		if strings.Contains(dump, leak) {
-			t.Errorf("audit event leaks %q: %s", leak, dump)
-		}
+	if dump := fmt.Sprintf("%+v", ev); strings.Contains(dump, "topsecret-xyz") {
+		t.Errorf("audit event leaks the secret: %s", dump)
 	}
 }
 
@@ -865,5 +872,30 @@ func TestURLChangeWithItsSecret(t *testing.T) {
 				t.Errorf("snapshot = %+v", snap)
 			}
 		})
+	}
+}
+
+func TestSettingsAuditRecordsResetsAndSecretChanges(t *testing.T) {
+	e := newEnv(t, gitlabSeeds())
+	e.patch(t, `{"session.idle_timeout":"2h","gitlab.client_secret":"another-secret"}`)
+	e.patch(t, `{"session.idle_timeout":null,"gitlab.client_secret":null}`)
+	if len(e.rec.events) != 2 {
+		t.Fatalf("events = %v", e.rec.events)
+	}
+	for i, ev := range e.rec.events {
+		dump := fmt.Sprintf("%+v", ev.detail)
+		for _, leak := range []string{"another-secret", "s3cret"} {
+			if strings.Contains(dump, leak) {
+				t.Errorf("event %d leaks a secret: %s", i, dump)
+			}
+		}
+	}
+	reset := e.rec.events[1].detail["changes"].([]map[string]any)
+	want := []map[string]any{
+		{"key": "gitlab.client_secret", "reset": true, "changed": true},
+		{"key": "session.idle_timeout", "reset": true, "from": "2h", "to": "30m"},
+	}
+	if !reflect.DeepEqual(reset, want) {
+		t.Errorf("reset changes = %v; want %v", reset, want)
 	}
 }

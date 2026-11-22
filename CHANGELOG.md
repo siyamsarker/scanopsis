@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `settings.changed` audit event records, besides the keys, the value before and after for each changed setting (`changes`), and for a secret only that it changed, so the audit log shows what a change did.
 - Demoting an administrator is refused when no other enabled administrator would remain; a disabled administrator no longer counts.
 - Sessions now end after 30 minutes without use (was 8 hours) and 12 hours after sign-in at the latest (was 24 hours), as OWASP ASVS level 2 asks. Values stored in the database before the upgrade are kept. The session cookie is now a browser-session cookie without an expiry date, so closing the browser ends it; the server still enforces both timeouts.
 

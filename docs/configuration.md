@@ -91,7 +91,9 @@ SCANOPSIS_PUBLIC_URL must not contain a path, query, fragment or credentials, go
 The columns show the key as it appears on the Settings page, the variable that
 seeds it, the type, the default and the rules. The value is validated when you
 save it, and the whole change is rejected, with nothing saved, if any value is
-invalid.
+invalid. A saved change is recorded in the audit log as `settings.changed`,
+with the value before and after for each setting, or, for a secret, only that
+it changed.
 
 | Key | Seeding variable | Type | Default | Example | Effect and validation |
 |---|---|---|---|---|---|

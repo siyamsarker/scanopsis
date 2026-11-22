@@ -467,3 +467,25 @@ test('24. an administrator disables, enables and deletes users', async () => {
     await expect(audit).toContainText(action);
   }
 });
+
+test('25. a settings change is audited with the values before and after', async () => {
+  await root.goto('/settings');
+  await root.getByLabel(/may stay unused before the user must sign in again/).fill('45m');
+  await root.getByRole('button', { name: 'Save changes' }).click();
+  await expect(root.getByText('Settings saved. Changes apply now.')).toBeVisible();
+
+  await root.goto('/admin/audit');
+  await root.getByLabel('Action', { exact: true }).selectOption('settings.changed');
+  const audit = root.getByRole('main').getByRole('table', { name: 'Audit log' });
+  // The details are stored as JSON, which lists the shorter key first.
+  await expect(audit).toContainText('[{"to":"45m","key":"session.idle_timeout","from":"30m"}]');
+  // Flow 4 saved the GitLab client secret: the log says only that it changed.
+  await expect(audit).not.toContainText(gitlabSecret);
+  const response = await rootContext.request.get('/api/v1/admin/audit?action=settings.changed');
+  expect(await response.text()).not.toContain(gitlabSecret);
+  const page = (await response.json()) as {
+    items: { detail: { changes?: Record<string, unknown>[] } }[];
+  };
+  const changes = page.items.flatMap((item) => item.detail.changes ?? []);
+  expect(changes).toContainEqual({ key: 'gitlab.client_secret', changed: true });
+});
