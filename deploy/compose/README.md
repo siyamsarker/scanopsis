@@ -5,6 +5,9 @@ database.
 
 - `compose.yaml`: the `db` and `scanopsis` services.
 - `.env.example`: copy it to `.env` and edit it.
+- `compose.external-db.yaml`: an override that removes the `db` service, for an
+  existing PostgreSQL server. See
+  [use an existing PostgreSQL](../../docs/deployment.md#use-an-existing-postgresql).
 
 ## Defaults in `compose.yaml`
 
