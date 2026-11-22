@@ -49,7 +49,7 @@ Run `make help` to list every target. The most common ones are:
 
 | Command | What it does |
 |---|---|
-| `make check` | Runs the fast checks: formatting, lint, unit tests, vulnerabilities, web checks, build, headers, script tests and licences. Run it before you open a pull request. |
+| `make check` | Runs the fast checks: formatting, lint, unit tests, vulnerabilities, web checks (lint, unit tests and the npm audit), build, headers, script tests and licences. Run it before you open a pull request. |
 | `make fmt` | Formats the Go code. |
 | `make test` | Runs the Go unit tests with the race detector. |
 | `make test-integration` | Runs the Go tests that need PostgreSQL, against a database in Docker. See [integration tests](#integration-tests). |
@@ -58,6 +58,7 @@ Run `make help` to list every target. The most common ones are:
 | `make perf` | Measures the performance targets and fails when one is missed. Needs Docker. See [performance](#performance). |
 | `make lint` | Lints the Go code. |
 | `make web-test` | Installs the web dependencies and runs the web unit tests. |
+| `make web-audit` | Audits the runtime npm dependencies and fails on a high or critical advisory. Needs network access. `make check` runs it. |
 | `make web-lint` | Type-checks, lints and checks the formatting of the web code. |
 | `make build` | Builds the web interface, then builds `bin/scanopsis` with it embedded. |
 | `make image` | Builds the container image `scanopsis:dev`. The Compose deployment in `deploy/compose` runs it. |

@@ -524,11 +524,14 @@ services was not measured for this page.
 ## Upgrades and rollback
 
 Schema changes are applied by the new version when it starts. There is no
-separate migration step.
+separate migration step. You deploy a version by building it from its branch,
+see [versions and branches](versions.md). The steps below show the checks around
+an upgrade.
 
 ### Upgrade
 
-1. Read the [changelog](../CHANGELOG.md) for the new version.
+1. Read the [changelog](../CHANGELOG.md) of the new version branch, see
+   [find the newest version](versions.md#find-the-newest-version).
 2. Back up the database and the key, as in
    [backup and restore](operations.md#backup-and-restore). This is the only
    safe way back.
@@ -553,9 +556,9 @@ separate migration step.
                  3
    ```
 
-4. Set the new image in `.env` (`SCANOPSIS_IMAGE=...`, by digest once releases
-   exist). If the image comes from a registry, pull it first with
-   `docker compose pull scanopsis` (example; the test used a local image).
+4. Switch to the new version branch and build its image, then set it in
+   `.env` (`SCANOPSIS_IMAGE=...`), as in
+   [upgrade to a newer version](versions.md#upgrade-to-a-newer-version).
 5. Recreate the container:
 
    ```sh
@@ -603,7 +606,8 @@ the two new migrations only added indexes and a column with a default, but this
 holds for no migration in general and the old version does not know what the
 new ones changed.
 
-1. Set the old image in `.env`.
+1. Build the image of the previous version branch and set it in `.env`, as in
+   [roll back to the previous version](versions.md#roll-back-to-the-previous-version).
 2. Stop Scanopsis and restore the backup over the database, as in
    [restore](operations.md#restore-into-the-existing-database):
 

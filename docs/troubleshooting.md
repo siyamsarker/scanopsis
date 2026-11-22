@@ -252,7 +252,7 @@ times.
 | "Not available" instead of a time | The time in the data is missing or unreadable. | Report it as a defect. |
 | Old scans are gone | [Data retention](operations.md#data-retention) deleted scans older than the retention period, except the latest per ref and artifact. | Raise `retention.days` if you need more history. |
 | A link to GitLab is plain text | The link did not start with `http` or `https`, or the GitLab URL is not set. | Set the GitLab URL. |
-| The page is blank, or shows the message "The web interface is not included in this build." | The binary was built without the web interface. | Use the released image or `make image`. |
+| The page is blank, or shows the message "The web interface is not included in this build." | The binary was built without the web interface. | Build the image with `make image`, see [versions and branches](versions.md#deploy-a-version). |
 
 ## Reverse proxy and TLS
 

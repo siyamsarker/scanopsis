@@ -412,6 +412,9 @@ were removed.
 
 ## Backup and restore
 
+Take a backup before every upgrade, see
+[upgrade to a newer version](versions.md#upgrade-to-a-newer-version).
+
 Back up two things, and keep them apart:
 
 | What | How | Where to keep it |

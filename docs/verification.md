@@ -3,13 +3,13 @@
 Scanopsis is only useful if its numbers are right. This guide describes the
 accuracy check that you run with real data: you compare what Scanopsis shows
 with what Trivy and SonarQube report for the same scans. Operators run it after
-setting up Scanopsis and after each upgrade. The project runs it before every
-release.
+setting up Scanopsis and after each upgrade. The project runs it before it
+publishes a version.
 
 The result is a table of numbers and one decision. The acceptance rule is
 strict:
 
-> **Any mismatch blocks the release.** A number that differs by even one finding
+> **Any mismatch blocks the version.** A number that differs by even one finding
 > is a defect. Do not round, and do not explain it away. Record it, find the
 > cause, and run the check again after the fix.
 
@@ -402,7 +402,7 @@ Ratings in the Web API are numbers from `1.0` to `5.0`. Scanopsis shows A to E:
 
 ## Record the results
 
-Copy this table into the release record. Fill one row for each artifact and one
+Copy this table into your record of the check. Fill one row for each artifact and one
 for each SonarQube project. Keep the exported reports (anonymised) and the
 screenshots or API output with it.
 
@@ -441,5 +441,5 @@ and you write "accepted" with the date. If one Match is no:
 3. Find the cause: the data (a report with an unusual shape, a different ref,
    an older `CreatedAt`), the comparison (a suppressed finding, a second
    artifact), or Scanopsis. Open an issue with the report, anonymised.
-4. The release is blocked until the cause is fixed and the whole check passes
+4. The version is blocked until the cause is fixed and the whole check passes
    again on the same sample.

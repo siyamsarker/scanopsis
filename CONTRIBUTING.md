@@ -32,6 +32,7 @@ Run the checks before you open a pull request. The repository has no CI service,
    - Checks Go dependencies for known vulnerabilities with `govulncheck`.
    - Lints and type-checks the web interface.
    - Runs the web unit tests.
+   - Audits the runtime npm dependencies for known vulnerabilities with `npm audit` (`make web-audit`).
    - Builds `bin/scanopsis` with the web interface embedded.
 2. If `make check` reports formatting problems, run `make fmt` to format the Go code, and then run `make check` again.
 3. Run `make help` to list all available targets.
@@ -83,7 +84,7 @@ Then push the branch again with `git push --force-with-lease`.
 
 ## Pull requests
 
-Keep each pull request small and focused on a single change. Follow these guidelines:
+Keep each pull request small and focused on a single change. Open it from your fork and target `main`. The repository has only two kinds of branches: `main` and the frozen `release/X.Y.Z` version branches, which never accept pull requests, see [versions and branches](docs/versions.md). Follow these guidelines:
 
 1. Add or update tests for any change in behaviour.
 2. Update the documentation that is affected by the change.

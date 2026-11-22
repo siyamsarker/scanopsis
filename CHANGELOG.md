@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Data retention: scan history, SonarQube analyses and deliveries are kept for a configurable number of days (`retention.days`, default 90), always keeping the latest scan of every service, ref, artifact and kind; audit events are kept for 365 days. Each run that deletes data is recorded in the audit log.
 - Coverage thresholds for the backend and the web interface (`make coverage`), a performance check of start-up time, memory, bundle size and response times (`make perf`), an image scan (`make image-scan`), a sign-off check (`make dco`).
 
+- Versions are published as `release/X.Y.Z` branches with `vX.Y.Z` tags. `main` holds development code and is not for deployment. There is no published container image: you build the image from a version branch. See `docs/versions.md`.
+- `make web-audit`, part of `make check`, audits the runtime npm dependencies for known vulnerabilities.
+
 ### Security
 
 - Ten wrong second-factor codes in a row lock two-factor sign-in for the account until an administrator resets it, and sign the account out everywhere.

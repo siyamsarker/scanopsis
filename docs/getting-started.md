@@ -26,15 +26,22 @@ only, so nothing outside the host can reach it until you add a reverse proxy.
 
 ## Step 1. Build the image
 
-No release image is published yet, so you build one from the source. This
-step is an example to adapt: use your own clone location.
+Scanopsis publishes no container image, so you build one from a version
+branch. Deploy a version branch, not `main`: `main` is development code. See
+[versions and branches](versions.md) to find the newest version. This step is an
+example to adapt: use your own clone location.
 
-1. Clone the repository and go to its root:
+1. Clone the version branch and go to its root. Replace `X.Y.Z` with the
+   version:
 
    ```sh
-   git clone https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/X.Y.Z --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    ```
+
+   No version branch is published yet. Until `release/1.0.0` exists, you can
+   use `--branch main` to try Scanopsis, at your own risk, see
+   [the status of versions](versions.md#versions-and-branches).
 
 2. Build the image:
 

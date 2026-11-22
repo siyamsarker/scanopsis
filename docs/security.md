@@ -251,8 +251,9 @@ Go through this list when you deploy, and again after each upgrade.
 13. **Keep the setup token private** and finish the setup at once.
 14. **Limit who reads the container logs.** They hold client addresses, project
     paths and, before the setup, the setup token.
-15. **Update.** Pull new images and apply them. See [upgrades](deployment.md#upgrades-and-rollback).
-    Pin the image by digest.
+15. **Update.** Build the newest version branch and apply it. See
+    [versions and branches](versions.md#upgrade-to-a-newer-version) and
+    [upgrades](deployment.md#upgrades-and-rollback). Never deploy `main`.
 
 ## How to report a vulnerability
 

@@ -3,9 +3,11 @@
 Scanopsis is a small, self-hosted dashboard that shows SonarQube and Trivy
 results from your GitLab CI/CD pipelines in one view.
 
-> **Status:** not released yet. All features below work and are tested end to
-> end, but no release image is published and the accuracy check with real
-> pipeline data is still open.
+> **Status:** no version is published yet. All features below work and are
+> tested end to end, but the accuracy check with real pipeline data is still
+> open. Deploy a version branch (`release/X.Y.Z`), never `main`, which is
+> development code. The first version branch does not exist yet; see
+> [versions and branches](docs/versions.md).
 
 ![The service dashboard in the dark theme: Trivy findings by severity next to the SonarQube quality gate, ratings and coverage](docs/images/service-dark.png)
 
@@ -43,13 +45,19 @@ by SonarSource, Aqua Security or GitLab.
 
 ## Quick start
 
-No release image is published yet, so you build the image first and then start
-Scanopsis and PostgreSQL with Docker Compose:
+Scanopsis publishes no container image. You clone a version branch, build the
+image, and then start Scanopsis and PostgreSQL with Docker Compose. Replace
+`X.Y.Z` with a version from [versions and branches](docs/versions.md):
 
 ```sh
+git clone --branch release/X.Y.Z --depth 1 https://github.com/siyamsarker/scanopsis.git
+cd scanopsis
 make image
 cd deploy/compose
 ```
+
+The first version branch is not published yet. To test now, use
+`--branch main` at your own risk.
 
 Then create the secrets and the configuration file, run `docker compose up -d`
 and finish the setup in the browser. The
@@ -67,6 +75,8 @@ a database, run the server and run the checks.
 For operators:
 
 - [Getting started](docs/getting-started.md)
+- [Versions and branches](docs/versions.md): which branch to deploy, how to
+  upgrade and roll back
 - [Configuration reference](docs/configuration.md)
 - [Sign in with GitLab](docs/integrations/gitlab-sso.md)
 - [Upload Trivy reports from GitLab CI](docs/integrations/gitlab-ci.md)

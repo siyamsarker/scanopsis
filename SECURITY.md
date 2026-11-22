@@ -21,4 +21,4 @@ The maintainer aims to acknowledge reports within 5 working days. This is a best
 
 ## Supported versions
 
-No release has been published yet. Once releases exist, security fixes are made for the latest minor release.
+Only the newest version branch (`release/X.Y.Z`, see [versions and branches](docs/versions.md)) is supported. Version branches never change, so a security fix is made on `main` and published as a new version. No version has been published yet; until the first one exists, only `main` receives fixes, and it is development code.

@@ -31,7 +31,7 @@ body:
     id: scanopsis-version
     attributes:
       label: Scanopsis version
-      description: The release tag or commit you are running.
+      description: The version (for example v1.0.0, from /api/v1/version) or the commit you are running.
       placeholder: e.g. v0.1.0 or a commit hash
     validations:
       required: true
