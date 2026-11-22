@@ -127,6 +127,11 @@ func MigrateLogged(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) er
 	cfg.MaxConns = 3 // the advisory lock holds one; a migration uses another
 	cfg.MinConns = 0
 	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "0"
+	// DDL that cannot get its lock fails after this and is retried at the
+	// next start, instead of queuing behind a long transaction and blocking
+	// every query that queues behind it. Goose polls for its advisory lock
+	// with pg_try_advisory_lock, which the timeout does not affect.
+	cfg.ConnConfig.RuntimeParams["lock_timeout"] = "10000" // milliseconds
 	mpool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("prepare migrations: %w", err)
