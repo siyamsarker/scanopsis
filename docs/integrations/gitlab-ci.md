@@ -198,7 +198,9 @@ trivy-scan:
 ## Step 4: Run a pipeline and read the log
 
 The first successful upload creates the service for your project in Scanopsis
-(named after the last part of the project path). The log of the job shows:
+(named after the last part of the project path) and records it in the audit log
+as `service.created`, with the actor `ci:<project path>`. The log of the job
+shows:
 
 ```console
 $ sh ci/scan.sh

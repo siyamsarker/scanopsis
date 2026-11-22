@@ -310,6 +310,18 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 	})
 	switch {
 	case err == nil:
+		// Recorded in the transaction of the upload, so a service that is
+		// rolled back leaves no record and one that stays always has it.
+		detail, err := json.Marshal(map[string]any{
+			"id": svc.ID, "gitlab_project_path": svc.GitlabProjectPath,
+			"gitlab_project_id": c.ProjectID, "reason": "created by the first verified upload",
+		})
+		if err == nil {
+			err = q.InsertAudit(ctx, store.InsertAuditParams{Actor: "ci:" + c.ProjectPath, Action: audit.ActionServiceCreated, Detail: detail})
+		}
+		if err != nil {
+			return svc, false, fmt.Errorf("audit creation: %w", err)
+		}
 		return svc, true, nil
 	case errors.Is(err, pgx.ErrNoRows):
 		// An archived service an administrator added by this path, which was
