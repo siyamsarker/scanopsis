@@ -44,9 +44,28 @@ function searchApi(items: object[], extra?: Handler): Handler {
         total_findings: items.length,
         total_services: new Set(items.map((i) => (i as { service: { id: number } }).service.id))
           .size,
+        total_artifacts: new Set(
+          items.map((i) => {
+            const h = i as { service: { id: number }; artifact_name: string };
+            return `${h.service.id}/${h.artifact_name}`;
+          }),
+        ).size,
+        ...summaryOf(items as { severity: string; fixed_version: string }[]),
       });
     }
     return undefined;
+  };
+}
+
+/** The summary the API derives from every match. */
+function summaryOf(items: { severity: string; fixed_version: string }[]) {
+  const counts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
+  for (const i of items) counts[i.severity.toLowerCase() as keyof typeof counts] += 1;
+  return {
+    counts,
+    title: items.length ? 'xz: malicious code in the release tarballs' : '',
+    primary_url: items.length ? 'https://avd.aquasec.com/nvd/cve-2024-3094' : '',
+    fixed_versions: [...new Set(items.map((i) => i.fixed_version).filter(Boolean))],
   };
 }
 
@@ -70,28 +89,37 @@ describe('vulnerability search', () => {
     fireEvent.keyDown(box, { key: 'Enter' });
 
     expect(
-      await screen.findByText(
-        (_, el) =>
-          el?.tagName === 'P' &&
-          el.textContent === 'CVE-2024-3094 affects 2 services in 3 artifacts',
-      ),
+      await screen.findByText('CVE-2024-3094 affects 2 services in 3 images.'),
     ).toBeInTheDocument();
+    // The summary: worst severity, title, fixed versions and reach.
+    const summary = screen.getByRole('region', { name: 'Vulnerability summary' });
+    expect(within(summary).getByText('Critical at worst')).toBeInTheDocument();
+    expect(
+      within(summary).getByRole('heading', { name: 'xz: malicious code in the release tarballs' }),
+    ).toBeInTheDocument();
+    expect(within(summary).getByText('5.6.2')).toBeInTheDocument();
+    expect(within(summary).getByRole('link', { name: /Advisory/ })).toHaveAttribute(
+      'href',
+      'https://avd.aquasec.com/nvd/cve-2024-3094',
+    );
     expect(searchCalls(calls)).toHaveLength(1);
     expect(searchCalls(calls)[0].path).toBe('/api/v1/search/vulnerabilities?id=CVE-2024-3094');
     expect(screen.getByTestId('location')).toHaveTextContent('/search?id=CVE-2024-3094');
 
-    const payments = screen.getByRole('region', { name: 'payments-api' });
+    // One table; a group of rows per service under a row naming it.
+    const table = screen.getByRole('table', { name: 'Where CVE-2024-3094 is present' });
+    const payments = within(table).getByRole('rowgroup', { name: 'payments-api' });
     expect(within(payments).getByRole('link', { name: 'payments-api' })).toHaveAttribute(
       'href',
       '/services/1',
     );
     expect(within(payments).getAllByRole('row')).toHaveLength(3);
-    expect(within(payments).getByText('No fix')).toBeInTheDocument();
+    expect(within(payments).getByText('no fix yet')).toBeInTheDocument();
     expect(within(payments).getAllByRole('link', { name: /ago|just now|in / })[0]).toHaveAttribute(
       'href',
       '/scans/11',
     );
-    const auth = screen.getByRole('region', { name: 'auth' });
+    const auth = within(table).getByRole('rowgroup', { name: 'auth' });
     expect(within(auth).getByText('release')).toBeInTheDocument();
     expect(within(auth).getByText('High')).toBeInTheDocument();
   });
@@ -107,12 +135,16 @@ describe('vulnerability search', () => {
           truncated: true,
           total_findings: 4200,
           total_services: 310,
+          total_artifacts: 512,
+          ...summaryOf([ITEMS[0]]),
         });
       }
       return undefined;
     });
     renderApp('/search?id=CVE-2024-3094');
-    expect(await screen.findByText(/affects 310 services/)).toBeInTheDocument();
+    expect(
+      await screen.findByText('CVE-2024-3094 affects 310 services in 512 images.'),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/4,200 findings match\. Showing the 1 most severe/),
     ).toBeInTheDocument();
@@ -122,11 +154,7 @@ describe('vulnerability search', () => {
     const { calls } = mockFetch(searchApi([ITEMS[0]]));
     renderApp('/search?id=GHSA-jfh8-c2jp-5v3q');
     expect(
-      await screen.findByText(
-        (_, el) =>
-          el?.tagName === 'P' &&
-          el.textContent === 'GHSA-jfh8-c2jp-5v3q affects 1 service in 1 artifact',
-      ),
+      await screen.findByText('GHSA-jfh8-c2jp-5v3q affects 1 service in 1 image.'),
     ).toBeInTheDocument();
     expect(searchCalls(calls)[0].path).toBe(
       '/api/v1/search/vulnerabilities?id=GHSA-jfh8-c2jp-5v3q',
@@ -160,7 +188,7 @@ describe('vulnerability search', () => {
     mockFetch(searchApi([]));
     renderApp('/search?id=CVE-2000-0001');
     expect(
-      await screen.findByText('No service is affected in its current scans.'),
+      await screen.findByText('No service is affected in its current scans'),
     ).toBeInTheDocument();
   });
 
@@ -174,7 +202,7 @@ describe('vulnerability search', () => {
     expect(screen.getByRole('link', { name: 'GHSA-jfh8-c2jp-5v3q' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('link', { name: 'CVE-2021-44228' }));
     expect(
-      await screen.findByText('No service is affected in its current scans.'),
+      await screen.findByText('No service is affected in its current scans'),
     ).toBeInTheDocument();
     expect(screen.getByRole('searchbox', { name: 'Vulnerability ID' })).toHaveValue(
       'CVE-2021-44228',
@@ -184,7 +212,9 @@ describe('vulnerability search', () => {
   it('searches dashboard branches and protected refs by default and says so', async () => {
     const { calls } = mockFetch(searchApi(ITEMS));
     renderApp('/search?id=CVE-2024-3094');
-    expect(await screen.findByText('dashboard branches and protected refs')).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Searched dashboard branches and protected refs/),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole('radio', { name: 'Dashboard branches and protected refs' }),
     ).toBeChecked();
@@ -195,9 +225,9 @@ describe('vulnerability search', () => {
   it('switches to all branches, reflects it in the URL and searches again', async () => {
     const { calls } = mockFetch(searchApi(ITEMS));
     renderApp('/search?id=CVE-2024-3094');
-    await screen.findByText('dashboard branches and protected refs');
+    await screen.findByText(/Searched dashboard branches and protected refs/);
     fireEvent.click(screen.getByRole('radio', { name: 'All branches' }));
-    expect(await screen.findByText('all branches')).toBeInTheDocument();
+    expect(await screen.findByText(/Searched all branches/)).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('/search?id=CVE-2024-3094&scope=all');
     expect(searchCalls(calls).map((c) => c.path)).toEqual([
       '/api/v1/search/vulnerabilities?id=CVE-2024-3094',
@@ -205,35 +235,39 @@ describe('vulnerability search', () => {
     ]);
     // Back to the default: the parameter leaves the URL.
     fireEvent.click(screen.getByRole('radio', { name: 'Dashboard branches and protected refs' }));
-    await screen.findByText('dashboard branches and protected refs');
+    await screen.findByText(/Searched dashboard branches and protected refs/);
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/search\?id=CVE-2024-3094$/);
   });
 
   it('opens with the scope from the URL and keeps it for a new search', async () => {
     const { calls } = mockFetch(searchApi([ITEMS[0]]));
     renderApp('/search?id=CVE-2024-3094&scope=all');
-    expect(await screen.findByText('all branches')).toBeInTheDocument();
+    expect(await screen.findByText(/Searched all branches/)).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'All branches' })).toBeChecked();
     const box = screen.getByRole('searchbox', { name: 'Vulnerability ID' });
     fireEvent.change(box, { target: { value: 'CVE-2021-44228' } });
     fireEvent.keyDown(box, { key: 'Enter' });
-    await screen.findByText(
-      (_, el) =>
-        el?.tagName === 'P' && el.textContent?.startsWith('CVE-2021-44228 affects') === true,
-    );
+    await screen.findByText('CVE-2021-44228 affects 1 service in 1 image.');
     expect(searchCalls(calls).at(-1)?.path).toBe(
       '/api/v1/search/vulnerabilities?id=CVE-2021-44228&scope=all',
     );
-    expect(screen.getByRole('link', { name: 'CVE-2024-3094' })).toHaveAttribute(
-      'href',
-      '/search?id=CVE-2024-3094&scope=all',
-    );
   });
 
-  it('names the scope when nothing is found', async () => {
+  it('names the scope when nothing is found and offers every branch', async () => {
     mockFetch(searchApi([]));
     renderApp('/search?id=CVE-2000-0001&scope=all');
     expect(await screen.findByText(/searching all branches\./)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Search all branches' })).toBeNull();
+  });
+
+  it('offers to search every branch when the default scope finds nothing', async () => {
+    const { calls } = mockFetch(searchApi([]));
+    renderApp('/search?id=CVE-2000-0001');
+    fireEvent.click(await screen.findByRole('button', { name: 'Search all branches' }));
+    expect(await screen.findByText(/searching all branches\./)).toBeInTheDocument();
+    expect(searchCalls(calls).at(-1)?.path).toBe(
+      '/api/v1/search/vulnerabilities?id=CVE-2000-0001&scope=all',
+    );
   });
 
   it('shows an error with a retry', async () => {
