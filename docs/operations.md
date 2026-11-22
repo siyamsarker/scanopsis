@@ -510,7 +510,16 @@ cleared by data retention` to standard error and exits with status 1.
 Emptying a report frees its space for new data in the same database; PostgreSQL
 gives the space back to the operating system only after a `VACUUM FULL`, which
 locks the table while it runs. Autovacuum, which runs by default, makes the
-space reusable without any action.
+space reusable without any action. For the two large tables, `scans` and
+`vulnerabilities`, Scanopsis sets autovacuum to start at 5% of dead rows
+(PostgreSQL's default is 20%) and to refresh the planner statistics at 2%
+changed rows (default 10%), so that it follows a clean-up soon. A run that
+deleted or cleared 10,000 rows or more also runs `ANALYZE` on `scans`, and on
+`vulnerabilities` when it deleted scans, before it finishes, so that the queries
+after a large clean-up use statistics of the data that is left. `ANALYZE` reads a
+sample of fixed size: with 540,000 scans and 4.3 million findings it took 0.1 s
+for `scans` and 0.2 s for `vulnerabilities`, far inside the 30-second statement
+timeout.
 
 ### When it runs
 
@@ -545,10 +554,10 @@ docker compose logs scanopsis | grep "data retention"
 ```
 
 ```text
-{"time":"2026-11-19T04:01:12.318Z","level":"INFO","msg":"data retention run finished","retention_days":90,"scans_deleted":41200,"raw_reports_cleared":9800,"sonar_analyses_deleted":3100,"sonar_deliveries_deleted":3100,"audit_events_deleted":12,"failed_steps":0,"duration":"48.2s"}
+{"time":"2026-11-19T04:01:12.318Z","level":"INFO","msg":"data retention run finished","retention_days":90,"scans_deleted":41200,"raw_reports_cleared":9800,"sonar_analyses_deleted":3100,"sonar_deliveries_deleted":3100,"audit_events_deleted":12,"analyzed":true,"failed_steps":0,"duration":"48.2s"}
 ```
 
-`failed_steps` is the number of the steps above that stopped with an
+`analyzed` is `true` when the run ended with `ANALYZE`. `failed_steps` is the number of the steps above that stopped with an
 error. `raw_reports_cleared` is the number of original reports emptied. For each one, a separate `WARN` line `data retention step failed`
 names the step and the error. The rows deleted before the error stay deleted,
 and the next run continues from there. When another server holds the lock, the

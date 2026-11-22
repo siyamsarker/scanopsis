@@ -45,6 +45,14 @@ const (
 	// report of a scan that is not current is cleared.
 	RawReportRetention = 30 * 24 * time.Hour
 
+	// AnalyzeThreshold is the number of scans deleted and original reports
+	// cleared in one run from which the run ends with ANALYZE. Autovacuum
+	// analyzes a table only after a fraction of it changed and some time
+	// later; reads of the scans and findings after a large clean-up were two to
+	// five times slower until then. Below the threshold the planner's
+	// statistics stay close enough and autovacuum is left to do it.
+	AnalyzeThreshold = 10000
+
 	// firstRunDelay is the wait between start and the first run.
 	firstRunDelay = time.Minute
 	// runInterval is the time between runs.
@@ -70,6 +78,8 @@ type Result struct {
 	SonarAnalyses   int64
 	SonarDeliveries int64
 	AuditEvents     int64
+	// Analyzed is true when the run ended with ANALYZE of scans and findings.
+	Analyzed        bool
 	FailedSteps     int
 	ScanCutoff      time.Time
 	RawReportCutoff time.Time
@@ -86,6 +96,7 @@ type Retention struct {
 
 	now        func() time.Time
 	batch      int32
+	analyzeAt  int64
 	firstDelay time.Duration
 	interval   time.Duration
 }
@@ -94,7 +105,7 @@ type Retention struct {
 func New(pool *pgxpool.Pool, cfg SettingsSource, log *slog.Logger) *Retention {
 	return &Retention{
 		pool: pool, cfg: cfg, log: log,
-		now: time.Now, batch: BatchSize, firstDelay: firstRunDelay, interval: runInterval,
+		now: time.Now, batch: BatchSize, analyzeAt: AnalyzeThreshold, firstDelay: firstRunDelay, interval: runInterval,
 	}
 }
 
@@ -189,6 +200,16 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 		}
 	}
 
+	// A large clean-up leaves the planner with statistics of the old data.
+	if res.Scans+res.RawReports >= r.analyzeAt && ctx.Err() == nil {
+		if err := analyze(ctx, conn, res.Scans > 0); err != nil {
+			res.FailedSteps++
+			r.log.WarnContext(ctx, "data retention step failed", "step", "analyze", "error", err)
+		} else {
+			res.Analyzed = true
+		}
+	}
+
 	// A run that deleted anything is itself audited, so the deletion of old
 	// audit events stays visible in the audit log.
 	if res.Scans+res.RawReports+res.SonarAnalyses+res.SonarDeliveries+res.AuditEvents > 0 {
@@ -206,9 +227,26 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 		"sonar_analyses_deleted", res.SonarAnalyses,
 		"sonar_deliveries_deleted", res.SonarDeliveries,
 		"audit_events_deleted", res.AuditEvents,
+		"analyzed", res.Analyzed,
 		"failed_steps", res.FailedSteps,
 		"duration", res.Duration.Round(time.Millisecond).String())
 	return res
+}
+
+// analyze updates the planner statistics of scans, and of vulnerabilities
+// when scans were deleted, because their findings went with them. ANALYZE
+// reads a fixed-size sample, so it takes about as long on a large table as on
+// a small one and fits in the statement timeout.
+func analyze(ctx context.Context, conn *pgxpool.Conn, findings bool) error {
+	if _, err := conn.Exec(ctx, "ANALYZE scans"); err != nil {
+		return fmt.Errorf("analyze scans: %w", err)
+	}
+	if findings {
+		if _, err := conn.Exec(ctx, "ANALYZE vulnerabilities"); err != nil {
+			return fmt.Errorf("analyze vulnerabilities: %w", err)
+		}
+	}
+	return nil
 }
 
 // AuditActor is the actor of the audit event a run writes.
