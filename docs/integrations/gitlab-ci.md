@@ -293,7 +293,8 @@ large ones. An upload that fits the free memory is admitted at once, even when a
 larger one is waiting, until the oldest waiting upload has waited 5 seconds;
 newer uploads then queue behind it, so large uploads are not starved. An upload
 that finds no free memory waits up to 30 seconds and is then answered with `503`
-`busy`. See [sizing](../deployment.md#sizing).
+`busy`. At most a quarter of the database connections store uploads at the same
+time; an upload that cannot get a place within 30 seconds is answered `busy` too. See [sizing](../deployment.md#sizing).
 
 ## Restrict who may upload
 

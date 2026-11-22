@@ -150,6 +150,9 @@ type Options struct {
 	// AdmitWait is how long an upload waits for memory before it is answered
 	// with 503 busy. 0 means DefaultAdmitWait.
 	AdmitWait time.Duration
+	// DBSlots is how many uploads may be in their database phase at once.
+	// 0 means a quarter of the pool's MaxConns, at least 2.
+	DBSlots int
 	// Limiter limits uploads per client address. nil means no limit.
 	Limiter *auth.RateLimiter
 	// ProjectLimiter limits uploads per GitLab project, keyed by the project
@@ -182,6 +185,9 @@ type Ingest struct {
 	auditLimit *auth.RateLimiter
 	// budget admits uploads by their estimated memory.
 	budget *memBudget
+	// dbSlots limits the uploads that hold a database connection to store
+	// their scan, so uploads alone cannot take the whole pool.
+	dbSlots chan struct{}
 	// freeMemory returns unused heap memory to the operating system. It is a
 	// field so that tests can observe it.
 	freeMemory func()
@@ -221,12 +227,19 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	if opts.AuditLimiter == nil {
 		opts.AuditLimiter = auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, opts.Now)
 	}
+	if opts.DBSlots <= 0 {
+		opts.DBSlots = 4
+		if pool != nil {
+			opts.DBSlots = max(int(pool.Config().MaxConns)/4, 2)
+		}
+	}
 	i := &Ingest{
 		cfg: cfg, audit: audit, opts: opts, log: opts.Logger,
 		ver:        &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
 		store:      &pgSaver{pool: pool, log: opts.Logger},
 		auditLimit: opts.AuditLimiter,
 		budget:     newMemBudget(opts.MemoryBudget),
+		dbSlots:    make(chan struct{}, opts.DBSlots),
 		freeMemory: debug.FreeOSMemory,
 	}
 	i.checkOpen(cfg.Current())
@@ -434,7 +447,24 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 			"project", claims.ProjectPath, "job_id", claims.JobID, "created_at", scanned.UTC().Format(time.RFC3339))
 		scanned = now
 	}
-	res, err := i.store.save(ctx, &saveInput{claims: claims, kind: kind, report: rep, raw: raw, findings: replay, scanTime: scanned})
+	// The memory budget admits many small uploads at once, and each needs a
+	// pooled connection to store its scan, so the database phase has its own
+	// limit, taken only now that the body has been read and checked. It waits
+	// as long as admission does and answers busy in the same way.
+	dctx, dcancel := context.WithTimeout(ctx, i.opts.AdmitWait)
+	select {
+	case i.dbSlots <- struct{}{}:
+		dcancel()
+	case <-dctx.Done():
+		dcancel()
+		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
+		reject(http.StatusServiceUnavailable, codeBusy, "The server is processing other uploads. Retry later.", "budget_bytes", i.opts.MemoryBudget)
+		return
+	}
+	res, err := func() (Result, error) {
+		defer func() { <-i.dbSlots }()
+		return i.store.save(ctx, &saveInput{claims: claims, kind: kind, report: rep, raw: raw, findings: replay, scanTime: scanned})
+	}()
 	switch {
 	case errors.Is(err, errServiceArchived):
 		reject(http.StatusConflict, codeArchived, "The service for this project is archived. Ask an administrator to unarchive it.")
