@@ -89,8 +89,8 @@ describe('setup page', () => {
       within(progress)
         .getAllByRole('listitem')
         .map((li) => li.textContent),
-    ).toEqual(['Create the administrator', 'Set up two-factor', 'Save recovery codes']);
-    expect(within(progress).getByText('Create the administrator').closest('li')).toHaveAttribute(
+    ).toEqual(['Administrator', 'Two-factor', 'Recovery codes']);
+    expect(within(progress).getByText('Administrator').closest('li')).toHaveAttribute(
       'aria-current',
       'step',
     );
@@ -115,7 +115,7 @@ describe('setup page', () => {
     // Enrolment continues the setup steps.
     const progress = screen.getByRole('navigation', { name: 'Progress' });
     expect(progress).toHaveTextContent('Step 2 of 3');
-    expect(within(progress).getByText('Set up two-factor').closest('li')).toHaveAttribute(
+    expect(within(progress).getByText('Two-factor').closest('li')).toHaveAttribute(
       'aria-current',
       'step',
     );

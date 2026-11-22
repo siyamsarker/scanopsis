@@ -16,7 +16,7 @@ import { AuthField, PasswordField, PasswordRules, passwordChecks } from './auth/
 export const passwordRules = 'At least 12 characters, and not your username.';
 
 /** The steps from a new server to the first signed-in administrator. */
-export const setupSteps = ['Create the administrator', 'Set up two-factor', 'Save recovery codes'];
+export const setupSteps = ['Administrator', 'Two-factor', 'Recovery codes'];
 
 function setupMessage(err: unknown): string {
   if (err instanceof ApiError) {

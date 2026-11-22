@@ -125,7 +125,7 @@ function SessionRow({
   const Icon = agent.mobile ? Smartphone : Monitor;
   return (
     <li
-      className={`flex flex-wrap items-center gap-x-4 gap-y-3 px-5 py-4 sm:px-6 ${
+      className={`grid grid-cols-[2.5rem_minmax(0,1fr)] items-center gap-x-4 gap-y-3 px-5 py-4 sm:flex sm:px-6 ${
         session.current ? 'bg-[color-mix(in_srgb,var(--brand)_6%,transparent)]' : ''
       }`}
     >
@@ -155,7 +155,7 @@ function SessionRow({
       {!session.current ? (
         <button
           type="button"
-          className={buttonClass('secondary', 'sm')}
+          className={`${buttonClass('secondary', 'sm')} col-start-2 justify-self-start`}
           onClick={(e) => onEnd(session, e.currentTarget)}
         >
           End session{' '}
