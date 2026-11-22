@@ -114,8 +114,8 @@ flowchart LR
 
 | Feature | What you get |
 | :--- | :--- |
-| **Portfolio** | All services at a glance, as a grid or a treemap: open vulnerabilities, quality gate and how fresh the data is. |
-| **Service dashboard** | Trivy and SonarQube results for the branch an administrator chooses, with trends across pipelines, the recent scans, and a "fix first" list: the packages with the most findings and the version to upgrade to. |
+| **Portfolio** | All services ranked by risk, as cards or a compact list: the risk of the whole portfolio and its last week, what needs attention, and per service the open findings, quality gate, coverage, how fresh the data is and how the last pipelines moved it. |
+| **Service dashboard** | One sentence on where the service stands, then what every pipeline added and fixed, with its quality gate and coverage, on one branch or all of them. A "fix first" list of the upgrades that clear the most risk and the exact version to move to, where the findings are, the quality gate with new code and overall code told apart, and the recent scans. |
 | **Findings explorer** | Every vulnerability and secret finding of a service, with filters. |
 | **Scan comparison** | What is new and what was fixed since the previous scan. |
 | **CVE search across services** | By default on the dashboard branches and the protected branches and tags, or on every branch. |
