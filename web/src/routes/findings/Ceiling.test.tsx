@@ -122,6 +122,7 @@ describe('truncation notices', () => {
     render(
       <MemoryRouter>
         <VulnerabilitiesTab
+          serviceId={5}
           rows={[vuln(1)]}
           loading={false}
           loadingMore={false}
@@ -140,6 +141,7 @@ describe('truncation notices', () => {
     render(
       <MemoryRouter>
         <VulnerabilitiesTab
+          serviceId={5}
           rows={[vuln(1)]}
           loading={false}
           loadingMore={false}
@@ -171,7 +173,9 @@ describe('truncation notices', () => {
   it('states complete totals plainly', () => {
     fix({});
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
-    expect(screen.getByText(/clears 2 of 2 fixable vulnerabilities/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/upgrading 2 packages clears 10 of 10 \(100%, 2 findings\)/),
+    ).toBeInTheDocument();
   });
 
   it('warns at the ceiling without a retry and qualifies the headline', () => {
@@ -180,9 +184,7 @@ describe('truncation notices', () => {
       'Loading stopped after 2 findings; these totals are incomplete.',
     );
     expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument();
-    expect(
-      screen.getByText(/clears at least 2 of at least 2 fixable vulnerabilities/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/clears at least 10 of at least 10/)).toBeInTheDocument();
   });
 
   it('warns after an error with a retry', () => {
@@ -193,6 +195,6 @@ describe('truncation notices', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(onRetry).toHaveBeenCalledOnce();
-    expect(screen.getByText(/clears at least 2 of at least 2/)).toBeInTheDocument();
+    expect(screen.getByText(/clears at least 10 of at least 10/)).toBeInTheDocument();
   });
 });

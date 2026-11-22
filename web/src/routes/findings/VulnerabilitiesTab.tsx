@@ -1,54 +1,59 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useMemo, useState } from 'react';
+import { SlidersHorizontal } from 'lucide-react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
+import { ApiError } from '../../api/client';
 import type { Vulnerability } from '../../api/findings';
 import { FilterChips, type ChipOption } from '../../components/FilterChips';
-import { Mono } from '../../components/Mono';
-import { SearchInput } from '../../components/inputs';
-import { SeverityBadge } from '../../components/Severity';
+import { SearchInput, Select } from '../../components/inputs';
+import { Segmented } from '../../components/Segmented';
 import { SEVERITY_LABEL, SEVERITY_ORDER, severityKey } from '../../components/severityModel';
 import { EmptyState, ErrorState } from '../../components/states';
-import type { Column, SortState } from '../../components/tableCore';
-import { VirtualTable } from '../../components/VirtualTable';
-import { countOf, formatExactTime, formatInt, relativeTime } from '../../format';
-import { secondaryButtonClass } from '../../ui';
-import { ApiError } from '../../api/client';
-import { AdvisoryLink, VulnDrawer } from './VulnDrawer';
+import { formatInt } from '../../format';
+import { buttonClass } from '../../ui';
+import { FindingsList } from './FindingsList';
+import { LensSummary } from './LensSummary';
+import { VulnDrawer } from './VulnDrawer';
 import {
   DEFAULT_SORT,
   applyFilters,
   countBy,
   isFixable,
   parseFilters,
+  parseGroupBy,
   sortVulns,
   vulnClass,
+  type GroupBy,
   type Sort,
-  type SortKey,
 } from './model';
 
 const CLASS_OPTIONS = [
-  { value: 'os-pkgs', label: 'os-pkgs' },
-  { value: 'lang-pkgs', label: 'lang-pkgs' },
+  { value: 'os-pkgs', label: 'OS packages' },
+  { value: 'lang-pkgs', label: 'Language packages' },
   { value: 'other', label: 'Other' },
 ];
 const FILTER_PARAMS = ['severity', 'fixable', 'class', 'artifact', 'q'];
+const GROUP_OPTIONS: { value: GroupBy; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'package', label: 'Package' },
+  { value: 'vulnerability', label: 'Vulnerability' },
+  { value: 'image', label: 'Image' },
+];
 
-function StatusCell({ vuln }: { vuln: Vulnerability }) {
-  if (vuln.suppressed) {
-    const reason = vuln.suppression || 'no reason recorded';
-    return (
-      <span className="flex min-w-0 items-center gap-2" title={`Suppressed: ${reason}`}>
-        <span className="chip tone-neutral shrink-0">Suppressed</span>
-        <span className="truncate text-text-muted">{reason}</span>
-      </span>
-    );
-  }
-  return <span className="text-text-muted">{vuln.status || '–'}</span>;
+/** One labelled row of facet chips. */
+function Facet({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-[5.5rem_minmax(0,1fr)] sm:items-start">
+      <span className="pt-1.5 text-small text-text-muted">{label}</span>
+      {children}
+    </div>
+  );
 }
 
 export interface VulnerabilitiesTabProps {
+  serviceId: number;
   rows: Vulnerability[];
   loading: boolean;
   loadingMore: boolean;
@@ -59,6 +64,7 @@ export interface VulnerabilitiesTabProps {
 }
 
 export function VulnerabilitiesTab({
+  serviceId,
   rows,
   loading,
   loadingMore,
@@ -69,7 +75,10 @@ export function VulnerabilitiesTab({
   const [params, setParams] = useSearchParams();
   const [sort, setSort] = useState<Sort>(DEFAULT_SORT);
   const [open, setOpen] = useState<Vulnerability | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const facetsId = useId();
   const filters = useMemo(() => parseFilters(params), [params]);
+  const groupBy = parseGroupBy(params.get('group'));
   const includeSuppressed = params.get('suppressed') === 'true';
 
   function setParam(name: string, value: string | null) {
@@ -88,7 +97,6 @@ export function VulnerabilitiesTab({
     () => sortVulns(applyFilters(rows, filters), sort),
     [rows, filters, sort],
   );
-  const fixableCount = filtered.filter(isFixable).length;
 
   const chips = useMemo(() => {
     const sev = countBy(applyFilters(rows, filters, 'severity'), (v) => severityKey(v.severity));
@@ -104,9 +112,11 @@ export function VulnerabilitiesTab({
     }));
     const fixOptions: ChipOption[] = [
       { value: 'true', label: 'Fixable', count: fixable },
-      { value: 'false', label: 'No fix', count: fix.length - fixable },
+      { value: 'false', label: 'No fix yet', count: fix.length - fixable },
     ];
-    const classes = CLASS_OPTIONS.map((o) => ({ ...o, count: cls.get(o.value) ?? 0 }));
+    const classes = CLASS_OPTIONS.map((o) => ({ ...o, count: cls.get(o.value) ?? 0 })).filter(
+      (o) => o.count > 0 || filters.classes.includes(o.value as never),
+    );
     const artifactNames = [...new Set(rows.map((v) => v.artifact_name))].sort();
     const artifacts = artifactNames.map((name) => ({
       value: name,
@@ -115,90 +125,6 @@ export function VulnerabilitiesTab({
     }));
     return { severity, fixOptions, classes, artifacts };
   }, [rows, filters]);
-
-  const columns: Column<Vulnerability>[] = [
-    {
-      key: 'severity',
-      header: 'Severity',
-      width: 'w-28 shrink-0',
-      sortKey: 'severity',
-      cell: (v) => <SeverityBadge severity={v.severity} />,
-    },
-    {
-      key: 'vuln',
-      header: 'Vulnerability',
-      width: 'w-44 shrink-0',
-      cell: (v) => <AdvisoryLink vuln={v} />,
-    },
-    {
-      key: 'package',
-      header: 'Package',
-      width: 'w-52 shrink-0',
-      sortKey: 'package',
-      cell: (v) => (
-        <button
-          type="button"
-          aria-haspopup="dialog"
-          title={v.pkg_name}
-          onClick={() => setOpen(v)}
-          className="block max-w-full truncate rounded text-left underline-offset-2 hover:underline"
-        >
-          <Mono value={v.pkg_name} />
-        </button>
-      ),
-    },
-    {
-      key: 'versions',
-      header: 'Installed → fixed',
-      width: 'w-[28rem] shrink-0',
-      cell: (v) => (
-        <span
-          className="flex min-w-0 items-center gap-1.5"
-          title={`${v.installed_version} → ${isFixable(v) ? v.fixed_version : 'No fix'}`}
-        >
-          <Mono value={v.installed_version} truncate />
-          <span aria-hidden="true" className="text-text-muted">
-            →
-          </span>
-          <span className="sr-only">to</span>
-          {isFixable(v) ? (
-            <Mono value={v.fixed_version} truncate />
-          ) : (
-            <span className="text-text-muted">No fix</span>
-          )}
-        </span>
-      ),
-    },
-    {
-      key: 'target',
-      header: 'Target',
-      width: 'w-48 shrink-0',
-      cell: (v) => <span title={v.target}>{v.target}</span>,
-    },
-    {
-      key: 'artifact',
-      header: 'Artifact',
-      width: 'w-56 shrink-0',
-      cell: (v) => <span title={v.artifact_name}>{v.artifact_name}</span>,
-    },
-    {
-      key: 'seen',
-      header: 'First seen',
-      width: 'w-32 shrink-0',
-      sortKey: 'seen',
-      cell: (v) => (
-        <time dateTime={v.first_seen_at} title={formatExactTime(v.first_seen_at)}>
-          {relativeTime(v.first_seen_at)}
-        </time>
-      ),
-    },
-    {
-      key: 'status',
-      header: 'Status',
-      width: 'w-56 shrink-0',
-      cell: (v) => <StatusCell vuln={v} />,
-    },
-  ];
 
   if (error && rows.length === 0) {
     return (
@@ -210,10 +136,18 @@ export function VulnerabilitiesTab({
     );
   }
 
-  const filtering =
+  const focused =
     filters.severity.length + filters.classes.length + filters.artifacts.length > 0 ||
     filters.fixable !== null ||
     filters.q !== '';
+  const focusKey = JSON.stringify([filters, groupBy]);
+  const activeCount =
+    filters.severity.length +
+    filters.classes.length +
+    filters.artifacts.length +
+    (filters.fixable !== null ? 1 : 0) +
+    (groupBy !== 'none' ? 1 : 0) +
+    (includeSuppressed ? 1 : 0);
 
   function clearFilters() {
     setParams(
@@ -227,118 +161,179 @@ export function VulnerabilitiesTab({
   }
 
   return (
-    <div className="space-y-4">
-      <div className="space-y-3 rounded-card border border-border bg-surface p-4">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-          <SearchInput
-            label="Search package, vulnerability ID or title"
-            placeholder="Search package, ID or title"
-            value={filters.q}
-            onChange={(value) => setParam('q', value.trim() || null)}
-            className="w-full sm:w-80"
-          />
-          <label className="inline-flex min-h-10 items-center gap-2 text-text">
-            <input
-              type="checkbox"
-              checked={includeSuppressed}
-              onChange={(event) => setParam('suppressed', event.target.checked ? 'true' : null)}
-              className="size-4 accent-[var(--brand)]"
+    <div className="space-y-6">
+      <div data-focused={focused || undefined} className="lens-panel panel overflow-hidden">
+        <div className="space-y-3 px-5 pt-5 pb-4 sm:px-6">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
+            <SearchInput
+              label="Search package, vulnerability ID or title"
+              placeholder="Search package, ID or title"
+              value={filters.q}
+              primary
+              onChange={(value) => setParam('q', value.trim() || null)}
+              className="min-w-0 flex-1 lg:max-w-md"
             />
-            Include suppressed
-          </label>
-        </div>
-        <FilterChips
-          label="Filter by severity"
-          options={chips.severity}
-          selected={filters.severity}
-          onChange={(s) => setParam('severity', s.join(',') || null)}
-        />
-        <div className="flex flex-wrap gap-x-6 gap-y-3">
-          <FilterChips
-            label="Filter by fix availability"
-            single
-            options={chips.fixOptions}
-            selected={filters.fixable ? [filters.fixable] : []}
-            onChange={(s) => setParam('fixable', s[0] ?? null)}
-          />
-          <FilterChips
-            label="Filter by class"
-            options={chips.classes}
-            selected={filters.classes}
-            onChange={(s) => setParam('class', s.join(',') || null)}
-          />
-        </div>
-        {chips.artifacts.length > 1 ? (
-          <FilterChips
-            label="Filter by artifact"
-            options={chips.artifacts}
-            selected={filters.artifacts}
-            onChange={(s) => setParam('artifact', s.join(',') || null)}
-          />
-        ) : null}
-      </div>
-
-      <div className="flex min-h-6 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <p className="font-medium text-text tabular-nums">
-          {countOf(filtered.length, 'vulnerability', 'vulnerabilities')}, {formatInt(fixableCount)}{' '}
-          fixable
-        </p>
-        {loadingMore ? (
-          <p role="status" className="text-sm text-text-muted tabular-nums">
-            Loaded {formatInt(rows.length)} so far, counts update as more arrive
-          </p>
-        ) : null}
-        {truncated ? (
-          <p role="status" className="text-sm text-text-muted">
-            Showing the first 50 000 findings. Narrow the filters to see the rest.
-          </p>
-        ) : null}
-        {error && rows.length > 0 ? (
-          <p role="alert" className="text-sm text-text-muted">
-            Loading stopped after {formatInt(rows.length)} vulnerabilities.{' '}
-            <button type="button" onClick={onRetry} className="underline underline-offset-2">
-              Try again
+            <button
+              type="button"
+              aria-expanded={filtersOpen}
+              aria-controls={facetsId}
+              onClick={() => setFiltersOpen((open) => !open)}
+              className={`${buttonClass('secondary')} md:hidden`}
+            >
+              <SlidersHorizontal size={16} strokeWidth={1.75} aria-hidden="true" />
+              Filters
+              {activeCount > 0 ? (
+                <span className="rounded-full bg-brand px-1.5 text-caption font-semibold text-brand-ink tabular-nums">
+                  {activeCount}
+                </span>
+              ) : null}
             </button>
-          </p>
-        ) : null}
+            <div className="hidden items-center gap-2 md:flex">
+              <span className="text-small text-text-muted">Group by</span>
+              <Segmented
+                label="Group by"
+                options={GROUP_OPTIONS}
+                value={groupBy}
+                onChange={(next) => setParam('group', next === 'none' ? null : next)}
+              />
+            </div>
+          </div>
+          <div id={facetsId} className={`space-y-3 ${filtersOpen ? '' : 'max-md:hidden'}`}>
+            <div className="space-y-3 md:hidden">
+              <Select
+                label="Group by"
+                value={groupBy}
+                onChange={(next) => setParam('group', next === 'none' ? null : next)}
+                options={GROUP_OPTIONS}
+              />
+            </div>
+            <Facet label="Severity">
+              <FilterChips
+                label="Filter by severity"
+                options={chips.severity}
+                selected={filters.severity}
+                onChange={(s) => setParam('severity', s.join(',') || null)}
+              />
+            </Facet>
+            <Facet label="Fix">
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+                <FilterChips
+                  label="Filter by fix availability"
+                  single
+                  options={chips.fixOptions}
+                  selected={filters.fixable ? [filters.fixable] : []}
+                  onChange={(s) => setParam('fixable', s[0] ?? null)}
+                />
+                <label className="inline-flex min-h-8 items-center gap-2 text-body-s text-text-muted">
+                  <input
+                    type="checkbox"
+                    checked={includeSuppressed}
+                    onChange={(event) =>
+                      setParam('suppressed', event.target.checked ? 'true' : null)
+                    }
+                    className="size-4 accent-[var(--brand)]"
+                  />
+                  Include suppressed
+                </label>
+              </div>
+            </Facet>
+            {chips.classes.length > 1 ? (
+              <Facet label="Packages">
+                <FilterChips
+                  label="Filter by package class"
+                  options={chips.classes}
+                  selected={filters.classes}
+                  onChange={(s) => setParam('class', s.join(',') || null)}
+                />
+              </Facet>
+            ) : null}
+            {chips.artifacts.length > 1 ? (
+              <Facet label="Image">
+                <FilterChips
+                  label="Filter by image"
+                  options={chips.artifacts}
+                  selected={filters.artifacts}
+                  onChange={(s) => setParam('artifact', s.join(',') || null)}
+                />
+              </Facet>
+            ) : null}
+          </div>
+        </div>
+        <div className="border-t border-line bg-sunken/50">
+          <LensSummary
+            all={rows}
+            selected={filtered}
+            focused={focused}
+            onClear={clearFilters}
+            incomplete={loadingMore || truncated || Boolean(error)}
+          />
+        </div>
       </div>
 
-      <VirtualTable
-        caption="Vulnerabilities"
-        columns={columns}
+      {loadingMore || truncated || (error && rows.length > 0) ? (
+        <div className="-mt-2 flex flex-wrap gap-x-4 text-small text-text-muted">
+          {loadingMore ? (
+            <p role="status" className="tabular-nums">
+              Loaded {formatInt(rows.length)} so far, counts update as more arrive
+            </p>
+          ) : null}
+          {truncated ? (
+            <p role="status">
+              Showing the first 50 000 findings. Narrow the filters to see the rest.
+            </p>
+          ) : null}
+          {error && rows.length > 0 ? (
+            <p role="alert">
+              Loading stopped after {formatInt(rows.length)} vulnerabilities.{' '}
+              <button type="button" onClick={onRetry} className="underline underline-offset-2">
+                Try again
+              </button>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <FindingsList
         rows={filtered}
-        rowKey={(v) => v.id}
-        manualSort
+        groupBy={groupBy}
         sort={sort}
-        onSortChange={(s: SortState) => setSort({ key: s.key as SortKey, direction: s.direction })}
+        onSortChange={setSort}
+        onOpen={setOpen}
+        openId={open?.id ?? null}
         loading={loading}
-        onRowActivate={setOpen}
-        heightClass="h-[70vh]"
-        minWidthClass="min-w-[107rem]"
+        focusKey={focusKey}
         empty={
-          rows.length === 0 ? (
-            <EmptyState
-              compact
-              title="No vulnerabilities in the current scans"
-              body="Trivy reported nothing for the latest scan of this ref."
-            />
-          ) : (
-            <EmptyState
-              compact
-              title="No vulnerabilities match these filters"
-              body="Loosen a filter to see more."
-              action={
-                filtering ? (
-                  <button type="button" className={secondaryButtonClass} onClick={clearFilters}>
-                    Clear filters
-                  </button>
-                ) : undefined
-              }
-            />
-          )
+          <div className="panel">
+            {rows.length === 0 ? (
+              <EmptyState
+                compact
+                art="clean"
+                title="No vulnerabilities in the current scans"
+                body="Trivy reported nothing for the latest scan of this ref."
+              />
+            ) : (
+              <EmptyState
+                compact
+                art="lens"
+                title="No vulnerabilities match these filters"
+                body="Loosen a filter to see more."
+                action={
+                  focused ? (
+                    <button
+                      type="button"
+                      className={buttonClass('secondary')}
+                      onClick={clearFilters}
+                    >
+                      Clear filters
+                    </button>
+                  ) : undefined
+                }
+              />
+            )}
+          </div>
         }
       />
-      {open ? <VulnDrawer vuln={open} onClose={() => setOpen(null)} /> : null}
+      {open ? <VulnDrawer serviceId={serviceId} vuln={open} onClose={() => setOpen(null)} /> : null}
     </div>
   );
 }

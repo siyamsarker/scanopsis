@@ -8,6 +8,7 @@ import {
   type SeverityCountValues,
   type SeverityKey,
 } from '../../components/severityModel';
+import { RISK_WEIGHTS, riskPoints } from '../../viz/risk';
 
 export const SEVERITY_RANK: Record<SeverityKey, number> = {
   critical: 4,
@@ -155,41 +156,214 @@ export function highestFixed(values: string[]): string {
   return all.reduce((best, v) => (compareVersions(v, best) > 0 ? v : best), all[0] ?? '');
 }
 
+/** Zero counts, a fresh object each time. */
+export const emptyCounts = (): SeverityCountValues => ({
+  critical: 0,
+  high: 0,
+  medium: 0,
+  low: 0,
+  unknown: 0,
+});
+
+/** Findings per severity. */
+export function countSeverities(rows: Vulnerability[]): SeverityCountValues {
+  const counts = emptyCounts();
+  for (const v of rows) counts[severityKey(v.severity)]++;
+  return counts;
+}
+
+/** Risk points of one finding: its severity's weight. */
+export const riskOf = (v: Vulnerability) => RISK_WEIGHTS[severityKey(v.severity)];
+
 export interface UpgradeGroup {
   key: string;
   pkg: string;
+  /** Trivy's package type (debian, npm, pip…), for the upgrade command. */
+  pkgType: string;
   installed: string;
   upgradeTo: string;
   cleared: number;
   counts: SeverityCountValues;
+  /** Risk points the upgrade clears. */
+  risk: number;
+  /** Distinct vulnerability IDs the upgrade clears, most severe first. */
+  vulnIds: string[];
+  artifacts: string[];
 }
 
-/** Fixable, unsuppressed findings grouped by package and installed version, biggest win first. */
+/**
+ * Fixable, unsuppressed findings grouped by package and installed version,
+ * ranked by the risk points the upgrade clears (critical×10, high×5…), then
+ * by the number of findings and the package name.
+ */
 export function upgradeGroups(rows: Vulnerability[]): UpgradeGroup[] {
   const groups = new Map<string, Vulnerability[]>();
   for (const v of rows) {
     if (v.suppressed || !isFixable(v)) continue;
     const key = JSON.stringify([v.pkg_name, v.installed_version]);
-    groups.set(key, [...(groups.get(key) ?? []), v]);
+    const list = groups.get(key);
+    if (list) list.push(v);
+    else groups.set(key, [v]);
   }
   return [...groups.entries()]
     .map(([key, items]): UpgradeGroup => {
-      const counts = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
-      for (const v of items) counts[severityKey(v.severity)]++;
+      const counts = countSeverities(items);
+      const bySeverity = [...items].sort(
+        (a, b) => SEVERITY_RANK[severityKey(b.severity)] - SEVERITY_RANK[severityKey(a.severity)],
+      );
       return {
         key,
         pkg: items[0].pkg_name,
+        pkgType: items[0].pkg_type,
         installed: items[0].installed_version,
         upgradeTo: highestFixed(items.map((v) => v.fixed_version)),
         cleared: items.length,
         counts,
+        risk: riskPoints(counts),
+        vulnIds: [...new Set(bySeverity.map((v) => v.vuln_id))],
+        artifacts: [...new Set(items.map((v) => v.artifact_name))].sort(),
       };
     })
     .sort(
       (a, b) =>
-        b.counts.critical - a.counts.critical ||
-        b.counts.high - a.counts.high ||
+        b.risk - a.risk ||
         b.cleared - a.cleared ||
         a.pkg.localeCompare(b.pkg, 'en', { numeric: true }),
     );
+}
+
+/**
+ * The fixed version to suggest for one finding: the lowest listed version
+ * above the installed one (Trivy lists one per release line, "1.0.5, 1.1.2"),
+ * else the highest listed. Empty when there is no fix.
+ */
+export function suggestedFix(installed: string, fixed: string): string {
+  const all = fixed
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .sort(compareVersions);
+  return all.find((v) => compareVersions(v, installed) > 0) ?? all[all.length - 1] ?? '';
+}
+
+const quote = (value: string) => (/^[A-Za-z0-9@._/:+=~-]+$/.test(value) ? value : `'${value}'`);
+
+const OS_APT = ['debian', 'ubuntu'];
+const OS_APK = ['alpine', 'wolfi', 'chainguard'];
+const OS_DNF = ['redhat', 'centos', 'rocky', 'alma', 'amazon', 'oracle', 'fedora', 'azurelinux'];
+
+/**
+ * A command that installs `version` of a package with the usual tool of its
+ * ecosystem, or null when there is no common one. The version comes from the
+ * scan; it is a hint to check, not something to run blindly.
+ */
+export function upgradeCommand(pkgType: string, pkg: string, version: string): string | null {
+  if (!version || !pkg) return null;
+  const type = pkgType.toLowerCase();
+  if (OS_APT.includes(type)) return `apt-get install --only-upgrade ${quote(`${pkg}=${version}`)}`;
+  if (OS_APK.includes(type)) return `apk add --upgrade ${quote(`${pkg}=${version}`)}`;
+  if (OS_DNF.includes(type)) return `dnf upgrade ${quote(`${pkg}-${version}`)}`;
+  switch (type) {
+    case 'npm':
+    case 'node-pkg':
+      return `npm install ${quote(`${pkg}@${version}`)}`;
+    case 'yarn':
+      return `yarn add ${quote(`${pkg}@${version}`)}`;
+    case 'pnpm':
+      return `pnpm add ${quote(`${pkg}@${version}`)}`;
+    case 'pip':
+    case 'pipenv':
+    case 'python-pkg':
+    case 'uv':
+      return `pip install ${quote(`${pkg}==${version}`)}`;
+    case 'poetry':
+      return `poetry add ${quote(`${pkg}@${version}`)}`;
+    case 'gomod':
+    case 'gobinary':
+      return pkg === 'stdlib'
+        ? null
+        : `go get ${quote(`${pkg}@${version.startsWith('v') ? version : `v${version}`}`)}`;
+    case 'cargo':
+    case 'rust-binary':
+      return `cargo update -p ${quote(pkg)} --precise ${quote(version)}`;
+    case 'composer':
+      return `composer require ${quote(`${pkg}:${version}`)}`;
+    case 'nuget':
+    case 'dotnet-core':
+    case 'packages-props':
+      return `dotnet add package ${quote(pkg)} --version ${quote(version)}`;
+    case 'gemspec':
+    case 'bundler':
+      return `gem install ${quote(pkg)} -v ${quote(version)}`;
+    case 'jar':
+    case 'pom':
+    case 'gradle':
+    case 'sbt':
+      return `${pkg}:${version}`;
+  }
+  return null;
+}
+
+export type GroupBy = 'none' | 'package' | 'vulnerability' | 'image';
+export const GROUP_BY: readonly GroupBy[] = ['none', 'package', 'vulnerability', 'image'];
+
+export function parseGroupBy(value: string | null): GroupBy {
+  return (GROUP_BY as readonly string[]).includes(value ?? '') ? (value as GroupBy) : 'none';
+}
+
+export interface FindingGroup {
+  key: string;
+  /** What the rows share: a package, an ID or an image. */
+  label: string;
+  /** The installed version, for package groups. */
+  version?: string;
+  rows: Vulnerability[];
+  counts: SeverityCountValues;
+  risk: number;
+  fixable: number;
+  /** Package groups: the version that fixes every fixable finding of the group. */
+  upgradeTo?: string;
+  /** Vulnerability groups: the title. */
+  title?: string;
+}
+
+function groupKey(v: Vulnerability, by: Exclude<GroupBy, 'none'>): [string, string] {
+  if (by === 'package') return [JSON.stringify([v.pkg_name, v.installed_version]), v.pkg_name];
+  if (by === 'vulnerability') return [v.vuln_id, v.vuln_id];
+  return [v.artifact_name, v.artifact_name];
+}
+
+/**
+ * Groups rows that are already sorted; rows keep their order inside a group.
+ * Groups come by risk points, then size, then name.
+ */
+export function groupRows(rows: Vulnerability[], by: Exclude<GroupBy, 'none'>): FindingGroup[] {
+  const groups = new Map<string, FindingGroup>();
+  for (const v of rows) {
+    const [key, label] = groupKey(v, by);
+    let group = groups.get(key);
+    if (!group) {
+      group = { key, label, rows: [], counts: emptyCounts(), risk: 0, fixable: 0 };
+      if (by === 'package') group.version = v.installed_version;
+      groups.set(key, group);
+    }
+    group.rows.push(v);
+    group.counts[severityKey(v.severity)]++;
+    group.risk += riskOf(v);
+    if (isFixable(v)) group.fixable++;
+    if (by === 'vulnerability' && !group.title && v.title) group.title = v.title;
+  }
+  const list = [...groups.values()];
+  if (by === 'package') {
+    for (const g of list) {
+      const fixes = g.rows.filter(isFixable).map((v) => v.fixed_version);
+      if (fixes.length) g.upgradeTo = highestFixed(fixes);
+    }
+  }
+  return list.sort(
+    (a, b) =>
+      b.risk - a.risk ||
+      b.rows.length - a.rows.length ||
+      a.label.localeCompare(b.label, 'en', { numeric: true }),
+  );
 }
