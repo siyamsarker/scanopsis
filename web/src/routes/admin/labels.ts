@@ -20,6 +20,25 @@ export const rejectionReasons: Record<string, string> = {
   job_artifact_limit: 'One job uploaded more different artifacts than a job may.',
 };
 
+/** A short name for each rejection reason code, for tables. */
+export const rejectionLabels: Record<string, string> = {
+  invalid_token: 'Invalid ID token',
+  namespace_not_allowed: 'Namespace not allowed',
+  ref_not_protected: 'Branch not protected',
+  report_too_large: 'Report too large',
+  not_a_trivy_report: 'Not a Trivy report',
+  invalid_report: 'Malformed report',
+  unsupported_media_type: 'Not sent as JSON',
+  too_many_requests: 'Rate limited',
+  service_archived: 'Service archived',
+  service_conflict: 'Path conflict',
+  gitlab_unavailable: 'GitLab unreachable',
+  busy: 'Server busy',
+  request_timeout: 'Upload too slow',
+  project_rate_limited: 'Project rate limited',
+  job_artifact_limit: 'Too many artifacts',
+};
+
 /** Plain label for each audit action. */
 export const auditActions: Record<string, string> = {
   'login.succeeded': 'Signed in',
