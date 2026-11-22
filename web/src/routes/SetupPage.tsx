@@ -8,11 +8,15 @@ import { api, ApiError, unwrap } from '../api/client';
 import { describeError } from '../api/errors';
 import { setupKey } from '../api/hooks';
 import { AuthShell } from '../components/AuthShell';
-import { ErrorNote } from '../components/ErrorNote';
-import { Field } from '../components/Field';
-import { monoInputClass, primaryButtonClass } from '../ui';
+import { Spinner } from '../components/ConfirmDialog';
+import { buttonClass, monoInputClass } from '../ui';
+import { Problem } from './admin/kit';
+import { AuthField, PasswordField, PasswordRules, passwordChecks } from './auth/fields';
 
 export const passwordRules = 'At least 12 characters, and not your username.';
+
+/** The steps from a new server to the first signed-in administrator. */
+export const setupSteps = ['Create the administrator', 'Set up two-factor', 'Save recovery codes'];
 
 function setupMessage(err: unknown): string {
   if (err instanceof ApiError) {
@@ -47,10 +51,12 @@ export function SetupPage() {
     setMismatch(false);
     setPending(true);
     try {
-      unwrap(await api.POST('/api/v1/setup', { body: { token, username, password } }));
+      unwrap(
+        await api.POST('/api/v1/setup', { body: { token: token.trim(), username, password } }),
+      );
       queryClient.clear();
       queryClient.setQueryData(setupKey, { required: false });
-      void navigate('/2fa/setup', { replace: true });
+      void navigate('/2fa/setup', { replace: true, state: { fromSetup: true } });
     } catch (err) {
       if (err instanceof ApiError && err.code === 'setup_complete') {
         queryClient.setQueryData(setupKey, { required: false });
@@ -62,60 +68,77 @@ export function SetupPage() {
     }
   }
 
+  const strong = passwordChecks(password, username).every((c) => c.ok);
   return (
     <AuthShell
       title="Set up Scanopsis"
-      lead={
-        <>
-          Create the first administrator. Find the setup token in the server log, for example with{' '}
-          <code className="font-mono text-text">docker logs &lt;container&gt;</code>.
-        </>
-      }
+      lead="Create the first administrator. Two-factor sign-in comes next."
+      steps={{ labels: setupSteps, current: 0 }}
     >
       <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-        <Field
+        <AuthField
           id="token"
           label="Setup token"
           type="text"
           autoComplete="off"
           spellCheck={false}
+          autoCapitalize="off"
           required
           value={token}
           onChange={(e) => setToken(e.target.value)}
           className={monoInputClass}
+          hint={
+            <>
+              Printed in the server log at start-up, for example by{' '}
+              <code className="rounded-[4px] bg-sunken px-1 font-mono text-text">
+                docker logs scanopsis
+              </code>
+              .
+            </>
+          }
         />
-        <Field
+        <AuthField
           id="username"
           label="Username"
           type="text"
           autoComplete="username"
+          autoCapitalize="off"
+          spellCheck={false}
           required
           value={username}
           onChange={(e) => setUsername(e.target.value)}
         />
-        <Field
+        <PasswordField
           id="password"
           label="Password"
-          type="password"
           autoComplete="new-password"
           required
           minLength={12}
-          hint={passwordRules}
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={setPassword}
+          hint={<PasswordRules password={password} username={username} />}
         />
-        <Field
+        <PasswordField
           id="confirm"
           label="Confirm password"
-          type="password"
           autoComplete="new-password"
           required
           value={confirm}
+          onChange={(v) => {
+            setConfirm(v);
+            setMismatch(false);
+          }}
           error={mismatch ? 'The passwords do not match.' : undefined}
-          onChange={(e) => setConfirm(e.target.value)}
         />
-        {error && <ErrorNote>{error}</ErrorNote>}
-        <button type="submit" disabled={pending} className={primaryButtonClass}>
+        {error ? <Problem>{error}</Problem> : null}
+        <button
+          type="submit"
+          disabled={pending}
+          aria-busy={pending || undefined}
+          className={`${buttonClass('primary', 'lg')} mt-2 w-full`}
+          title={strong ? undefined : passwordRules}
+        >
+          {pending ? <Spinner /> : null}
           Create administrator
         </button>
       </form>

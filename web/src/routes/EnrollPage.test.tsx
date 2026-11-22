@@ -1,10 +1,10 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { apiError, json, makeUser, mockFetch, renderApp, type Handler } from '../test-utils';
 
-const codes = Array.from({ length: 10 }, (_, i) => `abcd${i}-efgh${i}`);
+const codes = Array.from({ length: 10 }, (_, i) => `abcd${i}-efgh${i}-ijkm${i}-npqr${i}`);
 
 function enrolApi(opts: { confirm?: Handler } = {}) {
   const state = { enrolled: false };
@@ -40,7 +40,7 @@ describe('two-factor enrolment', () => {
     vi.restoreAllMocks();
   });
 
-  it('starts enrolment once and shows the QR code and the secret', async () => {
+  it('starts enrolment once and shows the QR code and the secret in groups of four', async () => {
     const { handler } = enrolApi();
     const { calls } = mockFetch(handler);
     renderApp('/2fa/setup');
@@ -48,9 +48,34 @@ describe('two-factor enrolment', () => {
     expect(heading).toHaveFocus();
     const qr = await screen.findByRole('img', { name: 'QR code for your authenticator app' });
     expect(qr.querySelector('path')?.getAttribute('d')?.length).toBeGreaterThan(100);
-    expect(screen.getByLabelText('Secret')).toHaveTextContent('JBSWY3DPEHPK3PXP');
-    expect(screen.getByLabelText('Secret')).toHaveClass('font-mono');
+    const secret = screen.getByLabelText('Secret');
+    expect(secret).toHaveAttribute('data-secret', 'JBSWY3DPEHPK3PXP');
+    expect(secret).toHaveClass('font-mono');
+    // Screen readers get the secret in one piece; the eye gets groups of four.
+    expect(secret.querySelector('.sr-only')).toHaveTextContent(/^JBSWY3DPEHPK3PXP$/);
+    expect(
+      [...secret.querySelectorAll('span[aria-hidden="true"]')].map((g) => g.textContent),
+    ).toEqual(['JBSW', 'Y3DP', 'EHPK', '3PXP']);
     expect(calls.filter((c) => c.path === '/api/v1/auth/mfa/enrollment')).toHaveLength(1);
+  });
+
+  it('shows the enrolment steps', async () => {
+    mockFetch(enrolApi().handler);
+    renderApp('/2fa/setup');
+    await screen.findByRole('heading', { name: 'Set up two-factor sign-in' });
+    const progress = screen.getByRole('navigation', { name: 'Progress' });
+    expect(progress).toHaveTextContent('Step 1 of 3');
+    expect(
+      within(progress)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Scan the code', 'Enter a code', 'Save recovery codes']);
+    await toCodeStep();
+    expect(progress).toHaveTextContent('Step 2 of 3');
+    expect(within(progress).getByText('Enter a code').closest('li')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
   });
 
   it('copies the secret', async () => {
@@ -58,7 +83,7 @@ describe('two-factor enrolment', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     mockFetch(enrolApi().handler);
     renderApp('/2fa/setup');
-    fireEvent.click(await screen.findByRole('button', { name: 'Copy secret' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy key' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('JBSWY3DPEHPK3PXP'));
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
   });
@@ -73,15 +98,31 @@ describe('two-factor enrolment', () => {
   });
 
   it('shows an error for a wrong code and stays on the step', async () => {
-    mockFetch(enrolApi({ confirm: () => apiError(401, 'invalid_code', 'Wrong code.') }).handler);
+    const { calls } = mockFetch(
+      enrolApi({ confirm: () => apiError(401, 'invalid_code', 'Wrong code.') }).handler,
+    );
     renderApp('/2fa/setup');
     fireEvent.change(await toCodeStep(), { target: { value: '000000' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('That code is not correct');
     expect(screen.getByLabelText('6-digit code')).toBeInTheDocument();
+    // Confirm sends the same code again on request.
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(calls.filter((c) => c.path.endsWith('/confirm'))).toHaveLength(2));
   });
 
-  it('shows the recovery codes once, with copy, download and a required checkbox', async () => {
+  it('goes back to the QR code without starting again', async () => {
+    const { calls } = mockFetch(enrolApi().handler);
+    renderApp('/2fa/setup');
+    await toCodeStep();
+    fireEvent.click(screen.getByRole('button', { name: 'Back to the QR code' }));
+    expect(
+      await screen.findByRole('img', { name: 'QR code for your authenticator app' }),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText('Secret')).toHaveAttribute('data-secret', 'JBSWY3DPEHPK3PXP');
+    expect(calls.filter((c) => c.path === '/api/v1/auth/mfa/enrollment')).toHaveLength(1);
+  });
+
+  it('shows the recovery codes once as a numbered sheet, with copy, download and a required checkbox', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     let blob: Blob | undefined;
@@ -95,24 +136,35 @@ describe('two-factor enrolment', () => {
     const { handler } = enrolApi();
     const { calls } = mockFetch(handler);
     renderApp('/2fa/setup?return_to=%2Fadmin%2Fusers');
+    // The sixth digit confirms; spaces are dropped from the code that is sent.
     fireEvent.change(await toCodeStep(), { target: { value: '123 456' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
 
     const heading = await screen.findByRole('heading', { name: 'Save your recovery codes' });
     // Focus moves to the heading after the page renders.
     await waitFor(() => expect(heading).toHaveFocus());
     expect(calls.find((c) => c.path.endsWith('/confirm'))?.body).toEqual({ code: '123456' });
     const list = screen.getByRole('list', { name: 'Recovery codes' });
-    expect(list.querySelectorAll('li')).toHaveLength(10);
+    expect(list.tagName).toBe('OL');
+    expect([...list.querySelectorAll('li')].map((li) => li.textContent)).toEqual(codes);
     expect(list).toHaveClass('font-mono');
+    expect(calls.filter((c) => c.path.endsWith('/confirm'))).toHaveLength(1);
+    // The sheet names the account it belongs to.
+    expect(screen.getByText('ada')).toBeVisible();
     expect(screen.queryByLabelText('Secret')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Copy all' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(codes.join('\n')));
 
+    expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('button', { name: 'Download as text file' }));
     expect(click).toHaveBeenCalled();
-    expect(await blob?.text()).toContain(codes[3]);
+    const text = (await blob?.text()) ?? '';
+    expect(text).toContain('Scanopsis recovery codes');
+    expect(text).toContain('Account: ada');
+    expect(text).toContain(` 4. ${codes[3]}`);
+    expect(text).toContain(`10. ${codes[9]}`);
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:codes');
 
     const next = screen.getByRole('button', { name: 'Continue' });
     expect(next).toBeDisabled();

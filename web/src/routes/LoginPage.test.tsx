@@ -82,6 +82,56 @@ describe('login page methods', () => {
   });
 });
 
+describe('login page layout', () => {
+  it('makes GitLab the one primary action when both methods are offered', async () => {
+    mockFetch(anonymous());
+    renderApp('/login');
+    const gitlab = await screen.findByRole('link', { name: 'Sign in with GitLab' });
+    expect(gitlab).toHaveClass('bg-brand');
+    expect(gitlab.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getByText('or with a local account')).toBeVisible();
+    const local = screen.getByRole('button', { name: 'Sign in' });
+    expect(local).not.toHaveClass('bg-brand');
+    expect(local).toHaveClass('bg-surface-raised');
+  });
+
+  it('makes the local form primary when it is the only method', async () => {
+    mockFetch(anonymous({ gitlab: false, local: true }));
+    renderApp('/login');
+    expect(await screen.findByRole('button', { name: 'Sign in' })).toHaveClass('bg-brand');
+    expect(screen.queryByText('or with a local account')).not.toBeInTheDocument();
+  });
+
+  it('shows and hides the password', async () => {
+    mockFetch(anonymous());
+    renderApp('/login');
+    const password = await screen.findByLabelText('Password');
+    expect(password).toHaveAttribute('type', 'password');
+    const show = screen.getByRole('button', { name: 'Show characters' });
+    expect(show).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(show);
+    expect(password).toHaveAttribute('type', 'text');
+    const hide = screen.getByRole('button', { name: 'Hide characters' });
+    expect(hide).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(hide);
+    expect(password).toHaveAttribute('type', 'password');
+  });
+
+  it('warns while Caps Lock is on', async () => {
+    mockFetch(anonymous());
+    renderApp('/login');
+    const password = await screen.findByLabelText('Password');
+    fireEvent.keyDown(password, { key: 'A', modifierCapsLock: true });
+    expect(screen.getByText('Caps Lock is on.')).toBeVisible();
+    expect(password).toHaveAccessibleDescription('Caps Lock is on.');
+    fireEvent.keyUp(password, { key: 'CapsLock', modifierCapsLock: false });
+    expect(screen.queryByText('Caps Lock is on.')).not.toBeInTheDocument();
+    fireEvent.keyDown(password, { key: 'A', modifierCapsLock: true });
+    fireEvent.blur(password);
+    expect(screen.queryByText('Caps Lock is on.')).not.toBeInTheDocument();
+  });
+});
+
 describe('login page theme', () => {
   it('offers the theme switch', async () => {
     mockFetch(anonymous());

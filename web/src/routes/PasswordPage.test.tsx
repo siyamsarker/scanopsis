@@ -42,8 +42,17 @@ describe('password page', () => {
     const heading = await screen.findByRole('heading', { name: 'Choose a new password' });
     // Focus moves to the heading after the page renders.
     await waitFor(() => expect(heading).toHaveFocus());
-    expect(screen.getByText('At least 12 characters, and not your username.')).toBeVisible();
+    expect(screen.getByText('The temporary password from your administrator.')).toBeVisible();
+    // The rules are checked as the new password is typed; ada is the username.
+    fireEvent.change(screen.getByLabelText('New password'), { target: { value: 'ada' } });
+    expect(screen.getByText('At least 12 characters')).toHaveTextContent(
+      'At least 12 characters: not yet',
+    );
+    expect(screen.getByText('Not your username')).toHaveTextContent('Not your username: not yet');
     fill();
+    expect(screen.getByText('At least 12 characters')).toHaveTextContent(
+      'At least 12 characters: met',
+    );
     expect(await screen.findByRole('heading', { name: 'Users' })).toBeInTheDocument();
     expect(calls.find((c) => c.path === '/api/v1/me/password')?.body).toEqual({
       current_password: 'temporary-1',
@@ -58,6 +67,24 @@ describe('password page', () => {
     fill('a much longer password', 'another long password');
     expect(await screen.findByText('The passwords do not match.')).toBeVisible();
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('shows each password on request', async () => {
+    mockFetch(passwordApi(() => noContent()));
+    renderApp('/password');
+    await screen.findByRole('heading', { name: 'Choose a new password' });
+    const toggles = screen.getAllByRole('button', { name: 'Show characters' });
+    expect(toggles).toHaveLength(3);
+    fireEvent.click(toggles[1]);
+    expect(screen.getByLabelText('New password')).toHaveAttribute('type', 'text');
+    expect(screen.getByLabelText('Current password')).toHaveAttribute('type', 'password');
+  });
+
+  it('offers to sign out', async () => {
+    mockFetch(passwordApi(() => noContent()));
+    renderApp('/password');
+    await screen.findByRole('heading', { name: 'Choose a new password' });
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
   });
 
   it('explains a wrong current password', async () => {

@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useQueryClient } from '@tanstack/react-query';
-import { LogIn } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
@@ -10,8 +9,11 @@ import { describeError } from '../api/errors';
 import { useAuthMethods, useMe } from '../api/hooks';
 import { safeReturnTo } from '../auth/returnTo';
 import { AuthShell } from '../components/AuthShell';
-import { ErrorNote } from '../components/ErrorNote';
-import { inputClass, primaryButtonClass } from '../ui';
+import { Spinner } from '../components/ConfirmDialog';
+import { Skeleton } from '../components/states';
+import { buttonClass } from '../ui';
+import { GitLabGlyph, Problem } from './admin/kit';
+import { AuthField, OrDivider, PasswordField } from './auth/fields';
 
 const errorMessages: Record<string, string> = {
   access_denied: 'You cancelled the sign-in on GitLab.',
@@ -28,7 +30,11 @@ function localLoginMessage(err: unknown): string {
   return describeError(err);
 }
 
-function LocalForm({ returnTo }: { returnTo: string }) {
+/**
+ * Username and password. When GitLab sign-in is offered too, GitLab is the
+ * primary action and this form's button steps back to a secondary one.
+ */
+function LocalForm({ returnTo, primary }: { returnTo: string; primary: boolean }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [username, setUsername] = useState('');
@@ -53,38 +59,33 @@ function LocalForm({ returnTo }: { returnTo: string }) {
 
   return (
     <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <label htmlFor="username" className="font-medium text-text">
-          Username
-        </label>
-        <input
-          id="username"
-          name="username"
-          type="text"
-          autoComplete="username"
-          required
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          className={inputClass}
-        />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label htmlFor="password" className="font-medium text-text">
-          Password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className={inputClass}
-        />
-      </div>
-      {error && <ErrorNote>{error}</ErrorNote>}
-      <button type="submit" disabled={pending} className={primaryButtonClass}>
+      <AuthField
+        id="username"
+        label="Username"
+        type="text"
+        autoComplete="username"
+        autoCapitalize="off"
+        spellCheck={false}
+        required
+        value={username}
+        onChange={(e) => setUsername(e.target.value)}
+      />
+      <PasswordField
+        id="password"
+        label="Password"
+        autoComplete="current-password"
+        required
+        value={password}
+        onChange={setPassword}
+      />
+      {error ? <Problem>{error}</Problem> : null}
+      <button
+        type="submit"
+        disabled={pending}
+        aria-busy={pending || undefined}
+        className={`${buttonClass(primary ? 'primary' : 'secondary', 'lg')} w-full`}
+      >
+        {pending ? <Spinner /> : null}
         Sign in
       </button>
     </form>
@@ -106,19 +107,18 @@ export function LoginPage() {
   let body;
   if (me.isPending || methods.isPending) {
     body = (
-      <p role="status" className="text-text-muted">
-        Loading…
-      </p>
+      <div role="status" aria-label="Loading sign-in options" className="flex flex-col gap-3">
+        <Skeleton className="h-11 w-full" />
+        <Skeleton className="h-11 w-full" />
+      </div>
     );
   } else if (methods.isError) {
     body = (
-      <ErrorNote>
-        Scanopsis could not load the sign-in options. Reload the page to try again.
-      </ErrorNote>
+      <Problem>Scanopsis could not load the sign-in options. Reload the page to try again.</Problem>
     );
   } else if (!methods.data.gitlab && !methods.data.local) {
     body = (
-      <p className="text-text-muted">
+      <p className="text-body-s text-text-muted">
         No sign-in method is enabled on this server. Ask an administrator to configure GitLab or
         local sign-in.
       </p>
@@ -126,26 +126,32 @@ export function LoginPage() {
   } else {
     body = (
       <div className="flex flex-col gap-6">
-        {methods.data.gitlab && (
+        {methods.data.gitlab ? (
           <a
             href={`/api/v1/auth/gitlab/login?return_to=${encodeURIComponent(returnTo)}`}
-            className={primaryButtonClass}
+            className={`${buttonClass('primary', 'lg')} w-full`}
           >
-            <LogIn size={16} strokeWidth={1.5} aria-hidden="true" />
+            <GitLabGlyph size={18} />
             Sign in with GitLab
           </a>
-        )}
-        {methods.data.gitlab && methods.data.local && (
-          <p className="text-center text-text-muted">or use a local account</p>
-        )}
-        {methods.data.local && <LocalForm returnTo={returnTo} />}
+        ) : null}
+        {methods.data.gitlab && methods.data.local ? (
+          <OrDivider>or with a local account</OrDivider>
+        ) : null}
+        {methods.data.local ? (
+          <LocalForm returnTo={returnTo} primary={!methods.data.gitlab} />
+        ) : null}
       </div>
     );
   }
 
   return (
-    <AuthShell title="Sign in" lead="to see your SonarQube and Trivy results." focusHeading={false}>
-      {urlError && <ErrorNote>{urlError}</ErrorNote>}
+    <AuthShell title="Sign in" lead="to see what every pipeline changed." focusHeading={false}>
+      {urlError ? (
+        <div className="tone-fail rounded-inner border border-[color-mix(in_srgb,var(--tone)_35%,var(--line))] bg-[color-mix(in_srgb,var(--tone)_8%,var(--surface))] px-4 py-3">
+          <Problem>{urlError}</Problem>
+        </div>
+      ) : null}
       <div className="min-h-24">{body}</div>
     </AuthShell>
   );
