@@ -16,8 +16,13 @@ import (
 // it has no scans yet, else the ref of the most recent scan (ties broken by
 // ref as in ListRefs); findings.pickRef applies the same rule. The current
 // state of a ref is the latest scan per (artifact_name, kind), as in
-// CurrentScans. It is written by hand rather than generated because sqlc
-// types the columns of LEFT JOIN LATERAL subqueries as not null.
+// CurrentScans. It finds the latest scan of each (artifact_name, kind) by
+// jumping from one group to the next in scans_current_cover_idx (a recursive
+// "skip scan") instead of reading every scan of the ref, so its cost follows
+// the number of artifacts, not the number of scans in the retention window;
+// the counts come from the index without reading the table. It is written by
+// hand rather than generated because sqlc types the columns of LEFT JOIN
+// LATERAL subqueries as not null.
 const portfolioSQL = `
 SELECT s.id, s.name, s.gitlab_project_id, s.gitlab_project_path, s.sonar_project_key,
        s.created_via, s.archived, s.created_at, s.default_ref,
@@ -38,18 +43,29 @@ LEFT JOIN LATERAL (
     ) l ON s.default_ref IS NULL
 ) dr ON true
 LEFT JOIN LATERAL (
-    SELECT sum(c.count_critical)::bigint AS critical, sum(c.count_high)::bigint AS high,
-           sum(c.count_medium)::bigint AS medium, sum(c.count_low)::bigint AS low,
-           sum(c.count_unknown)::bigint AS unknown, sum(c.count_fixable)::bigint AS fixable,
-           sum(c.count_secrets)::bigint AS secrets, max(c.scanned_at) AS last_scan_at
-    FROM (
-        SELECT DISTINCT ON (artifact_name, kind)
-               count_critical, count_high, count_medium, count_low, count_unknown,
-               count_fixable, count_secrets, scanned_at
-        FROM scans
-        WHERE service_id = s.id AND ref = dr.ref
-        ORDER BY artifact_name, kind, scanned_at DESC, id DESC
-    ) c
+    WITH RECURSIVE c AS (
+        (SELECT artifact_name, kind, count_critical, count_high, count_medium, count_low,
+                count_unknown, count_fixable, count_secrets, scanned_at
+         FROM scans
+         WHERE service_id = s.id AND ref = dr.ref
+         ORDER BY artifact_name, kind, scanned_at DESC, id DESC
+         LIMIT 1)
+        UNION ALL
+        SELECT n.*
+        FROM c, LATERAL (
+            SELECT artifact_name, kind, count_critical, count_high, count_medium, count_low,
+                   count_unknown, count_fixable, count_secrets, scanned_at
+            FROM scans
+            WHERE service_id = s.id AND ref = dr.ref AND (artifact_name, kind) > (c.artifact_name, c.kind)
+            ORDER BY artifact_name, kind, scanned_at DESC, id DESC
+            LIMIT 1
+        ) n
+    )
+    SELECT sum(count_critical)::bigint AS critical, sum(count_high)::bigint AS high,
+           sum(count_medium)::bigint AS medium, sum(count_low)::bigint AS low,
+           sum(count_unknown)::bigint AS unknown, sum(count_fixable)::bigint AS fixable,
+           sum(count_secrets)::bigint AS secrets, max(scanned_at) AS last_scan_at
+    FROM c
 ) cs ON true
 LEFT JOIN LATERAL (
     SELECT quality_gate_status, reliability_rating, security_rating, maintainability_rating,
