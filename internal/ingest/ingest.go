@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"os"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -55,7 +56,20 @@ const (
 	codeArchived          = "service_archived"
 	// codeBusy: every upload slot is taken and the client stopped waiting.
 	codeBusy = "busy"
+	// codeTimeout: the body did not arrive within the read deadline.
+	codeTimeout = "request_timeout"
 )
+
+// DefaultReadTimeout is how long an admitted upload has to send its whole
+// body when Options.ReadTimeout is 0. It replaces the server's read timeout
+// for this route (30 s in the server), which cuts off large uploads from slow
+// links.
+const DefaultReadTimeout = 5 * time.Minute
+
+// writeGrace is how long after the read deadline the answer can still be
+// written. It replaces the server's write timeout (60 s) for this route, so
+// an upload that used its whole read time still gets an answer.
+const writeGrace = 60 * time.Second
 
 // DefaultAdmitWait is how long an upload waits for memory to be free when
 // Options.AdmitWait is 0.
@@ -89,6 +103,9 @@ type Options struct {
 	// uploadWeight). Others wait for memory to be free. 0 means two fifths of the
 	// process memory limit (GOMEMLIMIT), or 160 MiB without one.
 	MemoryBudget int64
+	// ReadTimeout is how long an upload has to send its whole body, counted
+	// from the moment it is admitted. 0 means DefaultReadTimeout.
+	ReadTimeout time.Duration
 	// AdmitWait is how long an upload waits for memory before it is answered
 	// with 503 busy. 0 means DefaultAdmitWait.
 	AdmitWait time.Duration
@@ -146,6 +163,9 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	}
 	if opts.MemoryBudget <= 0 {
 		opts.MemoryBudget = budgetFromLimit()
+	}
+	if opts.ReadTimeout <= 0 {
+		opts.ReadTimeout = DefaultReadTimeout
 	}
 	if opts.AdmitWait <= 0 {
 		opts.AdmitWait = DefaultAdmitWait
@@ -317,9 +337,26 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		i.trim(weight)
 	}()
 
+	// The server's own deadlines (30 s to read, 60 s to write) fit small
+	// requests, not a report of tens of megabytes over a slow link. This
+	// route sets its own, now that the upload holds its memory. A response
+	// writer that cannot (a test recorder) keeps the server's.
+	rc := http.NewResponseController(w)
+	deadline := time.Now().Add(i.opts.ReadTimeout)
+	if err := rc.SetReadDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		i.log.WarnContext(ctx, "cannot set the read deadline of an upload", "error", err)
+	}
+	if err := rc.SetWriteDeadline(deadline.Add(writeGrace)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		i.log.WarnContext(ctx, "cannot set the write deadline of an upload", "error", err)
+	}
+
 	rep, raw, replay, err := i.readReport(w, r, gz, limit)
 	if err != nil {
 		rj := classifyRead(err, gz, limit)
+		if rj.status == http.StatusRequestTimeout {
+			// The rest of the body is still on its way, or never comes.
+			w.Header().Set("Connection", "close")
+		}
 		reject(rj.status, rj.code, rj.message)
 		return
 	}
@@ -505,7 +542,11 @@ func parseGzip(raw []byte, limit int64, s sink, buffer bool, rep *Report) error 
 
 func classifyRead(err error, gz bool, limit int64) rejection {
 	var tooBig *http.MaxBytesError
+	var netErr net.Error
 	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded), errors.As(err, &netErr) && netErr.Timeout():
+		return rejection{http.StatusRequestTimeout, codeTimeout,
+			"The body did not arrive in time. Upload it faster, or retry."}
 	case errors.Is(err, errTooLarge), errors.As(err, &tooBig):
 		return rejection{http.StatusRequestEntityTooLarge, codeTooLarge, tooLargeMessage(limit)}
 	case errors.Is(err, ErrTooManyFindings):
