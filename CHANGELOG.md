@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - SonarQube webhook deliveries are processed by four workers that run apart from the periodic sync, so a slow SonarQube or a burst of webhooks no longer delays the other. The queue holds 500 deliveries, and a delivery that still finds it full stays pending and is read by the next sync instead of being marked failed.
 - A SonarQube sync stops early when the version call fails or after three calls in a row get no answer, holds no pooled database connection while it waits for SonarQube, and logs one summary warning per sync instead of one per project.
-- Data retention now keeps the latest scan of a ref forever only when the ref is the service's dashboard branch, was protected, or is the ref the dashboards show when no branch is chosen. The latest scan of any other unprotected branch expires after the retention period, so storage no longer grows with short-lived branches. Migration 00009 adds an index on the most recent scan of a service, used by retention and the portfolio.
+- Data retention now keeps the latest scan of a ref forever only when the ref is the service's dashboard branch, was protected, or is the ref the dashboards show when no branch is chosen. The latest scan of any other unprotected branch expires after the retention period, so storage no longer grows with short-lived branches.
 - Data retention empties the stored original report of scans that are not current after 30 days (fixed). The report was never read and was most of the database and of every backup.
 
 ### Added
