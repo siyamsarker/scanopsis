@@ -547,7 +547,14 @@ type trivyJSON struct {
 		At          string  `json:"at"`
 		Reason      string  `json:"reason"`
 		ProjectPath *string `json:"project_path"`
+		ServiceID   *int64  `json:"service_id"`
+		ServiceName *string `json:"service_name"`
 	} `json:"recent_rejections"`
+	Daily []struct {
+		Day        string `json:"day"`
+		Uploads    int64  `json:"uploads"`
+		Rejections int64  `json:"rejections"`
+	} `json:"daily"`
 }
 
 func TestTrivyIntegration(t *testing.T) {
@@ -557,6 +564,16 @@ func TestTrivyIntegration(t *testing.T) {
 	tr := decode[trivyJSON](t, call(t, c, "getTrivyIntegration", "GET", "/", "", ""), http.StatusOK)
 	if !tr.Configured || tr.LastUploadAt != nil || tr.Uploads24h != 0 || tr.Rejections24h != 0 || tr.RecentRejections == nil || len(tr.RecentRejections) != 0 {
 		t.Errorf("empty = %+v", tr)
+	}
+	// Thirty days, all zero, ending today (UTC).
+	today := time.Now().UTC().Format(time.DateOnly)
+	if len(tr.Daily) != 30 || tr.Daily[29].Day != today {
+		t.Fatalf("daily = %+v, want 30 days ending %s", tr.Daily, today)
+	}
+	for _, d := range tr.Daily {
+		if d.Uploads != 0 || d.Rejections != 0 {
+			t.Errorf("empty day = %+v", d)
+		}
 	}
 	if rec := call(t, c, "getTrivyIntegration", "GET", "/", "", ""); !strings.Contains(rec.Body.String(), `"recent_rejections":[]`) {
 		t.Errorf("body %s", rec.Body.String())
@@ -587,6 +604,8 @@ func TestTrivyIntegration(t *testing.T) {
 	}
 	// Other actions are not rejections.
 	mustExec(t, pool, `INSERT INTO audit_log (actor, action) VALUES ('local:root', 'service.created')`)
+	// The rejection for g/P1 names the service registered for that path, in any case.
+	p1 := addService(t, pool, "payments", "G/p1", false)
 
 	tr = decode[trivyJSON](t, call(t, c, "getTrivyIntegration", "GET", "/", "", ""), http.StatusOK)
 	if tr.Uploads24h != 2 || tr.Rejections24h != 22 {
@@ -596,14 +615,53 @@ func TestTrivyIntegration(t *testing.T) {
 	if len(tr.RecentRejections) != 20 {
 		t.Fatalf("recent = %d", len(tr.RecentRejections))
 	}
-	if r := tr.RecentRejections[0]; r.Reason != "invalid_token" || r.ProjectPath != nil {
+	if r := tr.RecentRejections[0]; r.Reason != "invalid_token" || r.ProjectPath != nil || r.ServiceID != nil || r.ServiceName != nil {
 		t.Errorf("newest = %+v", r)
 	}
-	if r := tr.RecentRejections[1]; r.Reason != "reason-1" || r.ProjectPath == nil || *r.ProjectPath != "g/p1" {
+	if r := tr.RecentRejections[1]; r.Reason != "reason-1" || r.ProjectPath == nil || *r.ProjectPath != "g/p1" ||
+		r.ServiceID == nil || *r.ServiceID != p1 || r.ServiceName == nil || *r.ServiceName != "payments" {
 		t.Errorf("second = %+v", r)
+	}
+	if r := tr.RecentRejections[2]; r.ServiceID != nil || r.ServiceName != nil {
+		t.Errorf("unregistered project = %+v", r)
 	}
 	if r := tr.RecentRejections[19]; r.Reason != "reason-19" {
 		t.Errorf("oldest shown = %+v", r)
+	}
+}
+
+func TestTrivyIntegrationDaily(t *testing.T) {
+	c, pool, _ := newCatalog(t, "https://gitlab.example.com")
+	svc := addService(t, pool, "s", "g/s", false)
+	start := time.Now().UTC().Truncate(24 * time.Hour) // midnight UTC today
+	first := start.AddDate(0, 0, -29)
+	for i, at := range []time.Time{
+		start.Add(time.Second), start.Add(2 * time.Second), // today: 2
+		start.AddDate(0, 0, -3).Add(time.Hour), // 3 days ago: 1
+		first,                                  // the first day, at its first instant: 1
+		first.Add(-time.Second),                // the day before: not counted
+	} {
+		addScan(t, pool, scanSeed{svc: svc, kind: "image", artifact: "x", ref: "main", job: int64(i + 1), at: at})
+		mustExec(t, pool, `UPDATE scans SET received_at = $1 WHERE gitlab_job_id = $2`, at, i+1)
+	}
+	for _, at := range []time.Time{start.Add(time.Minute), start.AddDate(0, 0, -5), first.Add(-time.Hour)} {
+		mustExec(t, pool, `INSERT INTO audit_log (at, actor, action, detail) VALUES ($1, 'ingest', 'ingest.rejected', '{"reason":"invalid_token"}')`, at)
+	}
+	// Other actions on the same days are not rejections.
+	mustExec(t, pool, `INSERT INTO audit_log (at, actor, action) VALUES ($1, 'local:root', 'service.created')`, start.Add(time.Minute))
+
+	tr := decode[trivyJSON](t, call(t, c, "getTrivyIntegration", "GET", "/", "", ""), http.StatusOK)
+	if len(tr.Daily) != 30 {
+		t.Fatalf("daily has %d days", len(tr.Daily))
+	}
+	want := map[int][2]int64{29: {2, 1}, 26: {1, 0}, 24: {0, 1}, 0: {1, 0}}
+	for i, d := range tr.Daily {
+		if day := first.AddDate(0, 0, i).Format(time.DateOnly); d.Day != day {
+			t.Errorf("day %d = %s, want %s", i, d.Day, day)
+		}
+		if got := [2]int64{d.Uploads, d.Rejections}; got != want[i] {
+			t.Errorf("%s = %d uploads, %d rejections; want %v", d.Day, d.Uploads, d.Rejections, want[i])
+		}
 	}
 }
 

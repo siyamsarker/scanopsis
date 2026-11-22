@@ -871,7 +871,7 @@ components:
         password: { type: string, minLength: 1, maxLength: 1024 }
     User:
       type: object
-      required: [id, source, username, name, email, role, created_at, last_login_at, disabled_at]
+      required: [id, source, username, name, email, role, created_at, last_login_at, disabled_at, mfa_enrolled]
       properties:
         id: { type: integer, format: int64 }
         source: { type: string, enum: [gitlab, local] }
@@ -882,6 +882,7 @@ components:
         created_at: { type: string, format: date-time }
         last_login_at: { type: [string, "null"], format: date-time }
         disabled_at: { type: [string, "null"], format: date-time, description: When an administrator disabled the user; null while the user may sign in. }
+        mfa_enrolled: { type: boolean, description: The user has a confirmed TOTP enrolment. }
     UserPage:
       type: object
       required: [items, next_after]
@@ -1236,7 +1237,7 @@ components:
         next_before: { type: [integer, "null"], format: int64 }
     TrivyIntegration:
       type: object
-      required: [configured, last_upload_at, uploads_24h, rejections_24h, recent_rejections]
+      required: [configured, last_upload_at, uploads_24h, rejections_24h, recent_rejections, daily]
       properties:
         configured: { type: boolean, description: "The GitLab URL is set, so ID tokens can be verified." }
         last_upload_at: { type: [string, "null"], format: date-time }
@@ -1247,11 +1248,25 @@ components:
           maxItems: 20
           items:
             type: object
-            required: [at, reason, project_path]
+            required: [at, reason, project_path, service_id, service_name]
             properties:
               at: { type: string, format: date-time }
               reason: { type: string }
               project_path: { type: [string, "null"] }
+              service_id: { type: [integer, "null"], format: int64, description: The service registered for the project path; null when there is none. }
+              service_name: { type: [string, "null"] }
+        daily:
+          type: array
+          minItems: 30
+          maxItems: 30
+          description: Uploads and recorded rejections per UTC day over the last 30 days, oldest first, today last; days without either have zeros.
+          items:
+            type: object
+            required: [day, uploads, rejections]
+            properties:
+              day: { type: string, format: date }
+              uploads: { type: integer }
+              rejections: { type: integer }
     SonarIntegration:
       type: object
       required: [configured, server_version, last_webhook_at, last_sync_at, last_sync_error, recent_deliveries]
@@ -1266,21 +1281,21 @@ components:
           maxItems: 50
           items:
             type: object
-            required: [task_id, project_key, received_at, outcome, service_id, detail]
+            required: [task_id, project_key, received_at, outcome, service_id, service_name, detail]
             properties:
               task_id: { type: string }
               project_key: { type: string }
               received_at: { type: string, format: date-time }
               outcome: { type: string, enum: [pending, linked, unlinked, failed] }
               service_id: { type: [integer, "null"], format: int64 }
+              service_name: { type: [string, "null"], description: Name of the linked service; null when the delivery is not linked. }
               detail: { type: string }
     Me:
       allOf:
         - $ref: "#/components/schemas/User"
         - type: object
-          required: [mfa_enrolled, mfa_verified, must_change_password]
+          required: [mfa_verified, must_change_password]
           properties:
-            mfa_enrolled: { type: boolean, description: The user has a confirmed TOTP enrolment. }
             mfa_verified: { type: boolean, description: This session has passed the second factor. }
             must_change_password: { type: boolean }
     Session:

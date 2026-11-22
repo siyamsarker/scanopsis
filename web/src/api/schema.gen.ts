@@ -793,6 +793,8 @@ export interface components {
              * @description When an administrator disabled the user; null while the user may sign in.
              */
             disabled_at: string | null;
+            /** @description The user has a confirmed TOTP enrolment. */
+            mfa_enrolled: boolean;
         };
         UserPage: {
             items: components["schemas"]["User"][];
@@ -1196,6 +1198,19 @@ export interface components {
                 at: string;
                 reason: string;
                 project_path: string | null;
+                /**
+                 * Format: int64
+                 * @description The service registered for the project path; null when there is none.
+                 */
+                service_id: number | null;
+                service_name: string | null;
+            }[];
+            /** @description Uploads and recorded rejections per UTC day over the last 30 days, oldest first, today last; days without either have zeros. */
+            daily: {
+                /** Format: date */
+                day: string;
+                uploads: number;
+                rejections: number;
             }[];
         };
         SonarIntegration: {
@@ -1215,12 +1230,12 @@ export interface components {
                 outcome: "pending" | "linked" | "unlinked" | "failed";
                 /** Format: int64 */
                 service_id: number | null;
+                /** @description Name of the linked service; null when the delivery is not linked. */
+                service_name: string | null;
                 detail: string;
             }[];
         };
         Me: components["schemas"]["User"] & {
-            /** @description The user has a confirmed TOTP enrolment. */
-            mfa_enrolled: boolean;
             /** @description This session has passed the second factor. */
             mfa_verified: boolean;
             must_change_password: boolean;

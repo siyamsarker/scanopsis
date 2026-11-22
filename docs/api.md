@@ -1573,6 +1573,7 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `configured` | boolean | yes | The GitLab URL is set, so ID tokens can be verified. |
+| `daily` | array of object | yes | Uploads and recorded rejections per UTC day over the last 30 days, oldest first, today last; days without either have zeros. |
 | `last_upload_at` | string or null (date-time) | yes |  |
 | `recent_rejections` | array of object | yes |  |
 | `rejections_24h` | integer | yes | Recorded rejections in the last 24 hours. Rate-limited requests are not recorded and the number of recorded rejections per client address is bounded for rejections before the namespace and protected-ref checks. |
@@ -1589,6 +1590,7 @@ Type: object
 | `email` | string | yes |  |
 | `id` | integer (int64) | yes |  |
 | `last_login_at` | string or null (date-time) | yes |  |
+| `mfa_enrolled` | boolean | yes | The user has a confirmed TOTP enrolment. |
 | `name` | string | yes |  |
 | `role` | [Role](#role) | yes |  |
 | `source` | string (one of `gitlab`, `local`) | yes |  |

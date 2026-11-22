@@ -219,19 +219,22 @@ func (q *Queries) ListSonarAnalyses(ctx context.Context, arg ListSonarAnalysesPa
 }
 
 const listSonarDeliveries = `-- name: ListSonarDeliveries :many
-SELECT task_id, project_key, received_at, outcome, service_id, detail
-FROM sonar_deliveries
-ORDER BY received_at DESC, id DESC
+SELECT d.task_id, d.project_key, d.received_at, d.outcome, d.service_id, d.detail,
+       s.name AS service_name
+FROM sonar_deliveries d
+LEFT JOIN services s ON s.id = d.service_id
+ORDER BY d.received_at DESC, d.id DESC
 LIMIT 50
 `
 
 type ListSonarDeliveriesRow struct {
-	TaskID     string
-	ProjectKey string
-	ReceivedAt pgtype.Timestamptz
-	Outcome    string
-	ServiceID  pgtype.Int8
-	Detail     string
+	TaskID      string
+	ProjectKey  string
+	ReceivedAt  pgtype.Timestamptz
+	Outcome     string
+	ServiceID   pgtype.Int8
+	Detail      string
+	ServiceName pgtype.Text
 }
 
 func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliveriesRow, error) {
@@ -250,6 +253,7 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 			&i.Outcome,
 			&i.ServiceID,
 			&i.Detail,
+			&i.ServiceName,
 		); err != nil {
 			return nil, err
 		}

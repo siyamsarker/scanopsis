@@ -92,9 +92,11 @@ ORDER BY analysed_at DESC, id DESC
 LIMIT $2;
 
 -- name: ListSonarDeliveries :many
-SELECT task_id, project_key, received_at, outcome, service_id, detail
-FROM sonar_deliveries
-ORDER BY received_at DESC, id DESC
+SELECT d.task_id, d.project_key, d.received_at, d.outcome, d.service_id, d.detail,
+       s.name AS service_name
+FROM sonar_deliveries d
+LEFT JOIN services s ON s.id = d.service_id
+ORDER BY d.received_at DESC, d.id DESC
 LIMIT 50;
 
 -- name: LastSonarDeliveryAt :one

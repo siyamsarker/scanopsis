@@ -356,6 +356,15 @@ type rejectionJSON struct {
 	At          time.Time `json:"at"`
 	Reason      string    `json:"reason"`
 	ProjectPath *string   `json:"project_path"`
+	ServiceID   *int64    `json:"service_id"`
+	ServiceName *string   `json:"service_name"`
+}
+
+// dayJSON is the activity of one UTC day; Day is the date, as YYYY-MM-DD.
+type dayJSON struct {
+	Day        string `json:"day"`
+	Uploads    int64  `json:"uploads"`
+	Rejections int64  `json:"rejections"`
 }
 
 func (c *Catalog) getTrivyIntegration(w http.ResponseWriter, r *http.Request) {
@@ -369,6 +378,11 @@ func (c *Catalog) getTrivyIntegration(w http.ResponseWriter, r *http.Request) {
 		c.internalError(w, r, "cannot read ingestion rejections", err)
 		return
 	}
+	days, err := c.q.TrivyDailyActivity(r.Context())
+	if err != nil {
+		c.internalError(w, r, "cannot read daily ingestion activity", err)
+		return
+	}
 	rej := make([]rejectionJSON, len(rows))
 	for i, row := range rows {
 		var d struct {
@@ -377,6 +391,14 @@ func (c *Catalog) getTrivyIntegration(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.Unmarshal(row.Detail, &d) // a malformed detail shows as an empty reason
 		rej[i] = rejectionJSON{At: row.At.Time, Reason: d.Reason, ProjectPath: d.ProjectPath}
+		if row.ServiceID.Valid {
+			id, name := row.ServiceID.Int64, row.ServiceName.String
+			rej[i].ServiceID, rej[i].ServiceName = &id, &name
+		}
+	}
+	daily := make([]dayJSON, len(days))
+	for i, d := range days {
+		daily[i] = dayJSON{Day: d.Day.Time.Format(time.DateOnly), Uploads: d.Uploads, Rejections: d.Rejections}
 	}
 	var last *time.Time
 	if st.LastUploadAt.Valid {
@@ -388,5 +410,6 @@ func (c *Catalog) getTrivyIntegration(w http.ResponseWriter, r *http.Request) {
 		Uploads24h       int64           `json:"uploads_24h"`
 		Rejections24h    int64           `json:"rejections_24h"`
 		RecentRejections []rejectionJSON `json:"recent_rejections"`
-	}{c.cfg.Current().GitLabURL != "", last, st.Uploads24h, st.Rejections24h, rej})
+		Daily            []dayJSON       `json:"daily"`
+	}{c.cfg.Current().GitLabURL != "", last, st.Uploads24h, st.Rejections24h, rej, daily})
 }

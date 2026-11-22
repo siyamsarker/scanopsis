@@ -53,8 +53,9 @@ type deliveryJSON struct {
 	ProjectKey string    `json:"project_key"`
 	ReceivedAt time.Time `json:"received_at"`
 	Outcome    string    `json:"outcome"`
-	ServiceID  *int64    `json:"service_id"`
-	Detail     string    `json:"detail"`
+	ServiceID   *int64    `json:"service_id"`
+	ServiceName *string   `json:"service_name"`
+	Detail      string    `json:"detail"`
 }
 
 type integrationJSON struct {
@@ -189,6 +190,10 @@ func (s *Sonar) getSonarIntegration(w http.ResponseWriter, r *http.Request) {
 		if d.ServiceID.Valid {
 			id := d.ServiceID.Int64
 			dj.ServiceID = &id
+			if d.ServiceName.Valid {
+				name := d.ServiceName.String
+				dj.ServiceName = &name
+			}
 		}
 		out.RecentDeliveries = append(out.RecentDeliveries, dj)
 	}
