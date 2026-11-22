@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/siyamsarker/scanopsis/internal/config"
+
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/siyamsarker/scanopsis/internal/auth"
@@ -897,5 +899,20 @@ func TestSettingsAuditRecordsResetsAndSecretChanges(t *testing.T) {
 	}
 	if !reflect.DeepEqual(reset, want) {
 		t.Errorf("reset changes = %v; want %v", reset, want)
+	}
+}
+
+// The start-up check in internal/config assumes the same session defaults as
+// the settings definitions.
+func TestSessionDefaultsMatchConfig(t *testing.T) {
+	for key, want := range map[string]time.Duration{
+		KeySessionIdleTimeout: config.DefaultSessionIdleTimeout,
+		KeySessionAbsTimeout:  config.DefaultSessionAbsoluteTimeout,
+	} {
+		d := definitionByKey[key]
+		got, err := time.ParseDuration(d.Default.(string))
+		if err != nil || got != want {
+			t.Errorf("%s default %v, config %v", key, d.Default, want)
+		}
 	}
 }

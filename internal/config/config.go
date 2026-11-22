@@ -86,6 +86,13 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 	return c, nil
 }
 
+// Default session timeouts. They must equal the defaults of the settings
+// session.idle_timeout and session.absolute_timeout; a test checks this.
+const (
+	DefaultSessionIdleTimeout     = 30 * time.Minute
+	DefaultSessionAbsoluteTimeout = 12 * time.Hour
+)
+
 // ParseBaseURL checks an absolute http(s) URL without path, query, fragment
 // or credentials and returns it without a trailing slash. The Settings page
 // applies the same rules as the environment.
@@ -291,10 +298,10 @@ func (l *loader) seeds(m map[string]any) {
 		m["auth.local_login_enabled"] = l.boolean("LOCAL_LOGIN_ENABLED", true)
 	}
 	if l.str("SESSION_IDLE_TIMEOUT", "") != "" {
-		m["session.idle_timeout"] = l.duration("SESSION_IDLE_TIMEOUT", 30*time.Minute)
+		m["session.idle_timeout"] = l.duration("SESSION_IDLE_TIMEOUT", DefaultSessionIdleTimeout)
 	}
 	if l.str("SESSION_ABSOLUTE_TIMEOUT", "") != "" {
-		m["session.absolute_timeout"] = l.duration("SESSION_ABSOLUTE_TIMEOUT", 12*time.Hour)
+		m["session.absolute_timeout"] = l.duration("SESSION_ABSOLUTE_TIMEOUT", DefaultSessionAbsoluteTimeout)
 	}
 
 	if u := l.baseURL("SONAR_URL"); u != nil {
@@ -341,7 +348,8 @@ func (l *loader) seeds(m map[string]any) {
 		l.fail("SONAR_URL", "and "+Prefix+"SONAR_TOKEN must be set together (the webhook secret needs both)")
 	}
 
-	idle, abs := 8*time.Hour, 24*time.Hour
+	// A timeout that is not set takes its default, as in the settings.
+	idle, abs := DefaultSessionIdleTimeout, DefaultSessionAbsoluteTimeout
 	if d, ok := m["session.idle_timeout"].(time.Duration); ok {
 		idle = d
 	}

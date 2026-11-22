@@ -260,3 +260,14 @@ func TestLoadReportsAllErrors(t *testing.T) {
 		t.Fatalf("expected at least 3 joined errors, got %v", err)
 	}
 }
+
+// Only the absolute timeout set: it is compared with the default idle
+// timeout (30m), so 4h is accepted and 20m is not.
+func TestSessionAbsoluteAloneUsesTheDefaultIdle(t *testing.T) {
+	if _, err := load(t, with(minimal(), "SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT", "4h"), nil); err != nil {
+		t.Errorf("4h absolute with the default idle timeout: %v", err)
+	}
+	if _, err := load(t, with(minimal(), "SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT", "20m"), nil); err == nil || !strings.Contains(err.Error(), "SESSION_ABSOLUTE_TIMEOUT must not be shorter") {
+		t.Errorf("20m absolute: %v", err)
+	}
+}
