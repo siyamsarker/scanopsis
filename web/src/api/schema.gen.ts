@@ -81,8 +81,11 @@ export interface paths {
         /**
          * Start GitLab sign-in.
          * @description Redirects the browser to GitLab (authorization code flow with PKCE,
-         *     state and nonce). return_to must be a local path starting with a
-         *     single "/"; anything else is replaced by "/".
+         *     state and nonce). return_to must be a local path. It is cleaned
+         *     (dot segments and repeated slashes resolved) and then checked: a
+         *     backslash or a control character anywhere, raw or percent-encoded,
+         *     or a result that does not start with exactly one "/" is replaced by
+         *     "/". Only the path and the query are kept.
          */
         get: operations["gitlabLogin"];
         put?: never;

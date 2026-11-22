@@ -439,12 +439,18 @@ func TestGroupAllowList(t *testing.T) {
 func TestReturnToSanitised(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"/services", "/services"},
-		{"/a/b?c=d#e", "/a/b?c=d#e"},
+		{"/a/b?c=d", "/a/b?c=d"},
+		{"/a/b?c=d#e", "/a/b?c=d"}, // only the path and the query are kept
+		{"/admin/users/", "/admin/users/"},
+		{"/a/./b/../c", "/a/c"},
+		{"/services?q=%5C", "/services?q=%5C"}, // an encoded backslash in the query cannot change the host
+		{"/%2F%2Fevil.example", "/evil.example"},
+		{"/.//evil.example", "/evil.example"},
+		{"///evil.example", "/"},
 		{"", "/"},
 		{"//evil.com", "/"},
 		{"//evil.com/path", "/"},
 		{"https://evil.com", "/"},
-		{`/\evil.com`, "/"},
 		{"javascript:alert(1)", "/"},
 		{"services", "/"},
 		{"/ok\r\nSet-Cookie: x=y", "/"},
@@ -455,6 +461,77 @@ func TestReturnToSanitised(t *testing.T) {
 		e.wantRedirect(e.signIn(tc.in), tc.want)
 		if len(e.sessions.users) != 1 {
 			t.Errorf("return_to %q: sign-in failed", tc.in)
+		}
+	}
+}
+
+// returnToBypasses are values that try to leave the site after sign-in. Each
+// must end in a redirect to a plain local path.
+var returnToBypasses = []string{
+	`/\evil.example`,
+	`/./\evil.example`,
+	`/../\evil.example`,
+	`/a/../\evil.example`,
+	`/.\evil.example`,
+	`/\/evil.example`,
+	"/%5Cevil.example",
+	"/%5cevil.example",
+	"/./%5Cevil.example",
+	"/../%5Cevil.example",
+	"/%2E/%5Cevil.example",
+	"/%2e%2e/%5cevil.example",
+	"/%255Cevil.example",
+	"/%252F%252Fevil.example",
+	"/%2F%2Fevil.example",
+	"/%2F/evil.example",
+	"/%2f%2fevil.example",
+	"/\t/evil.example",
+	"/\n/evil.example",
+	"/%09/evil.example",
+	"/%0A/evil.example",
+	"/%00/evil.example",
+	"///evil.example",
+	"////evil.example",
+	"/.//evil.example",
+	"/./../..//evil.example",
+	"/..//evil.example",
+	"//evil.example",
+	"/\x7f/evil.example",
+	"https:/evil.example",
+	"/https://evil.example",
+}
+
+func TestReturnToBypassesStayLocal(t *testing.T) {
+	for _, in := range returnToBypasses {
+		e := newEnv(t, nil)
+		rec := e.signIn(in)
+		loc := rec.Header().Get("Location")
+		if rec.Code != http.StatusFound || len(e.sessions.users) != 1 {
+			t.Errorf("return_to %q: callback = %d, sessions %v", in, rec.Code, e.sessions.users)
+			continue
+		}
+		if !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "//") || strings.ContainsAny(loc, "\\\t\r\n\x00") {
+			t.Errorf("return_to %q: Location %q is not a plain local path", in, loc)
+		}
+		// A browser treats a backslash as a slash; resolve as it would.
+		target, err := url.Parse(publicURL + strings.ReplaceAll(loc, `\`, "/"))
+		if err != nil || target.Host != "scanopsis.example.com" {
+			t.Errorf("return_to %q: Location %q leaves the site", in, loc)
+		}
+	}
+}
+
+func TestForgedCookieBypassesStayLocal(t *testing.T) {
+	// The cookie is not signed: an attacker who can set cookies can skip the
+	// check at login. The callback must not trust it either.
+	for _, in := range returnToBypasses {
+		e := newEnv(t, nil)
+		loc, ck := e.login("/ok")
+		q := e.authorize(loc)
+		rec := serve(e.gl.CallbackHandler(), "/api/v1/auth/gitlab/callback?"+q.Encode(), forgeCookie(t, ck, in))
+		got := rec.Header().Get("Location")
+		if !strings.HasPrefix(got, "/") || strings.HasPrefix(got, "//") || strings.Contains(got, `\`) {
+			t.Errorf("forged return_to %q: Location %q", in, got)
 		}
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -174,20 +175,40 @@ func randomToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// sanitizeReturnTo returns p if it is a local path, otherwise "/".
+// sanitizeReturnTo returns the local path and query that p names, or "/" if
+// p is not a plain local path. The path is cleaned first (as http.Redirect
+// would clean it) and validated afterwards, so that dot segments cannot turn
+// an accepted value into a different one: "/./\host" would otherwise become
+// "/\host", which browsers read as "//host" on another site. A backslash or
+// a control character anywhere, raw or percent-encoded, rejects the value.
+// The result is rebuilt from the parsed path and query only.
 func sanitizeReturnTo(p string) string {
-	if p == "" || len(p) > maxReturnTo || p[0] != '/' || strings.HasPrefix(p, "//") || strings.HasPrefix(p, `/\`) {
+	if !isLocalPath(p) || len(p) > maxReturnTo {
 		return "/"
 	}
-	for _, r := range p {
-		if r < 0x20 || r == 0x7f {
-			return "/"
-		}
-	}
-	if u, err := url.Parse(p); err != nil || u.Scheme != "" || u.Host != "" {
+	u, err := url.Parse(p)
+	if err != nil || u.Scheme != "" || u.Host != "" || u.User != nil || u.Opaque != "" ||
+		!strings.HasPrefix(u.Path, "/") || strings.ContainsFunc(u.Path, unsafeInPath) {
 		return "/"
 	}
-	return p
+	clean := path.Clean(u.Path)
+	if strings.HasSuffix(u.Path, "/") && clean != "/" {
+		clean += "/"
+	}
+	out := (&url.URL{Path: clean, RawQuery: u.RawQuery}).String()
+	if !isLocalPath(out) {
+		return "/"
+	}
+	return out
+}
+
+// unsafeInPath reports characters that never appear in an accepted return
+// path: browsers treat a backslash as a slash and drop tabs and newlines.
+func unsafeInPath(r rune) bool { return r == '\\' || r < 0x20 || r == 0x7f }
+
+// isLocalPath reports whether s starts with exactly one slash.
+func isLocalPath(s string) bool {
+	return strings.HasPrefix(s, "/") && !strings.HasPrefix(s, "//") && !strings.ContainsFunc(s, unsafeInPath)
 }
 
 // LoginHandler starts sign-in: GET /api/v1/auth/gitlab/login.
@@ -251,7 +272,8 @@ func (g *GitLab) CallbackHandler() http.Handler {
 			http.Redirect(w, r, "/login?error="+url.QueryEscape(f.code), http.StatusFound)
 			return
 		}
-		http.Redirect(w, r, returnTo, http.StatusFound) //nolint:gosec // returnTo passed sanitizeReturnTo
+		// The cookie is not signed: check its value again just before use.
+		http.Redirect(w, r, sanitizeReturnTo(returnTo), http.StatusFound) //nolint:gosec // returnTo passed sanitizeReturnTo
 	})
 }
 

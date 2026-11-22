@@ -293,6 +293,7 @@ test('8. resetting two-factor ends the sessions and forces a new enrolment', asy
   await expect(alice).toHaveURL(/\/2fa\/setup$/);
   const secret = await enrol(alice);
   expect(secret).not.toBe(aliceSecret);
+  aliceSecret = secret;
   await expect(header(alice).getByText('Alice Example')).toBeVisible();
 });
 
@@ -361,4 +362,25 @@ registerDashboardFlows({
   root: () => root,
   rootContext: () => rootContext,
   viewer: () => alice,
+});
+
+test('22. a return_to that tries to leave the site ends on a local page', async ({ browser }) => {
+  const { context, page } = await newUser(browser);
+  const hosts = new Set<string>();
+  page.on('request', (request) => hosts.add(new URL(request.url()).hostname));
+
+  // "/./\evil.example" passed a prefix check and was cleaned to "/\evil.example",
+  // which browsers resolve to https://evil.example/.
+  await page.goto(`/api/v1/auth/gitlab/login?return_to=${encodeURIComponent('/./\\evil.example')}`);
+  await expect(page.getByRole('heading', { name: 'Fake GitLab sign-in' })).toBeVisible();
+  await page.getByRole('link', { name: 'alice', exact: true }).click();
+  await expect(page).toHaveURL(/^http:\/\/localhost:18080\/2fa(\?|$)/);
+  await enterCode(page, aliceSecret);
+  await expect(page).toHaveURL('http://localhost:18080/');
+  expect([...hosts].filter((h) => h.includes('evil'))).toEqual([]);
+
+  // The same rule applies when the sign-in page passes return_to on.
+  await page.goto(`/login?return_to=${encodeURIComponent('/%2e%2e/%5Cevil.example')}`);
+  await expect(page).toHaveURL('http://localhost:18080/');
+  await context.close();
 });
