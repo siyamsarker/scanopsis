@@ -90,7 +90,7 @@ Keep each pull request small and focused on a single change. Open it from your f
 2. Update the documentation that is affected by the change.
 3. Add an entry under the `Unreleased` section of `CHANGELOG.md`.
 4. Make sure `make check` passes.
-5. Describe what the change does and how you tested it. The pull request template asks for both.
+5. Write a description that says what changed and why, and how you tested it. Say which tests, documentation and changelog entries you added or updated, and confirm that your commits are signed off.
 
 ## Code of conduct
 

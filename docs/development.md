@@ -37,7 +37,6 @@ nvm use
 | `web/` | Web interface (React, TypeScript, Vite, Tailwind CSS) |
 | `web/embed.go` | Embeds the built web interface into the Go binary |
 | `scripts/` | Helper scripts for the checks |
-| `.github/` | Code owners, issue and pull request templates |
 | `docs/` | Documentation for operators and developers |
 | `api/openapi.yaml` | The HTTP API contract |
 | `internal/` | Server packages: configuration, settings, authentication, HTTP API, database access |
