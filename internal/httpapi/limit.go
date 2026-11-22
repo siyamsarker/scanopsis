@@ -179,6 +179,20 @@ func bodyWeight(r *http.Request) int64 {
 // a body over maxAPIBody as too large. Any other read error is not handled
 // here: the handler gets the bytes read so far followed by the same error and
 // answers it as it always did.
+// abortUnreadBody is called before answering a request whose body will not
+// be read. Without it the server first waits for the rest of a small body,
+// up to its read timeout: an expired read deadline ends that wait at once,
+// and when the deadline cannot be set the connection is closed after the
+// answer instead.
+func abortUnreadBody(w http.ResponseWriter, r *http.Request) {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return
+	}
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now()); err != nil {
+		w.Header().Set("Connection", "close")
+	}
+}
+
 func bufferBody(w http.ResponseWriter, r *http.Request) (status int) {
 	if r.Body == nil || r.Body == http.NoBody {
 		return 0
@@ -252,6 +266,7 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 			return
 		}
 		if r.ContentLength > maxAPIBody {
+			abortUnreadBody(w, r)
 			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request body is too large.")
 			return
 		}
@@ -293,7 +308,7 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 		bodyUnread := bodyWeight(r) > 0
 		busy := func(why string) {
 			if bodyUnread {
-				_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+				abortUnreadBody(w, r)
 			}
 			s.Log.WarnContext(r.Context(), "request rejected: too many concurrent requests",
 				"method", r.Method, "path", r.URL.Path, "limit", s.MaxConcurrent, "reason", why, "waited", wait.String())

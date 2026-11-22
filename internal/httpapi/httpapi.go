@@ -195,7 +195,8 @@ func (s *server) handler(routes []route) http.Handler {
 	mux.Handle("/", s.static())
 
 	csrf := http.NewCrossOriginProtection()
-	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		abortUnreadBody(w, r)
 		writeError(w, http.StatusForbidden, "cross_origin", "Cross-origin request rejected.")
 	}))
 

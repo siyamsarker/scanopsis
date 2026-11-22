@@ -4,6 +4,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -569,3 +570,42 @@ func TestReadyzSurvivesAPanickingCheck(t *testing.T) {
 type pingFunc func(context.Context) error
 
 func (f pingFunc) Ping(ctx context.Context) error { return f(ctx) }
+
+// An answer sent before a body is read, such as a cross-origin refusal or a
+// declared length over the limit, arrives at once: the server does not wait
+// for the rest of a body that is never sent.
+func TestEarlyAnswersDoNotWaitForTheBody(t *testing.T) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		WriteJSON(w, http.StatusOK, statusBody{Status: "ok"})
+	})
+	e := newEnv(t, func(d *Deps) {
+		d.MaxConcurrent = 4
+		d.Features = map[string]http.Handler{"createService": h}
+	})
+	srv := httptest.NewServer(e.h)
+	defer srv.Close()
+	for name, c := range map[string]struct {
+		headers string
+		want    string
+	}{
+		"cross-origin":   {"Content-Length: 100\r\nSec-Fetch-Site: cross-site\r\n", "403 Forbidden"},
+		"over the limit": {fmt.Sprintf("Content-Length: %d\r\n", maxAPIBody+1), "413 Request Entity Too Large"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", srv.Listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conn.Close() }()
+			_, _ = fmt.Fprintf(conn, "POST /api/v1/services HTTP/1.1\r\nHost: x\r\n%sContent-Type: application/json\r\n%s: admin\r\n\r\n12345", c.headers, roleHeader)
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			line, err := bufio.NewReader(conn).ReadString('\n')
+			if err != nil {
+				t.Fatalf("no answer while the body is incomplete: %v", err)
+			}
+			if !strings.Contains(line, c.want) {
+				t.Errorf("status line %q, want %q", line, c.want)
+			}
+		})
+	}
+}
