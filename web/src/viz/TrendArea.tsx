@@ -106,7 +106,15 @@ export function TrendArea({
     .domain([0, top1 * (reference ? 1.12 : 1)])
     .range([bottom, top])
     .nice(4);
-  const ticks = y.ticks(4).map((v) => ({ value: v, y: y(v), text: formatCount(v, true) }));
+  // Counts get whole-number ticks only: a small range such as 0 to 1 would
+  // otherwise label 0.2, 0.4 … and round them to a column of 0s and 1s.
+  const counts =
+    defined.every((d) => Number.isInteger(d.value)) &&
+    (reference === undefined || Number.isInteger(reference.value));
+  const ticks = y
+    .ticks(4)
+    .filter((v) => !counts || Number.isInteger(v))
+    .map((v) => ({ value: v, y: y(v), text: formatCount(v, true) }));
   const isDefined = (d: { value: number | null }) => d.value !== null;
   const linePath = line<(typeof data)[number]>()
     .defined(isDefined)

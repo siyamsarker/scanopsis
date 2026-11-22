@@ -514,6 +514,28 @@ describe('TrendArea', () => {
     render(<TrendArea points={[]} label="Empty" />);
     expect(screen.getByRole('note')).toHaveTextContent('No data for this period yet.');
   });
+
+  it('labels a small count axis with whole numbers only', () => {
+    const zeros = ['2026-11-17', '2026-11-18', '2026-11-19'].map((at) => ({ at, value: 0 }));
+    const { container, unmount } = render(
+      <TrendArea points={zeros} label="Refused" timeZone="UTC" width={400} animate={false} />,
+    );
+    const axis = () =>
+      [...container.querySelectorAll('.viz-axis text')]
+        .map((t) => t.textContent)
+        .filter((t) => /^\d+$/.test(t ?? ''));
+    expect(axis()).toEqual(['0', '1']);
+    unmount();
+    // Fractions keep their in-between ticks.
+    const share = ['2026-11-17', '2026-11-18'].map((at, i) => ({ at, value: 0.4 + i * 0.3 }));
+    const second = render(
+      <TrendArea points={share} label="Share" timeZone="UTC" width={400} animate={false} />,
+    );
+    const texts = [...second.container.querySelectorAll('.viz-axis text')].map(
+      (t) => t.textContent,
+    );
+    expect(texts.length).toBeGreaterThan(2);
+  });
 });
 
 describe('Gallery', () => {
