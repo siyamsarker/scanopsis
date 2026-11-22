@@ -3,38 +3,46 @@
 
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
+import { pairs, themes } from '../scripts/contrast.mjs';
 
 const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
 
 const themed = [
-  'brand',
   'bg',
   'surface',
   'surface-raised',
-  'border',
-  'border-strong',
+  'surface-overlay',
+  'sunken',
+  'line',
+  'line-strong',
   'text',
   'text-muted',
-];
-const shared = [
+  'text-faint',
+  'lens-a',
+  'lens-b',
+  'brand',
+  'brand-ink',
   'sev-critical',
   'sev-high',
   'sev-medium',
   'sev-low',
   'sev-unknown',
-  'pass',
+  'ok',
   'fail',
   'warn',
+  'fail-ink',
 ];
 
-// The default (dark) block is the first `:root` rule. Light tokens appear twice:
-// for the system preference when no theme is chosen, and for data-theme="light".
-const dark = /^:root\s*\{([^}]*)\}/m.exec(css)?.[1] ?? '';
+// The default (dark) block comes first and also themes data-theme-scope="dark".
+// Light tokens appear twice: for the system preference when no theme is
+// chosen, and for data-theme="light" (which also themes data-theme-scope="light").
+const dark = /:root,\s*\[data-theme-scope='dark'\]\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
 const light =
   /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\[data-theme\]\)\s*\{([^}]*)\}/.exec(
     css,
   )?.[1] ?? '';
-const lightExplicit = /:root\[data-theme='light'\]\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+const lightExplicit =
+  /:root\[data-theme='light'\],\s*\[data-theme-scope='light'\]\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
 
 function declarations(block: string) {
   return block
@@ -44,28 +52,44 @@ function declarations(block: string) {
     .sort();
 }
 
+interface Pair {
+  label: string;
+  ratio: number;
+  min: number;
+}
+
 describe('design tokens', () => {
   it.each(themed)('defines %s for dark and light themes', (name) => {
     expect(dark).toContain(`--${name}:`);
     expect(light).toContain(`--${name}:`);
   });
 
-  it.each(shared)('defines %s for both themes', (name) => {
-    expect(dark).toContain(`--${name}:`);
-  });
-
-  it.each([...themed, ...shared])('exposes %s to Tailwind', (name) => {
+  it.each(themed)('exposes %s to Tailwind', (name) => {
     expect(css).toContain(`--color-${name}: var(--${name});`);
   });
 
   it('gives data-theme="light" the same tokens as the light system preference', () => {
     expect(declarations(lightExplicit)).toEqual(declarations(light));
-    expect(declarations(light).length).toBe(themed.length);
+    expect(declarations(dark).map((d) => d.split(':')[0])).toEqual(
+      declarations(light).map((d) => d.split(':')[0]),
+    );
   });
 
   it('applies the system preference only when no theme is chosen', () => {
     expect(css).toMatch(
       /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\[data-theme\]\)/,
     );
+  });
+
+  it('sets the root font size to 16px and turns motion off on request', () => {
+    expect(css).toMatch(/html\s*\{[^}]*font-size:\s*16px/);
+    expect(css).toMatch(/@media \(prefers-reduced-motion: reduce\)/);
+  });
+
+  describe.each(['dark', 'light'])('contrast in the %s theme', (theme) => {
+    const palette = (themes(css) as Record<string, unknown>)[theme];
+    it.each((pairs(palette) as Pair[]).map((p) => [p.label, p] as const))('%s', (_label, pair) => {
+      expect(pair.ratio).toBeGreaterThanOrEqual(pair.min);
+    });
   });
 });

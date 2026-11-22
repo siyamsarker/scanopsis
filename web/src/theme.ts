@@ -1,9 +1,35 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { useSyncExternalStore } from 'react';
+
 export type Theme = 'system' | 'light' | 'dark';
 
 export const themeStorageKey = 'scanopsis.theme';
+
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** The applied choice, read from <html>, which applyTheme keeps current. */
+function appliedTheme(): Theme {
+  const value = document.documentElement.getAttribute('data-theme');
+  return isTheme(value) ? value : 'system';
+}
+
+/**
+ * The current choice and a setter, shared by every theme control (the account
+ * menu, the command palette, the sign-in pages) so they always agree.
+ */
+export function useTheme(): [Theme, (theme: Theme) => void] {
+  const theme = useSyncExternalStore(subscribe, appliedTheme, () => 'system' as Theme);
+  return [theme, setTheme];
+}
 export const themes: readonly Theme[] = ['system', 'light', 'dark'];
 
 function isTheme(value: unknown): value is Theme {
@@ -30,6 +56,7 @@ export function applyTheme(theme: Theme): void {
 /** Applies and saves a choice. A blocked or full storage never breaks the switch. */
 export function setTheme(theme: Theme): void {
   applyTheme(theme);
+  for (const listener of listeners) listener();
   try {
     if (theme === 'system') globalThis.localStorage?.removeItem(themeStorageKey);
     else globalThis.localStorage?.setItem(themeStorageKey, theme);

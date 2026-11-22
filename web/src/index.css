@@ -4,85 +4,299 @@
 @import 'tailwindcss';
 
 /*
- * Dark is the default. With no data-theme attribute the system preference
- * decides; data-theme="light" or "dark" on <html> is an explicit choice.
+ * Optic design tokens.
+ *
+ * Dark is the default. With no data-theme attribute on <html> the system
+ * preference decides; data-theme="light" or "dark" is an explicit choice.
+ * data-theme-scope="dark" or "light" themes one subtree (the showcase uses it
+ * to show both themes side by side).
+ *
+ * Components use these tokens only, never raw colours. Severity and status
+ * colours always come with a shape or icon and a word.
  */
-:root {
+:root,
+[data-theme-scope='dark'] {
   color-scheme: dark;
 
-  --brand: #7c83ff;
-  --bg: #0b1020;
-  --surface: #131a2e;
-  --surface-raised: #1b2440;
-  --border: #273152;
-  --border-strong: #6b769c;
-  --text: #e6eaf2;
-  --text-muted: #9aa4bf;
+  --bg: #0d1526;
+  --surface: #121c31;
+  --surface-raised: #18243d;
+  --surface-overlay: #1f2c49;
+  --sunken: #0a1120;
+  --line: #26344f;
+  --line-strong: #6d7a94;
+  --text: #e8edf7;
+  --text-muted: #9da9c2;
+  --text-faint: #6f7c97;
+  --lens-a: #8b7cf6;
+  --lens-b: #22d3ee;
+  --brand: #8b7cf6;
+  --brand-ink: #0d1526;
 
-  --sev-critical: #e5484d;
-  --sev-high: #f76b15;
-  --sev-medium: #f5b700;
-  --sev-low: #3e9bff;
-  --sev-unknown: #8b93a7;
-  --pass: #30a46c;
-  --fail: #e5484d;
-  --warn: #f5b700;
+  --sev-critical: #f43f5e;
+  --sev-high: #fb923c;
+  --sev-medium: #facc15;
+  --sev-low: #60a5fa;
+  --sev-unknown: #94a3b8;
+  --ok: #34d399;
+  --fail: #f43f5e;
+  --warn: #facc15;
+  --fail-ink: #0d1526;
+
+  --scrim: rgb(5 9 18 / 0.66);
+  --highlight: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --elev-1: inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --elev-2: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.45);
+  --elev-3: inset 0 1px 0 rgb(255 255 255 / 0.05), 0 24px 48px -12px rgb(0 0 0 / 0.5);
 }
 
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
     color-scheme: light;
 
-    --brand: #4f46e5;
-    --bg: #f7f8fb;
+    --bg: #f4f6fb;
     --surface: #ffffff;
     --surface-raised: #ffffff;
-    --border: #e2e6ef;
-    --border-strong: #7b8499;
-    --text: #111827;
-    --text-muted: #5b6478;
+    --surface-overlay: #ffffff;
+    --sunken: #edf1f8;
+    --line: #dce2ee;
+    --line-strong: #808a9e;
+    --text: #0f1a2e;
+    --text-muted: #4f5b73;
+    --text-faint: #6b778e;
+    --lens-a: #6d5df0;
+    --lens-b: #0891b2;
+    --brand: #5b4be8;
+    --brand-ink: #ffffff;
+
+    --sev-critical: #be123c;
+    --sev-high: #c2410c;
+    --sev-medium: #a16207;
+    --sev-low: #1d4ed8;
+    --sev-unknown: #64748b;
+    --ok: #047857;
+    --fail: #be123c;
+    --warn: #a16207;
+    --fail-ink: #ffffff;
+
+    --scrim: rgb(15 26 46 / 0.36);
+    --highlight: inset 0 0 0 0 transparent;
+    --elev-1: 0 1px 2px rgb(15 26 46 / 0.06);
+    --elev-2: 0 1px 2px rgb(15 26 46 / 0.06), 0 8px 24px -12px rgb(15 26 46 / 0.14);
+    --elev-3: 0 24px 48px -16px rgb(15 26 46 / 0.25);
   }
 }
 
-:root[data-theme='light'] {
+:root[data-theme='light'],
+[data-theme-scope='light'] {
   color-scheme: light;
 
-  --brand: #4f46e5;
-  --bg: #f7f8fb;
+  --bg: #f4f6fb;
   --surface: #ffffff;
   --surface-raised: #ffffff;
-  --border: #e2e6ef;
-  --border-strong: #7b8499;
-  --text: #111827;
-  --text-muted: #5b6478;
+  --surface-overlay: #ffffff;
+  --sunken: #edf1f8;
+  --line: #dce2ee;
+  --line-strong: #808a9e;
+  --text: #0f1a2e;
+  --text-muted: #4f5b73;
+  --text-faint: #6b778e;
+  --lens-a: #6d5df0;
+  --lens-b: #0891b2;
+  --brand: #5b4be8;
+  --brand-ink: #ffffff;
+
+  --sev-critical: #be123c;
+  --sev-high: #c2410c;
+  --sev-medium: #a16207;
+  --sev-low: #1d4ed8;
+  --sev-unknown: #64748b;
+  --ok: #047857;
+  --fail: #be123c;
+  --warn: #a16207;
+  --fail-ink: #ffffff;
+
+  --scrim: rgb(15 26 46 / 0.36);
+  --highlight: inset 0 0 0 0 transparent;
+  --elev-1: 0 1px 2px rgb(15 26 46 / 0.06);
+  --elev-2: 0 1px 2px rgb(15 26 46 / 0.06), 0 8px 24px -12px rgb(15 26 46 / 0.14);
+  --elev-3: 0 24px 48px -16px rgb(15 26 46 / 0.25);
+}
+
+/* Theme-independent tokens: shape, motion, derived colours. */
+:root {
+  --r-panel: 16px;
+  --r-inner: 10px;
+  --r-tag: 6px;
+  --r-chip: 999px;
+
+  --dur-micro: 120ms;
+  --dur-enter: 200ms;
+  --dur-layout: 320ms;
+  --dur-draw: 600ms;
+  --easing-enter: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --easing-exit: cubic-bezier(0.4, 0, 1, 1);
+
+  /* The lens gradient: signature elements, active nav, brand moments only. */
+  --lens: linear-gradient(135deg, var(--lens-a), var(--lens-b));
+
+  /* Five-step rating scale: ok, between, medium, between, fail. */
+  --rating-a: var(--ok);
+  --rating-b: color-mix(in srgb, var(--ok) 50%, var(--sev-medium));
+  --rating-c: var(--sev-medium);
+  --rating-d: color-mix(in srgb, var(--sev-medium) 50%, var(--fail));
+  --rating-e: var(--fail);
+
+  /* A quiet wash for hover rows and ghost buttons, on any surface. */
+  --wash: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 @theme inline {
-  --color-brand: var(--brand);
   --color-bg: var(--bg);
   --color-surface: var(--surface);
   --color-surface-raised: var(--surface-raised);
-  --color-border: var(--border);
-  --color-border-strong: var(--border-strong);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
   --color-text: var(--text);
   --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-lens-a: var(--lens-a);
+  --color-lens-b: var(--lens-b);
+  --color-brand: var(--brand);
+  --color-brand-ink: var(--brand-ink);
+  --color-wash: var(--wash);
 
   --color-sev-critical: var(--sev-critical);
   --color-sev-high: var(--sev-high);
   --color-sev-medium: var(--sev-medium);
   --color-sev-low: var(--sev-low);
   --color-sev-unknown: var(--sev-unknown);
-  --color-pass: var(--pass);
+  --color-ok: var(--ok);
   --color-fail: var(--fail);
   --color-warn: var(--warn);
+  --color-fail-ink: var(--fail-ink);
 
-  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+  /* Older names kept so that pages built before these tokens keep working. */
+  --color-border: var(--line);
+  --color-border-strong: var(--line-strong);
+  --color-pass: var(--ok);
 
-  --radius-card: 12px;
-  --radius-control: 8px;
+  --font-sans: 'IBM Plex Sans Variable', 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  --radius-panel: var(--r-panel);
+  --radius-inner: var(--r-inner);
+  --radius-tag: var(--r-tag);
+  --radius-card: var(--r-panel);
+  --radius-control: var(--r-inner);
+
+  --shadow-1: var(--elev-1);
+  --shadow-2: var(--elev-2);
+  --shadow-3: var(--elev-3);
+
+  --ease-enter: var(--easing-enter);
+  --ease-exit: var(--easing-exit);
+
+  /* Type scale (px / line height). */
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+  --text-small: 0.8125rem;
+  --text-small--line-height: 1.125rem;
+  --text-body-s: 0.875rem;
+  --text-body-s--line-height: 1.25rem;
+  --text-body: 1rem;
+  --text-body--line-height: 1.5rem;
+  --text-h3: 1.25rem;
+  --text-h3--line-height: 1.75rem;
+  --text-h2: 1.5rem;
+  --text-h2--line-height: 2rem;
+  --text-display-s: 2rem;
+  --text-display-s--line-height: 2.5rem;
+  --text-display-s--letter-spacing: -0.02em;
+  --text-display-s--font-weight: 600;
+  --text-display: 2.75rem;
+  --text-display--line-height: 3rem;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 600;
+
+  --animate-optic-in: optic-in var(--dur-enter) var(--easing-enter) both;
 }
 
+@utility duration-micro {
+  transition-duration: var(--dur-micro);
+}
+@utility duration-enter {
+  transition-duration: var(--dur-enter);
+}
+@utility duration-layout {
+  transition-duration: var(--dur-layout);
+}
+
+/* A top-level panel: surface, hairline, panel radius, first elevation. */
+@utility panel {
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
+  background-color: var(--surface);
+  box-shadow: var(--elev-1);
+}
+
+/* Menus, popovers, select lists: raised surface with the second elevation. */
+@utility raised {
+  border: 1px solid var(--line);
+  border-radius: var(--r-inner);
+  background-color: var(--surface-raised);
+  box-shadow: var(--elev-2);
+}
+
+/* Dialogs, drawers, the command palette. */
+@utility overlay {
+  border: 1px solid var(--line);
+  background-color: var(--surface-overlay);
+  box-shadow: var(--elev-3);
+}
+
+/* A hairline ring in the lens gradient around an element (active filter, focus moment). */
+@utility lens-ring {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--surface-raised), var(--surface-raised)) padding-box,
+    var(--lens) border-box;
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 1rem;
+  line-height: 1.5rem;
+  font-feature-settings: 'kern';
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+::selection {
+  background-color: color-mix(in srgb, var(--brand) 32%, transparent);
+}
+
+/* Focus: a solid brand outline with a 2px gap, never the lens gradient. */
 :focus-visible {
   outline: 2px solid var(--brand);
   outline-offset: 2px;
@@ -93,92 +307,185 @@
   outline: none;
 }
 
-html {
-  font-size: 14px;
-  -webkit-text-size-adjust: 100%;
+/* Roving-focus items keep a visible ring even though they carry tabindex=-1. */
+[data-roving]:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+[data-roving='row']:focus-visible {
+  outline-offset: -2px;
 }
 
-body {
-  margin: 0;
-  min-height: 100vh;
-  -webkit-font-smoothing: antialiased;
-  background-color: var(--bg);
-  color: var(--text);
-  font-family: var(--font-sans);
+/* Inside overlays the outline sits inside, so it is never clipped by the panel edge. */
+[role='menuitem']:focus-visible,
+[role='menuitemradio']:focus-visible,
+[role='option']:focus-visible {
+  outline-offset: -2px;
 }
 
-/* Brand gradient: used only on the sign-in card edge and the page glow. */
-.brand-edge {
-  position: relative;
-}
+/* ---------- Motion ---------- */
 
-.brand-edge::before {
-  content: '';
-  position: absolute;
-  inset: 0 24px auto 24px;
-  height: 2px;
-  border-radius: 0 0 2px 2px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--brand),
-    color-mix(in srgb, var(--brand) 40%, var(--text-muted)),
-    transparent
-  );
-}
-
-.brand-glow {
-  background-image: radial-gradient(
-    60rem 28rem at 50% -8rem,
-    color-mix(in srgb, var(--brand) 14%, transparent),
-    transparent 70%
-  );
-  background-repeat: no-repeat;
-}
-
-@keyframes rise {
+@keyframes optic-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: scale(0.98);
   }
   to {
     opacity: 1;
     transform: none;
   }
 }
-
-.rise {
-  animation: rise 180ms ease-out both;
+@keyframes optic-out {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
+@keyframes optic-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes optic-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes optic-sheet-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes optic-sheet-out-right {
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes optic-sheet-in-left {
+  from {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+@keyframes optic-sheet-out-left {
+  to {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+@keyframes optic-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+@keyframes optic-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes optic-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
 /*
- * Design system additions. Everything below is derived from the palette above
- * with expressions only, so both themes follow without repeating values.
- *
- * Tone classes set --tone for the element and its children. Chips, dots and
- * icons read it; text itself always stays --text or --text-muted so that status
- * colours never carry small text (contrast on light backgrounds).
+ * Overlays animate on Radix's data-state, which also waits for the exit
+ * animation before unmounting. Transform is gone after the enter animation, so
+ * nothing inside an overlay is confined by a leftover transform.
  */
-:root {
-  /* Five-step rating scale: pass, between, medium, between, fail. */
-  --rating-a: var(--pass);
-  --rating-b: color-mix(in srgb, var(--pass) 50%, var(--sev-medium));
-  --rating-c: var(--sev-medium);
-  --rating-d: color-mix(in srgb, var(--sev-medium) 50%, var(--fail));
-  --rating-e: var(--fail);
+.anim-pop[data-state='open'],
+.anim-pop[data-state='delayed-open'],
+.anim-pop[data-state='instant-open'] {
+  animation: optic-in var(--dur-enter) var(--easing-enter);
+}
+.anim-pop[data-state='closed'] {
+  animation: optic-out var(--dur-micro) var(--easing-exit) forwards;
+}
+.anim-fade[data-state='open'] {
+  animation: optic-fade-in var(--dur-enter) var(--easing-enter);
+}
+.anim-fade[data-state='closed'] {
+  animation: optic-fade-out var(--dur-micro) var(--easing-exit) forwards;
+}
+.anim-sheet-right[data-state='open'] {
+  animation: optic-sheet-in-right var(--dur-enter) var(--easing-enter);
+}
+.anim-sheet-right[data-state='closed'] {
+  animation: optic-sheet-out-right var(--dur-micro) var(--easing-exit) forwards;
+}
+.anim-sheet-left[data-state='open'] {
+  animation: optic-sheet-in-left var(--dur-enter) var(--easing-enter);
+}
+.anim-sheet-left[data-state='closed'] {
+  animation: optic-sheet-out-left var(--dur-micro) var(--easing-exit) forwards;
+}
+.anim-toast[data-state='open'] {
+  animation: optic-toast-in var(--dur-enter) var(--easing-enter);
+}
+.anim-toast[data-state='closed'] {
+  animation: optic-fade-out var(--dur-micro) var(--easing-exit) forwards;
+}
+.anim-toast[data-swipe='move'] {
+  transform: translateX(var(--radix-toast-swipe-move-x));
+}
+.anim-toast[data-swipe='cancel'] {
+  transform: none;
+  transition: transform var(--dur-enter) var(--easing-enter);
+}
+.anim-toast[data-swipe='end'] {
+  animation: optic-fade-out var(--dur-micro) var(--easing-exit) forwards;
 }
 
+/* A one-time entrance: fade with a 4px rise. Ends without a transform. */
+.anim-rise {
+  animation: optic-rise var(--dur-enter) var(--easing-enter) both;
+}
+
+/* The loading lens turns slowly around its centre. */
+.lens-spin-a {
+  transform-box: view-box;
+  transform-origin: 24px 24px;
+  animation: optic-spin 1.6s var(--easing-enter) infinite;
+}
+
+/* Instant everything for people who ask for less motion; opacity fades stay short. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-micro: 1ms;
+    --dur-enter: 1ms;
+    --dur-layout: 1ms;
+    --dur-draw: 1ms;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- Tones ---------- */
+
+/*
+ * Tone classes set --tone for an element and its children. Pills, marks and
+ * icons read it. Text inside a pill uses --tone-ink, the tone mixed towards the
+ * text colour, which keeps it at 4.5:1 or more on the tinted fill.
+ */
 .tone-critical {
   --tone: var(--sev-critical);
 }
@@ -194,8 +501,9 @@ body {
 .tone-unknown {
   --tone: var(--sev-unknown);
 }
+.tone-ok,
 .tone-pass {
-  --tone: var(--pass);
+  --tone: var(--ok);
 }
 .tone-fail {
   --tone: var(--fail);
@@ -231,33 +539,45 @@ body {
 .tone-bg {
   background-color: var(--tone);
 }
+.tone-ink {
+  color: color-mix(in srgb, var(--tone, var(--text-muted)) 70%, var(--text));
+}
 
-/* A small pill with a tinted fill. Text stays --text for contrast. */
+/* A status pill: 14% tone fill, tone ink, fully rounded. */
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 2px 8px;
-  border: 1px solid color-mix(in srgb, var(--tone, var(--text-muted)) 40%, var(--border));
-  border-radius: 6px;
-  background-color: color-mix(in srgb, var(--tone, var(--text-muted)) 12%, var(--surface));
-  color: var(--text);
-  font-size: 12px;
+  min-height: 24px;
+  padding: 1px 10px 1px 8px;
+  border: 1px solid color-mix(in srgb, var(--tone, var(--text-muted)) 28%, transparent);
+  border-radius: var(--r-chip);
+  background-color: color-mix(in srgb, var(--tone, var(--text-muted)) 14%, var(--surface));
+  color: color-mix(in srgb, var(--tone, var(--text-muted)) 70%, var(--text));
+  font-size: 0.8125rem;
   font-weight: 500;
-  line-height: 20px;
+  line-height: 1.125rem;
   white-space: nowrap;
 }
 
-/* Soft glow behind the aperture in empty states: the brand colour, very quiet. */
-.aperture-halo {
-  background-image: radial-gradient(
-    closest-side,
-    color-mix(in srgb, var(--brand) 18%, transparent),
-    transparent
-  );
+/* A tag: the same fill with a 6px radius, for labels that are not a status. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-tag);
+  background-color: var(--sunken);
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.125rem;
+  white-space: nowrap;
 }
 
-/* Skeleton blocks: sized by the caller with Tailwind classes so nothing shifts. */
+/* ---------- States ---------- */
+
 @keyframes sheen {
   from {
     background-position: 200% 0;
@@ -267,71 +587,41 @@ body {
   }
 }
 
+/* Skeleton blocks: sized by the caller with Tailwind classes so nothing shifts. */
 .skeleton {
-  border-radius: 6px;
-  background-color: var(--border);
+  border-radius: var(--r-tag);
+  background-color: color-mix(in srgb, var(--line) 70%, transparent);
   background-image: linear-gradient(
     100deg,
     transparent 30%,
-    color-mix(in srgb, var(--text) 7%, transparent) 50%,
+    color-mix(in srgb, var(--text) 6%, transparent) 50%,
     transparent 70%
   );
   background-size: 200% 100%;
   animation: sheen 1.8s ease-in-out infinite;
 }
 
-/* Roving-focus items keep a visible ring even though they carry tabindex=-1. */
-[data-roving]:focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 2px;
-}
-
-/*
- * Scoped themes for the development showcase: shows a component in both themes
- * side by side. These repeat the palette values above on purpose and are used
- * nowhere else; the app itself themes through :root only.
- */
-[data-theme-scope='dark'] {
-  color-scheme: dark;
-  --brand: #7c83ff;
-  --bg: #0b1020;
-  --surface: #131a2e;
-  --surface-raised: #1b2440;
-  --border: #273152;
-  --border-strong: #6b769c;
-  --text: #e6eaf2;
-  --text-muted: #9aa4bf;
-}
-[data-theme-scope='light'] {
-  color-scheme: light;
-  --brand: #4f46e5;
-  --bg: #f7f8fb;
-  --surface: #ffffff;
-  --surface-raised: #ffffff;
-  --border: #e2e6ef;
-  --border-strong: #7b8499;
-  --text: #111827;
-  --text-muted: #5b6478;
-}
-[data-theme-scope] {
-  background-color: var(--bg);
-  color: var(--text);
-}
-
-[data-roving='row']:focus-visible {
-  outline-offset: -2px;
-}
-
 /* A quiet row highlight that works on both light and dark surfaces. */
 .hover-tint:hover,
 .hover-tint:focus-visible {
-  background-color: color-mix(in srgb, var(--text) 5%, transparent);
+  background-color: var(--wash);
 }
 
-/*
- * Chart tooltips. echarts builds the tooltip as HTML, and inline style
- * attributes are blocked by the CSP, so our formatters emit these classes.
- */
+/* Radix Select injects this rule with an inline style element, which the CSP blocks. */
+[data-radix-select-viewport] {
+  scrollbar-width: none;
+}
+[data-radix-select-viewport]::-webkit-scrollbar {
+  display: none;
+}
+
+/* cmdk: hide groups that have no matching items. */
+[cmdk-group][hidden] {
+  display: none;
+}
+
+/* ---------- Charts (ECharts tooltips are HTML; inline styles are blocked) ---------- */
+
 .chart-tip {
   min-width: 140px;
   font-family: var(--font-sans);
