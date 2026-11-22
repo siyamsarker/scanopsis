@@ -37,6 +37,9 @@ type Principal struct {
 	// SessionID is the SHA-256 of the session token; it identifies the
 	// session server-side.
 	SessionID []byte
+	// SessionNumber is the session's stable public number, shown in the
+	// session list; it stays the same when the token is replaced.
+	SessionNumber int64
 	// MFAEnrolled reports a confirmed TOTP enrolment; MFAVerified that this
 	// session has passed the second factor.
 	MFAEnrolled        bool

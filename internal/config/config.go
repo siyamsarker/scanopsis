@@ -291,10 +291,10 @@ func (l *loader) seeds(m map[string]any) {
 		m["auth.local_login_enabled"] = l.boolean("LOCAL_LOGIN_ENABLED", true)
 	}
 	if l.str("SESSION_IDLE_TIMEOUT", "") != "" {
-		m["session.idle_timeout"] = l.duration("SESSION_IDLE_TIMEOUT", 8*time.Hour)
+		m["session.idle_timeout"] = l.duration("SESSION_IDLE_TIMEOUT", 30*time.Minute)
 	}
 	if l.str("SESSION_ABSOLUTE_TIMEOUT", "") != "" {
-		m["session.absolute_timeout"] = l.duration("SESSION_ABSOLUTE_TIMEOUT", 24*time.Hour)
+		m["session.absolute_timeout"] = l.duration("SESSION_ABSOLUTE_TIMEOUT", 12*time.Hour)
 	}
 
 	if u := l.baseURL("SONAR_URL"); u != nil {

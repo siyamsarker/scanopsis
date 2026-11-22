@@ -202,7 +202,7 @@ func TestDefaults(t *testing.T) {
 	e := newEnv(t, nil)
 	want := Snapshot{
 		GitLabAllowedGroups: []string{}, LocalLoginEnabled: true,
-		SessionIdleTimeout: 8 * time.Hour, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
+		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 12 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -215,7 +215,7 @@ func TestDefaults(t *testing.T) {
 	}
 	items := e.items(t)
 	idle := items["session.idle_timeout"]
-	if idle["source"] != "default" || idle["value"] != "8h" || idle["is_set"] != true || idle["updated_by"] != nil || idle["updated_at"] != nil ||
+	if idle["source"] != "default" || idle["value"] != "30m" || idle["is_set"] != true || idle["updated_by"] != nil || idle["updated_at"] != nil ||
 		idle["type"] != "duration" || idle["secret"] != false || idle["env_var"] != "SCANOPSIS_SESSION_IDLE_TIMEOUT" || idle["description"] == "" {
 		t.Errorf("idle = %v", idle)
 	}
@@ -254,7 +254,7 @@ func TestSeedingFillsOnlyMissingKeys(t *testing.T) {
 	want := Snapshot{
 		GitLabURL: "https://gitlab.example.com", GitLabClientID: "from-ui", GitLabClientSecret: "s3cret-value",
 		GitLabAllowedGroups: []string{"platform", "sec/appsec"}, LocalLoginEnabled: true,
-		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 24 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
+		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 12 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -309,8 +309,8 @@ func TestResetFallsBackToEnvThenDefault(t *testing.T) {
 	d := newEnv(t, nil)
 	d.patch(t, `{"session.idle_timeout":"2h"}`)
 	d.patch(t, `{"session.idle_timeout":null}`)
-	if got := d.svc.Current().SessionIdleTimeout; got != 8*time.Hour {
-		t.Errorf("idle = %v, want default 8h", got)
+	if got := d.svc.Current().SessionIdleTimeout; got != 30*time.Minute {
+		t.Errorf("idle = %v, want default 30m", got)
 	}
 	if it := d.items(t)["session.idle_timeout"]; it["source"] != "default" {
 		t.Errorf("source = %v", it["source"])
@@ -436,7 +436,7 @@ func TestValidation(t *testing.T) {
 		{"idle too short", nil, `{"session.idle_timeout":"4m59s"}`, map[string]string{"session.idle_timeout": "Must be at least 5m."}},
 		{"absolute shorter", nil, `{"session.idle_timeout":"2h","session.absolute_timeout":"1h"}`,
 			map[string]string{"session.absolute_timeout": "Must not be shorter than the idle timeout."}},
-		{"absolute shorter than existing idle", nil, `{"session.absolute_timeout":"1h"}`,
+		{"absolute shorter than existing idle", nil, `{"session.absolute_timeout":"20m"}`,
 			map[string]string{"session.absolute_timeout": "Must not be shorter than the idle timeout."}},
 		{"gitlab id only", nil, `{"gitlab.client_id":"x"}`, map[string]string{
 			"gitlab.url": "Required when other GitLab sign-in settings are set.", "gitlab.client_secret": "Required when other GitLab sign-in settings are set."}},

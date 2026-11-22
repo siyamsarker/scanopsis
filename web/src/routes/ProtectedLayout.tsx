@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useQueryClient } from '@tanstack/react-query';
-import { LogOut } from 'lucide-react';
+import { LogOut, UserRound } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
@@ -140,17 +140,25 @@ export function ProtectedLayout() {
             )}
           </nav>
           <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            <span
+            <Link
+              to="/account"
               title={`Signed in as ${user.name || user.username}`}
-              className="sr-only min-w-0 items-center gap-2 text-text sm:not-sr-only sm:flex"
+              aria-label={`Your account: ${user.name || user.username}, ${user.role === 'admin' ? 'Admin' : 'Viewer'}`}
+              className="flex min-h-10 min-w-0 items-center gap-2 rounded-control px-2 text-text transition-colors duration-150 ease-out hover:bg-surface-raised"
             >
+              <UserRound
+                size={18}
+                strokeWidth={1.5}
+                aria-hidden="true"
+                className="shrink-0 text-text-muted"
+              />
               <span className="sr-only max-w-48 truncate xl:not-sr-only xl:block">
                 {user.name || user.username}
               </span>
-              <span className="rounded-control border border-border px-1.5 py-0.5 text-xs text-text-muted">
+              <span className="hidden rounded-control border border-border px-1.5 py-0.5 text-xs text-text-muted sm:inline">
                 {user.role === 'admin' ? 'Admin' : 'Viewer'}
               </span>
-            </span>
+            </Link>
             <ThemeSwitch />
             <button type="button" className={secondaryButtonClass} onClick={() => void signOut()}>
               <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />

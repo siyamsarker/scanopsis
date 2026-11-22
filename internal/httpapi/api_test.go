@@ -47,6 +47,12 @@ var rbacRoutes = []struct {
 	{"GET", "/api/v1/me", "", [6]string{"401:unauthenticated", "200", "200", "200", "200", "200"}},
 	{"POST", "/api/v1/me/password", "{}", [6]string{
 		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "204", "204", "204"}},
+	{"GET", "/api/v1/me/sessions", "", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"DELETE", "/api/v1/me/sessions", "", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"DELETE", "/api/v1/me/sessions/3", "", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/users", "", [6]string{
 		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "200"}},
 	{"PATCH", "/api/v1/users/3", `{"role":"viewer"}`, [6]string{
@@ -89,6 +95,7 @@ func TestRBACMatrix(t *testing.T) {
 					d.LocalLogin, d.GitLabLogin, d.GitLabCallback = ok, ok, ok
 					d.Setup, d.MFAVerify, d.MFAStartEnrollment, d.MFAConfirmEnrollment = ok, ok, ok, ok
 					d.PasswordChange, d.SettingsList, d.SettingsUpdate = ok, ok, ok
+					d.MySessionsList, d.MySessionsEndOthers, d.MySessionEnd = ok, ok, ok
 					d.Features = map[string]http.Handler{}
 					for _, id := range featureIDs {
 						d.Features[id] = ok

@@ -79,6 +79,9 @@ type Session struct {
 	LastSeenAt  pgtype.Timestamptz
 	ExpiresAt   pgtype.Timestamptz
 	MfaVerified bool
+	ID          int64
+	ClientIp    string
+	UserAgent   string
 }
 
 type Setting struct {

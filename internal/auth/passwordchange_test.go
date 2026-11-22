@@ -49,12 +49,12 @@ func (f *fakePasswordStore) SetPassword(_ context.Context, arg store.SetPassword
 	return nil
 }
 
-func (f *fakePasswordStore) DeleteOtherUserSessions(_ context.Context, arg store.DeleteOtherUserSessionsParams) error {
+func (f *fakePasswordStore) DeleteOtherUserSessions(_ context.Context, arg store.DeleteOtherUserSessionsParams) (int64, error) {
 	if f.deleteErr != nil {
-		return f.deleteErr
+		return 0, f.deleteErr
 	}
 	f.deleted = append(f.deleted, arg)
-	return nil
+	return 1, nil
 }
 
 const (

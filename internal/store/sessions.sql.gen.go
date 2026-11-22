@@ -13,19 +13,28 @@ import (
 
 const createSession = `-- name: CreateSession :exec
 
-INSERT INTO sessions (id_hash, user_id, expires_at) VALUES ($1, $2, $3)
+INSERT INTO sessions (id_hash, user_id, expires_at, client_ip, user_agent)
+VALUES ($1, $2, $3, $4, $5)
 `
 
 type CreateSessionParams struct {
 	IDHash    []byte
 	UserID    int64
 	ExpiresAt pgtype.Timestamptz
+	ClientIp  string
+	UserAgent string
 }
 
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) error {
-	_, err := q.db.Exec(ctx, createSession, arg.IDHash, arg.UserID, arg.ExpiresAt)
+	_, err := q.db.Exec(ctx, createSession,
+		arg.IDHash,
+		arg.UserID,
+		arg.ExpiresAt,
+		arg.ClientIp,
+		arg.UserAgent,
+	)
 	return err
 }
 
@@ -46,7 +55,7 @@ func (q *Queries) DeleteExpiredSessions(ctx context.Context, arg DeleteExpiredSe
 	return result.RowsAffected(), nil
 }
 
-const deleteOtherUserSessions = `-- name: DeleteOtherUserSessions :exec
+const deleteOtherUserSessions = `-- name: DeleteOtherUserSessions :execrows
 DELETE FROM sessions WHERE user_id = $1 AND id_hash <> $2
 `
 
@@ -55,9 +64,12 @@ type DeleteOtherUserSessionsParams struct {
 	KeepIDHash []byte
 }
 
-func (q *Queries) DeleteOtherUserSessions(ctx context.Context, arg DeleteOtherUserSessionsParams) error {
-	_, err := q.db.Exec(ctx, deleteOtherUserSessions, arg.UserID, arg.KeepIDHash)
-	return err
+func (q *Queries) DeleteOtherUserSessions(ctx context.Context, arg DeleteOtherUserSessionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOtherUserSessions, arg.UserID, arg.KeepIDHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteSession = `-- name: DeleteSession :exec
@@ -67,6 +79,27 @@ DELETE FROM sessions WHERE id_hash = $1
 func (q *Queries) DeleteSession(ctx context.Context, idHash []byte) error {
 	_, err := q.db.Exec(ctx, deleteSession, idHash)
 	return err
+}
+
+const deleteUserSession = `-- name: DeleteUserSession :execrows
+DELETE FROM sessions
+WHERE id = $1 AND user_id = $2 AND id_hash <> $3
+`
+
+type DeleteUserSessionParams struct {
+	ID         int64
+	UserID     int64
+	KeepIDHash []byte
+}
+
+// DeleteUserSession ends one session of a user, never the one whose token
+// hash is keep_id_hash. No row means there is no such other session.
+func (q *Queries) DeleteUserSession(ctx context.Context, arg DeleteUserSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUserSession, arg.ID, arg.UserID, arg.KeepIDHash)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteUserSessions = `-- name: DeleteUserSessions :exec
@@ -79,7 +112,7 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, sessions.mfa_verified, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at, users.must_change_password, users.totp_secret_enc, users.totp_enabled_at, users.totp_last_step, users.mfa_failed_attempts
+SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, sessions.mfa_verified, sessions.id, sessions.client_ip, sessions.user_agent, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at, users.must_change_password, users.totp_secret_enc, users.totp_enabled_at, users.totp_last_step, users.mfa_failed_attempts
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id_hash = $1
@@ -110,6 +143,9 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.Session.LastSeenAt,
 		&i.Session.ExpiresAt,
 		&i.Session.MfaVerified,
+		&i.Session.ID,
+		&i.Session.ClientIp,
+		&i.Session.UserAgent,
 		&i.User.ID,
 		&i.User.Source,
 		&i.User.GitlabUserID,
@@ -127,6 +163,71 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.User.MfaFailedAttempts,
 	)
 	return i, err
+}
+
+const listUserSessions = `-- name: ListUserSessions :many
+SELECT id, id_hash, created_at, last_seen_at, expires_at, mfa_verified, client_ip, user_agent
+FROM sessions
+WHERE user_id = $1
+  AND expires_at > $2
+  AND last_seen_at > $3
+ORDER BY last_seen_at DESC, id DESC
+LIMIT $4
+`
+
+type ListUserSessionsParams struct {
+	UserID     int64
+	Now        pgtype.Timestamptz
+	IdleCutoff pgtype.Timestamptz
+	MaxRows    int32
+}
+
+type ListUserSessionsRow struct {
+	ID          int64
+	IDHash      []byte
+	CreatedAt   pgtype.Timestamptz
+	LastSeenAt  pgtype.Timestamptz
+	ExpiresAt   pgtype.Timestamptz
+	MfaVerified bool
+	ClientIp    string
+	UserAgent   string
+}
+
+// ListUserSessions returns the user's sessions that are neither past their
+// absolute expiry nor idle since before idle_cutoff, most recently used
+// first. The token hash is returned only to recognise the current session.
+func (q *Queries) ListUserSessions(ctx context.Context, arg ListUserSessionsParams) ([]ListUserSessionsRow, error) {
+	rows, err := q.db.Query(ctx, listUserSessions,
+		arg.UserID,
+		arg.Now,
+		arg.IdleCutoff,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserSessionsRow{}
+	for rows.Next() {
+		var i ListUserSessionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.IDHash,
+			&i.CreatedAt,
+			&i.LastSeenAt,
+			&i.ExpiresAt,
+			&i.MfaVerified,
+			&i.ClientIp,
+			&i.UserAgent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const promoteSession = `-- name: PromoteSession :one

@@ -112,3 +112,35 @@ export function useUpdateSettings() {
     },
   });
 }
+
+export type MySession = components['schemas']['Session'];
+
+const mySessionsKey = ['me', 'sessions'] as const;
+
+/** The signed-in user's sessions that still work, most recently used first. */
+export function useMySessions() {
+  return useQuery({
+    queryKey: mySessionsKey,
+    queryFn: async () => unwrap(await api.GET('/api/v1/me/sessions')).items,
+  });
+}
+
+/** Ends one other session of the signed-in user. */
+export function useEndSession() {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, number>({
+    mutationFn: async (id) => {
+      unwrap(await api.DELETE('/api/v1/me/sessions/{id}', { params: { path: { id } } }));
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: mySessionsKey }),
+  });
+}
+
+/** Ends every session of the signed-in user except this one; resolves to how many ended. */
+export function useEndOtherSessions() {
+  const queryClient = useQueryClient();
+  return useMutation<number, ApiError, void>({
+    mutationFn: async () => unwrap(await api.DELETE('/api/v1/me/sessions')).ended,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: mySessionsKey }),
+  });
+}

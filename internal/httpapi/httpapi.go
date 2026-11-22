@@ -74,8 +74,12 @@ type Deps struct {
 	MFAConfirmEnrollment http.Handler
 	MFAVerify            http.Handler
 	PasswordChange       http.Handler
-	SettingsList         http.Handler
-	SettingsUpdate       http.Handler
+	// The signed-in user's own sessions: list, end all others, end one.
+	MySessionsList      http.Handler
+	MySessionsEndOthers http.Handler
+	MySessionEnd        http.Handler
+	SettingsList        http.Handler
+	SettingsUpdate      http.Handler
 
 	// Features maps OpenAPI operation IDs (for example "ingestTrivy",
 	// "getPortfolio") to the handlers of the scan and SonarQube endpoints.
@@ -127,6 +131,9 @@ func (s *server) routes() []route {
 		{"POST", "/api/v1/auth/logout", http.HandlerFunc(s.logout)},
 		{"GET", "/api/v1/me", s.requireFirstFactor(http.HandlerFunc(s.me))},
 		{"POST", "/api/v1/me/password", s.requireMFA(s.optional(s.PasswordChange, "Password change"))},
+		{"GET", "/api/v1/me/sessions", s.requireComplete(s.optional(s.MySessionsList, "The session list"))},
+		{"DELETE", "/api/v1/me/sessions", s.requireComplete(s.optional(s.MySessionsEndOthers, "The session list"))},
+		{"DELETE", "/api/v1/me/sessions/{id}", s.requireComplete(s.optional(s.MySessionEnd, "The session list"))},
 		{"GET", "/api/v1/setup", s.optional(s.Setup, "Setup")},
 		{"POST", "/api/v1/setup", s.optional(s.Setup, "Setup")},
 		{"POST", "/api/v1/auth/mfa/verify", s.requireFirstFactor(s.optional(s.MFAVerify, "Two-factor authentication"))},

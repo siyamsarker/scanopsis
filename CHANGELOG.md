@@ -19,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scanopsis admin export-report <scan-id>` writes the original Trivy report of a scan to standard output, for checking a stored scan with `trivy convert`. It works in the container without a shell: `docker compose exec scanopsis /scanopsis admin export-report 42 > report.json`. A successful export is recorded in the audit log as `report.exported`; a report cleared by data retention fails with a clear message.
 - Rejected SonarQube webhooks (wrong signature, oversized or invalid body) are recorded in the audit log as `webhook.rejected` with the reason and client address, at most 10 per address and then one per minute.
 
+### Added
+
+- An **Account** page, opened from your name in the header, lists your sessions: when each started, when it was last used, the client address and the browser. You can end any other session, or all of them at once. The API is `GET` and `DELETE /api/v1/me/sessions` and `DELETE /api/v1/me/sessions/{id}`, and ending sessions is recorded in the audit log as `session.revoked`.
+
+### Changed
+
+- Sessions now end after 30 minutes without use (was 8 hours) and 12 hours after sign-in at the latest (was 24 hours), as OWASP ASVS level 2 asks. Values stored in the database before the upgrade are kept. The session cookie is now a browser-session cookie without an expiry date, so closing the browser ends it; the server still enforces both timeouts.
+
 ### Security
 
 - GitLab sign-in no longer redirects to another site when `return_to` hides a backslash behind a dot segment, such as `/./%5Cevil.example`. The value is now cleaned before it is checked, any backslash or control character (raw or percent-encoded) is refused, and the redirect is built from the path and query only. The web interface applies the same rule.

@@ -11,8 +11,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/netip"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -25,6 +28,8 @@ const (
 	// touchInterval is how stale last_seen_at may get before a request
 	// writes it again, so that requests do not each cause a write.
 	touchInterval = time.Minute
+	// maxUserAgent bounds the User-Agent text stored with a session.
+	maxUserAgent = 200
 )
 
 // ErrNoSession is returned when a request carries no valid session.
@@ -41,11 +46,16 @@ type SessionStore interface {
 }
 
 // SessionOptions configures Sessions. A session ends after Idle without a
-// request or Absolute after it started, whichever comes first.
+// request or Absolute after it started, whichever comes first. The cookie
+// has no expiry of its own: the browser drops it when it closes, and the
+// server enforces both timeouts.
 type SessionOptions struct {
 	Idle, Absolute time.Duration
 	Secure         bool
 	Now            func() time.Time // nil means time.Now
+	// ClientIP gives the client address recorded with a new session; nil
+	// records none.
+	ClientIP func(*http.Request) netip.Addr
 }
 
 // Sessions manages server-side sessions identified by a random cookie. Only
@@ -100,8 +110,13 @@ func (s *Sessions) tokenFrom(r *http.Request) []byte {
 }
 
 // cookie builds the session cookie. It has no Domain, so browsers keep it
-// host-only.
-func (s *Sessions) cookie(value string, expires time.Time, maxAge int) *http.Cookie {
+// host-only. A live session's cookie has neither Expires nor Max-Age, so it
+// is a browser-session cookie; clearing passes a negative maxAge.
+func (s *Sessions) cookie(value string, maxAge int) *http.Cookie {
+	var expires time.Time
+	if maxAge < 0 {
+		expires = time.Unix(0, 0)
+	}
 	// Secure follows the deployment's TLS setting; plain HTTP is for local development only.
 	return &http.Cookie{ //nolint:gosec
 		Name:     CookieName(s.opts.Secure),
@@ -135,16 +150,38 @@ func (s *Sessions) Start(w http.ResponseWriter, r *http.Request, userID int64) e
 		return fmt.Errorf("generate session token: %w", err)
 	}
 	expires := s.opts.Now().Add(time.Duration(s.absolute.Load()))
+	var ip string
+	if s.opts.ClientIP != nil {
+		if a := s.opts.ClientIP(r); a.IsValid() {
+			ip = a.String()
+		}
+	}
 	err := s.store.CreateSession(r.Context(), store.CreateSessionParams{
 		IDHash:    hashToken(token),
 		UserID:    userID,
 		ExpiresAt: ts(expires),
+		ClientIp:  ip,
+		UserAgent: shortUserAgent(r.UserAgent()),
 	})
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
-	http.SetCookie(w, s.cookie(base64.RawURLEncoding.EncodeToString(token), expires, 0))
+	http.SetCookie(w, s.cookie(base64.RawURLEncoding.EncodeToString(token), 0))
 	return nil
+}
+
+// shortUserAgent returns at most maxUserAgent bytes of ua, cut at a character
+// boundary, with invalid UTF-8 replaced, so it can be stored and shown as text.
+func shortUserAgent(ua string) string {
+	ua = strings.ToValidUTF8(ua, "\uFFFD")
+	if len(ua) <= maxUserAgent {
+		return ua
+	}
+	cut := maxUserAgent
+	for cut > 0 && !utf8.RuneStart(ua[cut]) {
+		cut--
+	}
+	return ua[:cut]
 }
 
 // Authenticate returns the principal for the request's session cookie. It
@@ -181,6 +218,7 @@ func (s *Sessions) Authenticate(r *http.Request) (*Principal, error) {
 		Role:     Role(u.Role),
 
 		SessionID:          id,
+		SessionNumber:      row.Session.ID,
 		MFAEnrolled:        u.TotpEnabledAt.Valid,
 		MFAVerified:        row.Session.MfaVerified,
 		MustChangePassword: u.MustChangePassword,
@@ -191,17 +229,17 @@ func (s *Sessions) Authenticate(r *http.Request) (*Principal, error) {
 // Principal's SessionID) has passed the second factor, and replaces its token:
 // the cookie set on w carries a new random token, and the one the request
 // came with stops working. A token captured before the second factor is
-// therefore never a full session. The session keeps its original expiry.
+// therefore never a full session. The session keeps its original expiry and
+// number.
 func (s *Sessions) PromoteMFAVerified(ctx context.Context, w http.ResponseWriter, sessionID []byte) error {
 	token := make([]byte, tokenBytes)
 	if _, err := rand.Read(token); err != nil {
 		return fmt.Errorf("generate session token: %w", err)
 	}
-	expires, err := s.store.PromoteSession(ctx, store.PromoteSessionParams{NewIDHash: hashToken(token), OldIDHash: sessionID})
-	if err != nil {
+	if _, err := s.store.PromoteSession(ctx, store.PromoteSessionParams{NewIDHash: hashToken(token), OldIDHash: sessionID}); err != nil {
 		return fmt.Errorf("promote session: %w", err)
 	}
-	http.SetCookie(w, s.cookie(base64.RawURLEncoding.EncodeToString(token), expires.Time, 0))
+	http.SetCookie(w, s.cookie(base64.RawURLEncoding.EncodeToString(token), 0))
 	return nil
 }
 
@@ -212,8 +250,15 @@ func (s *Sessions) End(w http.ResponseWriter, r *http.Request) error {
 			return fmt.Errorf("delete session: %w", err)
 		}
 	}
-	http.SetCookie(w, s.cookie("", time.Unix(0, 0), -1))
+	http.SetCookie(w, s.cookie("", -1))
 	return nil
+}
+
+// window returns the current time and the idle cutoff: a session last seen
+// at or before the cutoff has ended.
+func (s *Sessions) window() (now, idleCutoff time.Time) {
+	now = s.opts.Now()
+	return now, now.Add(-time.Duration(s.idle.Load()))
 }
 
 // RemoveExpired deletes sessions past their absolute or idle expiry.

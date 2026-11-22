@@ -126,12 +126,14 @@ test('1. setup creates the administrator and enrols two-factor', async ({ browse
   await expect(root.getByRole('heading', { name: 'Services' })).toBeVisible();
 });
 
-test('2. the session cookie is HttpOnly, SameSite=Lax and not in the page', async () => {
+test('2. the session cookie is HttpOnly, SameSite=Lax, ends with the browser and is not in the page', async () => {
   const cookies = await rootContext.cookies();
   const session = cookies.find((c) => c.name.endsWith('scanopsis_session'));
   expect(session, 'session cookie present').toBeDefined();
   expect(session?.httpOnly).toBe(true);
   expect(session?.sameSite).toBe('Lax');
+  // -1: a browser-session cookie without Expires or Max-Age.
+  expect(session?.expires).toBe(-1);
 
   const value = session?.value ?? '';
   expect(value.length).toBeGreaterThan(16);
@@ -383,4 +385,45 @@ test('22. a return_to that tries to leave the site ends on a local page', async 
   await page.goto(`/login?return_to=${encodeURIComponent('/%2e%2e/%5Cevil.example')}`);
   await expect(page).toHaveURL('http://localhost:18080/');
   await context.close();
+});
+
+test('23. the account page lists sessions and ends other ones', async ({ browser }) => {
+  // Another browser signs in as root and completes the second factor.
+  const laptop = await newUser(browser);
+  await signInLocal(laptop.page, 'root', newPassword);
+  await enterCode(laptop.page, rootSecret);
+  await expect(laptop.page).toHaveURL(/\/$/);
+
+  await header(root).getByRole('link', { name: /^Your account/ }).click();
+  await expect(root).toHaveURL(/\/account$/);
+  const list = root.getByRole('list', { name: 'Sessions' });
+  await expect(list.getByRole('listitem')).toHaveCount(2);
+  await expect(list.getByText('This browser')).toHaveCount(1);
+  await list.getByRole('button', { name: /^End session/ }).click();
+  await expect(list.getByRole('listitem')).toHaveCount(1);
+
+  await laptop.page.reload();
+  await expect(laptop.page).toHaveURL(/\/login/);
+  await laptop.context.close();
+
+  // A browser that stopped after the password shows up too, and ends with the others.
+  const phone = await newUser(browser);
+  await signInLocal(phone.page, 'root', newPassword);
+  await expect(phone.page.getByRole('heading', { name: 'Enter your code' })).toBeVisible();
+  await root.reload();
+  await expect(list.getByText('Second factor not completed')).toBeVisible();
+  await root.getByRole('button', { name: 'End all other sessions' }).click();
+  await root.getByRole('alertdialog').getByRole('button', { name: 'End other sessions' }).click();
+  await expect(root.getByText('Ended 1 other session.')).toBeVisible();
+  await expect(list.getByRole('listitem')).toHaveCount(1);
+  await expect(root.getByRole('button', { name: 'End all other sessions' })).toBeDisabled();
+
+  await phone.page.reload();
+  await expect(phone.page).toHaveURL(/\/login/);
+  await phone.context.close();
+
+  await root.goto('/admin/audit');
+  const audit = root.getByRole('main').getByRole('table', { name: 'Audit log' });
+  await expect(audit).toContainText('session.revoked');
+  await expect(audit).toContainText('Sessions ended');
 });

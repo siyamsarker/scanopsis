@@ -312,6 +312,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in user's sessions that are still valid, most recently used first.
+         * @description Lists at most 200 sessions. The client address and the browser are
+         *     as recorded when the session started; sessions started before they
+         *     were recorded show empty strings.
+         */
+        get: operations["listMySessions"];
+        put?: never;
+        post?: never;
+        /**
+         * End every other session of the signed-in user.
+         * @description The session making the request stays signed in. Recorded in the audit log as session.revoked when at least one session ended.
+         */
+        delete: operations["endOtherSessions"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/sessions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End one other session of the signed-in user.
+         * @description Recorded in the audit log as session.revoked. The current session ends with sign-out instead.
+         */
+        delete: operations["endMySession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/users/{id}/mfa": {
         parameters: {
             query?: never;
@@ -1104,6 +1150,43 @@ export interface components {
             mfa_verified: boolean;
             must_change_password: boolean;
         };
+        Session: {
+            /**
+             * Format: int64
+             * @description Stable number of the session.
+             */
+            id: number;
+            /** @description This is the session making the request. */
+            current: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description Last request, to the minute.
+             */
+            last_seen_at: string;
+            /**
+             * Format: date-time
+             * @description Absolute expiry; the session ends earlier after the idle timeout.
+             */
+            expires_at: string;
+            /** @description The session has passed the second factor. */
+            mfa_verified: boolean;
+            /** @description Client address when the session started; empty if not recorded. */
+            client_ip: string;
+            /** @description First 200 bytes of the User-Agent header when the session started; empty if not recorded. */
+            user_agent: string;
+        };
+        SessionList: {
+            items: components["schemas"]["Session"][];
+        };
+        SessionsEnded: {
+            /**
+             * Format: int64
+             * @description Number of sessions that ended.
+             */
+            ended: number;
+        };
         SetupStatus: {
             required: boolean;
         };
@@ -1813,6 +1896,99 @@ export interface operations {
             };
             /** @description Not a local account (code not_local) or second factor not verified. */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listMySessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Sessions of the signed-in user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    endOtherSessions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many sessions ended. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionsEnded"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    endMySession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session ended. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description The user has no other session with this id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description This is the current session (code current_session). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

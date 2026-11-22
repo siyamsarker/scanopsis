@@ -100,8 +100,8 @@ invalid.
 | `gitlab.client_secret` | `SCANOPSIS_GITLAB_CLIENT_SECRET` | secret | not set | | Secret of the GitLab OAuth application. Stored encrypted and never shown again. It cannot be empty; reset it instead. |
 | `gitlab.allowed_groups` | `SCANOPSIS_GITLAB_ALLOWED_GROUPS` | list | empty | `platform,security/appsec` | GitLab groups, by full path, whose members may sign in. Empty allows every GitLab user. Each path must not be empty, must not start or end with `/` and must not contain spaces. In the environment, separate entries with commas. On the Settings page, write one entry per line. See the [GitLab sign-in guide](integrations/gitlab-sso.md#allowed-groups). |
 | `auth.local_login_enabled` | `SCANOPSIS_LOCAL_LOGIN_ENABLED` | boolean | `true` | `false` | Whether users can sign in with a local username and password. In the environment, use `true`, `false`, `1` or `0`. |
-| `session.idle_timeout` | `SCANOPSIS_SESSION_IDLE_TIMEOUT` | duration | `8h` | `30m` | How long a session may stay unused before the user must sign in again. At least `5m`. |
-| `session.absolute_timeout` | `SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT` | duration | `24h` | `12h` | Maximum lifetime of a session, however active. Not shorter than the idle timeout. |
+| `session.idle_timeout` | `SCANOPSIS_SESSION_IDLE_TIMEOUT` | duration | `30m` | `15m` | How long a session may stay unused before the user must sign in again. At least `5m`. |
+| `session.absolute_timeout` | `SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT` | duration | `12h` | `8h` | Maximum lifetime of a session, however active. Not shorter than the idle timeout. |
 | `ingest.allowed_namespaces` | `SCANOPSIS_INGEST_ALLOWED_NAMESPACES` | list | empty | `platform,security` | GitLab groups, by full path, whose projects may upload scan reports; projects in subgroups are included. Empty accepts every project whose CI job token is valid. Same path rules as the allowed groups. See the [GitLab CI guide](integrations/gitlab-ci.md). |
 | `ingest.protected_refs_only` | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | boolean | `false` | `true` | Accept scan reports only from pipelines on protected branches and tags (the token's `ref_protected` claim). |
 | `sonar.url` | `SCANOPSIS_SONAR_URL` | URL | empty | `https://sonarqube.example.com` | Base URL of the SonarQube server. Same rules as the GitLab URL. Prefer `https`: the token is sent with every request. See the [SonarQube guide](integrations/sonarqube.md). |
@@ -173,6 +173,15 @@ sign-in page and does not contact GitLab.
 - The retention period is read at the start of each cleanup run, so a change
   applies from the next run. It does not start a run. See
   [data retention](operations.md#data-retention).
+
+The defaults, 30 minutes idle and 12 hours in total, follow the session
+timeouts of OWASP ASVS level 2. The session cookie has no expiry date of its
+own: the browser deletes it when it closes, and the server ends the session
+after either timeout even if the browser stays open. In version 0.1.0 the
+defaults were 8 hours and 24 hours. A database that already stores a value
+for either setting (one saved on the Settings page or seeded from the
+environment on the first start) keeps it; reset the setting on the Settings
+page to use the new default.
 
 ## File variants and Docker secrets
 

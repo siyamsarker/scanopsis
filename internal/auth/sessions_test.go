@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -59,6 +60,7 @@ type fakeSessionStore struct {
 	createFn error
 	markErr  error
 	now      func() time.Time
+	nextID   int64
 }
 
 func newFakeSessionStore() *fakeSessionStore {
@@ -84,9 +86,11 @@ func (f *fakeSessionStore) CreateSession(_ context.Context, a store.CreateSessio
 	if f.createFn != nil {
 		return f.createFn
 	}
+	f.nextID++
 	f.sessions[string(a.IDHash)] = store.Session{
 		IDHash: a.IDHash, UserID: a.UserID, ExpiresAt: a.ExpiresAt,
 		CreatedAt: ts(f.clock()), LastSeenAt: ts(f.clock()),
+		ID: f.nextID, ClientIp: a.ClientIp, UserAgent: a.UserAgent,
 	}
 	return nil
 }
@@ -207,9 +211,14 @@ func TestStartCookieAttributes(t *testing.T) {
 		if c.Path != "/" || c.Domain != "" || !c.HttpOnly || c.Secure != secure || c.SameSite != http.SameSiteLaxMode {
 			t.Errorf("secure=%v: attributes %+v", secure, c)
 		}
-		wantExp := clk.Now().Add(testAbsolute).Truncate(time.Second)
-		if !c.Expires.Equal(wantExp) {
-			t.Errorf("secure=%v: Expires %v; want %v", secure, c.Expires, wantExp)
+		// A browser-session cookie: the server alone decides when it ends.
+		if !c.Expires.IsZero() || c.MaxAge != 0 {
+			t.Errorf("secure=%v: Expires %v, MaxAge %d; want neither", secure, c.Expires, c.MaxAge)
+		}
+		for _, stored := range fs.sessions {
+			if want := clk.Now().Add(testAbsolute); !stored.ExpiresAt.Time.Equal(want) {
+				t.Errorf("secure=%v: stored expiry %v; want %v", secure, stored.ExpiresAt.Time, want)
+			}
 		}
 		raw := w.Header().Get("Set-Cookie")
 		for _, want := range []string{"Path=/", "HttpOnly", "SameSite=Lax"} {
@@ -217,8 +226,8 @@ func TestStartCookieAttributes(t *testing.T) {
 				t.Errorf("secure=%v: %q lacks %q", secure, raw, want)
 			}
 		}
-		if strings.Contains(raw, "Domain") || strings.Contains(raw, "Max-Age") {
-			t.Errorf("secure=%v: %q has Domain or Max-Age", secure, raw)
+		if strings.Contains(raw, "Domain") || strings.Contains(raw, "Max-Age") || strings.Contains(raw, "Expires") {
+			t.Errorf("secure=%v: %q has Domain, Max-Age or Expires", secure, raw)
 		}
 		if strings.Contains(raw, "Secure") != secure {
 			t.Errorf("secure=%v: %q", secure, raw)
@@ -377,8 +386,8 @@ func TestPromoteMFAVerifiedReplacesTheToken(t *testing.T) {
 	if len(cookies) != 1 || cookies[0].Name != CookieName(false) || cookies[0].Value == old.Value || !cookies[0].HttpOnly {
 		t.Fatalf("cookies %+v; want one new session cookie", cookies)
 	}
-	if !cookies[0].Expires.Equal(created.ExpiresAt.Time.Truncate(time.Second)) {
-		t.Fatalf("cookie expires %v; want the original %v", cookies[0].Expires, created.ExpiresAt.Time)
+	if !cookies[0].Expires.IsZero() || cookies[0].MaxAge != 0 {
+		t.Fatalf("cookie Expires %v, MaxAge %d; want a browser-session cookie", cookies[0].Expires, cookies[0].MaxAge)
 	}
 	if _, err := s.Authenticate(requestWith(old)); !errors.Is(err, ErrNoSession) {
 		t.Fatalf("old cookie after promotion: %v; want ErrNoSession", err)
@@ -581,14 +590,51 @@ func TestRemoveExpired(t *testing.T) {
 }
 
 func TestNewSessionsDefaultsClock(t *testing.T) {
-	s := NewSessions(newFakeSessionStore(), SessionOptions{Idle: time.Hour, Absolute: time.Hour})
+	fs := newFakeSessionStore()
+	s := NewSessions(fs, SessionOptions{Idle: time.Hour, Absolute: time.Hour})
 	before := time.Now()
 	w := httptest.NewRecorder()
 	if err := s.Start(w, requestWith(nil), 7); err != nil {
 		t.Fatal(err)
 	}
-	if exp := w.Result().Cookies()[0].Expires; exp.Before(before.Add(time.Hour).Truncate(time.Second)) {
-		t.Fatalf("expiry %v is not based on the wall clock", exp)
+	for _, stored := range fs.sessions {
+		if exp := stored.ExpiresAt.Time; exp.Before(before.Add(time.Hour)) {
+			t.Fatalf("expiry %v is not based on the wall clock", exp)
+		}
+	}
+}
+
+func TestStartRecordsClientAndShortUserAgent(t *testing.T) {
+	fs := newFakeSessionStore()
+	addr := netip.MustParseAddr("2001:db8::7")
+	s := NewSessions(fs, SessionOptions{Idle: time.Hour, Absolute: time.Hour,
+		ClientIP: func(*http.Request) netip.Addr { return addr }})
+	r := requestWith(nil)
+	// 199 ASCII bytes and then a two-byte character that would straddle the limit.
+	r.Header.Set("User-Agent", strings.Repeat("a", 199)+"é and more")
+	if err := s.Start(httptest.NewRecorder(), r, 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, stored := range fs.sessions {
+		if stored.ClientIp != "2001:db8::7" {
+			t.Errorf("client IP %q", stored.ClientIp)
+		}
+		if stored.UserAgent != strings.Repeat("a", 199) {
+			t.Errorf("user agent %q (%d bytes); want cut before the split character", stored.UserAgent, len(stored.UserAgent))
+		}
+	}
+
+	fs = newFakeSessionStore()
+	s = NewSessions(fs, SessionOptions{Idle: time.Hour, Absolute: time.Hour})
+	r = requestWith(nil)
+	r.Header.Set("User-Agent", "curl/8 \xff")
+	if err := s.Start(httptest.NewRecorder(), r, 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, stored := range fs.sessions {
+		if stored.ClientIp != "" || stored.UserAgent != "curl/8 \uFFFD" {
+			t.Errorf("without a resolver: IP %q, user agent %q", stored.ClientIp, stored.UserAgent)
+		}
 	}
 }
 

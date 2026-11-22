@@ -320,6 +320,52 @@ paths:
         "401": { description: "Wrong current password (code invalid_credentials), or no session.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: Not a local account (code not_local) or second factor not verified., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+  /api/v1/me/sessions:
+    get:
+      tags: [auth]
+      summary: The signed-in user's sessions that are still valid, most recently used first.
+      description: |
+        Lists at most 200 sessions. The client address and the browser are
+        as recorded when the session started; sessions started before they
+        were recorded show empty strings.
+      operationId: listMySessions
+      responses:
+        "200":
+          description: Sessions of the signed-in user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionList" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      tags: [auth]
+      summary: End every other session of the signed-in user.
+      description: The session making the request stays signed in. Recorded in the audit log as session.revoked when at least one session ended.
+      operationId: endOtherSessions
+      responses:
+        "200":
+          description: How many sessions ended.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionsEnded" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+  /api/v1/me/sessions/{id}:
+    delete:
+      tags: [auth]
+      summary: End one other session of the signed-in user.
+      description: Recorded in the audit log as session.revoked. The current session ends with sign-out instead.
+      operationId: endMySession
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "204": { description: The session ended. }
+        "400": { description: Invalid id., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: The user has no other session with this id., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: This is the current session (code current_session)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+
   /api/v1/users/{id}/mfa:
     delete:
       tags: [users]
@@ -1117,6 +1163,31 @@ components:
             mfa_enrolled: { type: boolean, description: The user has a confirmed TOTP enrolment. }
             mfa_verified: { type: boolean, description: This session has passed the second factor. }
             must_change_password: { type: boolean }
+    Session:
+      type: object
+      required: [id, current, created_at, last_seen_at, expires_at, mfa_verified, client_ip, user_agent]
+      properties:
+        id: { type: integer, format: int64, description: Stable number of the session. }
+        current: { type: boolean, description: This is the session making the request. }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time, description: "Last request, to the minute." }
+        expires_at: { type: string, format: date-time, description: "Absolute expiry; the session ends earlier after the idle timeout." }
+        mfa_verified: { type: boolean, description: The session has passed the second factor. }
+        client_ip: { type: string, description: "Client address when the session started; empty if not recorded." }
+        user_agent: { type: string, description: "First 200 bytes of the User-Agent header when the session started; empty if not recorded." }
+    SessionList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/Session" }
+    SessionsEnded:
+      type: object
+      required: [ended]
+      properties:
+        ended: { type: integer, format: int64, description: Number of sessions that ended. }
     SetupStatus:
       type: object
       required: [required]

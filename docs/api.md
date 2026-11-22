@@ -328,6 +328,66 @@ Responses:
 | 401 | Wrong current password (code invalid_credentials), or no session. | `application/json` [Error](#error) |
 | 403 | Not a local account (code not_local) or second factor not verified. | `application/json` [Error](#error) |
 
+### `GET /api/v1/me/sessions`
+
+The signed-in user's sessions that are still valid, most recently used first.
+
+Lists at most 200 sessions. The client address and the browser are as recorded when the session started; sessions started before they were recorded show empty strings.
+
+- Operation ID: `listMySessions`
+- Authentication: Session
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Sessions of the signed-in user. | `application/json` [SessionList](#sessionlist) |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+
+### `DELETE /api/v1/me/sessions`
+
+End every other session of the signed-in user.
+
+The session making the request stays signed in. Recorded in the audit log as session.revoked when at least one session ended.
+
+- Operation ID: `endOtherSessions`
+- Authentication: Session
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | How many sessions ended. | `application/json` [SessionsEnded](#sessionsended) |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+
+### `DELETE /api/v1/me/sessions/{id}`
+
+End one other session of the signed-in user.
+
+Recorded in the audit log as session.revoked. The current session ends with sign-out instead.
+
+- Operation ID: `endMySession`
+- Authentication: Session
+
+Parameters:
+
+| Name | In | Required | Type | Description |
+|---|---|---|---|---|
+| `id` | path | yes | integer (int64) |  |
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | The session ended. | none |
+| 400 | Invalid id. | `application/json` [Error](#error) |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 404 | The user has no other session with this id. | `application/json` [Error](#error) |
+| 409 | This is the current session (code current_session). | `application/json` [Error](#error) |
+
 ### `GET /api/v1/portfolio`
 
 Current posture of every non-archived service.
@@ -1212,6 +1272,37 @@ Type: object
 | `default_ref` | string or null (minLength 1, maxLength 255) | no | Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet. |
 | `name` | string (minLength 1, maxLength 200) | no |  |
 | `sonar_project_key` | string or null (maxLength 400) | no | null unlinks. |
+
+### Session
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `client_ip` | string | yes | Client address when the session started; empty if not recorded. |
+| `created_at` | string (date-time) | yes |  |
+| `current` | boolean | yes | This is the session making the request. |
+| `expires_at` | string (date-time) | yes | Absolute expiry; the session ends earlier after the idle timeout. |
+| `id` | integer (int64) | yes | Stable number of the session. |
+| `last_seen_at` | string (date-time) | yes | Last request, to the minute. |
+| `mfa_verified` | boolean | yes | The session has passed the second factor. |
+| `user_agent` | string | yes | First 200 bytes of the User-Agent header when the session started; empty if not recorded. |
+
+### SessionList
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `items` | array of [Session](#session) | yes |  |
+
+### SessionsEnded
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `ended` | integer (int64) | yes | Number of sessions that ended. |
 
 ### Setting
 

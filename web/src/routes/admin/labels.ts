@@ -21,6 +21,7 @@ export const auditActions: Record<string, string> = {
   'login.succeeded': 'Signed in',
   'login.failed': 'Sign-in failed',
   logout: 'Signed out',
+  'session.revoked': 'Sessions ended',
   'user.created': 'User created',
   'user.role_changed': 'Role changed',
   'user.password_changed': 'Password changed',

@@ -87,8 +87,9 @@ describe('protected layout', () => {
       return call.path === '/api/v1/me' ? json(200, makeUser()) : undefined;
     });
     const { container } = renderApp('/');
-    expect(await screen.findByRole('link', { name: 'scanopsis' })).toHaveAttribute('href', '/');
-    expect(container.querySelectorAll('header a svg path')).toHaveLength(2);
+    const mark = await screen.findByRole('link', { name: 'scanopsis' });
+    expect(mark).toHaveAttribute('href', '/');
+    expect(mark.querySelectorAll('svg path')).toHaveLength(2);
     await screen.findByText('No services yet');
     expect(container.querySelectorAll('main .aperture-halo svg path')).toHaveLength(2);
   });

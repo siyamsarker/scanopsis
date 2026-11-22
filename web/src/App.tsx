@@ -41,6 +41,9 @@ const IntegrationsPage = lazy(() =>
   import('./routes/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })),
 );
 const AuditPage = lazy(() => import('./routes/AuditPage').then((m) => ({ default: m.AuditPage })));
+const AccountPage = lazy(() =>
+  import('./routes/AccountPage').then((m) => ({ default: m.AccountPage })),
+);
 
 const loading = (
   <p role="status" className="p-6 text-text-muted">
@@ -69,6 +72,7 @@ export function App() {
             <Route path="admin/integrations" element={<IntegrationsPage />} />
             <Route path="admin/audit" element={<AuditPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="account" element={<AccountPage />} />
             <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Route>

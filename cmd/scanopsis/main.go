@@ -138,7 +138,9 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	snap := conf.Current()
 	sessions := auth.NewSessions(q, auth.SessionOptions{
 		Idle: snap.SessionIdleTimeout, Absolute: snap.SessionAbsoluteTimeout, Secure: cfg.Secure(),
+		ClientIP: resolver.IP,
 	})
+	mySessions := auth.NewMySessions(q, sessions, rec, resolver.IP, log)
 
 	setup := auth.NewSetup(q, sessions, rec, resolver.IP, auth.NewRateLimiter(12*time.Second, 5, nil), log)
 	token, err := setup.PrepareToken(startCtx)
@@ -215,6 +217,9 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		MFAConfirmEnrollment: mfa.ConfirmEnrollmentHandler(),
 		MFAVerify:            mfa.VerifyHandler(),
 		PasswordChange:       auth.NewPasswordChange(q, rec, auth.NewRateLimiter(12*time.Second, 10, nil), log),
+		MySessionsList:       mySessions.ListHandler(),
+		MySessionsEndOthers:  mySessions.EndOthersHandler(),
+		MySessionEnd:         mySessions.EndHandler(),
 		SettingsList:         conf.ListHandler(),
 		SettingsUpdate:       conf.UpdateHandler(),
 		Build:                httpapi.BuildInfo{Version: version, Commit: resolveCommit(), Go: runtime.Version()},

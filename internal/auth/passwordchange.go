@@ -22,7 +22,7 @@ import (
 type PasswordStore interface {
 	GetUser(ctx context.Context, id int64) (store.User, error)
 	SetPassword(ctx context.Context, arg store.SetPasswordParams) error
-	DeleteOtherUserSessions(ctx context.Context, arg store.DeleteOtherUserSessionsParams) error
+	DeleteOtherUserSessions(ctx context.Context, arg store.DeleteOtherUserSessionsParams) (int64, error)
 }
 
 type passwordChange struct {
@@ -145,7 +145,7 @@ func (h *passwordChange) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	// The password is changed; signing out the other sessions is what makes
 	// the change useful after a suspected compromise, so failing here is an error.
-	if err := h.store.DeleteOtherUserSessions(r.Context(), store.DeleteOtherUserSessionsParams{
+	if _, err := h.store.DeleteOtherUserSessions(r.Context(), store.DeleteOtherUserSessionsParams{
 		UserID: user.ID, KeepIDHash: p.SessionID,
 	}); err != nil {
 		h.fail(w, r, "cannot sign out other sessions", err)

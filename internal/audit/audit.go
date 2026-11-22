@@ -29,6 +29,10 @@ const (
 	ActionPasswordChanged = "user.password_changed"
 	ActionPasswordReset   = "user.password_reset"
 
+	// ActionSessionRevoked: users ended their own sessions. The detail has
+	// "scope" ("one" with "session_id", or "others" with "count") and "ip".
+	ActionSessionRevoked = "session.revoked"
+
 	// Scan ingestion and services. ingest.rejected details carry "reason"
 	// and, when the token was valid, "project_path".
 	ActionIngestRejected = "ingest.rejected"
