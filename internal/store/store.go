@@ -43,7 +43,7 @@ var (
 )
 
 // Pool defaults, applied unless the database URL sets the same parameter
-// (pool_max_conns, statement_timeout; see docs/configuration.md).
+// (pool_max_conns, statement_timeout, jit; see docs/configuration.md).
 const (
 	// DefaultMaxConns bounds the connections one Scanopsis process opens.
 	// pgx would use the number of CPUs (at least 4), which varies with the
@@ -88,6 +88,13 @@ func poolConfig(databaseURL string) (*pgxpool.Config, error) {
 	params := cfg.ConnConfig.RuntimeParams
 	if _, set := params["statement_timeout"]; !set && !strings.Contains(params["options"], "statement_timeout") {
 		params["statement_timeout"] = strconv.FormatInt(DefaultStatementTimeout.Milliseconds(), 10)
+	}
+	// Every statement is short. PostgreSQL's cost estimate for a recursive
+	// query (the vulnerability search) is far above its real cost, which
+	// makes it compile the query with JIT: 250 ms of compiling for a search
+	// that runs in 17 ms. No query of the application gains from JIT.
+	if _, set := params["jit"]; !set && !strings.Contains(params["options"], "jit") {
+		params["jit"] = "off"
 	}
 	return cfg, nil
 }

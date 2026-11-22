@@ -69,6 +69,7 @@ func New(t testing.TB) *pgxpool.Pool {
 		t.Fatal(err)
 	}
 	cfg.ConnConfig.Database = name
+	cfg.ConnConfig.RuntimeParams["jit"] = "off" // as store.Open sets it
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)

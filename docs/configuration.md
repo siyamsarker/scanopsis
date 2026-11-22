@@ -60,12 +60,13 @@ token and the SonarQube webhook secret can also be given as files. See [file var
 
 ### Database URL parameters
 
-Scanopsis sets two defaults for its connections to PostgreSQL. Put the
+Scanopsis sets three defaults for its connections to PostgreSQL. Put the
 parameter in the database URL to change one.
 
 | Parameter | Default | Example | Effect |
 |---|---|---|---|
 | `pool_max_conns` | `16` | `?pool_max_conns=32` | The most connections one Scanopsis process opens. It also limits how many API requests are served at once: further requests wait up to 3 seconds for a slot and are then answered `503 busy`. Raise it only with enough `max_connections` on the database (the process needs one more for the readiness probe; keep a few spare for backups and administration). |
+| `jit` | `off` | `?jit=on` | PostgreSQL's just-in-time compilation. Scanopsis turns it off: its statements are short, and the estimate for the vulnerability search made PostgreSQL spend 250 ms compiling a query that runs in 17 ms. |
 | `statement_timeout` | `30000` (30 seconds, in milliseconds) | `?statement_timeout=60000` | PostgreSQL cancels any statement that runs longer and the request fails with an error. `0` turns the limit off. An `options=-c statement_timeout=...` parameter also counts as a setting. |
 
 Example: `postgres://scanopsis:pw@db:5432/scanopsis?sslmode=disable&pool_max_conns=24`.

@@ -37,6 +37,10 @@ func TestOpenAppliesPoolDefaults(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SHOW statement_timeout`).Scan(&timeout); err != nil || timeout != "30s" {
 		t.Errorf("statement_timeout = %q (%v), want 30s", timeout, err)
 	}
+	var jit string
+	if err := pool.QueryRow(ctx, `SHOW jit`).Scan(&jit); err != nil || jit != "off" {
+		t.Errorf("jit = %q (%v), want off", jit, err)
+	}
 	// A statement over the limit is cancelled by the server.
 	if _, err := pool.Exec(ctx, `SET statement_timeout = '50ms'`); err != nil {
 		t.Fatal(err)

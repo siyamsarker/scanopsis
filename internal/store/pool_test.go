@@ -46,6 +46,25 @@ func TestPoolConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestPoolConfigTurnsJITOff(t *testing.T) {
+	t.Parallel()
+	for url, want := range map[string]string{
+		"postgres://u@h/db":                                "off",
+		"host=h dbname=db":                                 "off",
+		"postgres://u@h/db?jit=on":                         "on",
+		"postgres://u@h/db?options=-c%20jit%3Don":          "",
+		"postgres://u@h/db?statement_timeout=5000&jit=off": "off",
+	} {
+		cfg, err := poolConfig(url)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.ConnConfig.RuntimeParams["jit"]; got != want {
+			t.Errorf("%s: jit = %q, want %q", url, got, want)
+		}
+	}
+}
+
 func TestPoolConfigRejectsBadURL(t *testing.T) {
 	t.Parallel()
 	if _, err := poolConfig("postgres://u@h/db?pool_max_conns=many"); err == nil {
