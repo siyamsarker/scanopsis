@@ -158,7 +158,7 @@ export default function CommandPalette({
               <Command.Input
                 value={query}
                 onValueChange={setQuery}
-                placeholder="Search pages, services, or paste a CVE or GHSA ID"
+                placeholder="Go to a service, page or CVE"
                 className="min-h-14 w-full bg-transparent text-body text-text outline-none placeholder:text-text-faint focus-visible:outline-none"
               />
               <Kbd className="hidden sm:inline-flex">Esc</Kbd>
