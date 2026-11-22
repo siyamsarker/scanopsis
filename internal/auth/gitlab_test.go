@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/siyamsarker/scanopsis/internal/auth"
 	"github.com/siyamsarker/scanopsis/internal/store"
 	"github.com/siyamsarker/scanopsis/internal/testutil/fakegitlab"
@@ -35,9 +37,10 @@ var (
 )
 
 type userStore struct {
-	mu    sync.Mutex
-	calls []store.UpsertGitLabUserParams
-	err   error
+	mu       sync.Mutex
+	calls    []store.UpsertGitLabUserParams
+	err      error
+	disabled bool
 }
 
 func (s *userStore) UpsertGitLabUser(_ context.Context, arg store.UpsertGitLabUserParams) (store.User, error) {
@@ -47,7 +50,11 @@ func (s *userStore) UpsertGitLabUser(_ context.Context, arg store.UpsertGitLabUs
 		return store.User{}, s.err
 	}
 	s.calls = append(s.calls, arg)
-	return store.User{ID: 1000 + arg.GitlabUserID.Int64, Username: arg.Username}, nil
+	u := store.User{ID: 1000 + arg.GitlabUserID.Int64, Username: arg.Username}
+	if s.disabled {
+		u.DisabledAt = pgtype.Timestamptz{Time: time.Unix(1, 0), Valid: true}
+	}
+	return u, nil
 }
 
 type sessions struct {
@@ -658,4 +665,17 @@ func forgeCookie(t *testing.T, ck *http.Cookie, returnTo string) *http.Cookie {
 	m["r"] = returnTo
 	raw, _ = json.Marshal(m)
 	return &http.Cookie{Name: ck.Name, Value: base64.RawURLEncoding.EncodeToString(raw)}
+}
+
+func TestDisabledGitLabUserIsRefused(t *testing.T) {
+	e := newEnv(t, nil)
+	e.users.disabled = true
+	rec := e.signIn("/services")
+	e.wantRedirect(rec, "/login?error=account_disabled")
+	if len(e.sessions.users) != 0 {
+		t.Fatalf("session started for a disabled user: %v", e.sessions.users)
+	}
+	if len(e.audit.events) != 1 || e.audit.events[0].Action != "login.failed" || e.audit.events[0].Detail["reason"] != "account_disabled" {
+		t.Fatalf("audit = %+v", e.audit.events)
+	}
 }

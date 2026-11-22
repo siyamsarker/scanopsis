@@ -43,7 +43,16 @@ describe('users page', () => {
       within(table)
         .getAllByRole('columnheader')
         .map((h) => h.textContent),
-    ).toEqual(['Username', 'Name', 'E-mail', 'Sign-in', 'Role', 'Last sign-in', 'Two-factor']);
+    ).toEqual([
+      'Username',
+      'Name',
+      'E-mail',
+      'Sign-in',
+      'Role',
+      'Last sign-in',
+      'Two-factor',
+      'Access',
+    ]);
     const row = within(table).getByRole('row', { name: /grace/ });
     expect(within(row).getByText('Grace Hopper')).toBeInTheDocument();
     expect(within(row).getByText('grace@example.com')).toBeInTheDocument();
@@ -149,10 +158,10 @@ describe('users page', () => {
       return undefined;
     });
     renderApp('/admin/users');
-    expect(screen.queryByText('linus')).not.toBeInTheDocument();
+    expect(screen.queryByText('Linus')).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Load more' }));
-    expect(await screen.findByText('linus')).toBeInTheDocument();
-    expect(screen.getByText('grace')).toBeInTheDocument();
+    expect(await screen.findByText('Linus')).toBeInTheDocument();
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
     expect(calls.map((c) => c.path)).toContain('/api/v1/users?after=2');
   });

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -35,7 +36,9 @@ func runAdminArgs(env map[string]string, args ...string) (code int, stdout, stde
 func TestAdminHelp(t *testing.T) {
 	for _, a := range []string{"-h", "--help", "help", "-help"} {
 		code, out, errs := runAdminArgs(nil, a)
-		if code != 0 || errs != "" || !strings.Contains(out, "reset-password <username>") || !strings.Contains(out, "reset-2fa") || !strings.Contains(out, "export-report <scan-id>") {
+		if code != 0 || errs != "" || !strings.Contains(out, "reset-password <username>") || !strings.Contains(out, "reset-2fa") ||
+			!strings.Contains(out, "disable-user") || !strings.Contains(out, "enable-user") || !strings.Contains(out, "delete-user") ||
+			!strings.Contains(out, "export-report <scan-id>") {
 			t.Errorf("%s: code %d stdout %q stderr %q", a, code, out, errs)
 		}
 	}
@@ -60,6 +63,10 @@ func TestAdminUsageErrors(t *testing.T) {
 		"export zero":           {"export-report", "0"},
 		"export negative":       {"export-report", "-5"},
 		"export flag":           {"export-report", "--all"},
+		"disable-user none":     {"disable-user"},
+		"enable-user bare name": {"enable-user", "alice"},
+		"delete-user two":       {"delete-user", "local:a", "local:b"},
+		"delete-user bad":       {"delete-user", "ldap:a"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -183,6 +190,9 @@ type fakeBackend struct {
 	resetErr error
 	listErr  error
 	rec      *recAudit
+	// access records disable (+id), enable (-id) and delete (x id) calls.
+	access    []string
+	accessErr error
 }
 
 func (f *fakeBackend) backend() *adminBackend {
@@ -223,6 +233,20 @@ func (f *fakeBackend) backend() *adminBackend {
 			}
 			f.resets = append(f.resets, id)
 			return nil
+		},
+		setDisabled: func(_ context.Context, id int64, disabled bool) (store.User, error) {
+			if f.accessErr != nil {
+				return store.User{}, f.accessErr
+			}
+			f.access = append(f.access, map[bool]string{true: "+", false: "-"}[disabled]+strconv.FormatInt(id, 10))
+			return store.User{ID: id}, nil
+		},
+		deleteUser: func(_ context.Context, id int64) (store.User, error) {
+			if f.accessErr != nil {
+				return store.User{}, f.accessErr
+			}
+			f.access = append(f.access, "x"+strconv.FormatInt(id, 10))
+			return store.User{ID: id}, nil
 		},
 		audit: f.rec,
 	}
@@ -395,4 +419,46 @@ type recordingAudit struct{ events []string }
 
 func (r *recordingAudit) Record(_ context.Context, actor, action string, detail map[string]any) {
 	r.events = append(r.events, fmt.Sprint(actor, " ", action, " ", detail))
+}
+
+func TestAccessCommands(t *testing.T) {
+	f := &fakeBackend{users: []store.User{
+		{ID: 3, Source: "local", Username: "root"},
+		{ID: 4, Source: "gitlab", Username: "ada"},
+	}}
+	b := f.backend()
+	ctx := context.Background()
+	var out bytes.Buffer
+	for _, c := range []struct{ cmd, source, name, want string }{
+		{"disable-user", "gitlab", "ada", "The account gitlab:ada was disabled and signed out everywhere."},
+		{"enable-user", "gitlab", "ada", "The account gitlab:ada was enabled and can sign in again."},
+		{"delete-user", "local", "root", "The account local:root was deleted."},
+	} {
+		out.Reset()
+		if err := b.changeAccess(ctx, c.cmd, c.source, c.name, &out); err != nil || strings.TrimSpace(out.String()) != c.want {
+			t.Fatalf("%s: %v, output %q", c.cmd, err, out.String())
+		}
+	}
+	if !reflect.DeepEqual(f.access, []string{"+4", "-4", "x3"}) {
+		t.Fatalf("calls %v", f.access)
+	}
+	if !reflect.DeepEqual(f.rec.events, []string{"cli user.disabled ada", "cli user.enabled ada", "cli user.deleted root"}) {
+		t.Fatalf("audit %v", f.rec.events)
+	}
+	if err := b.changeAccess(ctx, "disable-user", "gitlab", "ghost", &out); err == nil || !strings.Contains(err.Error(), "no gitlab account") {
+		t.Fatalf("ghost: %v", err)
+	}
+	for err, want := range map[error]string{
+		store.ErrLastAdmin: "last enabled administrator",
+		store.ErrNotFound:  "no longer exists",
+		errors.New("boom"): "boom",
+	} {
+		f.accessErr = err
+		if got := b.changeAccess(ctx, "delete-user", "local", "root", &out); got == nil || !strings.Contains(got.Error(), want) {
+			t.Fatalf("%v: %v", err, got)
+		}
+	}
+	if len(f.rec.events) != 3 {
+		t.Fatalf("a failed change was audited: %v", f.rec.events)
+	}
 }

@@ -213,6 +213,7 @@ describe('local sign-in', () => {
 describe('login page error codes', () => {
   it.each([
     ['access_denied', 'You cancelled the sign-in on GitLab.'],
+    ['account_disabled', 'Your account is disabled. Ask an administrator to enable it.'],
     [
       'group_not_allowed',
       'Your GitLab account is not in a group that may use Scanopsis. Ask an administrator to add your group.',

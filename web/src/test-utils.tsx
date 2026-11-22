@@ -76,6 +76,7 @@ export function makeUser(overrides: Partial<Me> = {}): Me {
     role: 'admin',
     created_at: '2026-01-01T00:00:00Z',
     last_login_at: '2026-11-18T10:00:00Z',
+    disabled_at: null,
     mfa_enrolled: true,
     mfa_verified: true,
     must_change_password: false,

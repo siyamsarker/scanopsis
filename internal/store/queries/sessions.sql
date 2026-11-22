@@ -6,14 +6,16 @@ INSERT INTO sessions (id_hash, user_id, expires_at, client_ip, user_agent)
 VALUES (@id_hash, @user_id, @expires_at, @client_ip, @user_agent);
 
 -- GetSession returns a session that is neither past its absolute expiry nor
--- idle since before idle_cutoff, together with its user.
+-- idle since before idle_cutoff, together with its user. A disabled user has
+-- no valid session, even if one was left behind.
 -- name: GetSession :one
 SELECT sqlc.embed(sessions), sqlc.embed(users)
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id_hash = @id_hash
   AND sessions.expires_at > @now
-  AND sessions.last_seen_at > @idle_cutoff;
+  AND sessions.last_seen_at > @idle_cutoff
+  AND users.disabled_at IS NULL;
 
 -- name: TouchSession :exec
 UPDATE sessions SET last_seen_at = @now WHERE id_hash = @id_hash;

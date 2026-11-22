@@ -6,7 +6,14 @@ import { CircleAlert } from 'lucide-react';
 import { useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { Role, User } from '../api/client';
-import { useMe, useResetUserMfa, useUpdateUserRole, useUsers } from '../api/hooks';
+import {
+  useDeleteUser,
+  useMe,
+  useResetUserMfa,
+  useSetUserDisabled,
+  useUpdateUserRole,
+  useUsers,
+} from '../api/hooks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { cardClass, headingClass, secondaryButtonClass, selectClass } from '../ui';
 
@@ -99,6 +106,114 @@ function ResetMfa({ user, isSelf }: { user: User; isSelf: boolean }) {
   );
 }
 
+function Problem({ message }: { message: string }) {
+  return (
+    <span className="flex items-start gap-2 text-text">
+      <CircleAlert
+        size={16}
+        strokeWidth={1.5}
+        aria-hidden="true"
+        className="mt-0.5 shrink-0 text-fail"
+      />
+      <span>{message}</span>
+    </span>
+  );
+}
+
+/** Disable or enable, and delete, a user. Both are refused for your own account. */
+function Access({ user, isSelf }: { user: User; isSelf: boolean }) {
+  const setDisabled = useSetUserDisabled();
+  const remove = useDeleteUser();
+  const [confirm, setConfirm] = useState<'disable' | 'delete' | null>(null);
+  const disableButton = useRef<HTMLButtonElement>(null);
+  const deleteButton = useRef<HTMLButtonElement>(null);
+  const disabled = user.disabled_at !== null;
+  const pending = setDisabled.isPending || remove.isPending;
+
+  if (isSelf) return <span className="text-text-muted">Your account</span>;
+
+  const error = setDisabled.error ?? remove.error;
+  let status = '';
+  if (setDisabled.isSuccess) {
+    status = setDisabled.data.disabled_at
+      ? `${user.username} is disabled and was signed out.`
+      : `${user.username} can sign in again.`;
+  }
+
+  function toggle() {
+    if (disabled) {
+      setDisabled.mutate({ id: user.id, disabled: false });
+    } else {
+      setConfirm('disable');
+    }
+  }
+
+  return (
+    <>
+      <div className="flex flex-wrap gap-2">
+        <button
+          ref={disableButton}
+          type="button"
+          className={secondaryButtonClass}
+          disabled={pending}
+          onClick={toggle}
+        >
+          {disabled ? 'Enable' : 'Disable'} <span className="sr-only">{user.username}</span>
+        </button>
+        <button
+          ref={deleteButton}
+          type="button"
+          className={`${secondaryButtonClass} text-fail`}
+          disabled={pending}
+          onClick={() => setConfirm('delete')}
+        >
+          Delete <span className="sr-only">{user.username}</span>
+        </button>
+      </div>
+      <div aria-live="polite" className="mt-1 min-h-5 text-text-muted">
+        {error ? <Problem message={error.message} /> : status}
+      </div>
+      {confirm === 'disable' && (
+        <ConfirmDialog
+          title={`Disable ${user.username}?`}
+          confirmLabel="Disable"
+          pending={setDisabled.isPending}
+          onConfirm={() =>
+            setDisabled.mutate(
+              { id: user.id, disabled: true },
+              { onSettled: () => setConfirm(null) },
+            )
+          }
+          onCancel={() => setConfirm(null)}
+          returnFocusTo={disableButton}
+        >
+          <p>
+            {user.username} is signed out everywhere and cannot sign in, with a password or with
+            GitLab, until an administrator enables the account again.
+          </p>
+        </ConfirmDialog>
+      )}
+      {confirm === 'delete' && (
+        <ConfirmDialog
+          title={`Delete ${user.username}?`}
+          confirmLabel="Delete user"
+          pending={remove.isPending}
+          onConfirm={() => remove.mutate(user.id, { onSettled: () => setConfirm(null) })}
+          onCancel={() => setConfirm(null)}
+          returnFocusTo={deleteButton}
+        >
+          <p>
+            This removes {user.username} with their sessions and two-factor setup. The audit log
+            keeps its entries.
+            {user.source === 'gitlab' &&
+              ' A GitLab user who signs in again comes back as a new viewer; disable the account instead to keep them out.'}
+          </p>
+        </ConfirmDialog>
+      )}
+    </>
+  );
+}
+
 function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
   const update = useUpdateUserRole();
   // While a change is in flight, show the requested role; on failure the
@@ -112,7 +227,17 @@ function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
 
   return (
     <tr className="border-t border-border transition-colors duration-150 ease-out hover:bg-surface-raised">
-      <td className={`${cell} font-mono text-[13px]`}>{user.username}</td>
+      <td className={cell}>
+        <span className="font-mono text-[13px]">{user.username}</span>{' '}
+        {user.disabled_at && (
+          <span
+            className="ml-1 rounded-control border border-fail px-1.5 py-0.5 text-xs whitespace-nowrap text-text"
+            title={`Disabled ${new Date(user.disabled_at).toLocaleString()}`}
+          >
+            Disabled
+          </span>
+        )}
+      </td>
       <td className={cell}>{user.name}</td>
       <td className={cell}>{user.email}</td>
       <td className={cell}>{user.source === 'gitlab' ? 'GitLab' : 'Local'}</td>
@@ -128,19 +253,7 @@ function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
           <option value="viewer">Viewer</option>
         </select>
         <div aria-live="polite" className="mt-1 min-h-5 text-text-muted">
-          {update.isError ? (
-            <span className="flex items-start gap-2 text-text">
-              <CircleAlert
-                size={16}
-                strokeWidth={1.5}
-                aria-hidden="true"
-                className="mt-0.5 shrink-0 text-fail"
-              />
-              <span>{update.error.message}</span>
-            </span>
-          ) : (
-            status
-          )}
+          {update.isError ? <Problem message={update.error.message} /> : status}
         </div>
       </td>
       <td className={cell}>
@@ -154,6 +267,9 @@ function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
       </td>
       <td className={cell}>
         <ResetMfa user={user} isSelf={isSelf} />
+      </td>
+      <td className={cell}>
+        <Access user={user} isSelf={isSelf} />
       </td>
     </tr>
   );
@@ -187,7 +303,7 @@ function UsersTable() {
         tabIndex={0}
         className={`${cardClass} mt-6 overflow-x-auto`}
       >
-        <table className="w-full min-w-[56rem] border-collapse">
+        <table className="w-full min-w-[68rem] border-collapse">
           <thead>
             <tr className="bg-bg/40 text-text-muted">
               <th scope="col" className={headCell}>
@@ -210,6 +326,9 @@ function UsersTable() {
               </th>
               <th scope="col" className={headCell}>
                 Two-factor
+              </th>
+              <th scope="col" className={headCell}>
+                Access
               </th>
             </tr>
           </thead>
@@ -239,7 +358,9 @@ export function UsersPage() {
   return (
     <>
       <h1 className={headingClass}>Users</h1>
-      <p className="mt-1 text-text-muted">Everyone who has signed in, and the role they hold.</p>
+      <p className="mt-1 text-text-muted">
+        Everyone who has signed in, the role they hold, and whether they may sign in.
+      </p>
       {me.data?.role === 'admin' ? (
         <UsersTable />
       ) : (

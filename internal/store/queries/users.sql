@@ -16,7 +16,9 @@ VALUES ('local', $1, $2, $3)
 RETURNING *;
 
 -- UpsertGitLabUser records a GitLab sign-in. A new user always gets the
--- viewer role; an existing user keeps their role.
+-- viewer role; an existing user keeps their role and stays disabled if an
+-- administrator disabled the account, in which case the sign-in time is not
+-- updated (the caller refuses the sign-in).
 -- name: UpsertGitLabUser :one
 INSERT INTO users (source, gitlab_user_id, username, name, email, role, last_login_at)
 VALUES ('gitlab', @gitlab_user_id, @username, @name, @email,
@@ -25,7 +27,7 @@ ON CONFLICT (gitlab_user_id) DO UPDATE
 SET username      = EXCLUDED.username,
     name          = EXCLUDED.name,
     email         = EXCLUDED.email,
-    last_login_at = now()
+    last_login_at = CASE WHEN users.disabled_at IS NULL THEN now() ELSE users.last_login_at END
 RETURNING *;
 
 -- name: TouchLastLogin :exec
@@ -37,8 +39,24 @@ WHERE id > @after_id
 ORDER BY id
 LIMIT @max_rows;
 
+-- LockAdmins locks the enabled administrators and returns their ids. A
+-- concurrent change that disables or demotes one of them waits, and the rows
+-- are checked again afterwards, so two such changes cannot both remove the
+-- last one.
 -- name: LockAdmins :many
-SELECT id FROM users WHERE role = 'admin' FOR UPDATE;
+SELECT id FROM users WHERE role = 'admin' AND disabled_at IS NULL FOR UPDATE;
+
+-- SetUserDisabled disables (keeping the first time) or enables a user.
+-- name: SetUserDisabled :one
+UPDATE users
+SET disabled_at = CASE WHEN @disabled::boolean THEN coalesce(disabled_at, now()) ELSE NULL END
+WHERE id = @id
+RETURNING *;
+
+-- DeleteUser removes a user. Sessions and recovery codes go with it; audit
+-- events keep the actor name they were recorded with.
+-- name: DeleteUser :one
+DELETE FROM users WHERE id = $1 RETURNING *;
 
 -- name: SetUserRole :one
 UPDATE users SET role = @role WHERE id = @id RETURNING *;

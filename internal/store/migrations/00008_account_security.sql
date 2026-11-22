@@ -23,7 +23,12 @@ ALTER TABLE recovery_codes ADD COLUMN version smallint NOT NULL DEFAULT 1
     CONSTRAINT recovery_codes_version_check CHECK (version IN (1, 2));
 ALTER TABLE recovery_codes ALTER COLUMN version DROP DEFAULT;
 
+-- Set while an administrator has disabled the account: every sign-in is
+-- refused and the account has no sessions. NULL for an enabled account.
+ALTER TABLE users ADD COLUMN disabled_at timestamptz;
+
 -- +goose Down
+ALTER TABLE users DROP COLUMN disabled_at;
 -- Version 2 codes cannot be checked without this column: remove them, so the
 -- users concerned fall back to their authenticator app.
 DELETE FROM recovery_codes WHERE version <> 1;

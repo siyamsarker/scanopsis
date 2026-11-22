@@ -145,9 +145,19 @@ long-running deployment.
 
 ## Administration commands
 
-Two commands run inside the container and work on the database directly. Use
-them when the web interface is not available, for example when the only
+Five commands run inside the container and work on the database directly.
+Use them when the web interface is not available, for example when the only
 administrator lost a password or a phone.
+
+| Command | What it does |
+|---|---|
+| `reset-password <username>` | New temporary password for a local account. |
+| `reset-2fa <account>` | Removes the two-factor setup of an account. |
+| `disable-user <account>` | Refuses every sign-in of an account and ends its sessions. |
+| `enable-user <account>` | Lets a disabled account sign in again. |
+| `delete-user <account>` | Deletes an account. |
+
+An account is written `local:<username>` or `gitlab:<username>`.
 
 ```sh
 docker compose exec scanopsis /scanopsis admin <command>
@@ -238,6 +248,51 @@ If it fails:
 | `the account must be written local:<username> or gitlab:<username>.` | You wrote only the name, for example `root`. Add the prefix, exit status 2. |
 | `there is no gitlab account named "alice"` (or `local`) | The account does not exist. A GitLab account exists only after its owner signed in once. |
 
+## Disable or delete a user
+
+Disable an account to take access away at once, for example when someone
+leaves or an account may be compromised. Delete an account that should not
+appear on the **Users** page any more.
+
+| | Disable | Delete |
+|---|---|---|
+| Sign-in | Refused, with the password and with GitLab, until the account is enabled again. The sign-in page says the account is disabled. | A local account no longer exists. A GitLab user who signs in again (and passes the group check) comes back as a new viewer. |
+| Sessions | All end at once. | All end, with the account. |
+| Role, two-factor setup, recovery codes | Kept, and in effect again after enabling. | Removed. |
+| Audit log | `user.disabled`, `user.enabled` | `user.deleted`. Earlier events keep the name they were recorded with. |
+
+To keep a GitLab user out for good, disable the account rather than deleting
+it, or remove the user from the allowed GitLab groups.
+
+On the **Users** page, an administrator selects **Disable** (or **Enable**)
+or **Delete** next to the user and confirms. Two rules always apply:
+
+- You cannot disable or delete your own account. Ask another administrator.
+- The last enabled administrator can be neither disabled, deleted nor
+  demoted. Enable or promote another administrator first.
+
+The same works from the command line, for example when the account to disable
+is the only administrator who can still sign in:
+
+```sh
+docker compose exec scanopsis /scanopsis admin disable-user gitlab:alice
+docker compose exec scanopsis /scanopsis admin enable-user gitlab:alice
+docker compose exec scanopsis /scanopsis admin delete-user local:olduser
+```
+
+Expected result, for example:
+
+```text
+The account gitlab:alice was disabled and signed out everywhere.
+```
+
+If it fails:
+
+| Message | Meaning and fix |
+|---|---|
+| `local:root is the last enabled administrator; enable or promote another administrator first` | The change would leave nobody who can administer Scanopsis. Enable or promote another administrator, then run the command again. |
+| `there is no gitlab account named "alice"` (or `local`) | The account does not exist. Check the spelling and the prefix. |
+
 ## Recovering access when locked out
 
 Find the case that matches, then follow its steps.
@@ -249,6 +304,7 @@ Find the case that matches, then follow its steps.
 | A local user forgot the password | Run `reset-password`. If the user also lost the phone, run `reset-2fa` as well. |
 | The only administrator lost both password and phone | Run `reset-password root` and `reset-2fa local:root` (use the real user name). Sign in with the temporary password, enrol again, and set a new password. |
 | A GitLab user cannot sign in | Check the [troubleshooting table](integrations/gitlab-sso.md#troubleshooting). Local sign-in still works for local accounts while GitLab is down. |
+| A user sees "Your account is disabled" | An administrator disabled the account. Select **Enable** next to the user on the **Users** page, or run `enable-user` as shown in [disable or delete a user](#disable-or-delete-a-user). |
 | Local sign-in is off and GitLab sign-in does not work | Turn local sign-in on again in the database, as described next. |
 | The server does not start and the log mentions `SCANOPSIS_SECRET_KEY` | See [the secret key](configuration.md#the-secret-key). |
 

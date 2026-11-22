@@ -83,7 +83,7 @@ Responses:
 
 GitLab redirect target. Completes sign-in.
 
-On success, sets the session cookie and redirects to return_to. On failure, redirects to /login?error=<code> where code is one of access_denied, group_not_allowed, login_expired, login_failed.
+On success, sets the session cookie and redirects to return_to. On failure, redirects to /login?error=<code> where code is one of access_denied, account_disabled, group_not_allowed, login_expired, login_failed.
 
 - Operation ID: `gitlabCallback`
 - Authentication: None
@@ -143,6 +143,7 @@ Responses:
 | 204 | Signed in. The session cookie is set. | none |
 | 400 | Malformed request. | `application/json` [Error](#error) |
 | 401 | Wrong username or password. | `application/json` [Error](#error) |
+| 403 | The password is right, but an administrator disabled the account (code account_disabled). | `application/json` [Error](#error) |
 | 404 | Local sign-in is disabled. | `application/json` [Error](#error) |
 | 429 | Too many attempts from this network or for this username. Retry-After gives seconds. | `application/json` [Error](#error) |
 | 503 | The server is busy hashing other passwords and the request ended while waiting. Try again. | `application/json` [Error](#error) |
@@ -817,7 +818,9 @@ Responses:
 
 ### `PATCH /api/v1/users/{id}`
 
-Change a user's role (admin only).
+Change a user's role, or disable or enable the user (admin only).
+
+Disabling refuses every sign-in of the user (local and GitLab) and ends all of the user's sessions; enabling restores access. Recorded in the audit log as user.role_changed, user.disabled or user.enabled. Administrators cannot disable their own account, and the last enabled administrator can be neither disabled nor demoted.
 
 - Operation ID: `updateUser`
 - Authentication: Session, admin
@@ -841,7 +844,33 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No such user. | `application/json` [Error](#error) |
-| 409 | The change would leave no administrator (code last_admin). | `application/json` [Error](#error) |
+| 409 | The change would leave no enabled administrator (code last_admin), or disables the caller's own account (code own_account). | `application/json` [Error](#error) |
+
+### `DELETE /api/v1/users/{id}`
+
+Delete a user (admin only).
+
+Removes the user with their sessions and recovery codes. Audit events keep the name they were recorded with. Recorded as user.deleted. A GitLab user who signs in again afterwards comes back as a new viewer; disable the user instead to keep them out. Administrators cannot delete their own account or the last enabled administrator.
+
+- Operation ID: `deleteUser`
+- Authentication: Session, admin
+
+Parameters:
+
+| Name | In | Required | Type | Description |
+|---|---|---|---|---|
+| `id` | path | yes | integer (int64) |  |
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Deleted. | none |
+| 400 | Invalid id. | `application/json` [Error](#error) |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 404 | No such user. | `application/json` [Error](#error) |
+| 409 | The user is the last enabled administrator (code last_admin), or the caller (code own_account). | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/users/{id}/mfa`
 
@@ -1001,6 +1030,7 @@ Type: [User](#user) + object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `created_at` | string (date-time) | yes |  |
+| `disabled_at` | string or null (date-time) | yes | When an administrator disabled the user; null while the user may sign in. |
 | `email` | string | yes |  |
 | `id` | integer (int64) | yes |  |
 | `last_login_at` | string or null (date-time) | yes |  |
@@ -1471,6 +1501,7 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `created_at` | string (date-time) | yes |  |
+| `disabled_at` | string or null (date-time) | yes | When an administrator disabled the user; null while the user may sign in. |
 | `email` | string | yes |  |
 | `id` | integer (int64) | yes |  |
 | `last_login_at` | string or null (date-time) | yes |  |
@@ -1494,7 +1525,8 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `role` | [Role](#role) | yes |  |
+| `disabled` | boolean | no | true disables the user and ends their sessions; false enables the user. |
+| `role` | [Role](#role) | no |  |
 
 ### Version
 

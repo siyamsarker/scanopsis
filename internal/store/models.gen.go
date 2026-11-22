@@ -142,6 +142,7 @@ type User struct {
 	TotpEnabledAt      pgtype.Timestamptz
 	TotpLastStep       int64
 	MfaFailedAttempts  int32
+	DisabledAt         pgtype.Timestamptz
 }
 
 type Vulnerability struct {

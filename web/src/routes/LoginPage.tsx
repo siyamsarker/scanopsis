@@ -18,6 +18,7 @@ const errorMessages: Record<string, string> = {
   group_not_allowed:
     'Your GitLab account is not in a group that may use Scanopsis. Ask an administrator to add your group.',
   login_expired: 'The sign-in took too long or was started in another tab. Try again.',
+  account_disabled: 'Your account is disabled. Ask an administrator to enable it.',
   login_failed:
     'Sign-in with GitLab failed. Try again, and contact an administrator if it keeps failing.',
 };

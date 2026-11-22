@@ -49,6 +49,7 @@ type userJSON struct {
 	Role        string     `json:"role"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastLoginAt *time.Time `json:"last_login_at"`
+	DisabledAt  *time.Time `json:"disabled_at"`
 }
 
 type meJSON struct {
@@ -71,6 +72,10 @@ func toUser(u store.User) userJSON {
 	if u.LastLoginAt.Valid {
 		t := u.LastLoginAt.Time
 		out.LastLoginAt = &t
+	}
+	if u.DisabledAt.Valid {
+		t := u.DisabledAt.Time
+		out.DisabledAt = &t
 	}
 	return out
 }
@@ -215,26 +220,49 @@ func (s *server) listUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, page)
 }
 
-func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
+// userID reads the {id} path value, answering 400 itself when it is not a
+// positive integer.
+func userID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil || id < 1 {
 		writeError(w, http.StatusBadRequest, "invalid_request", "The user id must be a positive integer.")
+		return 0, false
+	}
+	return id, true
+}
+
+func actorName(r *http.Request) (*auth.Principal, string) {
+	p, _ := auth.PrincipalFrom(r.Context())
+	return p, p.Source + ":" + p.Username
+}
+
+func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
+	id, ok := userID(w, r)
+	if !ok {
 		return
 	}
 	var body struct {
-		Role string `json:"role"`
+		Role     *string `json:"role"`
+		Disabled *bool   `json:"disabled"`
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxPatchBody))
 	dec.DisallowUnknownFields()
-	err = dec.Decode(&body)
+	err := dec.Decode(&body)
 	if err == nil {
 		// Reject anything after the object.
 		if extra := dec.Decode(&struct{}{}); !errors.Is(extra, io.EOF) {
 			err = errors.New("trailing data")
 		}
 	}
-	if err != nil || (body.Role != store.RoleAdmin && body.Role != store.RoleViewer) {
-		writeError(w, http.StatusBadRequest, "invalid_request", `The body must be a JSON object {"role":"admin"} or {"role":"viewer"}.`)
+	if err != nil || (body.Role == nil && body.Disabled == nil) ||
+		(body.Role != nil && *body.Role != store.RoleAdmin && *body.Role != store.RoleViewer) {
+		writeError(w, http.StatusBadRequest, "invalid_request",
+			`The body must be a JSON object with "role" ("admin" or "viewer"), "disabled" (true or false), or both.`)
+		return
+	}
+	actor, name := actorName(r)
+	if body.Disabled != nil && *body.Disabled && actor.UserID == id {
+		writeError(w, http.StatusConflict, "own_account", "You cannot disable your own account. Ask another administrator.")
 		return
 	}
 
@@ -243,22 +271,56 @@ func (s *server) updateUser(w http.ResponseWriter, r *http.Request) {
 		s.userError(w, r, err)
 		return
 	}
-	updated, err := s.Users.SetUserRole(r.Context(), id, body.Role)
+	updated := before
+	if body.Role != nil {
+		if updated, err = s.Users.SetUserRole(r.Context(), id, *body.Role); err != nil {
+			s.userError(w, r, err)
+			return
+		}
+		s.Audit.Record(r.Context(), name, audit.ActionRoleChanged, map[string]any{
+			"user_id": updated.ID, "username": updated.Username, "from": before.Role, "to": updated.Role,
+		})
+	}
+	if body.Disabled != nil {
+		if updated, err = s.Users.SetUserDisabled(r.Context(), id, *body.Disabled); err != nil {
+			s.userError(w, r, err)
+			return
+		}
+		action := audit.ActionUserEnabled
+		if *body.Disabled {
+			action = audit.ActionUserDisabled
+		}
+		s.Audit.Record(r.Context(), name, action, map[string]any{
+			"user_id": updated.ID, "username": updated.Username, "source": updated.Source,
+		})
+	}
+	writeJSON(w, http.StatusOK, toUser(updated))
+}
+
+func (s *server) deleteUser(w http.ResponseWriter, r *http.Request) {
+	id, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	actor, name := actorName(r)
+	if actor.UserID == id {
+		writeError(w, http.StatusConflict, "own_account", "You cannot delete your own account. Ask another administrator.")
+		return
+	}
+	deleted, err := s.Users.DeleteUser(r.Context(), id)
 	if err != nil {
 		s.userError(w, r, err)
 		return
 	}
-	actor, _ := auth.PrincipalFrom(r.Context())
-	s.Audit.Record(r.Context(), actor.Source+":"+actor.Username, audit.ActionRoleChanged, map[string]any{
-		"user_id": updated.ID, "username": updated.Username, "from": before.Role, "to": updated.Role,
+	s.Audit.Record(r.Context(), name, audit.ActionUserDeleted, map[string]any{
+		"user_id": deleted.ID, "username": deleted.Username, "source": deleted.Source,
 	})
-	writeJSON(w, http.StatusOK, toUser(updated))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *server) resetMFA(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || id < 1 {
-		writeError(w, http.StatusBadRequest, "invalid_request", "The user id must be a positive integer.")
+	id, ok := userID(w, r)
+	if !ok {
 		return
 	}
 	u, err := s.Users.GetUser(r.Context(), id)
@@ -282,7 +344,7 @@ func (s *server) userError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, store.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "No such user.")
 	case errors.Is(err, store.ErrLastAdmin):
-		writeError(w, http.StatusConflict, "last_admin", "At least one administrator must remain. Promote another user first.")
+		writeError(w, http.StatusConflict, "last_admin", "At least one enabled administrator must remain. Promote or enable another administrator first.")
 	default:
 		s.internalError(w, r, "cannot update user", err)
 	}

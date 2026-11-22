@@ -62,6 +62,29 @@ export function useUpdateUserRole() {
   });
 }
 
+/** Disables (ending every session) or enables a user. */
+export function useSetUserDisabled() {
+  const queryClient = useQueryClient();
+  return useMutation<User, ApiError, { id: number; disabled: boolean }>({
+    mutationFn: async ({ id, disabled }) =>
+      unwrap(
+        await api.PATCH('/api/v1/users/{id}', { params: { path: { id } }, body: { disabled } }),
+      ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: usersKey }),
+  });
+}
+
+/** Deletes a user with their sessions and recovery codes. */
+export function useDeleteUser() {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, number>({
+    mutationFn: async (id) => {
+      unwrap(await api.DELETE('/api/v1/users/{id}', { params: { path: { id } } }));
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: usersKey }),
+  });
+}
+
 export function useResetUserMfa() {
   return useMutation<void, ApiError, number>({
     mutationFn: async (id) => {

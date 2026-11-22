@@ -107,7 +107,8 @@ export interface paths {
          * GitLab redirect target. Completes sign-in.
          * @description On success, sets the session cookie and redirects to return_to. On
          *     failure, redirects to /login?error=<code> where code is one of
-         *     access_denied, group_not_allowed, login_expired, login_failed.
+         *     access_denied, account_disabled, group_not_allowed, login_expired,
+         *     login_failed.
          */
         get: operations["gitlabCallback"];
         put?: never;
@@ -202,10 +203,25 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete a user (admin only).
+         * @description Removes the user with their sessions and recovery codes. Audit events
+         *     keep the name they were recorded with. Recorded as user.deleted. A
+         *     GitLab user who signs in again afterwards comes back as a new viewer;
+         *     disable the user instead to keep them out. Administrators cannot
+         *     delete their own account or the last enabled administrator.
+         */
+        delete: operations["deleteUser"];
         options?: never;
         head?: never;
-        /** Change a user's role (admin only). */
+        /**
+         * Change a user's role, or disable or enable the user (admin only).
+         * @description Disabling refuses every sign-in of the user (local and GitLab) and
+         *     ends all of the user's sessions; enabling restores access. Recorded in
+         *     the audit log as user.role_changed, user.disabled or user.enabled.
+         *     Administrators cannot disable their own account, and the last enabled
+         *     administrator can be neither disabled nor demoted.
+         */
         patch: operations["updateUser"];
         trace?: never;
     };
@@ -751,6 +767,11 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             last_login_at: string | null;
+            /**
+             * Format: date-time
+             * @description When an administrator disabled the user; null while the user may sign in.
+             */
+            disabled_at: string | null;
         };
         UserPage: {
             items: components["schemas"]["User"][];
@@ -761,7 +782,9 @@ export interface components {
             next_after: number | null;
         };
         UserUpdate: {
-            role: components["schemas"]["Role"];
+            role?: components["schemas"]["Role"];
+            /** @description true disables the user and ends their sessions; false enables the user. */
+            disabled?: boolean;
         };
         /** @enum {string} */
         Role: "admin" | "viewer";
@@ -1463,6 +1486,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description The password is right, but an administrator disabled the account (code account_disabled). */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Local sign-in is disabled. */
             404: {
                 headers: {
@@ -1566,6 +1598,55 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Invalid id. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No such user. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The user is the last enabled administrator (code last_admin), or the caller (code own_account). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     updateUser: {
         parameters: {
             query?: never;
@@ -1610,7 +1691,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The change would leave no administrator (code last_admin). */
+            /** @description The change would leave no enabled administrator (code last_admin), or disables the caller's own account (code own_account). */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -29,6 +29,12 @@ const (
 	ActionPasswordChanged = "user.password_changed"
 	ActionPasswordReset   = "user.password_reset"
 
+	// An administrator disabled, enabled or deleted a user. The detail has
+	// "user_id", "username" and "source".
+	ActionUserDisabled = "user.disabled"
+	ActionUserEnabled  = "user.enabled"
+	ActionUserDeleted  = "user.deleted"
+
 	// ActionSessionRevoked: users ended their own sessions. The detail has
 	// "scope" ("one" with "session_id", or "others" with "count") and "ip".
 	ActionSessionRevoked = "session.revoked"

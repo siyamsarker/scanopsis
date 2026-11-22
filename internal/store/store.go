@@ -37,8 +37,9 @@ const (
 var (
 	// ErrNotFound is returned when a requested row does not exist.
 	ErrNotFound = errors.New("not found")
-	// ErrLastAdmin is returned when a change would leave no administrator.
-	ErrLastAdmin = errors.New("at least one administrator must remain")
+	// ErrLastAdmin is returned when a change would leave no enabled
+	// administrator.
+	ErrLastAdmin = errors.New("at least one enabled administrator must remain")
 )
 
 // Pool defaults, applied unless the database URL sets the same parameter
@@ -172,9 +173,9 @@ func MigrateLogged(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) er
 	return nil
 }
 
-// SetUserRole changes a user's role. It refuses to demote the last
-// administrator, holding row locks on all administrators so that concurrent
-// demotions cannot both succeed.
+// SetUserRole changes a user's role. It refuses to demote the last enabled
+// administrator, holding row locks on the enabled administrators so that
+// concurrent demotions cannot both succeed.
 func SetUserRole(ctx context.Context, pool *pgxpool.Pool, id int64, role string) (User, error) {
 	var out User
 	err := pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {

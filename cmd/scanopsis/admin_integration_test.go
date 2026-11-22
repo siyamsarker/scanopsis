@@ -227,6 +227,45 @@ func TestIntegrationAdminReset2FA(t *testing.T) {
 	}
 }
 
+func TestIntegrationAdminDisableEnableDeleteUser(t *testing.T) {
+	e := newAdminEnv(t)
+	root := e.localUser(t, "root", "the root passphrase")
+	other := e.localUser(t, "other", "the other passphrase")
+	e.session(t, other.ID, 1)
+
+	code, out, errs := e.run("disable-user", "local:other")
+	if code != 0 || !strings.Contains(out, "local:other was disabled") {
+		t.Fatalf("disable: code %d stdout %q stderr %q", code, out, errs)
+	}
+	if n := e.count(t, "SELECT count(*) FROM sessions WHERE user_id = $1", other.ID); n != 0 {
+		t.Fatalf("%d sessions left after disabling", n)
+	}
+	// root is now the last enabled administrator.
+	for _, cmd := range []string{"disable-user", "delete-user"} {
+		code, out, errs = e.run(cmd, "local:root")
+		if code != 1 || out != "" || !strings.Contains(errs, "last enabled administrator") {
+			t.Fatalf("%s root: code %d stdout %q stderr %q", cmd, code, out, errs)
+		}
+	}
+	code, _, errs = e.run("enable-user", "local:other")
+	if code != 0 || e.count(t, "SELECT count(*) FROM users WHERE disabled_at IS NULL") != 2 {
+		t.Fatalf("enable: code %d stderr %q", code, errs)
+	}
+	code, out, errs = e.run("delete-user", "local:root")
+	if code != 0 || !strings.Contains(out, "local:root was deleted") {
+		t.Fatalf("delete: code %d stdout %q stderr %q", code, out, errs)
+	}
+	if n := e.count(t, "SELECT count(*) FROM users WHERE id = $1", root.ID); n != 0 {
+		t.Fatal("root still exists")
+	}
+	if n := e.count(t, "SELECT count(*) FROM audit_log WHERE actor = 'cli' AND action IN ('user.disabled', 'user.enabled', 'user.deleted')"); n != 3 {
+		t.Fatalf("%d audit rows; want 3", n)
+	}
+	if code, _, _ := e.run("delete-user", "local:root"); code != 1 {
+		t.Fatalf("deleting a missing account: code %d", code)
+	}
+}
+
 func TestIntegrationAdminWithoutSchema(t *testing.T) {
 	e := newAdminEnv(t)
 	if _, err := e.pool.Exec(context.Background(), "DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {

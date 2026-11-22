@@ -111,7 +111,8 @@ paths:
       description: |
         On success, sets the session cookie and redirects to return_to. On
         failure, redirects to /login?error=<code> where code is one of
-        access_denied, group_not_allowed, login_expired, login_failed.
+        access_denied, account_disabled, group_not_allowed, login_expired,
+        login_failed.
       operationId: gitlabCallback
       security: []
       parameters:
@@ -136,6 +137,7 @@ paths:
         "204": { description: Signed in. The session cookie is set. }
         "400": { description: Malformed request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: Wrong username or password., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { description: "The password is right, but an administrator disabled the account (code account_disabled).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Local sign-in is disabled., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many attempts from this network or for this username. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { description: The server is busy hashing other passwords and the request ended while waiting. Try again., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -191,7 +193,13 @@ paths:
   /api/v1/users/{id}:
     patch:
       tags: [users]
-      summary: Change a user's role (admin only).
+      summary: Change a user's role, or disable or enable the user (admin only).
+      description: |
+        Disabling refuses every sign-in of the user (local and GitLab) and
+        ends all of the user's sessions; enabling restores access. Recorded in
+        the audit log as user.role_changed, user.disabled or user.enabled.
+        Administrators cannot disable their own account, and the last enabled
+        administrator can be neither disabled nor demoted.
       operationId: updateUser
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
@@ -210,7 +218,26 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "409": { description: The change would leave no administrator (code last_admin)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "The change would leave no enabled administrator (code last_admin), or disables the caller's own account (code own_account).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [users]
+      summary: Delete a user (admin only).
+      description: |
+        Removes the user with their sessions and recovery codes. Audit events
+        keep the name they were recorded with. Recorded as user.deleted. A
+        GitLab user who signs in again afterwards comes back as a new viewer;
+        disable the user instead to keep them out. Administrators cannot
+        delete their own account or the last enabled administrator.
+      operationId: deleteUser
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+      responses:
+        "204": { description: Deleted. }
+        "400": { description: Invalid id., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "The user is the last enabled administrator (code last_admin), or the caller (code own_account).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/setup:
     get:
@@ -764,7 +791,7 @@ components:
         password: { type: string, minLength: 1, maxLength: 1024 }
     User:
       type: object
-      required: [id, source, username, name, email, role, created_at, last_login_at]
+      required: [id, source, username, name, email, role, created_at, last_login_at, disabled_at]
       properties:
         id: { type: integer, format: int64 }
         source: { type: string, enum: [gitlab, local] }
@@ -774,6 +801,7 @@ components:
         role: { $ref: "#/components/schemas/Role" }
         created_at: { type: string, format: date-time }
         last_login_at: { type: [string, "null"], format: date-time }
+        disabled_at: { type: [string, "null"], format: date-time, description: When an administrator disabled the user; null while the user may sign in. }
     UserPage:
       type: object
       required: [items, next_after]
@@ -787,10 +815,11 @@ components:
           description: Pass as `after` to get the next page; null on the last page.
     UserUpdate:
       type: object
-      required: [role]
+      minProperties: 1
       additionalProperties: false
       properties:
         role: { $ref: "#/components/schemas/Role" }
+        disabled: { type: boolean, description: true disables the user and ends their sessions; false enables the user. }
     Role:
       type: string
       enum: [admin, viewer]

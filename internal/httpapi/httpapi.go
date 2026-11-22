@@ -34,6 +34,10 @@ type UserStore interface {
 	// ResetMFA wraps store.ResetMFA; it returns store.ErrNotFound for an
 	// unknown user.
 	ResetMFA(ctx context.Context, id int64) error
+	// SetUserDisabled wraps store.SetUserDisabled.
+	SetUserDisabled(ctx context.Context, id int64, disabled bool) (store.User, error)
+	// DeleteUser wraps store.DeleteUser.
+	DeleteUser(ctx context.Context, id int64) (store.User, error)
 }
 
 // Pinger checks that the database is reachable. *pgxpool.Pool implements it.
@@ -167,6 +171,7 @@ func (s *server) routes() []route {
 		{"DELETE", "/api/v1/users/{id}/mfa", s.requireAdmin(http.HandlerFunc(s.resetMFA))},
 		{"GET", "/api/v1/users", s.requireAdmin(http.HandlerFunc(s.listUsers))},
 		{"PATCH", "/api/v1/users/{id}", s.requireAdmin(http.HandlerFunc(s.updateUser))},
+		{"DELETE", "/api/v1/users/{id}", s.requireAdmin(http.HandlerFunc(s.deleteUser))},
 	}
 }
 

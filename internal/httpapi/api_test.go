@@ -57,6 +57,8 @@ var rbacRoutes = []struct {
 		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "200"}},
 	{"PATCH", "/api/v1/users/3", `{"role":"viewer"}`, [6]string{
 		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "200"}},
+	{"DELETE", "/api/v1/users/3", "", [6]string{
+		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 	{"DELETE", "/api/v1/users/3/mfa", "", [6]string{
 		"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 	{"GET", "/api/v1/settings", "", [6]string{
@@ -276,7 +278,7 @@ func TestMe(t *testing.T) {
 	e.users.users[1].LastLoginAt = pgtype.Timestamptz{Time: testTime, Valid: true}
 	rec := e.do("GET", "/api/v1/me", "viewer", "")
 	want := `{"id":2,"source":"gitlab","username":"vera","name":"VERA","email":"vera@example.com","role":"viewer",` +
-		`"created_at":"2026-03-01T12:00:00Z","last_login_at":"2026-03-01T12:00:00Z",` +
+		`"created_at":"2026-03-01T12:00:00Z","last_login_at":"2026-03-01T12:00:00Z","disabled_at":null,` +
 		`"mfa_enrolled":true,"mfa_verified":true,"must_change_password":false}` + "\n"
 	if rec.Code != 200 || rec.Body.String() != want {
 		t.Fatalf("me = %d %s", rec.Code, rec.Body.String())
@@ -369,7 +371,9 @@ func TestUpdateUserValidation(t *testing.T) {
 		{"empty body", "/api/v1/users/3", ``},
 		{"not json", "/api/v1/users/3", `role=admin`},
 		{"unknown role", "/api/v1/users/3", `{"role":"owner"}`},
-		{"missing role", "/api/v1/users/3", `{}`},
+		{"neither role nor disabled", "/api/v1/users/3", `{}`},
+		{"disabled not a boolean", "/api/v1/users/3", `{"disabled":"yes"}`},
+		{"null disabled", "/api/v1/users/3", `{"disabled":null}`},
 		{"unknown field", "/api/v1/users/3", `{"role":"admin","name":"x"}`},
 		{"trailing data", "/api/v1/users/3", `{"role":"admin"}{"role":"viewer"}`},
 		{"oversized", "/api/v1/users/3", `{"role":"admin","pad":"` + strings.Repeat("a", 9<<10) + `"}`},
@@ -390,7 +394,7 @@ func TestUpdateUserStoreErrors(t *testing.T) {
 
 	e.users.setErr = store.ErrLastAdmin
 	msg := assertError(t, e.do("PATCH", "/api/v1/users/1", "admin", `{"role":"viewer"}`), 409, "last_admin").Message
-	if msg != "At least one administrator must remain. Promote another user first." {
+	if msg != "At least one enabled administrator must remain. Promote or enable another administrator first." {
 		t.Fatalf("message = %q", msg)
 	}
 	e.users.setErr = store.ErrNotFound // deleted between read and write
@@ -524,5 +528,57 @@ func TestExportedWriters(t *testing.T) {
 	WriteJSON(rec, http.StatusCreated, map[string]int{"n": 1})
 	if rec.Code != http.StatusCreated || rec.Header().Get("Content-Type") != "application/json" || strings.TrimSpace(rec.Body.String()) != `{"n":1}` {
 		t.Fatalf("WriteJSON = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDisableEnableAndDeleteUser(t *testing.T) {
+	e := newEnv(t, nil)
+	rec := e.do("PATCH", "/api/v1/users/3", "admin", `{"disabled":true}`)
+	if rec.Code != 200 {
+		t.Fatalf("disable: %d %s", rec.Code, rec.Body.String())
+	}
+	if u := decode[userJSON](t, rec); u.DisabledAt == nil || !u.DisabledAt.Equal(testTime) || u.Role != "viewer" {
+		t.Fatalf("disabled user = %+v", u)
+	}
+	rec = e.do("PATCH", "/api/v1/users/3", "admin", `{"disabled":false,"role":"admin"}`)
+	if u := decode[userJSON](t, rec); rec.Code != 200 || u.DisabledAt != nil || u.Role != "admin" {
+		t.Fatalf("enable and promote: %d %+v", rec.Code, u)
+	}
+	if rec := e.do("DELETE", "/api/v1/users/3", "admin", ""); rec.Code != 204 {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, found := e.users.find(3); found {
+		t.Fatal("user 3 still exists")
+	}
+	assertError(t, e.do("DELETE", "/api/v1/users/3", "admin", ""), 404, "not_found")
+	detail := map[string]any{"user_id": int64(3), "username": "wes", "source": "gitlab"}
+	want := []auditEvent{
+		{"local:root", "user.disabled", detail},
+		{"local:root", "user.role_changed", map[string]any{"user_id": int64(3), "username": "wes", "from": "viewer", "to": "admin"}},
+		{"local:root", "user.enabled", detail},
+		{"local:root", "user.deleted", detail},
+	}
+	if !reflect.DeepEqual(e.audit.events, want) {
+		t.Fatalf("audit = %+v\nwant  %+v", e.audit.events, want)
+	}
+}
+
+func TestDisableAndDeleteRefuseOwnAccountAndLastAdmin(t *testing.T) {
+	e := newEnv(t, nil)
+	// The admin principal is user 1.
+	assertError(t, e.do("PATCH", "/api/v1/users/1", "admin", `{"disabled":true}`), 409, "own_account")
+	assertError(t, e.do("DELETE", "/api/v1/users/1", "admin", ""), 409, "own_account")
+	// Enabling oneself is harmless (and impossible while disabled): allowed.
+	if rec := e.do("PATCH", "/api/v1/users/1", "admin", `{"disabled":false}`); rec.Code != 200 {
+		t.Fatalf("enable self: %d", rec.Code)
+	}
+	e.users.setErr = store.ErrLastAdmin
+	assertError(t, e.do("PATCH", "/api/v1/users/2", "admin", `{"disabled":true}`), 409, "last_admin")
+	assertError(t, e.do("DELETE", "/api/v1/users/2", "admin", ""), 409, "last_admin")
+	e.users.setErr = errors.New("boom")
+	assertError(t, e.do("DELETE", "/api/v1/users/2", "admin", ""), 500, "internal_error")
+	assertError(t, e.do("DELETE", "/api/v1/users/x", "admin", ""), 400, "invalid_request")
+	if len(e.audit.events) != 1 || e.audit.events[0].Action != "user.enabled" {
+		t.Fatalf("audit = %+v", e.audit.events)
 	}
 }

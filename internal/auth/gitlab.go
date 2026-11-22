@@ -45,6 +45,7 @@ const (
 	loginExpired         = "login_expired"
 	loginGroupNotAllowed = "group_not_allowed"
 	loginFailed          = "login_failed"
+	loginDisabled        = reasonDisabled
 )
 
 // GitLabUserStore stores signed-in GitLab users. *store.Queries satisfies it.
@@ -363,6 +364,9 @@ func (g *GitLab) complete(w http.ResponseWriter, r *http.Request) (string, *fail
 	})
 	if err != nil {
 		return fail(loginFailed, fmt.Errorf("store user: %w", err))
+	}
+	if user.DisabledAt.Valid {
+		return fail(loginDisabled, errors.New("the account is disabled"))
 	}
 	if err := g.sessions.Start(w, r, user.ID); err != nil {
 		return fail(loginFailed, fmt.Errorf("start session: %w", err))

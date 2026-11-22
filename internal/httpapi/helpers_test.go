@@ -112,6 +112,31 @@ func (f *fakeUsers) SetUserRole(_ context.Context, id int64, role string) (store
 	return f.users[i], nil
 }
 
+func (f *fakeUsers) SetUserDisabled(_ context.Context, id int64, disabled bool) (store.User, error) {
+	if f.setErr != nil {
+		return store.User{}, f.setErr
+	}
+	i, ok := f.find(id)
+	if !ok {
+		return store.User{}, store.ErrNotFound
+	}
+	f.users[i].DisabledAt = pgtype.Timestamptz{Time: testTime, Valid: disabled}
+	return f.users[i], nil
+}
+
+func (f *fakeUsers) DeleteUser(_ context.Context, id int64) (store.User, error) {
+	if f.setErr != nil {
+		return store.User{}, f.setErr
+	}
+	i, ok := f.find(id)
+	if !ok {
+		return store.User{}, store.ErrNotFound
+	}
+	u := f.users[i]
+	f.users = append(f.users[:i], f.users[i+1:]...)
+	return u, nil
+}
+
 func (f *fakeUsers) ResetMFA(_ context.Context, id int64) error {
 	if f.resetErr != nil {
 		return f.resetErr

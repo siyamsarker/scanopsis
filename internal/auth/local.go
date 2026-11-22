@@ -138,6 +138,15 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A disabled account is refused only after the password matched, so the
+	// answer reveals nothing to someone who does not know the password.
+	if user.DisabledAt.Valid {
+		d := h.detail(username, ip)
+		d["reason"] = reasonDisabled
+		h.audit.Record(r.Context(), "local:"+username, audit.ActionLoginFailed, d)
+		writeDisabled(w)
+		return
+	}
 	if err := h.users.TouchLastLogin(r.Context(), user.ID); err != nil {
 		h.log.ErrorContext(r.Context(), "local sign-in: cannot record sign-in time", "error", err)
 		writeInternalError(w)
@@ -156,6 +165,15 @@ func (h *localLogin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // retryAfterSeconds rounds wait up to whole seconds, at least one.
 func retryAfterSeconds(wait time.Duration) int {
 	return max(1, int(math.Ceil(wait.Seconds())))
+}
+
+// reasonDisabled is the login.failed reason, and the GitLab sign-in error
+// code, for an account an administrator disabled.
+const reasonDisabled = "account_disabled"
+
+func writeDisabled(w http.ResponseWriter) {
+	writeError(w, http.StatusForbidden, reasonDisabled,
+		"This account is disabled. Ask an administrator to enable it.")
 }
 
 func tooManyAttempts(w http.ResponseWriter, wait time.Duration) {

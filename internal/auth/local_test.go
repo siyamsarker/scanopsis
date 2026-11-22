@@ -575,3 +575,29 @@ func TestLocalLoginCancelledWhileWaitingForASlot(t *testing.T) {
 		t.Fatalf("a busy response was audited or logged in: %+v", f.audit.events)
 	}
 }
+
+func TestLocalLoginRefusesDisabledAccount(t *testing.T) {
+	f := newLoginFixture(t, 12*time.Second, 10)
+	u := f.users.users[goodUser]
+	u.DisabledAt = pgtype.Timestamptz{Time: time.Unix(1, 0), Valid: true}
+	f.users.users[goodUser] = u
+
+	// A wrong password gets the usual answer: nothing tells it apart.
+	if w := f.post(creds(goodUser, "wrong")); w.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong password: %d", w.Code)
+	}
+	w := f.post(creds(goodUser, goodPass))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("right password, disabled account: %d %s", w.Code, w.Body)
+	}
+	if code, _ := errorCode(t, w); code != "account_disabled" {
+		t.Fatalf("code %q", code)
+	}
+	if len(f.start.started) != 0 || len(f.users.touched) != 0 {
+		t.Fatalf("session started %v or sign-in recorded %v", f.start.started, f.users.touched)
+	}
+	last := f.audit.events[len(f.audit.events)-1]
+	if last.Action != "login.failed" || last.Detail["reason"] != "account_disabled" || last.Actor != "local:"+goodUser {
+		t.Fatalf("audit %+v", last)
+	}
+}

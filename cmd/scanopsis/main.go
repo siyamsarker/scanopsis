@@ -317,6 +317,14 @@ func (u userStore) ResetMFA(ctx context.Context, id int64) error {
 	return store.ResetMFA(ctx, u.pool, id)
 }
 
+func (u userStore) SetUserDisabled(ctx context.Context, id int64, disabled bool) (store.User, error) {
+	return store.SetUserDisabled(ctx, u.pool, id, disabled)
+}
+
+func (u userStore) DeleteUser(ctx context.Context, id int64) (store.User, error) {
+	return store.DeleteUser(ctx, u.pool, id)
+}
+
 // expiredSessionRemover is the part of *auth.Sessions the clean-up loop uses.
 type expiredSessionRemover interface {
 	RemoveExpired(ctx context.Context) (int64, error)

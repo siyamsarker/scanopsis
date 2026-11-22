@@ -22,9 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - An **Account** page, opened from your name in the header, lists your sessions: when each started, when it was last used, the client address and the browser. You can end any other session, or all of them at once. The API is `GET` and `DELETE /api/v1/me/sessions` and `DELETE /api/v1/me/sessions/{id}`, and ending sessions is recorded in the audit log as `session.revoked`.
+- Administrators can disable a user, which refuses every sign-in (local and GitLab) and ends all sessions of the user, enable the user again, and delete a user. The **Users** page has **Disable**, **Enable** and **Delete** with a confirmation, the API accepts `disabled` in `PATCH /api/v1/users/{id}` and has `DELETE /api/v1/users/{id}`, and the administration commands `disable-user`, `enable-user` and `delete-user` do the same. Nobody can disable or delete their own account or the last enabled administrator. The audit log records `user.disabled`, `user.enabled` and `user.deleted`. Users have a new `disabled_at` field.
 
 ### Changed
 
+- Demoting an administrator is refused when no other enabled administrator would remain; a disabled administrator no longer counts.
 - Sessions now end after 30 minutes without use (was 8 hours) and 12 hours after sign-in at the latest (was 24 hours), as OWASP ASVS level 2 asks. Values stored in the database before the upgrade are kept. The session cookie is now a browser-session cookie without an expiry date, so closing the browser ends it; the server still enforces both timeouts.
 
 ### Security

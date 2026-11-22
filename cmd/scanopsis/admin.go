@@ -39,9 +39,22 @@ Commands:
       everywhere. The temporary password is printed once; the user must
       choose a new one at the next sign-in.
 
-  reset-2fa <local:username|gitlab:username>
+  reset-2fa <account>
       Remove the two-factor enrolment and recovery codes of an account and
       sign it out everywhere. The user enrols again at the next sign-in.
+
+  disable-user <account>
+      Refuse every sign-in of the account and sign it out everywhere. The
+      last enabled administrator cannot be disabled.
+
+  enable-user <account>
+      Let a disabled account sign in again.
+
+  delete-user <account>
+      Delete the account with its sessions and recovery codes. The audit log
+      keeps its entries. A GitLab user who signs in again comes back as a new
+      viewer; disable the account instead to keep it out. The last enabled
+      administrator cannot be deleted.
 
   export-report <scan-id>
       Write the original Trivy report of a scan to standard output as JSON,
@@ -50,6 +63,8 @@ Commands:
       retention 30 days after the scan unless the scan is current; the
       command then fails. In the container:
       docker compose exec scanopsis /scanopsis admin export-report 42 > report.json
+
+An account is written local:<username> or gitlab:<username>.
 
 Exit status: 0 on success, 1 on failure, 2 on a usage error.
 `
@@ -74,8 +89,10 @@ type adminBackend struct {
 	resetMFA    func(ctx context.Context, id int64) error
 	// rawReport returns the stored, gzip-compressed report of a scan; empty
 	// when it was cleared, pgx.ErrNoRows when the scan does not exist.
-	rawReport func(ctx context.Context, id int64) ([]byte, error)
-	audit     auth.AuditRecorder
+	rawReport   func(ctx context.Context, id int64) ([]byte, error)
+	setDisabled func(ctx context.Context, id int64, disabled bool) (store.User, error)
+	deleteUser  func(ctx context.Context, id int64) (store.User, error)
+	audit       auth.AuditRecorder
 }
 
 // runAdmin runs "scanopsis admin ..." and returns the process exit status.
@@ -123,6 +140,17 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
 			return b.exportReport(ctx, id, out)
 		}
+	case "disable-user", "enable-user", "delete-user":
+		if len(rest) != 1 {
+			return usageError(stderr, cmd+" needs exactly one argument: local:<username> or gitlab:<username>.")
+		}
+		source, username, ok := parseAccount(rest[0])
+		if !ok {
+			return usageError(stderr, "the account must be written local:<username> or gitlab:<username>.")
+		}
+		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
+			return b.changeAccess(ctx, cmd, source, username, out)
+		}
 	default:
 		return usageError(stderr, fmt.Sprintf("unknown command %q.", args[0]))
 	}
@@ -161,9 +189,13 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 				return tq.DeleteUserSessions(ctx, id)
 			})
 		},
-		resetMFA:  func(ctx context.Context, id int64) error { return store.ResetMFA(ctx, pool, id) },
-		rawReport: q.ScanRawReport,
-		audit:     audit.New(q, slog.New(slog.NewTextHandler(stderr, nil))),
+		resetMFA: func(ctx context.Context, id int64) error { return store.ResetMFA(ctx, pool, id) },
+		setDisabled: func(ctx context.Context, id int64, disabled bool) (store.User, error) {
+			return store.SetUserDisabled(ctx, pool, id, disabled)
+		},
+		deleteUser: func(ctx context.Context, id int64) (store.User, error) { return store.DeleteUser(ctx, pool, id) },
+		rawReport:  q.ScanRawReport,
+		audit:      audit.New(q, slog.New(slog.NewTextHandler(stderr, nil))),
 	}
 	if err := exec(ctx, b, stdout); err != nil {
 		_, _ = fmt.Fprintf(stderr, "scanopsis admin: %s\n", describeAdminError(err))
@@ -295,6 +327,37 @@ func (b *adminBackend) exportReport(ctx context.Context, id int64, stdout io.Wri
 	if _, err := out.WriteTo(stdout); err != nil {
 		return fmt.Errorf("write the report: %w", err)
 	}
+	return nil
+}
+
+// changeAccess runs disable-user, enable-user or delete-user.
+func (b *adminBackend) changeAccess(ctx context.Context, cmd, source, username string, stdout io.Writer) error {
+	user, err := b.findUser(ctx, source, username)
+	if err != nil {
+		return err
+	}
+	var action, done string
+	switch cmd {
+	case "disable-user":
+		_, err = b.setDisabled(ctx, user.ID, true)
+		action, done = audit.ActionUserDisabled, "was disabled and signed out everywhere"
+	case "enable-user":
+		_, err = b.setDisabled(ctx, user.ID, false)
+		action, done = audit.ActionUserEnabled, "was enabled and can sign in again"
+	default:
+		_, err = b.deleteUser(ctx, user.ID)
+		action, done = audit.ActionUserDeleted, "was deleted"
+	}
+	switch {
+	case errors.Is(err, store.ErrLastAdmin):
+		return fmt.Errorf("%s:%s is the last enabled administrator; enable or promote another administrator first", source, user.Username)
+	case errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("the account %s:%s no longer exists", source, user.Username)
+	case err != nil:
+		return fmt.Errorf("%s: %w", cmd, err)
+	}
+	b.audit.Record(ctx, actorCLI, action, map[string]any{"user_id": user.ID, "username": user.Username, "source": user.Source})
+	_, _ = fmt.Fprintf(stdout, "The account %s:%s %s.\n", source, user.Username, done)
 	return nil
 }
 

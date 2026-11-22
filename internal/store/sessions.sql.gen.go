@@ -112,12 +112,13 @@ func (q *Queries) DeleteUserSessions(ctx context.Context, userID int64) error {
 }
 
 const getSession = `-- name: GetSession :one
-SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, sessions.mfa_verified, sessions.id, sessions.client_ip, sessions.user_agent, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at, users.must_change_password, users.totp_secret_enc, users.totp_enabled_at, users.totp_last_step, users.mfa_failed_attempts
+SELECT sessions.id_hash, sessions.user_id, sessions.created_at, sessions.last_seen_at, sessions.expires_at, sessions.mfa_verified, sessions.id, sessions.client_ip, sessions.user_agent, users.id, users.source, users.gitlab_user_id, users.username, users.name, users.email, users.role, users.password_hash, users.created_at, users.last_login_at, users.must_change_password, users.totp_secret_enc, users.totp_enabled_at, users.totp_last_step, users.mfa_failed_attempts, users.disabled_at
 FROM sessions
 JOIN users ON users.id = sessions.user_id
 WHERE sessions.id_hash = $1
   AND sessions.expires_at > $2
   AND sessions.last_seen_at > $3
+  AND users.disabled_at IS NULL
 `
 
 type GetSessionParams struct {
@@ -132,7 +133,8 @@ type GetSessionRow struct {
 }
 
 // GetSession returns a session that is neither past its absolute expiry nor
-// idle since before idle_cutoff, together with its user.
+// idle since before idle_cutoff, together with its user. A disabled user has
+// no valid session, even if one was left behind.
 func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSessionRow, error) {
 	row := q.db.QueryRow(ctx, getSession, arg.IDHash, arg.Now, arg.IdleCutoff)
 	var i GetSessionRow
@@ -161,6 +163,7 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (GetSess
 		&i.User.TotpEnabledAt,
 		&i.User.TotpLastStep,
 		&i.User.MfaFailedAttempts,
+		&i.User.DisabledAt,
 	)
 	return i, err
 }

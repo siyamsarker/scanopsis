@@ -428,3 +428,42 @@ test('23. the account page lists sessions and ends other ones', async ({ browser
   await expect(audit).toContainText('session.revoked');
   await expect(audit).toContainText('Sessions ended');
 });
+
+test('24. an administrator disables, enables and deletes users', async () => {
+  await root.goto('/admin/users');
+  const row = (name: string) => root.getByRole('row', { name: new RegExp(`^${name}\\b`) });
+  await expect(row('root').getByText('Your account')).toBeVisible();
+
+  // Disabling ends alice's session and refuses her next GitLab sign-in.
+  await root.getByRole('button', { name: 'Disable alice' }).click();
+  await root.getByRole('alertdialog').getByRole('button', { name: 'Disable' }).click();
+  await expect(root.getByText('alice is disabled and was signed out.')).toBeVisible();
+  await expect(row('alice').getByText('Disabled', { exact: true })).toBeVisible();
+
+  await alice.reload();
+  await expect(alice).toHaveURL(/\/login/);
+  await signInWithGitLab(alice, 'alice');
+  await expect(alice).toHaveURL(/\/login\?error=account_disabled/);
+  await expect(
+    alice.getByText('Your account is disabled. Ask an administrator to enable it.'),
+  ).toBeVisible();
+
+  // Enabling restores access, with the same two-factor setup.
+  await root.getByRole('button', { name: 'Enable alice' }).click();
+  await expect(root.getByText('alice can sign in again.')).toBeVisible();
+  await signInWithGitLab(alice, 'alice');
+  await enterCode(alice, aliceSecret);
+  await expect(alice).toHaveURL(/\/$/);
+  await expect(header(alice).getByText('Alice Example')).toBeVisible();
+
+  // Deleting removes carol from the list.
+  await root.getByRole('button', { name: 'Delete carol' }).click();
+  await root.getByRole('alertdialog').getByRole('button', { name: 'Delete user' }).click();
+  await expect(row('carol')).toHaveCount(0);
+
+  await root.goto('/admin/audit');
+  const audit = root.getByRole('main').getByRole('table', { name: 'Audit log' });
+  for (const action of ['user.disabled', 'user.enabled', 'user.deleted']) {
+    await expect(audit).toContainText(action);
+  }
+});
