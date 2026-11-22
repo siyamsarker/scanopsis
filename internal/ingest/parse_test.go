@@ -85,7 +85,8 @@ var (
 )
 
 // tableTotals sums the Total lines that "trivy convert --format table" prints
-// (see testdata/README.md): severity counts and suppressed findings.
+// (see "Test data" in docs/development.md): severity counts and suppressed
+// findings.
 func tableTotals(t testing.TB, name string) (sev map[string]int, suppressed int) {
 	t.Helper()
 	sev = map[string]int{}
