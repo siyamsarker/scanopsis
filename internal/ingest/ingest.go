@@ -297,7 +297,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rep, raw, err := i.readReport(w, r, gz, limit)
+	rep, raw, replay, err := i.readReport(w, r, gz, limit)
 	if err != nil {
 		rj := classifyRead(err, gz, limit)
 		reject(rj.status, rj.code, rj.message)
@@ -319,7 +319,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 			"project", claims.ProjectPath, "job_id", claims.JobID, "created_at", scanned.UTC().Format(time.RFC3339))
 		scanned = now
 	}
-	res, err := i.store.save(ctx, &saveInput{claims: claims, kind: kind, report: rep, raw: raw, scanTime: scanned})
+	res, err := i.store.save(ctx, &saveInput{claims: claims, kind: kind, report: rep, raw: raw, findings: replay, scanTime: scanned})
 	switch {
 	case errors.Is(err, errServiceArchived):
 		reject(http.StatusConflict, codeArchived, "The service for this project is archived. Ask an administrator to unarchive it.")
@@ -340,7 +340,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		"critical", res.Counts.Critical, "high", res.Counts.High, "medium", res.Counts.Medium,
 		"low", res.Counts.Low, "unknown", res.Counts.Unknown, "fixable", res.Fixable,
 		"secrets", res.Secrets, "suppressed", res.Suppressed,
-		"vulnerabilities", len(rep.Vulns), "stored_bytes", len(raw), "duration_ms", time.Since(started).Milliseconds())
+		"findings", rep.Counts.total(), "stored_bytes", len(raw), "duration_ms", time.Since(started).Milliseconds())
 	httpapi.WriteJSON(w, http.StatusCreated, res)
 }
 
@@ -394,41 +394,75 @@ func (l *limitReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// readReport parses the body and returns the report with its gzip-compressed
-// form. A gzip upload is kept byte for byte; anything else is compressed
-// while it is parsed. At most limit bytes are read from the body and at most
+// errTrailingData means bytes follow the gzip stream of an upload.
+var errTrailingData = errors.New("data after the gzip stream")
+
+// readReport reads the body and returns what the report says, without its
+// findings, with the gzip-compressed body and a function that reads the
+// findings again from it.
+//
+// The body is kept compressed and is never held decompressed: a gzip upload
+// is kept byte for byte, anything else is compressed while it is read. The
+// compressed form is stored with the scan anyway, so holding it costs nothing
+// extra. One parse over it validates the report, counts the findings and
+// checks the limits, before the database is touched. The findings themselves
+// are read a second time, straight into the database (see pgSaver), so the
+// memory of an upload is the compressed body and a few buffers whatever the
+// number of findings. At most limit bytes are read from the body and at most
 // limit decompressed.
-func (i *Ingest) readReport(w http.ResponseWriter, r *http.Request, gz bool, limit int64) (*Report, []byte, error) {
+func (i *Ingest) readReport(w http.ResponseWriter, r *http.Request, gz bool, limit int64) (*Report, []byte, func(sink) error, error) {
 	body := http.MaxBytesReader(w, r.Body, limit)
 	var stored bytes.Buffer
 	if gz {
-		zr, err := gzip.NewReader(io.TeeReader(body, &stored))
+		if n := r.ContentLength; n > 0 && n <= limit {
+			stored.Grow(int(n))
+		}
+		if _, err := io.Copy(&stored, body); err != nil {
+			return nil, nil, nil, err
+		}
+	} else {
+		zw, err := gzip.NewWriterLevel(&stored, gzip.BestSpeed)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		rep, err := Parse(&limitReader{r: zr, max: limit})
-		if err != nil {
-			return nil, nil, err
+		if _, err := io.Copy(zw, &limitReader{r: body, max: limit}); err != nil {
+			return nil, nil, nil, err
 		}
-		// Parse stopped at the end of the stream, so the checksum was checked.
-		// Nothing may follow the stream.
-		if _, err := io.Copy(io.Discard, body); err != nil {
-			return nil, nil, err
+		if err := zw.Close(); err != nil {
+			return nil, nil, nil, err
 		}
-		return rep, stored.Bytes(), nil
 	}
-	zw, err := gzip.NewWriterLevel(&stored, gzip.BestSpeed)
+	raw := stored.Bytes()
+	rep := &Report{}
+	if err := parseGzip(raw, limit, nopSink{}, false, rep); err != nil {
+		return nil, nil, nil, err
+	}
+	// The first parse found whether the findings may be handed on as they are
+	// read; if not, the second holds one result at a time, as Parse does.
+	buffer := !rep.ordered
+	replay := func(s sink) error {
+		return parseGzip(raw, limit, s, buffer, &Report{})
+	}
+	return rep, raw, replay, nil
+}
+
+// parseGzip parses a gzip-compressed report held in memory. A decompressed
+// size above limit is errTooLarge; data after the gzip stream is
+// errTrailingData.
+func parseGzip(raw []byte, limit int64, s sink, buffer bool, rep *Report) error {
+	br := bytes.NewReader(raw)
+	zr, err := gzip.NewReader(br)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	rep, err := Parse(io.TeeReader(&limitReader{r: body, max: limit}, zw))
-	if err != nil {
-		return nil, nil, err
+	// Parse stops at the end of the stream, so the checksum was checked.
+	if _, err := parseTo(&limitReader{r: zr, max: limit}, MaxFindings, s, buffer, rep); err != nil {
+		return err
 	}
-	if err := zw.Close(); err != nil {
-		return nil, nil, err
+	if br.Len() != 0 {
+		return errTrailingData
 	}
-	return rep, stored.Bytes(), nil
+	return nil
 }
 
 func classifyRead(err error, gz bool, limit int64) rejection {

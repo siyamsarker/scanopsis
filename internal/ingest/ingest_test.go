@@ -110,6 +110,17 @@ func (f *fakeSaver) save(_ context.Context, in *saveInput) (Result, error) {
 	return res, nil
 }
 
+// replayed reads the findings of a saved upload again, as the database writer
+// does, and returns them with the report.
+func replayed(t testing.TB, in *saveInput) *Report {
+	t.Helper()
+	rep := &Report{}
+	if err := in.findings(collectSink{rep}); err != nil {
+		t.Fatal(err)
+	}
+	return rep
+}
+
 type hEnv struct {
 	t     *testing.T
 	g     *gitlab
@@ -605,7 +616,7 @@ func TestIngestNeverLogsReportContents(t *testing.T) {
 	if strings.Contains(e.logs.String(), "TOPSECRETVALUE") {
 		t.Errorf("report text in log: %s", e.logs)
 	}
-	for _, s := range secretStrings(e.save.calls[0].report) {
+	for _, s := range secretStrings(replayed(t, e.save.calls[0])) {
 		if strings.Contains(s, "TOPSECRETVALUE") {
 			t.Error("report text in parsed secrets")
 		}

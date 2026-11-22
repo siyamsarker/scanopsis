@@ -95,15 +95,53 @@ type Counts struct {
 	Suppressed                           int32 // suppressed vulnerabilities and secrets
 }
 
+// total is the number of findings counted, suppressed ones included.
+func (c Counts) total() int {
+	return int(c.Critical + c.High + c.Medium + c.Low + c.Unknown + c.Secrets + c.Suppressed)
+}
+
 // Report is the part of a Trivy report that Scanopsis keeps.
 type Report struct {
 	SchemaVersion int
 	TrivyVersion  string
 	ArtifactName  string
 	CreatedAt     time.Time // zero when the report has none or it is unreadable
-	Vulns         []Vuln
-	Secrets       []Secret
-	Counts        Counts
+	// Vulns and Secrets are filled by Parse only. The upload path reads a
+	// report with parseTo and never holds its findings.
+	Vulns   []Vuln
+	Secrets []Secret
+	Counts  Counts
+	// ordered is set when every result named its Target, Class and Type
+	// before its findings and listed them as vulnerabilities, secrets and
+	// modified findings, in that order, as Trivy writes them. Findings of such
+	// a report can be handed on as they are read (see parseTo).
+	ordered bool
+}
+
+// sink receives the findings of a report, normalised, in the order Parse
+// returns them. A sink error stops the parse and is returned as it is.
+type sink interface {
+	vuln(*Vuln) error
+	secret(*Secret) error
+}
+
+// nopSink drops findings: the parse then only validates and counts.
+type nopSink struct{}
+
+func (nopSink) vuln(*Vuln) error     { return nil }
+func (nopSink) secret(*Secret) error { return nil }
+
+// collectSink keeps every finding, as Parse returns them.
+type collectSink struct{ rep *Report }
+
+func (c collectSink) vuln(v *Vuln) error {
+	c.rep.Vulns = append(c.rep.Vulns, *v)
+	return nil
+}
+
+func (c collectSink) secret(f *Secret) error {
+	c.rep.Secrets = append(c.rep.Secrets, *f)
+	return nil
 }
 
 // The wire types list only what is stored. Fields not listed (Match, Code,
@@ -150,7 +188,10 @@ type wireModified struct {
 // than MaxFindings vulnerabilities and secrets. Any other error is from r
 // itself and is returned as is. Text after the JSON value is an
 // ErrInvalidJSON.
-func Parse(r io.Reader) (*Report, error) { return parse(r, MaxFindings) }
+func Parse(r io.Reader) (*Report, error) {
+	rep := &Report{}
+	return parseTo(r, MaxFindings, collectSink{rep}, true, rep)
+}
 
 // parser reads the report with the decoder's token API, one result and one
 // finding at a time, so only the normalised findings are kept and the
@@ -160,11 +201,25 @@ func Parse(r io.Reader) (*Report, error) { return parse(r, MaxFindings) }
 type parser struct {
 	dec     *json.Decoder
 	rep     *Report
+	sink    sink
 	max     int
+	n       int  // findings read so far, counted towards max
+	buffer  bool // hold the findings of a result until it ends
+	ordered bool
 	typeErr error
 }
 
-func parse(r io.Reader, maxFindings int) (*Report, error) {
+// parseTo reads one report and hands each finding to s as soon as it is read,
+// so a report of any size is read in a fixed amount of memory. rep receives
+// the rest (artifact, versions, time and counts). buffer holds the findings of
+// one result until the result ends instead: only then are they normalised in
+// the fixed order of Parse, whatever the order of the keys in the result.
+// Without it a finding is normalised with the Target, Class and Type read
+// before it, which is only right when rep.ordered is set after a first pass
+// over the same body. A caller that streams therefore parses twice: once
+// with a nopSink to validate and count and to learn rep.ordered, and again
+// to feed the real sink with buffer set to !rep.ordered.
+func parseTo(r io.Reader, maxFindings int, s sink, buffer bool, rep *Report) (*Report, error) {
 	br := bufio.NewReader(r)
 	for {
 		b, err := br.ReadByte()
@@ -185,7 +240,7 @@ func parse(r io.Reader, maxFindings int) (*Report, error) {
 		}
 		break
 	}
-	p := &parser{dec: json.NewDecoder(br), rep: &Report{}, max: maxFindings}
+	p := &parser{dec: json.NewDecoder(br), rep: rep, sink: s, max: maxFindings, buffer: buffer, ordered: true}
 	var (
 		schema     *int
 		haveResult bool
@@ -248,6 +303,7 @@ func parse(r io.Reader, maxFindings int) (*Report, error) {
 		return nil, fmt.Errorf("%w: neither Results nor ArtifactName is present", ErrNotTrivy)
 	}
 	p.rep.SchemaVersion = *schema
+	p.rep.ordered = p.ordered
 	if t, err := time.Parse(time.RFC3339Nano, created); err == nil {
 		p.rep.CreatedAt = t
 	}
@@ -370,10 +426,39 @@ func (p *parser) result() error {
 		return p.skip()
 	}
 	var res wireResult
-	pending := 0 // findings held in res, counted towards the cap
-	add := func() error {
-		pending++
-		if len(p.rep.Vulns)+len(p.rep.Secrets)+pending > p.max {
+	// header is the clipped Target, Class and Type, made when the first
+	// finding of the result is handled and again after a later change.
+	var header struct {
+		target, class, pkgType string
+		valid                  bool
+	}
+	head := func() {
+		if !header.valid {
+			header.target = clip(res.Target, maxFieldLen)
+			header.class = clip(res.Class, maxFieldLen)
+			header.pkgType = clip(res.Type, maxFieldLen)
+			header.valid = true
+		}
+	}
+	// phase is the last list of findings seen: 0 none, 1 vulnerabilities,
+	// 2 secrets, 3 modified findings. A header key after a list, or a list
+	// out of that order, makes the report not ordered.
+	phase := 0
+	list := func(n int) {
+		if phase > n {
+			p.ordered = false
+		}
+		phase = max(phase, n)
+	}
+	headerKey := func() {
+		if phase > 0 {
+			p.ordered = false
+		}
+		header.valid = false
+	}
+	count := func() error {
+		p.n++
+		if p.n > p.max {
 			return ErrTooManyFindings
 		}
 		return nil
@@ -385,30 +470,50 @@ func (p *parser) result() error {
 		}
 		switch strings.ToLower(key) {
 		case "target":
+			headerKey()
 			err = p.value(&res.Target)
 		case "class":
+			headerKey()
 			err = p.value(&res.Class)
 		case "type":
+			headerKey()
 			err = p.value(&res.Type)
 		case "vulnerabilities":
+			list(1)
 			err = p.array(func() error {
 				var f wireFinding
 				if err := p.value(&f); err != nil {
 					return err
 				}
-				res.Vulnerabilities = append(res.Vulnerabilities, f)
-				return add()
+				if err := count(); err != nil {
+					return err
+				}
+				if p.buffer {
+					res.Vulnerabilities = append(res.Vulnerabilities, f)
+					return nil
+				}
+				head()
+				return p.addVuln(&f, header.target, header.class, header.pkgType, "")
 			})
 		case "secrets":
+			list(2)
 			err = p.array(func() error {
 				var f wireFinding
 				if err := p.value(&f); err != nil {
 					return err
 				}
-				res.Secrets = append(res.Secrets, f)
-				return add()
+				if err := count(); err != nil {
+					return err
+				}
+				if p.buffer {
+					res.Secrets = append(res.Secrets, f)
+					return nil
+				}
+				head()
+				return p.addSecret(&f, header.target, false)
 			})
 		case "experimentalmodifiedfindings":
+			list(3)
 			err = p.array(func() error {
 				var m wireModified
 				if err := p.value(&m); err != nil {
@@ -417,8 +522,15 @@ func (p *parser) result() error {
 				if m.Type != "vulnerability" && m.Type != "secret" {
 					return nil
 				}
-				res.Modified = append(res.Modified, m)
-				return add()
+				if err := count(); err != nil {
+					return err
+				}
+				if p.buffer {
+					res.Modified = append(res.Modified, m)
+					return nil
+				}
+				head()
+				return p.addModified(&m, header.target, header.class, header.pkgType)
 			})
 		default:
 			err = p.skipValue()
@@ -430,7 +542,9 @@ func (p *parser) result() error {
 	if _, err := p.dec.Token(); err != nil { // }
 		return classify(err)
 	}
-	p.rep.addResult(&res)
+	if p.buffer {
+		return p.addResult(&res)
+	}
 	return nil
 }
 
@@ -450,28 +564,39 @@ func classify(err error) error {
 	return err
 }
 
-func (rep *Report) addResult(res *wireResult) {
+// addResult normalises the findings held for one result, in the fixed order:
+// vulnerabilities, secrets, modified findings.
+func (p *parser) addResult(res *wireResult) error {
 	target := clip(res.Target, maxFieldLen)
 	class := clip(res.Class, maxFieldLen)
 	pkgType := clip(res.Type, maxFieldLen)
 	for i := range res.Vulnerabilities {
-		rep.addVuln(&res.Vulnerabilities[i], target, class, pkgType, "")
-	}
-	for i := range res.Secrets {
-		rep.addSecret(&res.Secrets[i], target, false)
-	}
-	for i := range res.Modified {
-		m := &res.Modified[i]
-		switch m.Type {
-		case "vulnerability":
-			rep.addVuln(&m.Finding, target, class, pkgType, suppression(m))
-		case "secret":
-			rep.addSecret(&m.Finding, target, true)
+		if err := p.addVuln(&res.Vulnerabilities[i], target, class, pkgType, ""); err != nil {
+			return err
 		}
 	}
+	for i := range res.Secrets {
+		if err := p.addSecret(&res.Secrets[i], target, false); err != nil {
+			return err
+		}
+	}
+	for i := range res.Modified {
+		if err := p.addModified(&res.Modified[i], target, class, pkgType); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func (rep *Report) addVuln(f *wireFinding, target, class, pkgType, suppressed string) {
+func (p *parser) addModified(m *wireModified, target, class, pkgType string) error {
+	if m.Type == "vulnerability" {
+		return p.addVuln(&m.Finding, target, class, pkgType, suppression(m))
+	}
+	return p.addSecret(&m.Finding, target, true)
+}
+
+// addVuln normalises a vulnerability, counts it and hands it to the sink.
+func (p *parser) addVuln(f *wireFinding, target, class, pkgType, suppressed string) error {
 	v := Vuln{
 		Target:           target,
 		Class:            class,
@@ -488,31 +613,38 @@ func (rep *Report) addVuln(f *wireFinding, target, class, pkgType, suppressed st
 		Suppressed:       suppressed != "",
 		Suppression:      suppressed,
 	}
-	rep.Vulns = append(rep.Vulns, v)
-	c := &rep.Counts
-	if v.Suppressed {
+	c := &p.rep.Counts
+	switch {
+	case v.Suppressed:
 		c.Suppressed++
-		return
-	}
-	switch v.Severity {
-	case SevCritical:
-		c.Critical++
-	case SevHigh:
-		c.High++
-	case SevMedium:
-		c.Medium++
-	case SevLow:
-		c.Low++
 	default:
-		c.Unknown++
+		switch v.Severity {
+		case SevCritical:
+			c.Critical++
+		case SevHigh:
+			c.High++
+		case SevMedium:
+			c.Medium++
+		case SevLow:
+			c.Low++
+		default:
+			c.Unknown++
+		}
+		if v.FixedVersion != "" {
+			c.Fixable++
+		}
 	}
-	if v.FixedVersion != "" {
-		c.Fixable++
-	}
+	return p.sink.vuln(&v)
 }
 
-func (rep *Report) addSecret(f *wireFinding, target string, suppressed bool) {
-	rep.Secrets = append(rep.Secrets, Secret{
+// addSecret normalises a secret finding, counts it and hands it to the sink.
+func (p *parser) addSecret(f *wireFinding, target string, suppressed bool) error {
+	if suppressed {
+		p.rep.Counts.Suppressed++
+	} else {
+		p.rep.Counts.Secrets++
+	}
+	return p.sink.secret(&Secret{
 		Target:     target,
 		RuleID:     clip(f.RuleID, maxFieldLen),
 		Category:   clip(f.Category, maxFieldLen),
@@ -522,11 +654,6 @@ func (rep *Report) addSecret(f *wireFinding, target string, suppressed bool) {
 		EndLine:    f.EndLine,
 		Suppressed: suppressed,
 	})
-	if suppressed {
-		rep.Counts.Suppressed++
-	} else {
-		rep.Counts.Secrets++
-	}
 }
 
 // suppression describes why Trivy hid a finding: "<Status>: <Statement>

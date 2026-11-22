@@ -37,10 +37,12 @@ var errPathTaken = errors.New("another service already uses this project path")
 
 // saveInput is everything one upload stores.
 type saveInput struct {
-	claims   *Claims
-	kind     string
-	report   *Report
-	raw      []byte // gzip-compressed report
+	claims *Claims
+	kind   string
+	report *Report // everything but the findings
+	raw    []byte  // gzip-compressed report
+	// findings reads the findings of the report again, in order, into a sink.
+	findings func(sink) error
 	scanTime time.Time
 }
 
@@ -140,34 +142,80 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 			return fmt.Errorf("insert scan: %w", err)
 		}
 
-		if len(rep.Vulns) > 0 {
-			scanID := res.ScanID
-			_, err = tx.CopyFrom(ctx, pgx.Identifier{"vulnerabilities"}, vulnColumns,
-				pgx.CopyFromSlice(len(rep.Vulns), func(i int) ([]any, error) {
-					v := &rep.Vulns[i]
-					return []any{scanID, v.Target, v.Class, v.PkgType, v.PkgName, v.PkgPath, v.InstalledVersion,
-						v.FixedVersion, v.VulnID, v.Severity, v.Status, v.Title, v.PrimaryURL, v.Suppressed, v.Suppression}, nil
-				}))
-			if err != nil {
-				return fmt.Errorf("insert vulnerabilities: %w", err)
-			}
+		cp := &copier{ctx: ctx, tx: tx, scanID: res.ScanID}
+		if err := in.findings(cp); err != nil {
+			return fmt.Errorf("insert findings: %w", err)
 		}
-		if len(rep.Secrets) > 0 {
-			scanID := res.ScanID
-			_, err = tx.CopyFrom(ctx, pgx.Identifier{"secret_findings"}, secretColumns,
-				pgx.CopyFromSlice(len(rep.Secrets), func(i int) ([]any, error) {
-					f := &rep.Secrets[i]
-					return []any{scanID, f.Target, f.RuleID, f.Category, f.Severity, f.Title, f.StartLine, f.EndLine, f.Suppressed}, nil
-				}))
-			if err != nil {
-				return fmt.Errorf("insert secret findings: %w", err)
-			}
+		if err := cp.flush(); err != nil {
+			return fmt.Errorf("insert findings: %w", err)
 		}
 		res.Counts = SeverityCounts{Critical: cn.Critical, High: cn.High, Medium: cn.Medium, Low: cn.Low, Unknown: cn.Unknown}
 		res.Fixable, res.Secrets, res.Suppressed = cn.Fixable, cn.Secrets, cn.Suppressed
 		return nil
 	})
 	return res, err
+}
+
+// copyBatch is the number of findings sent to the database in one COPY.
+const copyBatch = 2048
+
+// copier is the sink that writes findings into the database in batches, so
+// that only one batch is held in memory. All batches belong to the
+// transaction of the upload, so a failure anywhere stores nothing.
+type copier struct {
+	ctx     context.Context
+	tx      pgx.Tx
+	scanID  int64
+	vulns   [][]any
+	secrets [][]any
+}
+
+func (c *copier) vuln(v *Vuln) error {
+	c.vulns = append(c.vulns, []any{c.scanID, v.Target, v.Class, v.PkgType, v.PkgName, v.PkgPath, v.InstalledVersion,
+		v.FixedVersion, v.VulnID, v.Severity, v.Status, v.Title, v.PrimaryURL, v.Suppressed, v.Suppression})
+	if len(c.vulns) >= copyBatch {
+		return c.flushVulns()
+	}
+	return nil
+}
+
+func (c *copier) secret(f *Secret) error {
+	c.secrets = append(c.secrets, []any{c.scanID, f.Target, f.RuleID, f.Category, f.Severity, f.Title, f.StartLine, f.EndLine, f.Suppressed})
+	if len(c.secrets) >= copyBatch {
+		return c.flushSecrets()
+	}
+	return nil
+}
+
+func (c *copier) flushVulns() error {
+	if len(c.vulns) == 0 {
+		return nil
+	}
+	_, err := c.tx.CopyFrom(c.ctx, pgx.Identifier{"vulnerabilities"}, vulnColumns, pgx.CopyFromRows(c.vulns))
+	c.vulns = c.vulns[:0]
+	if err != nil {
+		return fmt.Errorf("vulnerabilities: %w", err)
+	}
+	return nil
+}
+
+func (c *copier) flushSecrets() error {
+	if len(c.secrets) == 0 {
+		return nil
+	}
+	_, err := c.tx.CopyFrom(c.ctx, pgx.Identifier{"secret_findings"}, secretColumns, pgx.CopyFromRows(c.secrets))
+	c.secrets = c.secrets[:0]
+	if err != nil {
+		return fmt.Errorf("secret findings: %w", err)
+	}
+	return nil
+}
+
+func (c *copier) flush() error {
+	if err := c.flushVulns(); err != nil {
+		return err
+	}
+	return c.flushSecrets()
 }
 
 // resolveService finds the service for the token's project: by project ID;

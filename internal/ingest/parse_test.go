@@ -619,9 +619,10 @@ func TestParseFindingCap(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rep, err := parse(strings.NewReader(tc.in), tc.max)
+			rep := &Report{}
+			_, err := parseTo(strings.NewReader(tc.in), tc.max, collectSink{rep}, true, rep)
 			if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrTooManyFindings)) {
-				t.Fatalf("rep %v err %v, want ok=%v", rep != nil, err, tc.ok)
+				t.Fatalf("err %v, want ok=%v", err, tc.ok)
 			}
 		})
 	}
