@@ -83,9 +83,11 @@ WHERE scan_id = ANY(@scan_ids::bigint[]) AND NOT suppressed
 GROUP BY class, severity;
 
 -- FindingsPackageGroups counts unsuppressed vulnerabilities per package,
--- installed version and severity, with the fixed versions reported.
+-- installed version and severity, how many of them report a fixed version,
+-- and the fixed versions reported.
 -- name: FindingsPackageGroups :many
 SELECT pkg_name, installed_version, severity, count(*)::bigint AS findings,
+       count(*) FILTER (WHERE fixed_version <> '')::bigint AS fixable,
        coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
 FROM vulnerabilities
 WHERE scan_id = ANY(@scan_ids::bigint[]) AND NOT suppressed

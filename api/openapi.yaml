@@ -1048,13 +1048,17 @@ components:
         items: { type: array, items: { $ref: "#/components/schemas/SecretFinding" } }
     PackageImpact:
       type: object
-      required: [pkg_name, installed_version, fix_version, findings, by_severity]
+      description: "One installed package and what upgrading it clears. Risk points weigh each finding critical 10, high 5, medium 3, low 1, unknown 5 (the OWASP Dependency-Track weights)."
+      required: [pkg_name, installed_version, fix_version, findings, by_severity, fixable, risk, risk_cleared]
       properties:
         pkg_name: { type: string }
         installed_version: { type: string }
-        fix_version: { type: string, description: Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. }
+        fix_version: { type: string, description: "Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable." }
         findings: { type: integer }
         by_severity: { $ref: "#/components/schemas/SeverityCounts" }
+        fixable: { type: integer, description: "Findings that report a fixed version." }
+        risk: { type: integer, description: "Risk points of all the findings." }
+        risk_cleared: { type: integer, description: "Risk points of the fixable findings, which the upgrade to fix_version clears." }
     RefSource:
       type: string
       enum: [requested, default, latest]
@@ -1078,7 +1082,7 @@ components:
           type: object
           additionalProperties: { $ref: "#/components/schemas/SeverityCounts" }
           description: Counts per Trivy result class (os-pkgs, lang-pkgs).
-        top_packages: { type: array, maxItems: 10, items: { $ref: "#/components/schemas/PackageImpact" } }
+        top_packages: { type: array, maxItems: 10, description: "Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last.", items: { $ref: "#/components/schemas/PackageImpact" } }
         data_at: { type: [string, "null"], format: date-time, description: Scan time of the newest scan in this overview. }
     ScanDiff:
       type: object

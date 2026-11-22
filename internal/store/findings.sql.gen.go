@@ -433,6 +433,7 @@ func (q *Queries) FindingsGetService(ctx context.Context, id int64) (Service, er
 
 const findingsPackageGroups = `-- name: FindingsPackageGroups :many
 SELECT pkg_name, installed_version, severity, count(*)::bigint AS findings,
+       count(*) FILTER (WHERE fixed_version <> '')::bigint AS fixable,
        coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
 FROM vulnerabilities
 WHERE scan_id = ANY($1::bigint[]) AND NOT suppressed
@@ -444,11 +445,13 @@ type FindingsPackageGroupsRow struct {
 	InstalledVersion string
 	Severity         string
 	Findings         int64
+	Fixable          int64
 	FixedVersions    []string
 }
 
 // FindingsPackageGroups counts unsuppressed vulnerabilities per package,
-// installed version and severity, with the fixed versions reported.
+// installed version and severity, how many of them report a fixed version,
+// and the fixed versions reported.
 func (q *Queries) FindingsPackageGroups(ctx context.Context, scanIds []int64) ([]FindingsPackageGroupsRow, error) {
 	rows, err := q.db.Query(ctx, findingsPackageGroups, scanIds)
 	if err != nil {
@@ -463,6 +466,7 @@ func (q *Queries) FindingsPackageGroups(ctx context.Context, scanIds []int64) ([
 			&i.InstalledVersion,
 			&i.Severity,
 			&i.Findings,
+			&i.Fixable,
 			&i.FixedVersions,
 		); err != nil {
 			return nil, err

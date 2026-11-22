@@ -956,13 +956,20 @@ export interface components {
         SecretFindingList: {
             items: components["schemas"]["SecretFinding"][];
         };
+        /** @description One installed package and what upgrading it clears. Risk points weigh each finding critical 10, high 5, medium 3, low 1, unknown 5 (the OWASP Dependency-Track weights). */
         PackageImpact: {
             pkg_name: string;
             installed_version: string;
-            /** @description Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. */
+            /** @description Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable. */
             fix_version: string;
             findings: number;
             by_severity: components["schemas"]["SeverityCounts"];
+            /** @description Findings that report a fixed version. */
+            fixable: number;
+            /** @description Risk points of all the findings. */
+            risk: number;
+            /** @description Risk points of the fixable findings, which the upgrade to fix_version clears. */
+            risk_cleared: number;
         };
         /**
          * @description How the ref was chosen: requested (the ref parameter), default (the dashboard branch an administrator chose, even without scans yet) or latest (the ref with the most recent scan).
@@ -988,6 +995,7 @@ export interface components {
             by_class: {
                 [key: string]: components["schemas"]["SeverityCounts"];
             };
+            /** @description Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last. */
             top_packages: components["schemas"]["PackageImpact"][];
             /**
              * Format: date-time

@@ -1140,9 +1140,11 @@ Type: object
 | `secrets` | integer | yes |  |
 | `service` | [Service](#service) | yes |  |
 | `suppressed` | integer | yes |  |
-| `top_packages` | array of [PackageImpact](#packageimpact) | yes |  |
+| `top_packages` | array of [PackageImpact](#packageimpact) | yes | Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last. |
 
 ### PackageImpact
+
+One installed package and what upgrading it clears. Risk points weigh each finding critical 10, high 5, medium 3, low 1, unknown 5 (the OWASP Dependency-Track weights).
 
 Type: object
 
@@ -1150,9 +1152,12 @@ Type: object
 |---|---|---|---|
 | `by_severity` | [SeverityCounts](#severitycounts) | yes |  |
 | `findings` | integer | yes |  |
-| `fix_version` | string | yes | Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. |
+| `fix_version` | string | yes | Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable. |
+| `fixable` | integer | yes | Findings that report a fixed version. |
 | `installed_version` | string | yes |  |
 | `pkg_name` | string | yes |  |
+| `risk` | integer | yes | Risk points of all the findings. |
+| `risk_cleared` | integer | yes | Risk points of the fixable findings, which the upgrade to fix_version clears. |
 
 ### PasswordChange
 

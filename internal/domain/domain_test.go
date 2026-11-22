@@ -145,33 +145,45 @@ func TestSeverityCountsAdd(t *testing.T) {
 	}
 }
 
+// group builds a PackageGroup; fixable of count findings report a fix.
+func group(name, version, severity string, count, fixable int, fixed ...string) PackageGroup {
+	return PackageGroup{PkgName: name, InstalledVersion: version, Severity: severity,
+		Count: count, Fixable: fixable, FixedVersions: fixed}
+}
+
 func TestTopPackages(t *testing.T) {
 	groups := []PackageGroup{
-		// openssl 3.0.1: 3 findings, fix 3.1.2 (highest of several, lists included).
-		{"openssl", "3.0.1", "HIGH", 2, []string{"3.0.5", "3.0.9, 3.1.2", ""}},
-		{"openssl", "3.0.1", "CRITICAL", 1, []string{"3.0.10"}},
-		// same name, other version: separate entry, 3 findings, only MEDIUM/LOW.
-		{"openssl", "1.1.1", "MEDIUM", 2, nil},
-		{"openssl", "1.1.1", "LOW", 1, []string{""}},
-		// zlib: 3 findings, as severe as openssl 3.0.1 (both CRITICAL): name decides.
-		{"zlib", "1.2.11", "CRITICAL", 3, []string{"1.2.12"}},
+		// openssl 3.0.1: 3 findings, all fixable, fix 3.1.2 (highest of several, lists included).
+		group("openssl", "3.0.1", "HIGH", 2, 2, "3.0.5", "3.0.9, 3.1.2", ""),
+		group("openssl", "3.0.1", "CRITICAL", 1, 1, "3.0.10"),
+		// same name, other version: separate entry, 3 findings, only MEDIUM/LOW, no fix.
+		group("openssl", "1.1.1", "MEDIUM", 2, 0),
+		group("openssl", "1.1.1", "LOW", 1, 0, ""),
+		// zlib: more risk than openssl 3.0.1 (30 points), but the upgrade
+		// clears only one of its three findings (10 points).
+		group("zlib", "1.2.11", "CRITICAL", 3, 1, "1.2.12"),
 		// busybox: 1 finding, no fix.
-		{"busybox", "1.35", "UNKNOWN", 1, nil},
-		// alpha: 1 finding, same count as busybox, more severe.
-		{"alpha", "0.1", "HIGH", 1, []string{"0.2"}},
+		group("busybox", "1.35", "UNKNOWN", 1, 0),
+		// alpha: 1 fixable finding, 5 points.
+		group("alpha", "0.1", "HIGH", 1, 1, "0.2"),
 		// tie on everything but version.
-		{"libx", "2", "LOW", 1, nil},
-		{"libx", "1", "LOW", 1, nil},
+		group("libx", "2", "LOW", 1, 0),
+		group("libx", "1", "LOW", 1, 0),
 	}
 	got := TopPackages(groups, 10)
 	want := []PackageImpact{
-		{"openssl", "3.0.1", "3.1.2", 3, SeverityCounts{Critical: 1, High: 2}},
-		{"zlib", "1.2.11", "1.2.12", 3, SeverityCounts{Critical: 3}},
-		{"openssl", "1.1.1", "", 3, SeverityCounts{Medium: 2, Low: 1}},
-		{"alpha", "0.1", "0.2", 1, SeverityCounts{High: 1}},
-		{"libx", "1", "", 1, SeverityCounts{Low: 1}},
-		{"libx", "2", "", 1, SeverityCounts{Low: 1}},
-		{"busybox", "1.35", "", 1, SeverityCounts{Unknown: 1}},
+		{PkgName: "openssl", InstalledVersion: "3.0.1", FixVersion: "3.1.2", Findings: 3,
+			BySeverity: SeverityCounts{Critical: 1, High: 2}, Fixable: 3, Risk: 20, RiskCleared: 20},
+		{PkgName: "zlib", InstalledVersion: "1.2.11", FixVersion: "1.2.12", Findings: 3,
+			BySeverity: SeverityCounts{Critical: 3}, Fixable: 1, Risk: 30, RiskCleared: 10},
+		{PkgName: "alpha", InstalledVersion: "0.1", FixVersion: "0.2", Findings: 1,
+			BySeverity: SeverityCounts{High: 1}, Fixable: 1, Risk: 5, RiskCleared: 5},
+		{PkgName: "openssl", InstalledVersion: "1.1.1", Findings: 3,
+			BySeverity: SeverityCounts{Medium: 2, Low: 1}, Risk: 7},
+		{PkgName: "busybox", InstalledVersion: "1.35", Findings: 1,
+			BySeverity: SeverityCounts{Unknown: 1}, Risk: 5},
+		{PkgName: "libx", InstalledVersion: "1", Findings: 1, BySeverity: SeverityCounts{Low: 1}, Risk: 1},
+		{PkgName: "libx", InstalledVersion: "2", Findings: 1, BySeverity: SeverityCounts{Low: 1}, Risk: 1},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("TopPackages =\n%+v\nwant\n%+v", got, want)
@@ -185,20 +197,42 @@ func TestTopPackages(t *testing.T) {
 	}
 }
 
+func TestTopPackagesFixableIsBounded(t *testing.T) {
+	// A count that disagrees with the group size never clears more than it holds.
+	got := TopPackages([]PackageGroup{group("a", "1", "HIGH", 2, 5, "2"), group("b", "1", "LOW", 1, -1)}, 10)
+	if got[0].Fixable != 2 || got[0].RiskCleared != 10 || got[1].Fixable != 0 || got[1].RiskCleared != 0 {
+		t.Errorf("TopPackages = %+v", got)
+	}
+}
+
+func TestRisk(t *testing.T) {
+	c := SeverityCounts{Critical: 2, High: 44, Medium: 58, Low: 31, Unknown: 3}
+	if got := c.Risk(); got != 2*10+44*5+58*3+31+3*5 {
+		t.Errorf("Risk = %d", got)
+	}
+	for sev, want := range map[string]int{"CRITICAL": 10, "HIGH": 5, "MEDIUM": 3, "LOW": 1, "UNKNOWN": 5, "bogus": 5} {
+		if got := RiskWeight(sev); got != want {
+			t.Errorf("RiskWeight(%s) = %d, want %d", sev, got, want)
+		}
+	}
+}
+
 func TestTopPackagesSeverityTieBreak(t *testing.T) {
 	groups := []PackageGroup{
-		{"a", "1", "LOW", 2, nil},
-		{"b", "1", "MEDIUM", 2, nil},
-		{"c", "1", "LOW", 2, nil},
-		{"d", "1", "UNKNOWN", 2, nil},
-		{"e", "1", "HIGH", 2, nil},
-		{"f", "1", "CRITICAL", 2, nil},
+		// Equal risk points (10 each): more findings first, then the most
+		// severe (high and unknown weigh the same), then the name.
+		group("f", "1", "CRITICAL", 1, 0),
+		group("d", "1", "UNKNOWN", 2, 0),
+		group("e", "1", "HIGH", 2, 0),
+		group("c", "1", "LOW", 10, 0),
+		group("b", "1", "HIGH", 2, 0),
+		group("a", "1", "LOW", 10, 0),
 	}
 	var names string
 	for _, p := range TopPackages(groups, 10) {
 		names += p.PkgName
 	}
-	if names != "febacd" {
-		t.Errorf("order = %q, want febacd", names)
+	if names != "acbedf" {
+		t.Errorf("order = %q, want acbedf", names)
 	}
 }

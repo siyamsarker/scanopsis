@@ -24,6 +24,9 @@ type packageImpactJSON struct {
 	FixVersion       string     `json:"fix_version"`
 	Findings         int        `json:"findings"`
 	BySeverity       countsJSON `json:"by_severity"`
+	Fixable          int        `json:"fixable"`
+	Risk             int        `json:"risk"`
+	RiskCleared      int        `json:"risk_cleared"`
 }
 
 type overviewJSON struct {
@@ -181,7 +184,7 @@ func topPackageJSON(rows []store.FindingsPackageGroupsRow) []packageImpactJSON {
 	for i, g := range rows {
 		groups[i] = domain.PackageGroup{
 			PkgName: g.PkgName, InstalledVersion: g.InstalledVersion, Severity: g.Severity,
-			Count: int(g.Findings), FixedVersions: g.FixedVersions,
+			Count: int(g.Findings), Fixable: int(g.Fixable), FixedVersions: g.FixedVersions,
 		}
 	}
 	top := domain.TopPackages(groups, topPackages)
@@ -190,6 +193,7 @@ func topPackageJSON(rows []store.FindingsPackageGroupsRow) []packageImpactJSON {
 		out[i] = packageImpactJSON{
 			PkgName: p.PkgName, InstalledVersion: p.InstalledVersion, FixVersion: p.FixVersion,
 			Findings: p.Findings, BySeverity: fromDomain(p.BySeverity),
+			Fixable: p.Fixable, Risk: p.Risk, RiskCleared: p.RiskCleared,
 		}
 	}
 	return out

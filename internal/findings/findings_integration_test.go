@@ -147,12 +147,14 @@ func TestOverview(t *testing.T) {
 		"os-pkgs":   {Critical: 1, High: 2, Low: 2, Unknown: 1},
 		"lang-pkgs": {High: 1, Medium: 1},
 	})
+	// The upgrade that clears the most risk points comes first: curl has two
+	// findings but they are low (2 points); busybox has no fix.
 	eq(t, "top_packages", ov.TopPackages, []packageImpactJSON{
-		{"openssl", "3.0.1", "3.0.12", 3, countsJSON{Critical: 1, High: 2}},
-		{"curl", "7.8", "7.9", 2, countsJSON{Low: 2}},
-		{"libx", "1.0.0", "1.1.2", 1, countsJSON{High: 1}},
-		{"left-pad", "1.0.0", "1.3.0", 1, countsJSON{Medium: 1}},
-		{"busybox", "1.35", "", 1, countsJSON{Unknown: 1}},
+		{"openssl", "3.0.1", "3.0.12", 3, countsJSON{Critical: 1, High: 2}, 3, 20, 20},
+		{"libx", "1.0.0", "1.1.2", 1, countsJSON{High: 1}, 1, 5, 5},
+		{"left-pad", "1.0.0", "1.3.0", 1, countsJSON{Medium: 1}, 1, 3, 3},
+		{"curl", "7.8", "7.9", 2, countsJSON{Low: 2}, 2, 2, 2},
+		{"busybox", "1.35", "", 1, countsJSON{Unknown: 1}, 0, 5, 0},
 	})
 	if ov.DataAt == nil || unix(*ov.DataAt) != unix(at(f.base, 12*time.Hour)) {
 		t.Errorf("data_at = %v, want %v", ov.DataAt, at(f.base, 12*time.Hour))
