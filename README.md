@@ -3,11 +3,11 @@
 Scanopsis is a small, self-hosted dashboard that shows SonarQube and Trivy
 results from your GitLab CI/CD pipelines in one view.
 
-> **Status:** no version is published yet. All features below work and are
+> **Status:** the first version, 0.1.0, is published as the branch
+> `release/0.1.0`. It is an early version: all features below work and are
 > tested end to end, but the accuracy check with real pipeline data is still
 > open. Deploy a version branch (`release/X.Y.Z`), never `main`, which is
-> development code. The first version branch does not exist yet; see
-> [versions and branches](docs/versions.md).
+> development code. See [versions and branches](docs/versions.md).
 
 ![The service dashboard in the dark theme: Trivy findings by severity next to the SonarQube quality gate, ratings and coverage](docs/images/service-dark.png)
 
@@ -56,8 +56,8 @@ make image
 cd deploy/compose
 ```
 
-The first version branch is not published yet. To test now, use
-`--branch main` at your own risk.
+Replace `X.Y.Z` with the newest version, for example `0.1.0`. See
+[find the newest version](docs/versions.md#find-the-newest-version).
 
 Then create the secrets and the configuration file, run `docker compose up -d`
 and finish the setup in the browser. The

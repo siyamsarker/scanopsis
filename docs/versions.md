@@ -8,11 +8,11 @@ Scanopsis publishes no container image and no release files. You build the
 image yourself from a version branch, then run it with
 [Docker Compose](../deploy/compose/README.md).
 
-> **Status:** no version has been published yet. The first version branch,
-> `release/1.0.0`, does not exist. Until it does, `main` is the only code
-> there is, and it is development code. If you want to try Scanopsis now, you
-> can follow the steps below with `main` instead of a version branch, at your
-> own risk. Do not run it with production data.
+> **Status:** the first version, 0.1.0, is published as the branch
+> `release/0.1.0` with the tag `v0.1.0`. Versions before 1.0.0 are early
+> versions: the accuracy check with real pipeline data is still open, so
+> compare the numbers with your own Trivy and SonarQube results before you
+> rely on them. See the [accuracy check](verification.md).
 
 ## What is on GitHub
 
@@ -21,7 +21,7 @@ The repository has two kinds of branches, and nothing else.
 | Name | What it is | Deploy it? |
 |---|---|---|
 | `main` | The latest development code. It can be unfinished or broken between versions. All changes land here first. | No |
-| `release/X.Y.Z` | One finished version, for example `release/1.0.0`. The branch is created once, at the tag `vX.Y.Z`, and never changes after that. | Yes |
+| `release/X.Y.Z` | One finished version, for example `release/0.1.0`. The branch is created once, at the tag `vX.Y.Z`, and never changes after that. | Yes |
 
 Every version branch has a matching annotated tag `vX.Y.Z` on the same commit.
 The tag is the name of the tested commit. The branch is what you clone.
@@ -43,7 +43,7 @@ version, so a fix for 1.0.1 arrives as 1.0.2.
      ```
 
    Expected result: one line for each version, for example
-   `refs/heads/release/1.0.0`. No output means that no version has been
+   `refs/heads/release/0.1.0`. No output means that no version has been
    published yet.
 
 2. Pick the highest number. Compare the numbers one part at a time, so 1.10.0
@@ -214,7 +214,7 @@ tested. Replace `X.Y.Z` with the new version and use the date of the day.
 
    ```text
    [Unreleased]: https://github.com/siyamsarker/scanopsis/compare/vX.Y.Z...main
-   [X.Y.Z]: https://github.com/siyamsarker/scanopsis/releases/tag/vX.Y.Z
+   [X.Y.Z]: https://github.com/siyamsarker/scanopsis/tree/release/X.Y.Z
    ```
 
    Use a compare link between the previous and the new tag from the second

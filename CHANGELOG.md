@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-22
+
 ### Added
 
 - Project scaffold: Go server entry point, embedded web interface, build tooling and project documentation.
@@ -42,4 +44,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upload error responses no longer contain the GitLab URL or upstream error text.
 - npm dependencies are installed without running their install scripts.
 
-[Unreleased]: https://github.com/siyamsarker/scanopsis/commits/main
+[Unreleased]: https://github.com/siyamsarker/scanopsis/compare/v0.1.0...main
+[0.1.0]: https://github.com/siyamsarker/scanopsis/tree/release/0.1.0

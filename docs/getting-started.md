@@ -39,9 +39,8 @@ example to adapt: use your own clone location.
    cd scanopsis
    ```
 
-   No version branch is published yet. Until `release/1.0.0` exists, you can
-   use `--branch main` to try Scanopsis, at your own risk, see
-   [the status of versions](versions.md#versions-and-branches).
+   Replace `X.Y.Z` with the newest version, for example `0.1.0`. See
+   [find the newest version](versions.md#find-the-newest-version).
 
 2. Build the image:
 
