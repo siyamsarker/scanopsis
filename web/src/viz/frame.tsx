@@ -154,36 +154,42 @@ export interface SrTableProps {
   rows: (string | number)[][];
 }
 
-/** The chart's data as a table that only assistive technology sees. */
+/**
+ * The chart's data as a table that only assistive technology sees. The
+ * wrapper does the hiding: a table ignores the 1px width and would widen the
+ * page.
+ */
 export function SrTable({ caption, columns, rows }: SrTableProps) {
   return (
-    <table className="viz-sr">
-      <caption>{caption}</caption>
-      <thead>
-        <tr>
-          {columns.map((c, i) => (
-            <th key={i} scope="col">
-              {c}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, r) => (
-          <tr key={r}>
-            {row.map((cell, i) =>
-              i === 0 ? (
-                <th key={i} scope="row">
-                  {cell}
-                </th>
-              ) : (
-                <td key={i}>{cell}</td>
-              ),
-            )}
+    <div className="viz-sr">
+      <table>
+        <caption>{caption}</caption>
+        <thead>
+          <tr>
+            {columns.map((c, i) => (
+              <th key={i} scope="col">
+                {c}
+              </th>
+            ))}
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map((row, r) => (
+            <tr key={r}>
+              {row.map((cell, i) =>
+                i === 0 ? (
+                  <th key={i} scope="row">
+                    {cell}
+                  </th>
+                ) : (
+                  <td key={i}>{cell}</td>
+                ),
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
