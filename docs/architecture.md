@@ -225,6 +225,27 @@ The dashboards show the current state of a service. The definition is exact:
 - The numbers on the portfolio and on the service page are the sums of the
   counts of those latest scans. Only unsuppressed findings are counted.
 
+The queries behind these numbers read indexes, not the whole tables, so they
+stay fast with 500 services and 90 days of history (about 540,000 scans and
+millions of findings):
+
+- The portfolio finds the latest scan per artifact by jumping from one
+  artifact to the next in a covering index on `scans` that also holds the
+  counts, so it never reads the table. A second index finds the ref with the
+  most recent scan of a service.
+- "First seen" looks for the same finding in the earlier scans of an
+  artifact through an index on the scan and a hash of the finding's
+  vulnerability ID, package and target. A hash is used because those fields
+  can be 4,096 bytes long, more than an index entry can hold; the query also
+  compares the real values.
+- The vulnerability search checks every current scan once, through an index
+  on the lower-case vulnerability ID and the scan. It lists at most 1,000
+  findings, the most severe first, and reports the true totals with a
+  `truncated` flag. A scan diff lists at most 500 new and 500 fixed findings
+  and reports the full counts the same way.
+- A service overview reads all its numbers in one read-only transaction, so
+  they come from the same moment.
+
 Because of this, uploading an old report late does not replace newer results,
 and a job that is retried replaces only itself.
 

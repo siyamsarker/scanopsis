@@ -58,6 +58,25 @@ All variables start with `SCANOPSIS_`. An empty value counts as not set.
 The database URL, the secret key, the GitLab client secret, the SonarQube
 token and the SonarQube webhook secret can also be given as files. See [file variants and Docker secrets](#file-variants-and-docker-secrets).
 
+### Database URL parameters
+
+Scanopsis sets two defaults for its connections to PostgreSQL. Put the
+parameter in the database URL to change one.
+
+| Parameter | Default | Example | Effect |
+|---|---|---|---|
+| `pool_max_conns` | `16` | `?pool_max_conns=32` | The most connections one Scanopsis process opens. Requests wait for a free connection when all are busy, so raise it only with enough `max_connections` on the database (keep a few spare for backups and administration). |
+| `statement_timeout` | `30000` (30 seconds, in milliseconds) | `?statement_timeout=60000` | PostgreSQL cancels any statement that runs longer and the request fails with an error. `0` turns the limit off. An `options=-c statement_timeout=...` parameter also counts as a setting. |
+
+Example: `postgres://scanopsis:pw@db:5432/scanopsis?sslmode=disable&pool_max_conns=24`.
+
+Schema migrations ignore `statement_timeout` and the 30-second start-up limit.
+An upgrade can build indexes on large tables, which takes minutes on millions
+of findings. The index builds are concurrent, so scans keep arriving and the
+dashboards keep working while they run. The log shows when each migration
+starts and ends, with its duration. A migration that cannot get a table lock
+within 10 seconds stops the start; the next start continues where it stopped.
+
 If any variable is invalid, the server does not start. It prints
 `configuration error:` followed by one line for every problem, so you can fix
 them all at once. Example:
