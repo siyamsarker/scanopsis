@@ -1,37 +1,33 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { ArrowRight, ExternalLink } from 'lucide-react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client';
-import { useOverview, useScanLinks, useService, useSonar } from '../api/service';
-import { Freshness } from '../components/Freshness';
-import { Mono } from '../components/Mono';
-import { Select } from '../components/inputs';
-import { PageHeader } from '../components/layout';
+import { useOverview, useService, useSonar, useTrends, type Overview } from '../api/service';
+import { Breadcrumb } from '../components/layout';
 import { EmptyState, Skeleton } from '../components/states';
-import { safeExternalUrl } from '../format';
-import { primaryButtonClass } from '../ui';
-import { SonarPosture } from './service/SonarPosture';
-import {
-  CoverageChart,
-  DAY_OPTIONS,
-  RecentScans,
-  TrendsChart,
-  type Days,
-} from './service/Timeline';
-import { TrivyPosture } from './service/TrivyPosture';
+import type { GateState } from '../viz';
+import { useFirstView } from './firstView';
+import { FixFirst } from './service/FixFirst';
+import { previousPipeline } from './service/model';
+import { OpenFindings } from './service/OpenFindings';
 import { SectionError } from './service/parts';
-import { describeRefSource, refChoices } from './service/refSource';
-import { findingsHref, projectUrlFrom } from './service/links';
+import { DAY_OPTIONS, PipelinesSection, type Days, type Lanes } from './service/PipelinesSection';
+import { RecentScans } from './service/RecentScans';
+import { SonarPanel } from './service/SonarPanel';
+import { VerdictBand } from './service/VerdictBand';
+
+const GITLAB_CI_GUIDE =
+  'https://github.com/siyamsarker/scanopsis/blob/main/docs/integrations/gitlab-ci.md';
 
 function NotFound() {
   return (
     <EmptyState
+      art="lost"
       title="Service not found"
       body="This service does not exist, or it was deleted."
       action={
-        <Link to="/" className="text-brand underline underline-offset-2">
+        <Link to="/" className="font-medium text-text underline underline-offset-2">
           Back to the portfolio
         </Link>
       }
@@ -39,168 +35,164 @@ function NotFound() {
   );
 }
 
-function Header({ id, refParam }: { id: number; refParam: string | undefined }) {
-  const [params, setParams] = useSearchParams();
-  const service = useService(id);
-  const overview = useOverview(id, refParam);
-  const sonar = useSonar(id);
-
-  const artifacts = overview.data?.artifacts ?? [];
-  const latestScan = artifacts.reduce<(typeof artifacts)[number] | undefined>(
-    (best, scan) => (!best || scan.scanned_at > best.scanned_at ? scan : best),
-    undefined,
-  );
-  const scanLinks = useScanLinks(latestScan?.id);
-  const gitlab = projectUrlFrom(
-    scanLinks.data?.pipeline_url ?? scanLinks.data?.commit_url ?? scanLinks.data?.job_url,
-  );
-  const effectiveRef = refParam ?? overview.data?.ref ?? undefined;
-  const refs = refChoices(overview.data?.refs ?? [], effectiveRef);
-  const sonarLatest = sonar.data?.latest;
-  const sonarUrl = safeExternalUrl(sonarLatest?.project_url);
-
-  if (service.isPending) {
-    return (
-      <div className="pb-6" role="status" aria-label="Loading service">
-        <Skeleton className="h-8 w-64" />
-        <Skeleton className="mt-2 h-6 w-48" />
-        <Skeleton className="mt-3 h-5 w-80 max-w-full" />
-      </div>
-    );
-  }
-  if (service.isError) {
-    return (
-      <div className="pb-6">
-        <SectionError
-          what="The service"
-          error={service.error}
-          onRetry={() => void service.refetch()}
-          retrying={service.isFetching}
-        />
-      </div>
-    );
-  }
-  const s = service.data;
-
-  function selectRef(next: string) {
-    const copy = new URLSearchParams(params);
-    copy.set('ref', next);
-    setParams(copy, { replace: true });
-  }
-
+/** The ref has no scans: say why and what makes them appear. */
+function NoScans({ overview }: { overview: Overview }) {
+  const chosen = overview.ref_source === 'default';
+  const title = overview.ref ? `No scans of ${overview.ref} yet` : 'No Trivy scans yet';
+  const body = overview.ref
+    ? (chosen
+        ? 'An administrator chose this branch for the dashboards. '
+        : 'No pipeline on this branch has uploaded a report. ') +
+      (overview.refs.length > 0
+        ? 'Other scanned branches are in the branch list above.'
+        : 'Scans appear here after a pipeline on it uploads a Trivy report.')
+    : 'Scans appear here after a pipeline of this project uploads its first Trivy report.';
   return (
-    <>
-      <PageHeader
-        eyebrow={
-          <Link to="/" className="underline underline-offset-2 hover:text-text">
-            Portfolio
-          </Link>
-        }
-        title={s.name}
-        subtitle={
-          <span className="inline-flex flex-wrap items-center gap-x-2">
-            <Mono value={s.gitlab_project_path} />
-            {gitlab ? (
-              <a
-                href={gitlab}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label={`Open ${s.gitlab_project_path} in GitLab`}
-                className="inline-flex text-text-muted hover:text-text"
-              >
-                <ExternalLink size={14} strokeWidth={1.5} aria-hidden="true" />
-              </a>
-            ) : null}
-          </span>
-        }
-        actions={
-          <>
-            {refs.length > 0 ? (
-              <Select
-                label="Git ref"
-                value={effectiveRef ?? refs[0]}
-                onChange={selectRef}
-                options={refs.map((r) => ({ value: r, label: r }))}
-              />
-            ) : null}
-            <Link to={findingsHref(id, effectiveRef)} className={`${primaryButtonClass} self-end`}>
-              Explore findings
-              <ArrowRight size={16} strokeWidth={1.5} aria-hidden="true" />
-            </Link>
-          </>
+    <section aria-label="Trivy scans" className="panel mb-10">
+      <EmptyState
+        compact
+        art="pipeline"
+        title={title}
+        body={body}
+        action={
+          <a
+            className="font-medium text-text underline underline-offset-2"
+            href={GITLAB_CI_GUIDE}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Read the GitLab CI guide
+          </a>
         }
       />
-      <div className="-mt-3 flex flex-wrap gap-x-6 gap-y-1 pb-6">
-        {overview.data?.ref ? (
-          <p className="text-sm text-text-muted" data-testid="ref-source">
-            Showing <Mono value={overview.data.ref} /> ·{' '}
-            {describeRefSource(overview.data.ref_source, overview.data.ref, s.default_ref)}
-          </p>
-        ) : null}
-        {overview.data?.data_at ? (
-          <Freshness
-            at={overview.data.data_at}
-            prefix="Trivy scanned"
-            link={
-              latestScan
-                ? {
-                    label: `Pipeline #${latestScan.gitlab_pipeline_id}`,
-                    to: `/scans/${latestScan.id}`,
-                  }
-                : undefined
-            }
-          />
-        ) : null}
-        {sonarLatest ? (
-          <Freshness
-            at={sonarLatest.analysed_at}
-            prefix="SonarQube analysed"
-            link={sonarUrl ? { label: 'Open project', href: sonarUrl } : undefined}
-          />
-        ) : null}
-      </div>
-    </>
+    </section>
   );
+}
+
+function BandSkeleton() {
+  return (
+    <div
+      role="status"
+      aria-label="Loading service"
+      className="-mx-4 mb-10 flex items-center gap-8 border-y border-line px-4 py-8 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8"
+    >
+      <Skeleton className="size-[168px] shrink-0 rounded-full" />
+      <div className="flex-1 space-y-3">
+        <Skeleton className="h-8 w-64 max-w-full" />
+        <Skeleton className="h-4 w-48" />
+        <Skeleton className="h-7 w-full max-w-xl" />
+        <Skeleton className="h-10 w-72 max-w-full" />
+      </div>
+    </div>
+  );
+}
+
+function gateOf(status: string | undefined): GateState | undefined {
+  if (status === undefined) return undefined;
+  if (status === 'OK') return 'pass';
+  if (status === 'ERROR') return 'fail';
+  return 'none';
 }
 
 function Dashboard({ id }: { id: number }) {
   const [params, setParams] = useSearchParams();
   const refParam = params.get('ref') || undefined;
-  const daysParam = params.get('days');
-  const days: Days = DAY_OPTIONS.find((d) => d === daysParam) ?? '90';
+  const days: Days = DAY_OPTIONS.find((d) => d === params.get('days')) ?? '90';
+  const lanes: Lanes = params.get('branches') === 'all' ? 'all' : 'ref';
   const service = useService(id);
+  const overview = useOverview(id, refParam);
+  const sonar = useSonar(id);
+  const trends = useTrends(id, refParam, Number(days), lanes === 'all');
+  const first = useFirstView(`service-${id}`);
 
   if (service.error instanceof ApiError && service.error.status === 404) return <NotFound />;
 
-  function setDays(next: Days) {
+  function setParam(name: string, value: string | null) {
     const copy = new URLSearchParams(params);
-    copy.set('days', next);
+    if (value === null) copy.delete(name);
+    else copy.set(name, value);
     setParams(copy, { replace: true });
   }
 
+  const o = overview.data;
+  const scanned = o !== undefined && o.artifacts.length > 0;
+  const latestSonar = sonar.data?.latest ?? null;
+
   return (
     <div>
-      <Header id={id} refParam={refParam} />
-      <div className="grid gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:items-start">
-        <section aria-label="Trivy posture" className="min-w-0 space-y-4">
-          <h2 className="text-lg font-semibold tracking-tight text-text">Trivy posture</h2>
-          <TrivyPosture serviceId={id} gitRef={refParam} />
-        </section>
-        <section aria-label="SonarQube posture" className="min-w-0 space-y-4">
-          <h2 className="text-lg font-semibold tracking-tight text-text">SonarQube posture</h2>
-          <SonarPosture serviceId={id} />
-        </section>
+      <Breadcrumb
+        className="mb-4"
+        items={[{ label: 'Portfolio', to: '/' }, { label: service.data?.name ?? 'Service' }]}
+      />
+      {service.isPending || overview.isPending ? (
+        <BandSkeleton />
+      ) : service.isError ? (
+        <div className="mb-10">
+          <SectionError
+            what="The service"
+            error={service.error}
+            onRetry={() => void service.refetch()}
+            retrying={service.isFetching}
+          />
+        </div>
+      ) : (
+        <VerdictBand
+          service={service.data}
+          overview={o}
+          sonar={latestSonar}
+          gate={gateOf(latestSonar?.quality_gate_status)}
+          animate={first}
+          verdict={{
+            gate: gateOf(latestSonar?.quality_gate_status),
+            counts: scanned ? o.counts : null,
+            newFindings: o?.new_since_previous ?? 0,
+            fixed: o?.fixed_since_previous ?? 0,
+            sincePipeline: o && trends.data ? previousPipeline(o, trends.data.points) : undefined,
+          }}
+        />
+      )}
+
+      {overview.isError ? (
+        <div className="mb-10">
+          <SectionError
+            what="Trivy findings"
+            error={overview.error}
+            onRetry={() => void overview.refetch()}
+            retrying={overview.isFetching}
+          />
+        </div>
+      ) : o && !scanned ? (
+        <NoScans overview={o} />
+      ) : null}
+
+      {o && scanned ? (
+        <>
+          <PipelinesSection
+            serviceId={id}
+            gitRef={refParam}
+            shownRef={o.ref}
+            days={days}
+            lanes={lanes}
+            onDaysChange={(next) => setParam('days', next === '90' ? null : next)}
+            onLanesChange={(next) => setParam('branches', next === 'all' ? 'all' : null)}
+            animate={first}
+          />
+          <div className="mb-12 grid items-start gap-6 lg:grid-cols-12">
+            <div className="min-w-0 lg:col-span-7">
+              <FixFirst overview={o} serviceId={id} />
+            </div>
+            <div className="min-w-0 lg:col-span-5">
+              <OpenFindings overview={o} serviceId={id} />
+            </div>
+          </div>
+        </>
+      ) : null}
+
+      <div className="mb-12">
+        <SonarPanel serviceId={id} />
       </div>
-      <section aria-label="Pipeline timeline" className="mt-10 space-y-4">
-        <h2 className="text-lg font-semibold tracking-tight text-text">Pipeline timeline</h2>
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <TrendsChart serviceId={id} gitRef={refParam} days={days} onDaysChange={setDays} />
-          <CoverageChart serviceId={id} />
-        </div>
-        <div className="pt-4">
-          <RecentScans serviceId={id} gitRef={refParam} />
-        </div>
-      </section>
+
+      {o && scanned ? <RecentScans serviceId={id} gitRef={refParam} /> : null}
     </div>
   );
 }

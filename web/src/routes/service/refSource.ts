@@ -14,16 +14,17 @@ export function refChoices(refs: readonly string[], current: string | undefined)
 }
 
 /**
- * Where the shown ref comes from, in words: the dashboard branch an administrator
- * chose, the latest scan when none was chosen, or the viewer's own selection.
+ * Where the shown ref comes from, as the end of "Showing main, …": the
+ * dashboard branch an administrator chose, the latest scan when none was
+ * chosen, or the viewer's own selection.
  */
 export function describeRefSource(
   source: RefSource,
   ref: string,
   defaultRef: string | null | undefined,
 ): string {
-  if (defaultRef && ref === defaultRef) return 'dashboard branch';
-  if (source === 'default') return 'dashboard branch';
-  if (source === 'latest') return 'latest scan (no dashboard branch chosen)';
-  return defaultRef ? `selected (the dashboard branch is ${defaultRef})` : 'selected';
+  if (defaultRef && ref === defaultRef) return 'the dashboard branch';
+  if (source === 'default') return 'the dashboard branch';
+  if (source === 'latest') return 'the latest scanned branch; no dashboard branch is chosen';
+  return defaultRef ? `chosen here; the dashboard branch is ${defaultRef}` : 'chosen here';
 }

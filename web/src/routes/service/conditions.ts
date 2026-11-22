@@ -69,3 +69,32 @@ export function describeCondition(c: {
       return `${value} · threshold ${c.operator} ${threshold}`;
   }
 }
+
+type Condition = Parameters<typeof describeCondition>[0];
+
+/** The measured value as SonarQube reported it, or "Not available". */
+export function conditionValue(c: Condition): string {
+  if (c.status === 'NO_VALUE' || c.value === null) return 'Not available';
+  return display(c.metric, c.value);
+}
+
+/** What the gate asks for: "at least 80%", "at most A". */
+export function conditionRequirement(c: Condition): string {
+  const threshold = display(c.metric, c.threshold);
+  switch (c.operator) {
+    case 'LT':
+    case 'LESS_THAN':
+      return `at least ${threshold}`;
+    case 'GT':
+    case 'GREATER_THAN':
+      return `at most ${threshold}`;
+    case 'EQ':
+    case 'EQUALS':
+      return `not ${threshold}`;
+    case 'NE':
+    case 'NOT_EQUALS':
+      return `exactly ${threshold}`;
+    default:
+      return `${c.operator} ${threshold}`;
+  }
+}
