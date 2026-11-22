@@ -11,6 +11,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
+	"net/url"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -35,9 +41,30 @@ var (
 	ErrLastAdmin = errors.New("at least one administrator must remain")
 )
 
-// Open connects to PostgreSQL and verifies the connection.
+// Pool defaults, applied unless the database URL sets the same parameter
+// (pool_max_conns, statement_timeout; see docs/configuration.md).
+const (
+	// DefaultMaxConns bounds the connections one Scanopsis process opens.
+	// pgx would use the number of CPUs (at least 4), which varies with the
+	// host and is small for a service that waits on the database.
+	DefaultMaxConns = 16
+	// DefaultStatementTimeout ends a statement that runs longer than this, so
+	// one runaway query cannot hold a pooled connection for ever. Every
+	// statement of the application finishes well inside it; migrations run
+	// without a limit (see Migrate).
+	DefaultStatementTimeout = 30 * time.Second
+)
+
+// Open connects to PostgreSQL and verifies the connection. The pool holds at
+// most DefaultMaxConns connections and every statement is limited to
+// DefaultStatementTimeout, unless databaseURL sets pool_max_conns or
+// statement_timeout (as a query parameter or in "options").
 func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, databaseURL)
+	cfg, err := poolConfig(databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse database URL: %w", err)
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("parse database URL: %w", err)
 	}
@@ -48,14 +75,64 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
-// Migrate applies all pending schema migrations. Goose holds a PostgreSQL
-// advisory lock while migrating, so concurrent starts cannot interleave.
+// poolConfig parses databaseURL and fills in the defaults the URL leaves open.
+func poolConfig(databaseURL string) (*pgxpool.Config, error) {
+	cfg, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if !hasURLParam(databaseURL, "pool_max_conns") {
+		cfg.MaxConns = DefaultMaxConns
+	}
+	params := cfg.ConnConfig.RuntimeParams
+	if _, set := params["statement_timeout"]; !set && !strings.Contains(params["options"], "statement_timeout") {
+		params["statement_timeout"] = strconv.FormatInt(DefaultStatementTimeout.Milliseconds(), 10)
+	}
+	return cfg, nil
+}
+
+// hasURLParam reports whether a connection string (URL or key=value form)
+// sets the named parameter.
+func hasURLParam(connString, name string) bool {
+	if strings.HasPrefix(connString, "postgres://") || strings.HasPrefix(connString, "postgresql://") {
+		u, err := url.Parse(connString)
+		return err == nil && u.Query().Has(name)
+	}
+	for _, field := range strings.Fields(connString) {
+		if strings.HasPrefix(field, name+"=") {
+			return true
+		}
+	}
+	return false
+}
+
+// Migrate applies all pending schema migrations without logging them.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
+	return MigrateLogged(ctx, pool, slog.New(slog.DiscardHandler))
+}
+
+// MigrateLogged applies all pending schema migrations, logging the start, end
+// and duration of each. Goose holds a PostgreSQL advisory lock while
+// migrating, so concurrent starts cannot interleave.
+//
+// Migrations can build indexes on tables of millions of rows, so they run on
+// connections without a statement timeout, and the caller should pass a
+// context that only a shutdown cancels.
+func MigrateLogged(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) error {
 	sub, err := fs.Sub(migrations, "migrations")
 	if err != nil {
 		return err
 	}
-	db := stdlib.OpenDBFromPool(pool)
+	cfg := pool.Config().Copy()
+	cfg.MaxConns = 3 // the advisory lock holds one; a migration uses another
+	cfg.MinConns = 0
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "0"
+	mpool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return fmt.Errorf("prepare migrations: %w", err)
+	}
+	defer mpool.Close()
+	db := stdlib.OpenDBFromPool(mpool)
 	defer func() { _ = db.Close() }()
 	locker, err := lock.NewPostgresSessionLocker()
 	if err != nil {
@@ -65,8 +142,27 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if err != nil {
 		return fmt.Errorf("prepare migrations: %w", err)
 	}
-	if _, err := p.Up(ctx); err != nil {
-		return fmt.Errorf("apply migrations: %w", err)
+	// Apply one migration at a time so that each can be logged. The status is
+	// read under no lock, but UpByOne takes the lock and applies whatever is
+	// pending then, so a concurrent start only makes this log less precise.
+	statuses, err := p.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read migration status: %w", err)
+	}
+	for _, st := range statuses {
+		if st.State != goose.StatePending {
+			continue
+		}
+		name := filepath.Base(st.Source.Path)
+		log.Info("applying migration", "migration", name)
+		res, err := p.UpByOne(ctx)
+		if errors.Is(err, goose.ErrNoNextVersion) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("apply migration %s: %w", name, err)
+		}
+		log.Info("applied migration", "migration", filepath.Base(res.Source.Path), "duration", res.Duration.Round(time.Millisecond))
 	}
 	return nil
 }

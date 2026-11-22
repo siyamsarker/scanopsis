@@ -111,16 +111,21 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return fmt.Errorf("%sSECRET_KEY: %w", config.Prefix, err)
 	}
 
-	startCtx, cancel := context.WithTimeout(ctx, startupTimeout)
-	defer cancel()
-	pool, err := store.Open(startCtx, cfg.DatabaseURL)
+	openCtx, cancelOpen := context.WithTimeout(ctx, startupTimeout)
+	pool, err := store.Open(openCtx, cfg.DatabaseURL)
+	cancelOpen()
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	if err := store.Migrate(startCtx, pool); err != nil {
+	// Migrations may build indexes on large tables, so they are bounded by
+	// shutdown only; the start-up timeout covers the rest of the start-up
+	// and begins after them.
+	if err := store.MigrateLogged(ctx, pool, log); err != nil {
 		return err
 	}
+	startCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
 
 	q := store.New(pool)
 	rec := audit.New(q, log)
