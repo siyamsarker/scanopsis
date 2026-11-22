@@ -1243,7 +1243,9 @@ What decides the memory of an upload:
   `Retry-After: 5`. An upload that fits the free memory is admitted at once, even
   when a larger one is waiting, so a small report does not sit behind a large one.
   When the oldest waiting upload has waited 5 seconds, newer uploads queue behind
-  it, so a stream of small reports cannot starve a large one. Many small reports
+  it, so a stream of reports cannot starve a large one; reports of up to 4 MiB
+  still pass it whenever they fit, because they hold their memory only for
+  milliseconds. Many small reports
   run at once and a few large ones do. Separately, at most a quarter of the
   database pool (`pool_max_conns`, at least 2) stores uploads at the same time, so
   uploads cannot take every connection; one that cannot get a place within 30

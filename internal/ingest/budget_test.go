@@ -84,21 +84,26 @@ func TestBudgetSmallPassesWaitingLarge(t *testing.T) {
 	}
 }
 
+// u is the size unit of the fairness tests: 10 units are larger than
+// smallUpload, so those uploads are subject to the fairness bound.
+const u = 2 << 20
+
 // After the oldest waiter has waited the fairness bound, uploads that fit
-// queue behind it.
+// but are not small queue behind it. Sizes are in units of u, so that a unit
+// of 10 is above smallUpload.
 func TestBudgetSmallQueuesAfterFairnessBound(t *testing.T) {
-	b, clock := clockedBudget(100)
-	running, _ := b.acquire(context.Background(), 70)
-	large := acquireAsync(b, 60)
+	b, clock := clockedBudget(100 * u)
+	running, _ := b.acquire(context.Background(), 70*u)
+	large := acquireAsync(b, 60*u)
 	waitQueued(t, b, 1)
 	clock.advance(defaultFairWait)
-	small := acquireAsync(b, 10)
+	small := acquireAsync(b, 10*u)
 	waitQueued(t, b, 2)
 	if admitted(small) {
 		t.Fatal("a small upload passed a waiter that exceeded the fairness bound")
 	}
-	if b.inUse() != 70 {
-		t.Errorf("in use %d, want 70", b.inUse())
+	if b.inUse() != 70*u {
+		t.Errorf("in use %d, want %d", b.inUse(), 70*u)
 	}
 	// The running upload ends: the large one goes first, then the small one.
 	running()
@@ -111,25 +116,25 @@ func TestBudgetSmallQueuesAfterFairnessBound(t *testing.T) {
 
 // A stream of small uploads cannot starve a large one.
 func TestBudgetLargeIsNotStarved(t *testing.T) {
-	b, clock := clockedBudget(100)
+	b, clock := clockedBudget(100 * u)
 	var small []func()
 	for range 9 {
-		rel, _ := b.acquire(context.Background(), 10)
+		rel, _ := b.acquire(context.Background(), 10*u)
 		small = append(small, rel)
 	}
-	large := acquireAsync(b, 50) // 90 in use, 10 free
+	large := acquireAsync(b, 50*u) // 90 in use, 10 free
 	waitQueued(t, b, 1)
 	// Within the bound, small ones keep passing it.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	rel, err := b.acquire(ctx, 10)
+	rel, err := b.acquire(ctx, 10*u)
 	if err != nil {
 		t.Fatalf("a small upload that fits waited behind a large one: %v", err)
 	}
 	small = append(small, rel)
 	clock.advance(defaultFairWait + time.Second)
 	// Now new small ones queue, and each release frees memory for the large.
-	more := acquireAsync(b, 10)
+	more := acquireAsync(b, 10*u)
 	waitQueued(t, b, 2)
 	for _, rel := range small[:5] {
 		rel()
@@ -142,6 +147,40 @@ func TestBudgetLargeIsNotStarved(t *testing.T) {
 	}
 	if !admitted(more) {
 		t.Fatal("the queued small upload was not admitted after the large one")
+	}
+}
+
+// A small upload that fits passes waiting uploads even after the fairness
+// bound: it holds its memory only briefly. smallUpload is 9 units.
+func TestBudgetSmallAlwaysPassesWhenItFits(t *testing.T) {
+	b, clock := clockedBudget(100 * u)
+	runA, _ := b.acquire(context.Background(), 50*u)
+	runB, _ := b.acquire(context.Background(), 42*u) // 8 units free: less than smallUpload
+	large := acquireAsync(b, 60*u)
+	waitQueued(t, b, 1)
+	clock.advance(defaultFairWait + time.Second)
+	small := acquireAsync(b, smallUpload)
+	waitQueued(t, b, 2)
+	// 50 units free: the large one still does not fit, the small one does
+	// and is granted although the large one waited past the bound.
+	runB()
+	if !admitted(small) {
+		t.Fatal("a queued small upload was not granted while a large one stays blocked")
+	}
+	if admitted(large) {
+		t.Fatal("the large upload was admitted beyond the budget")
+	}
+	// A new small upload that fits is admitted at once.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	rel, err := b.acquire(ctx, smallUpload)
+	if err != nil {
+		t.Fatalf("a small upload waited behind a large one after the fairness bound: %v", err)
+	}
+	rel()
+	runA()
+	if !admitted(large) {
+		t.Fatal("the large upload was not admitted once memory was free")
 	}
 }
 

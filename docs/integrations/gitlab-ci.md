@@ -291,7 +291,8 @@ report can cross a slow link. A body that is not complete by then is answered wi
 not by a fixed number: many small reports are processed at once, and a few
 large ones. An upload that fits the free memory is admitted at once, even when a
 larger one is waiting, until the oldest waiting upload has waited 5 seconds;
-newer uploads then queue behind it, so large uploads are not starved. An upload
+newer uploads then queue behind it, so large uploads are not starved. Reports
+of up to 4 MiB, which most are, always pass when they fit. An upload
 that finds no free memory waits up to 30 seconds and is then answered with `503`
 `busy`. At most a quarter of the database connections store uploads at the same
 time; an upload that cannot get a place within 30 seconds is answered `busy` too. See [sizing](../deployment.md#sizing).

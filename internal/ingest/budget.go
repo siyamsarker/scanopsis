@@ -19,8 +19,12 @@ import (
 // larger uploads are waiting: a small report must not sit behind a large one
 // that waits for a lot of memory to be free. To keep the large ones from
 // being starved by a stream of small ones, this stops when the oldest waiter
-// has waited fairWait: from then on nothing passes it, new arrivals queue
-// behind it, and memory is freed for it as the running uploads end.
+// has waited fairWait: from then on only small uploads (smallUpload or less)
+// pass it, and memory is freed for it as the running uploads end. A small
+// upload holds its memory for milliseconds, and the upload rate limits keep
+// small ones from arriving fast enough to occupy the budget for long, so
+// they cannot starve a large one; without the exception a typical report
+// would wait behind large ones for up to the whole admission wait.
 type memBudget struct {
 	mu       sync.Mutex
 	size     int64
@@ -40,6 +44,10 @@ type budgetWaiter struct {
 // smaller ones that fit.
 const defaultFairWait = 5 * time.Second
 
+// smallUpload is the largest weight that may always pass waiting uploads when
+// it fits: a report of up to 4 MiB. A typical report is about 120 KiB.
+const smallUpload = 2*(4<<20) + uploadOverhead
+
 func newMemBudget(size int64) *memBudget {
 	return &memBudget{size: size, fairWait: defaultFairWait, now: time.Now}
 }
@@ -58,7 +66,7 @@ func (b *memBudget) bypassAllowed() bool {
 func (b *memBudget) acquire(ctx context.Context, n int64) (release func(), err error) {
 	n = min(max(n, 0), b.size)
 	b.mu.Lock()
-	if b.used+n <= b.size && b.bypassAllowed() {
+	if b.used+n <= b.size && (n <= smallUpload || b.bypassAllowed()) {
 		b.used += n
 		b.mu.Unlock()
 		return b.releaser(n), nil
@@ -101,19 +109,20 @@ func (b *memBudget) releaser(n int64) func() {
 }
 
 // grant serves the waiters that fit, oldest first. A waiter that does not fit
-// is passed by the later ones that do, until the oldest has waited fairWait.
-// The caller holds mu.
+// is passed by the later ones that do, until the oldest has waited fairWait;
+// after that only small ones pass it. The caller holds mu.
 func (b *memBudget) grant() {
+	blocked := false // an earlier waiter that does not fit holds back the rest
 	for i := 0; i < len(b.queue); {
 		w := b.queue[i]
-		if b.used+w.n <= b.size {
+		if b.used+w.n <= b.size && (!blocked || w.n <= smallUpload) {
 			b.used += w.n
 			b.queue = append(b.queue[:i], b.queue[i+1:]...)
 			close(w.ready)
 			continue
 		}
-		if !b.bypassAllowed() {
-			return
+		if b.used+w.n > b.size && !b.bypassAllowed() {
+			blocked = true
 		}
 		i++
 	}

@@ -199,10 +199,11 @@ func TestBudgetFromLimit(t *testing.T) {
 	}
 }
 
+// Sizes are in units of u, so that every request here is above smallUpload.
 func TestMemBudget(t *testing.T) {
-	b, clock := clockedBudget(100)
+	b, clock := clockedBudget(100 * u)
 	ctx := context.Background()
-	r1, err := b.acquire(ctx, 60)
+	r1, err := b.acquire(ctx, 60*u)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,14 +211,14 @@ func TestMemBudget(t *testing.T) {
 	// later, smaller request does not jump the queue.
 	got := make(chan string, 4)
 	go func() {
-		rel, _ := b.acquire(ctx, 50)
+		rel, _ := b.acquire(ctx, 50*u)
 		got <- "50"
 		rel()
 	}()
 	waitQueued(t, b, 1)
 	clock.advance(defaultFairWait)
 	go func() {
-		rel, _ := b.acquire(ctx, 10)
+		rel, _ := b.acquire(ctx, 10*u)
 		got <- "10"
 		rel()
 	}()
@@ -232,15 +233,15 @@ func TestMemBudget(t *testing.T) {
 		t.Errorf("admitted %s %s", a, c)
 	}
 	// A cancelled waiter leaves the queue and wakes the one behind it.
-	r2, _ := b.acquire(ctx, 90)
+	r2, _ := b.acquire(ctx, 90*u)
 	cctx, cancel := context.WithCancel(ctx)
 	errc := make(chan error, 1)
-	go func() { _, err := b.acquire(cctx, 80); errc <- err }()
+	go func() { _, err := b.acquire(cctx, 80*u); errc <- err }()
 	waitQueued(t, b, 1)
 	clock.advance(defaultFairWait)
 	behind := make(chan struct{})
 	go func() {
-		rel, _ := b.acquire(ctx, 5) // fits beside 90 but waits behind the 80
+		rel, _ := b.acquire(ctx, 10*u) // fits beside 90 but waits behind the 80
 		close(behind)
 		rel()
 	}()
