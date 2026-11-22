@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -56,9 +57,9 @@ const (
 	codeBusy = "busy"
 )
 
-// DefaultMaxConcurrentUploads is the number of uploads processed at once when
-// Options.MaxConcurrentUploads is 0. Each may hold a whole report in memory.
-const DefaultMaxConcurrentUploads = 4
+// DefaultAdmitWait is how long an upload waits for memory to be free when
+// Options.AdmitWait is 0.
+const DefaultAdmitWait = 30 * time.Second
 
 // busyRetryAfter is the Retry-After value, in seconds, of a busy response.
 const busyRetryAfter = 5
@@ -83,10 +84,14 @@ type Options struct {
 	// HTTPClient fetches GitLab's signing keys (for a custom CA). nil means
 	// http.DefaultClient.
 	HTTPClient *http.Client
-	// MaxConcurrentUploads limits the uploads read and stored at the same
-	// time, all addresses together. Others wait for a free slot while their
-	// request lasts. 0 means DefaultMaxConcurrentUploads.
-	MaxConcurrentUploads int
+	// MemoryBudget is the number of bytes of estimated memory the uploads
+	// being read and stored may use together, all addresses together (see
+	// uploadWeight). Others wait for memory to be free. 0 means two fifths of the
+	// process memory limit (GOMEMLIMIT), or 160 MiB without one.
+	MemoryBudget int64
+	// AdmitWait is how long an upload waits for memory before it is answered
+	// with 503 busy. 0 means DefaultAdmitWait.
+	AdmitWait time.Duration
 	// Limiter limits uploads per client address. nil means no limit.
 	Limiter *auth.RateLimiter
 	// AuditLimiter limits how many rejections per client address are written
@@ -113,8 +118,12 @@ type Ingest struct {
 	// auditLimit bounds the audit records per client address, so requests
 	// that need no credentials cannot fill the audit log.
 	auditLimit *auth.RateLimiter
-	// sem holds one entry per upload being processed.
-	sem chan struct{}
+	// budget admits uploads by their estimated memory.
+	budget *memBudget
+	// freeMemory returns unused heap memory to the operating system. It is a
+	// field so that tests can observe it.
+	freeMemory func()
+	trimming   atomic.Bool
 	// openWarned is set while the open-to-everyone warning has been logged
 	// for the current settings, so it is logged once per change into that
 	// state.
@@ -135,8 +144,11 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	if opts.MaxConcurrentUploads <= 0 {
-		opts.MaxConcurrentUploads = DefaultMaxConcurrentUploads
+	if opts.MemoryBudget <= 0 {
+		opts.MemoryBudget = budgetFromLimit()
+	}
+	if opts.AdmitWait <= 0 {
+		opts.AdmitWait = DefaultAdmitWait
 	}
 	if opts.AuditLimiter == nil {
 		opts.AuditLimiter = auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, opts.Now)
@@ -146,7 +158,8 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 		ver:        &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
 		store:      &pgSaver{pool: pool, log: opts.Logger},
 		auditLimit: opts.AuditLimiter,
-		sem:        make(chan struct{}, opts.MaxConcurrentUploads),
+		budget:     newMemBudget(opts.MemoryBudget),
+		freeMemory: debug.FreeOSMemory,
 	}
 	i.checkOpen(cfg.Current())
 	// The settings service calls back after every change; a source without
@@ -284,18 +297,25 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A report can take up to limit bytes compressed and as many parsed, so
-	// only a few are processed at once. The slot is held until the scan is
-	// stored; the server's read timeout bounds how long a slow client can
-	// keep it while sending the body.
-	select {
-	case i.sem <- struct{}{}:
-		defer func() { <-i.sem }()
-	case <-ctx.Done():
+	// An upload is admitted by the memory it is estimated to need, which
+	// grows with its size, not by a count: many small reports are processed
+	// at once and a few large ones are. The memory is held from before the
+	// body is read until the scan is stored, so a slow client holds only the
+	// share its own report needs, and for no longer than the read deadline.
+	// Waiting is bounded, so clients are never queued for ever.
+	weight := uploadWeight(r.ContentLength, limit)
+	wctx, cancel := context.WithTimeout(ctx, i.opts.AdmitWait)
+	release, err := i.budget.acquire(wctx, weight)
+	cancel()
+	if err != nil {
 		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
-		reject(http.StatusServiceUnavailable, codeBusy, "The server is processing other uploads. Retry later.", "slots", cap(i.sem))
+		reject(http.StatusServiceUnavailable, codeBusy, "The server is processing other uploads. Retry later.", "budget_bytes", i.opts.MemoryBudget)
 		return
 	}
+	defer func() {
+		release()
+		i.trim(weight)
+	}()
 
 	rep, raw, replay, err := i.readReport(w, r, gz, limit)
 	if err != nil {
@@ -342,6 +362,24 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		"secrets", res.Secrets, "suppressed", res.Suppressed,
 		"findings", rep.Counts.total(), "stored_bytes", len(raw), "duration_ms", time.Since(started).Milliseconds())
 	httpapi.WriteJSON(w, http.StatusCreated, res)
+}
+
+// trimThreshold is the estimated memory of an upload from which the heap is
+// returned to the operating system when the server falls idle.
+const trimThreshold = 16 << 20
+
+// trim returns the heap to the operating system after a large upload when no
+// upload is running any more. Without it the garbage of a burst stays in the
+// process until the runtime's own two-minute cycle, so the container looks
+// busy for long after the last upload. At most one runs at a time.
+func (i *Ingest) trim(weight int64) {
+	if weight < trimThreshold || i.budget.inUse() != 0 || !i.trimming.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer i.trimming.Store(false)
+		i.freeMemory()
+	}()
 }
 
 // reject answers with an error, writes the audit event and logs it. claims is

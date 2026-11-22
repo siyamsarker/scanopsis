@@ -47,6 +47,12 @@ LABEL org.opencontainers.image.title="scanopsis" \
 COPY --from=build /out/scanopsis /scanopsis
 # Numeric nonroot user, so container runtimes can verify it is not root.
 USER 65532:65532
+# Soft memory limit of the Go runtime, for a container limit of 512 MiB: the
+# garbage collector works harder instead of letting the process grow into the
+# limit, and uploads are admitted by two fifths of it (see docs/deployment.md).
+# Override it with -e GOMEMLIMIT=... when you set another container limit; use
+# about 80% of the limit.
+ENV GOMEMLIMIT=400MiB
 # Unprivileged port; the binary writes nothing, so a read-only root filesystem works.
 EXPOSE 8080
 # The image has no shell or curl; the binary probes its own /healthz.

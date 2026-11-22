@@ -88,13 +88,32 @@ var (
 	}
 )
 
+// discardConnAbove is the size of a stored report from which the database
+// connection that sent it is closed afterwards (see save).
+const discardConnAbove = 4 << 20
+
 // save runs the whole upload in one transaction. Uploads for the same GitLab
 // project are serialised by an advisory lock, so two uploads of the same job
 // and artifact end with exactly one scan and two first uploads create one
 // service.
 func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 	var res Result
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return res, fmt.Errorf("acquire connection: %w", err)
+	}
+	defer func() {
+		if len(in.raw) >= discardConnAbove {
+			// The driver keeps the buffer of the largest message it sent for
+			// as long as the connection lives, so a few large reports would
+			// leave every pooled connection holding as much memory as the
+			// biggest report. Closing the connection makes the pool open a
+			// fresh one when it is needed.
+			_ = conn.Conn().Close(context.WithoutCancel(ctx))
+		}
+		conn.Release()
+	}()
+	err = pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 		q := store.New(tx)
 		c := in.claims
 		if err := q.LockIngestProject(ctx, strconv.FormatInt(c.ProjectID, 10)); err != nil {
