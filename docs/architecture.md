@@ -1,35 +1,39 @@
-# Architecture
+# How Scanopsis works
 
-This page describes how Scanopsis is built and how data moves through it. Read
-it to understand what runs where, what talks to what, and why. It does not
-repeat setup steps. For those, see the [getting started guide](getting-started.md).
+See what runs where, how data moves through Scanopsis, and why it is built this
+way. Read it before you change the code, or when you need to explain the design
+to someone.
 
-The diagrams use [Mermaid](https://mermaid.js.org/). GitHub renders them. In a
-plain text viewer, read the code blocks as sequence lists.
+**Audience:** Developers · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
 
-## Components
+---
 
-Scanopsis has two runtime parts:
+The diagrams use [Mermaid](https://mermaid.js.org/), which GitHub draws as
+pictures. In a plain text viewer, read each one as a list of steps.
 
-| Part | What it is | State |
-|---|---|---|
-| Scanopsis | One Go binary. It serves the JSON API, the web interface (embedded in the binary), the health probes, and runs the background jobs. | None on disk. Everything is in PostgreSQL, except a few in-memory items listed under [single instance](#single-instance). |
-| PostgreSQL | The only datastore. It holds users, sessions, settings, services, scans, findings, SonarQube analyses and the audit log. | All of it. Back it up. |
+## The parts
 
-The binary also contains two small command modes: `scanopsis admin ...` (user
-recovery, see [operations](operations.md#administration-commands)) and
-`scanopsis healthcheck` (used by the container health check).
+Scanopsis has two parts that run:
+
+| Part | What it is | What it keeps |
+| --- | --- | --- |
+| Scanopsis | One Go binary. It serves the JSON API, the web interface (embedded in the binary) and the health probes, and it runs the background jobs. | Nothing on disk. Everything is in PostgreSQL, except a few things in memory, see [Run one server per database](#run-one-server-per-database). |
+| PostgreSQL | The only datastore: users, sessions, settings, services, scans, findings, SonarQube analyses and the audit log. | Everything. Back it up. |
+
+The binary has two more modes: `scanopsis admin ...` for account recovery and
+report export (see [operations](operations.md)), and `scanopsis healthcheck`,
+which the container health check runs.
 
 Scanopsis talks to three outside systems:
 
 | System | Direction | Why |
-|---|---|---|
-| GitLab | Scanopsis calls GitLab | To sign users in (OpenID Connect), to read the groups of a user, and to download the public signing keys that verify CI ID tokens. |
+| --- | --- | --- |
+| GitLab | Scanopsis calls GitLab | To sign users in with OpenID Connect, to read a user's groups, and to download the public keys that check CI ID tokens. |
 | GitLab CI jobs | Jobs call Scanopsis | To upload Trivy reports. |
-| SonarQube | Both | SonarQube calls the webhook after an analysis. Scanopsis calls the SonarQube Web API to read the results. |
+| SonarQube | Both ways | SonarQube calls the webhook after an analysis. Scanopsis calls the SonarQube Web API to read the results. |
 
-Scanopsis never calls the GitLab API with a stored access token. See
-[key design decisions](#key-design-decisions).
+Scanopsis never calls the GitLab API with a stored access token, see [Key design
+decisions](#key-design-decisions).
 
 ```mermaid
 flowchart LR
@@ -42,14 +46,14 @@ flowchart LR
     App -->|Web API, token| Sonar
 ```
 
-## Data flows
+## How data moves
 
 ### Sign-in with GitLab, then a two-factor code
 
-Every user, local or GitLab, passes two factors. A session starts after the
-first factor but cannot use the application until the second factor is
-verified. When the second factor passes, the session gets a new token, so a
-token captured earlier is useless.
+Every user passes two factors, local and GitLab users alike. A session starts
+after the first factor, but it cannot use the application until the second
+factor is checked. When the second factor passes, the session gets a new token,
+so a token captured before is useless.
 
 ```mermaid
 sequenceDiagram
@@ -81,11 +85,11 @@ sequenceDiagram
     S-->>B: New session cookie
 ```
 
-Local sign-in replaces the first half with `POST /api/v1/auth/local/login`
-(username and password, checked against an Argon2id hash) and then continues
-the same way. The first administrator is created once through the
-[setup page](getting-started.md#step-6-get-the-setup-token), guarded by a
-one-time token in the server log.
+Local sign-in replaces the first half with `POST /api/v1/auth/local/login`: a
+username and a password, checked against an Argon2id hash. Then it goes on the
+same way. The first administrator is created once, on the setup page, with a
+one-time token from the server log. See the [getting started
+guide](getting-started.md).
 
 ### Upload from CI with an ID token
 
@@ -97,23 +101,29 @@ sequenceDiagram
     participant D as PostgreSQL
     Note over J,G: GitLab creates the ID token for the job (id_tokens, aud = Scanopsis URL)
     J->>S: POST /api/v1/ingest/trivy?kind=image (Bearer token, gzip JSON)
-    S->>S: Rate limit per client address, wait for one of four upload slots
-    S->>G: Fetch signing keys (cached), only when needed
-    S->>S: Check signature, issuer, audience, expiry, claims
-    S->>S: Check allowed namespaces and protected refs
-    S->>S: Parse the report, count unsuppressed findings
+    S->>S: Rate limit per client address
+    S->>G: Fetch signing keys, only for a key it does not have yet
+    S->>S: Check signature, issuer, audience, expiry and claims
+    S->>S: Check allowed namespaces, protected refs and the project rate
+    S->>S: Wait for memory, then read and parse the report
+    S->>S: Wait for a database slot
     S->>D: One transaction: find or create the service, replace the scan of the same job, insert scan and findings
     S-->>J: 201 with the stored counts
-    Note over S,D: A rejected upload is answered with an error code and written to the audit log
+    Note over S,D: A refused upload gets an error code and is written to the audit log
 ```
 
-The project, pipeline, job, branch and commit come from the verified token,
-never from the report. A repeated upload for the same job, artifact and kind
-replaces the earlier scan, so retrying a job never duplicates data. Uploads for
-one GitLab project are serialised with a database advisory lock, so two first
-uploads create one service.
+The project, pipeline, job, branch and commit come from the checked token, never
+from the report. Uploading the same job, artifact and kind again replaces the
+earlier scan, so a retried job never duplicates data. Uploads of one GitLab
+project take a database advisory lock, one at a time, so two first uploads
+create one service, not two.
 
-### SonarQube: webhook, Web API and reconciliation
+Uploads are admitted by the memory they need, which grows with their size, so
+many small reports run at once and large ones fewer at a time. At most a quarter
+of the database connections store uploads at the same time. [Upload Trivy
+reports from GitLab CI](integrations/gitlab-ci.md) lists every limit.
+
+### SonarQube: webhook, Web API and sync
 
 ```mermaid
 sequenceDiagram
@@ -123,9 +133,9 @@ sequenceDiagram
     participant D as PostgreSQL
     Q->>S: POST /api/v1/hooks/sonarqube (HMAC-SHA256 header)
     S->>S: Verify the signature over the raw body
-    S->>D: Record the delivery as pending (deduplicated by task ID)
+    S->>D: Record the delivery as pending (once per task ID)
     S-->>Q: 202 Accepted
-    S->>W: Queue (100 entries)
+    S->>W: Queue (500 entries)
     W->>D: Find the service by project key
     W->>Q: Web API: measures, latest analysis
     W->>D: Store the analysis, set the delivery outcome
@@ -136,11 +146,11 @@ sequenceDiagram
 ```
 
 The webhook answers at once and does the work afterwards, because SonarQube
-gives a webhook only 10 seconds. The periodic sync is the safety net for
-deliveries that were lost, refused or interrupted. It runs under a database
-advisory lock, so only one server does it at a time.
+waits only 10 seconds. The sync every interval is the safety net for deliveries
+that were lost, refused or interrupted. It runs under a database advisory lock,
+so only one server syncs at a time.
 
-### Read path
+### Reading the dashboards
 
 ```mermaid
 flowchart LR
@@ -152,21 +162,21 @@ flowchart LR
     H --> J[JSON]
 ```
 
-Reads never load the stored raw report; only `scanopsis admin export-report`
-does, on request. The portfolio and the service pages are
+Reads never load the stored original report. Only `scanopsis admin
+export-report` does, on request. The portfolio and the service pages are
 computed in SQL from the counts kept on each scan row and from the latest
-SonarQube analysis. See [current state](#what-current-means).
+SonarQube analysis. See [What "current" means](#what-current-means).
 
 ## Trust boundaries
 
 | Boundary | Who is on each side | What crosses it | What protects it |
-|---|---|---|---|
-| Internet or network to the reverse proxy | Anyone, and the proxy | HTTPS requests | TLS at the proxy. |
+| --- | --- | --- | --- |
+| Network to the reverse proxy | Anyone, and the proxy | HTTPS requests | TLS at the proxy. |
 | Proxy to Scanopsis | The proxy, and Scanopsis | HTTP requests with `X-Forwarded-For` | The proxy runs next to Scanopsis. `SCANOPSIS_TRUSTED_PROXIES` names the only addresses whose forwarded header is believed. |
-| Browser to the API | Users, and Scanopsis | Session cookie, JSON | Session checks, role checks, cross-origin check, security headers. |
-| CI job to the upload endpoint | A job in your GitLab, and Scanopsis | A signed ID token and a report | Signature check against your GitLab's keys, audience, namespace and protected-ref rules. The report is untrusted data. |
-| SonarQube to the webhook | SonarQube, and Scanopsis | A signed JSON body | HMAC signature with a shared secret. The body only names a project and a task. Values are read from SonarQube afterwards. |
-| Scanopsis to GitLab and SonarQube | Scanopsis, and those servers | Requests with a bearer token (SonarQube) | Certificate verification (never disabled), no redirects to other hosts for SonarQube calls. |
+| Browser to the API | Users, and Scanopsis | Session cookie, JSON | Session and role checks, a cross-origin check, security headers. |
+| CI job to the upload endpoint | A job in your GitLab, and Scanopsis | A signed ID token and a report | Signature check against your GitLab's keys, audience, namespace and protected-ref rules. The report is treated as untrusted data. |
+| SonarQube to the webhook | SonarQube, and Scanopsis | A signed JSON body | HMAC signature with a shared secret. The body only names a project and a task: the values are read from SonarQube afterwards. |
+| Scanopsis to GitLab and SonarQube | Scanopsis, and those servers | Requests, with a bearer token for SonarQube | Certificate checks that cannot be turned off. No redirects to another scheme or host for SonarQube calls. |
 | Scanopsis to PostgreSQL | Scanopsis, and the database | SQL | A private network. Secrets are encrypted before they are stored. |
 
 [Security](security.md) lists the controls on each boundary and the risks that
@@ -174,22 +184,22 @@ remain.
 
 ## Data model
 
-The schema is created and updated by migrations that run when the server
-starts (`internal/store/migrations`). The tables:
+Migrations in `internal/store/migrations` create and update the schema when the
+server starts. The tables:
 
 | Table | What it holds |
-|---|---|
-| `users` | One row per person. `source` is `local` or `gitlab`. Local users have an Argon2id `password_hash`. GitLab users have a `gitlab_user_id` and the `gitlab_issuer` (GitLab URL) it belongs to; the pair is unique. `role` is `admin` or `viewer`. `disabled_at` is set while an administrator has disabled the account. Two-factor state: the encrypted secret, when it was enabled, the last accepted time step, the number of wrong codes in a row (ten lock the second factor), and a flag that forces a password change after a reset. |
-| `sessions` | One row per sign-in. The key is the SHA-256 of the session token, never the token. Holds a stable number shown in the session list, the user, the creation, last-seen and expiry times, whether the second factor was verified, and the client address and User-Agent (first 200 bytes) at sign-in. |
-| `recovery_codes` | The stored form of each recovery code of a user (an HMAC keyed from the secret key, or the SHA-256 of a code issued by version 0.1.0), its version and when it was used. |
-| `settings` | The runtime settings. Plain values are JSON. Secret values are stored encrypted. Each row records whether the value came from the environment or from the Settings page, who changed it and when. |
+| --- | --- |
+| `users` | One row per person. `source` is `local` or `gitlab`. Local users have an Argon2id `password_hash`. GitLab users have a `gitlab_user_id` and the `gitlab_issuer` (the GitLab URL); the pair is unique. `role` is `admin` or `viewer`. `disabled_at` is set while the account is disabled. Two-factor state: the encrypted secret, when it was enabled, the last accepted time step, the count of wrong codes in a row (ten lock the second factor), and a flag that forces a password change after a reset. |
+| `sessions` | One row per sign-in. The key is the SHA-256 of the session token, never the token. Also a stable number shown in the session list, the user, the creation, last-seen and expiry times, whether the second factor passed, and the client address and User-Agent (first 200 bytes) at sign-in. |
+| `recovery_codes` | The stored form of each recovery code: an HMAC keyed from the secret key, or the SHA-256 of a code issued by version 0.1.0. Also its version and when it was used. |
+| `settings` | The runtime settings. Plain values are JSON, secret values are encrypted. Each row records whether the value came from the environment or the Settings page, who changed it and when. |
 | `audit_log` | Security events: actor, action and a JSON detail. |
-| `services` | One service per GitLab project: name, GitLab project ID and path, optional SonarQube project key, how it was created (`ingest` or `manual`), and whether it is archived. |
-| `scans` | One Trivy report for one artifact in one CI job. Holds the pipeline, job, ref, protection flag, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity, fixable, secrets and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`, emptied by retention 30 days after the scan unless it is current). A job, artifact and kind exist once per service. |
+| `services` | One service per GitLab project: name, GitLab project ID and path, the optional SonarQube project key, how it was created (`ingest` or `manual`), and whether it is archived. |
+| `scans` | One Trivy report for one artifact in one CI job: pipeline, job, ref, whether the ref was protected, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity and of fixable, secret and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`). A job, artifact and kind exist once per service. |
 | `vulnerabilities` | The vulnerabilities of a scan: target, class, package, installed and fixed version, ID, severity, status, title, link, and whether and why Trivy suppressed it. |
 | `secret_findings` | The secret findings of a scan: target, rule, category, severity and line numbers. The matched text is never stored. |
 | `sonar_analyses` | One SonarQube analysis of a linked service: the quality gate and its conditions, every measure as reported, the mode (`mqr` or `standard`), the normalised ratings, coverage and duplication (empty when not reported). |
-| `sonar_deliveries` | Every webhook delivery, linked or not, with its outcome (`pending`, `linked`, `unlinked`, `failed`), a detail text and the number of attempts. It feeds the integration health page. |
+| `sonar_deliveries` | Every webhook delivery, linked or not, with its outcome (`pending`, `linked`, `unlinked`, `failed`), a detail text and the number of attempts. It feeds the Integrations page. |
 
 Deleting a service deletes its scans, findings and analyses (`ON DELETE
 CASCADE`). Deleting a scan deletes its findings.
@@ -199,83 +209,84 @@ CASCADE`). Deleting a scan deletes its findings.
 All jobs run inside the Scanopsis process. There is no separate worker.
 
 | Job | When | What it does |
-|---|---|---|
-| Session clean-up | Every hour | Deletes sessions that passed their absolute or idle expiry. |
-| SonarQube workers | Continuously | Four workers process queued webhook deliveries (up to 500 wait; a delivery that finds the queue full stays pending for the next sync). They run apart from the sync. |
-| SonarQube sync | Every sync interval, checked every 10 seconds; default 15 minutes, minimum 1 minute | Reads the newest analysis of every linked project, marks deliveries that stayed pending for more than 10 minutes as interrupted, and stops early when SonarQube does not answer. Runs under an advisory lock held on its own connection; no pooled connection is held while SonarQube is called. |
-| Retention | One minute after start, then every 24 hours | Deletes scan history older than the retention period, except the current scans (the latest scans of the dashboard branch, of protected refs and of the ref shown when no branch is chosen). Empties the stored original report of scans that are not current after 30 days. A run that deletes anything writes an audit event. See [data retention](operations.md#data-retention). |
+| --- | --- | --- |
+| Session clean-up | Every hour | Deletes sessions past their absolute or idle expiry. |
+| SonarQube workers | All the time | Four workers process queued webhook deliveries. Up to 500 wait. A delivery that finds the queue full stays pending for the next sync. |
+| SonarQube sync | Every sync interval (default 15 minutes, at least 1 minute), checked every 10 seconds | Reads the newest analysis of every linked project. Marks deliveries pending for more than 10 minutes as interrupted. Stops early when SonarQube does not answer. Holds an advisory lock on a connection of its own, and no pooled connection while it calls SonarQube. |
+| Retention | One minute after start, then every 24 hours | Deletes scans, SonarQube analyses and deliveries older than the retention period (default 90 days), but keeps the current scans and the latest analysis of every service. Empties the stored original report of a scan that is not current after 30 days. Deletes audit events after 365 days, or after the retention period if that is longer. A run that deletes anything writes an audit event. See [operations](operations.md). |
 
 ## What "current" means
 
 The dashboards show the current state of a service. The definition is exact:
 
-- The ref a dashboard shows is decided by one rule. A `ref` you select on the
-  page, or pass to the API, wins. Otherwise the **dashboard branch** that an
-  administrator chose for the service is used, even when it has no scans yet
-  (the dashboards then say "No scans of that branch yet" and do not show
-  another branch). When no dashboard branch is chosen, the ref of the most
-  recent scan is used, so a scan of any branch can change what is shown until
-  an administrator chooses one. The API reports which case applied as
-  `ref_source`: `requested`, `default` or `latest`.
-- For a ref, the current state is the **latest scan per artifact and kind**.
-  "Latest" is decided by `scanned_at`, which is the time in the Trivy report
-  (`CreatedAt`), then by the scan ID. It is not the time the report arrived.
-  If the report time is in the future, Scanopsis uses its own clock instead, so
-  a wrong clock cannot keep a scan current forever.
-- The numbers on the portfolio and on the service page are the sums of the
-  counts of those latest scans. Only unsuppressed findings are counted.
+- **Which ref.** One rule decides the ref a dashboard shows. A `ref` you select
+  on the page, or pass to the API, wins. Otherwise the **dashboard branch** an
+  administrator chose for the service is used, even when it has no scans yet:
+  the dashboards then say, for example, "No scans of main yet" and do not fall
+  back to another branch. When no dashboard branch is chosen, the ref of the
+  most recent scan is used, so a scan of any branch can change what is shown.
+  The API reports which case applied as `ref_source`: `requested`, `default` or
+  `latest`.
+- **Which scans.** For that ref, the current state is the **latest scan per
+  artifact and kind**. "Latest" means the newest `scanned_at`, the time in the
+  Trivy report (`CreatedAt`), then the highest scan ID. It is not the time the
+  report arrived. If the report time is in the future, Scanopsis uses its own
+  clock instead, so a wrong clock cannot keep a scan current forever.
+- **Which numbers.** The numbers on the portfolio and the service page are the
+  sums of the counts of those latest scans. Only unsuppressed findings count.
 
-The queries behind these numbers read indexes, not the whole tables, so they
-stay fast with 500 services and 90 days of history (about 540,000 scans and
-millions of findings):
+So a report uploaded late does not replace newer results, and a retried job
+replaces only itself.
 
-- The portfolio finds the latest scan per artifact by jumping from one
-  artifact to the next in a covering index on `scans` that also holds the
-  counts, so it never reads the table. A second index finds the ref with the
-  most recent scan of a service.
-- "First seen" looks for the same finding in the earlier scans of an
-  artifact through an index on the scan and a hash of the finding's
-  vulnerability ID, package and target. A hash is used because those fields
-  can be 4,096 bytes long, more than an index entry can hold; the query also
-  compares the real values.
-- The vulnerability search checks the current scans in its scope once, through
-  an index on the lower-case vulnerability ID and the scan. By default the
-  scope is, for each service, the ref its dashboards show (the chosen
-  dashboard branch, else the ref with the most recent scan) and every
-  protected ref (a ref whose latest scan of an artifact was protected); a
-  partial index on the scans of protected refs finds the latter without
-  visiting every branch. `scope=all` searches every ref, which reads every
-  current scan. It lists at most 1,000
+The queries behind these numbers read indexes, not whole tables. They stay fast
+with 500 services and 90 days of history, which is about 540,000 scans and
+millions of findings:
+
+- The portfolio finds the latest scan per artifact by jumping from one artifact
+  to the next in a covering index on `scans` that also holds the counts, so it
+  never reads the table. A second index finds the ref with the most recent scan
+  of a service.
+- "First seen" looks for the same finding in the earlier scans of an artifact,
+  through an index on the scan and a hash of the vulnerability ID, package and
+  target. The hash is needed because those fields can be 4,096 bytes long, more
+  than an index entry holds. The query then compares the real values.
+- The vulnerability search reads the current scans in its scope once, through an
+  index on the lower-case vulnerability ID and the scan. By default the scope
+  is, for each service, the ref its dashboards show and every protected ref. A
+  partial index on the scans of protected refs finds those without visiting
+  every branch. `scope=all` searches every ref. The search lists at most 1,000
   findings, the most severe first, and reports the true totals with a
-  `truncated` flag, counted within the scope. A scan diff lists at most 500 new and 500 fixed findings
-  and reports the full counts the same way.
-- A service overview reads all its numbers in one read-only transaction, so
-  they come from the same moment.
-
-Because of this, uploading an old report late does not replace newer results,
-and a job that is retried replaces only itself.
+  `truncated` flag. A scan diff lists at most 500 new and 500 fixed findings and
+  reports the full counts the same way.
+- A service overview reads all its numbers in one read-only transaction, so they
+  all come from the same moment.
 
 ## Key design decisions
 
-| Decision | Reason |
-|---|---|
-| **No GitLab API token.** Scanopsis stores no personal or project access token for GitLab. The only GitLab credential it keeps is the secret of the sign-in application, encrypted. | A stored token is a credential to protect, rotate and scope. Scanopsis needs only three things from GitLab: sign-in (a user signs in themselves), group membership (read with that user's own token during sign-in), and signing keys (public). |
-| **GitLab CI ID tokens for uploads.** | GitLab creates a short-lived token for each job and signs it. Scanopsis checks the signature against the public keys of your GitLab. There is no shared upload secret to create, store or leak, and the token proves the project, pipeline, job, ref and commit. |
+| Decision | Why |
+| --- | --- |
+| **No GitLab API token.** Scanopsis stores no personal or project access token for GitLab. Its only GitLab credential is the secret of the sign-in application, encrypted. | A stored token is a credential to protect, rotate and scope. Scanopsis needs only three things from GitLab: sign-in (users sign in themselves), group membership (read with the user's own token during sign-in), and the signing keys (public). |
+| **GitLab CI ID tokens for uploads.** | GitLab creates and signs a short-lived token for each job. Scanopsis checks it against your GitLab's public keys. There is no shared upload secret to create, store or leak, and the token proves the project, pipeline, job, ref and commit. |
 | **Current state follows the Trivy report time.** | The dashboards describe what Trivy found and when. Using the report time makes the result independent of upload order and network delays. |
-| **Raw report kept compressed, for a limited time.** | The compressed original lets you check any number against what Trivy wrote: `scanopsis admin export-report` writes it out for `trivy convert`. No page or API reads it, and it is most of the database and of every backup, so retention empties it 30 days after the scan unless the scan is current. A cleared report cannot be exported. |
-| **Settings seeded from the environment, then owned by the database.** | A new deployment can start from a file. Afterwards administrators change settings without a restart, and an old environment file cannot silently undo their changes. See [configuration](configuration.md#two-kinds-of-settings). |
-| **Mandatory two-factor authentication.** | Scanopsis shows vulnerability data for every service. Every account, including GitLab accounts, enrols a TOTP app. |
-| **One binary and one database.** | The load is small: a few thousand uploads a day. Fewer parts means fewer things to run, secure and upgrade. |
-| **Secrets encrypted with one key from the environment.** | The database holds TOTP secrets and the credentials entered on the Settings page. A backup alone is useless without the key. See [the secret key](configuration.md#the-secret-key). |
+| **The original report is kept compressed, for a while.** | It lets you check any number against what Trivy wrote: `scanopsis admin export-report` writes it out for `trivy convert`. No page or API reads it. It is also most of the database and of every backup, so retention empties it 30 days after the scan, unless the scan is current. A cleared report cannot be exported. |
+| **Settings start from the environment, then live in the database.** | A new deployment can start from a file. Afterwards administrators change settings without a restart, and an old environment file cannot quietly undo their changes. See [configuration](configuration.md). |
+| **Two-factor authentication for everyone.** | Scanopsis shows vulnerability data for every service, so every account, GitLab accounts too, enrols an authenticator app (TOTP). |
+| **One binary and one database.** | The load is small: a few thousand uploads a day. Fewer parts means less to run, secure and upgrade. |
+| **Secrets encrypted with one key from the environment.** | The database holds two-factor secrets and the credentials entered on the Settings page. A backup is useless without the key. See [configuration](configuration.md). |
 
-### Single instance
+### Run one server per database
 
-Run one Scanopsis server per database. The design does not support more:
+The design supports one Scanopsis server per database, not more:
 
-- Rate limits and the setup token are kept in memory. Each server would have its own.
+- Rate limits and the setup token live in memory, so each server would have its
+  own.
 - The settings are read into memory at start and updated in the server that
   handled the change. Another server would not see the change until it restarts.
 - The SonarQube sync and the retention job use database advisory locks, so a
-  second server does not corrupt data, but that is a safety net, not support.
+  second server does not corrupt data. That is a safety net, not support.
 
 For availability, rely on the container restart policy and on database backups.
+
+---
+
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
