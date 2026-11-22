@@ -120,6 +120,8 @@ export interface Job {
   jobId: number;
   audience?: string;
   ref?: string;
+  /** Whether the ref is protected; true unless set. */
+  refProtected?: boolean;
 }
 
 /** Asks the fake GitLab to sign a CI ID token for the job. */
@@ -133,7 +135,7 @@ export async function mintToken(request: APIRequestContext, job: Job): Promise<s
       pipeline_id: String(job.pipelineId),
       job_id: String(job.jobId),
       ref: job.ref ?? 'main',
-      ref_protected: 'true',
+      ref_protected: String(job.refProtected ?? true),
       sha: '0123456789abcdef0123456789abcdef01234567',
     },
   });

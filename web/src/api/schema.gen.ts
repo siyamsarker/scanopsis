@@ -664,7 +664,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Every service and artifact whose current state contains a vulnerability ID. */
+        /** Every service and artifact whose current state contains a vulnerability ID, by default on the dashboard branch of each service and on protected refs. */
         get: operations["searchVulnerabilities"];
         put?: never;
         post?: never;
@@ -1093,13 +1093,18 @@ export interface components {
         VulnerabilitySearch: {
             vuln_id: string;
             /**
+             * @description The scope that was searched, as asked for. The totals below count within it.
+             * @enum {string}
+             */
+            scope: "dashboard" | "all";
+            /**
              * Format: int64
-             * @description Number of unsuppressed findings of this ID in current scans, including any not listed in items.
+             * @description Number of unsuppressed findings of this ID in the current scans of the scope, including any not listed in items.
              */
             total_findings: number;
             /**
              * Format: int64
-             * @description Number of non-archived services with at least one such finding.
+             * @description Number of non-archived services with at least one such finding in the scope.
              */
             total_services: number;
             /** @description True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name. */
@@ -2937,6 +2942,8 @@ export interface operations {
         parameters: {
             query: {
                 id: string;
+                /** @description Which refs are searched. dashboard (the default): for each service the ref its dashboards show (the branch an administrator chose, else the ref with the most recent scan) and every protected ref, that is every ref whose latest scan of an artifact was protected. all: every ref of every service, which reads far more data and is slower. */
+                scope?: "dashboard" | "all";
             };
             header?: never;
             path?: never;

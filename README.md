@@ -16,7 +16,7 @@ results from your GitLab CI/CD pipelines in one view.
 - **One view of both tools.** A portfolio of all services with open
   vulnerabilities, quality gate and freshness; a dashboard per service, for
   the branch an administrator chooses, with trends across pipelines; a findings explorer with a "fix first" list of
-  packages; and a CVE search across services.
+  packages; and a CVE search across services (by default on the dashboard branches and the protected refs, optionally on every branch).
 - **Trivy uploads without shared secrets.** GitLab CI jobs upload image and
   secret scan reports, authenticated with GitLab CI/CD ID tokens. You can limit
   uploads to namespaces and to protected branches and tags.

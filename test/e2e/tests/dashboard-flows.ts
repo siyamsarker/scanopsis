@@ -400,7 +400,49 @@ export function registerDashboardFlows(session: Session): void {
     await page.getByLabel('Vulnerability ID').fill('CVE-2099-0001');
     await page.keyboard.press('Enter');
     await expect(m.getByText('No service is affected in its current scans.')).toBeVisible();
-    await expect(m).toContainText('CVE-2099-0001 does not appear in the latest scan of any service.');
+    await expect(m).toContainText('CVE-2099-0001 does not appear in the latest scan of any service, searching dashboard branches and protected refs.');
+  });
+
+  test('18a. the search covers dashboard branches and protected refs unless all branches are asked for', async ({ request }) => {
+    const page = root();
+    const m = main(page);
+    const scope = page.getByRole('radiogroup', { name: 'Search scope' });
+    const demo = { projectId: 44, projectPath: 'platform/scope-demo' };
+
+    // The service scans an unprotected branch with an older report than main.
+    // main is protected and is the ref its dashboards show; the finding that
+    // only the older report has is therefore found by "All branches" alone.
+    const onlyOld = previous.findings.find((f) => !currentKeys.has(findingKey(f)));
+    expect(onlyOld, 'a finding only the older report has').toBeDefined();
+    const id = onlyOld?.vulnId ?? '';
+    const onMain = await upload(request, current, { ...demo, pipelineId: 3001, jobId: 7001, ref: 'main' });
+    expect(onMain.status()).toBe(201);
+    const onBranch = await upload(request, previous, { ...demo, pipelineId: 3002, jobId: 7002, ref: 'feature/old', refProtected: false });
+    expect(onBranch.status()).toBe(201);
+
+    await page.goto(`/search?id=${id}`);
+    await expect(scope.getByRole('radio', { name: 'Dashboard branches and protected refs' })).toBeChecked();
+    await expect(m).toContainText('Searched: dashboard branches and protected refs');
+    await expect(m.getByRole('region', { name: 'scope-demo' })).toHaveCount(0);
+
+    await scope.getByRole('radio', { name: 'All branches' }).click();
+    await expect(page).toHaveURL(new RegExp(`id=${id}&scope=all`));
+    await expect(m).toContainText('Searched: all branches');
+    const hit = m.getByRole('region', { name: 'scope-demo' });
+    await expect(hit).toBeVisible();
+    await expect(hit).toContainText('feature/old');
+
+    // The scope is part of the address: a reload keeps it, and so does a new search.
+    await page.reload();
+    await expect(scope.getByRole('radio', { name: 'All branches' })).toBeChecked();
+    await expect(m.getByRole('region', { name: 'scope-demo' })).toBeVisible();
+    await page.getByLabel('Vulnerability ID').fill('CVE-2099-0001');
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL(/id=CVE-2099-0001&scope=all/);
+    await expect(m).toContainText('searching all branches.');
+
+    await scope.getByRole('radio', { name: 'Dashboard branches and protected refs' }).click();
+    await expect(page).toHaveURL(/\/search\?id=CVE-2099-0001$/);
   });
 
   test('19. admin: integrations, rejected uploads, audit log and archiving', async ({ request }) => {

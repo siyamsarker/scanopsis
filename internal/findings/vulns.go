@@ -250,27 +250,45 @@ type searchItemJSON struct {
 	Severity         string      `json:"severity"`
 }
 
+// Search scopes, the values of the scope parameter.
+const (
+	scopeDashboard = "dashboard" // the ref each service's dashboards show, plus protected refs
+	scopeAll       = "all"       // every ref
+)
+
 // search lists where a vulnerability ID is present in the current state of
-// every non-archived service. Suppressed findings are not listed: the
-// response has no way to flag them.
+// the non-archived services: by default of the ref each service's dashboards
+// show and of every protected ref, with scope=all of every ref. Suppressed
+// findings are not listed: the response has no way to flag them.
 func (f *Findings) search(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if !validSearchID(id) {
 		invalid(w, "The id parameter must be 3 to 100 characters: letters, digits, '-', '_', ':' and '.'.")
 		return
 	}
-	rows, err := f.q.FindingsSearch(r.Context(), store.FindingsSearchParams{VulnID: id, MaxRows: maxSearchResults})
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		scope = scopeDashboard
+	}
+	if scope != scopeDashboard && scope != scopeAll {
+		invalid(w, "The scope parameter must be dashboard or all.")
+		return
+	}
+	rows, err := f.q.FindingsSearch(r.Context(), store.FindingsSearchParams{
+		VulnID: id, AllRefs: scope == scopeAll, MaxRows: maxSearchResults,
+	})
 	if err != nil {
 		f.internalError(w, r, "cannot search vulnerabilities", err)
 		return
 	}
 	out := struct {
 		VulnID        string           `json:"vuln_id"`
+		Scope         string           `json:"scope"`
 		Items         []searchItemJSON `json:"items"`
 		TotalFindings int64            `json:"total_findings"`
 		TotalServices int64            `json:"total_services"`
 		Truncated     bool             `json:"truncated"`
-	}{VulnID: id, Items: make([]searchItemJSON, 0, len(rows))}
+	}{VulnID: id, Scope: scope, Items: make([]searchItemJSON, 0, len(rows))}
 	if len(rows) > 0 {
 		out.TotalFindings, out.TotalServices = rows[0].TotalFindings, rows[0].TotalServices
 		out.Truncated = out.TotalFindings > int64(len(rows))

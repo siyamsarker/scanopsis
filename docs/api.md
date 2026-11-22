@@ -463,7 +463,7 @@ Responses:
 
 ### `GET /api/v1/search/vulnerabilities`
 
-Every service and artifact whose current state contains a vulnerability ID.
+Every service and artifact whose current state contains a vulnerability ID, by default on the dashboard branch of each service and on protected refs.
 
 - Operation ID: `searchVulnerabilities`
 - Authentication: Session
@@ -473,6 +473,7 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | query | yes | string (minLength 3, maxLength 100) |  |
+| `scope` | query | no | string (one of `dashboard`, `all`, default dashboard) | Which refs are searched. dashboard (the default): for each service the ref its dashboards show (the branch an administrator chose, else the ref with the most recent scan) and every protected ref, that is every ref whose latest scan of an artifact was protected. all: every ref of every service, which reads far more data and is slower. |
 
 Responses:
 
@@ -1618,8 +1619,9 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `items` | array of object | yes |  |
-| `total_findings` | integer (int64) | yes | Number of unsuppressed findings of this ID in current scans, including any not listed in items. |
-| `total_services` | integer (int64) | yes | Number of non-archived services with at least one such finding. |
+| `scope` | string (one of `dashboard`, `all`) | yes | The scope that was searched, as asked for. The totals below count within it. |
+| `total_findings` | integer (int64) | yes | Number of unsuppressed findings of this ID in the current scans of the scope, including any not listed in items. |
+| `total_services` | integer (int64) | yes | Number of non-archived services with at least one such finding in the scope. |
 | `truncated` | boolean | yes | True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name. |
 | `vuln_id` | string | yes |  |
 

@@ -4,11 +4,16 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client';
-import { useVulnerabilitySearch, type VulnerabilitySearch } from '../api/findings';
+import {
+  useVulnerabilitySearch,
+  type SearchScope,
+  type VulnerabilitySearch,
+} from '../api/findings';
 import { DataTable } from '../components/DataTable';
 import { SearchInput } from '../components/inputs';
 import { Card, PageHeader } from '../components/layout';
 import { Mono } from '../components/Mono';
+import { Segmented } from '../components/Segmented';
 import { SeverityBadge } from '../components/Severity';
 import { EmptyState, ErrorState, SkeletonTable } from '../components/states';
 import type { Column } from '../components/tableCore';
@@ -19,6 +24,14 @@ type Hit = VulnerabilitySearch['items'][number];
 /** 3 to 100 characters: letters, digits and - _ : . */
 export const SEARCH_ID_PATTERN = /^[A-Za-z0-9_:.-]{3,100}$/;
 const HINT = 'Use 3 to 100 characters: letters, digits and - _ : .';
+const SCOPE_OPTIONS: { value: SearchScope; label: string }[] = [
+  { value: 'dashboard', label: 'Dashboard branches and protected refs' },
+  { value: 'all', label: 'All branches' },
+];
+const SCOPE_TEXT: Record<SearchScope, string> = {
+  dashboard: 'dashboard branches and protected refs',
+  all: 'all branches',
+};
 const EXAMPLES = ['CVE-2024-3094', 'CVE-2021-44228', 'GHSA-jfh8-c2jp-5v3q'];
 
 const columns: Column<Hit>[] = [
@@ -60,6 +73,7 @@ const columns: Column<Hit>[] = [
 ];
 
 function Results({ result }: { result: VulnerabilitySearch }) {
+  const scopeText = SCOPE_TEXT[result.scope];
   if (result.items.length === 0) {
     return (
       <Card padded={false}>
@@ -68,7 +82,8 @@ function Results({ result }: { result: VulnerabilitySearch }) {
           title="No service is affected in its current scans."
           body={
             <>
-              <Mono value={result.vuln_id} /> does not appear in the latest scan of any service.
+              <Mono value={result.vuln_id} /> does not appear in the latest scan of any service,
+              searching {scopeText}.
             </>
           }
         />
@@ -101,6 +116,9 @@ function Results({ result }: { result: VulnerabilitySearch }) {
             {result.items.length.toLocaleString('en-US')} most severe.
           </p>
         ) : null}
+        <p className="mt-1 text-sm text-text-muted">
+          Searched: <span className="text-text">{scopeText}</span>
+        </p>
         <p className="mt-1 text-sm text-text-muted">
           Newest scan{' '}
           <time dateTime={newest} title={formatExactTime(newest)} className="text-text">
@@ -135,7 +153,13 @@ export function SearchPage() {
   const idParam = params.get('id')?.trim() ?? '';
   const [rejected, setRejected] = useState<string | null>(null);
   const valid = SEARCH_ID_PATTERN.test(idParam);
-  const search = useVulnerabilitySearch(valid ? idParam : null);
+  const scope: SearchScope = params.get('scope') === 'all' ? 'all' : 'dashboard';
+  const search = useVulnerabilitySearch(valid ? idParam : null, scope);
+
+  /** The query string for an ID and a scope; the default scope is left out. */
+  function query(id: string, next: SearchScope): Record<string, string> {
+    return next === 'all' ? { id, scope: next } : { id };
+  }
 
   function submit(value: string) {
     const text = value.trim();
@@ -144,7 +168,7 @@ export function SearchPage() {
       setParams({}, { replace: false });
     } else if (SEARCH_ID_PATTERN.test(text)) {
       setRejected(null);
-      setParams({ id: text });
+      setParams(query(text, scope));
     } else {
       setRejected(text);
     }
@@ -174,13 +198,24 @@ export function SearchPage() {
         >
           {HINT}. Press Enter to search.
         </p>
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-sm text-text-muted">Search in</span>
+          <Segmented
+            label="Search scope"
+            options={SCOPE_OPTIONS}
+            value={scope}
+            onChange={(next) =>
+              setParams(valid ? query(idParam, next) : next === 'all' ? { scope: next } : {})
+            }
+          />
+        </div>
         <p className="text-sm text-text-muted">
           Examples:{' '}
           {EXAMPLES.map((example, index) => (
             <span key={example}>
               {index > 0 ? ', ' : ''}
               <Link
-                to={`/search?id=${example}`}
+                to={`/search?${new URLSearchParams(query(example, scope))}`}
                 onClick={() => setRejected(null)}
                 className="font-mono text-text underline decoration-border-strong underline-offset-2 hover:decoration-text"
               >

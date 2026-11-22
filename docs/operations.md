@@ -420,8 +420,29 @@ The rule for the branch a dashboard shows is:
 A branch name can be at most 255 characters, without control characters.
 Spaces at the start and end are removed. Every change is recorded in the
 audit log as `service.updated`, with the previous and the new branch. The
-cross-service CVE search lists the findings of every branch and is not
-affected.
+cross-service CVE search uses it too: unless you ask for all branches, it
+searches the dashboard branch of each service and every protected ref.
+
+## Vulnerability search
+
+**Search** in the header finds where a vulnerability ID (a CVE or GHSA number)
+is present in the current scans: the latest scan of each artifact on a ref. A
+switch under the box chooses which refs are searched:
+
+- **Dashboard branches and protected refs** (the default): for every service the
+  branch its dashboards show (see above) and every protected branch or tag,
+  that is every ref whose latest scan was protected. This is what the
+  services are judged by, and it stays fast with many short-lived branches.
+- **All branches**: every ref of every service, also unprotected branches
+  that nobody chose. It reads every current scan, so it takes longer: 25 to
+  30 ms at 500 services with 4 refs each, and about 0.3 s with 80,000
+  (service, branch, artifact) groups.
+
+The choice is part of the address (`/search?id=CVE-2024-3094&scope=all`) and
+the results say which scope was searched. The API takes `scope=dashboard` or
+`scope=all`. Suppressed findings are not listed, archived services are not
+searched, at most 1,000 findings are listed, the most severe first, and the
+totals shown count all matches within the scope.
 
 The dashboard branch is also the branch whose latest scans [data
 retention](#data-retention) never deletes. The latest scan of any other

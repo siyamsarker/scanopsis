@@ -34,6 +34,7 @@ func insertVulns(t *testing.T, pool *pgxpool.Pool, scan int64, prefix string, fr
 }
 
 type searchBody struct {
+	Scope  string `json:"scope"`
 	VulnID string `json:"vuln_id"`
 	Items  []struct {
 		Severity string `json:"severity"`

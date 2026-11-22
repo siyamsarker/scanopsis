@@ -172,35 +172,115 @@ WHERE service_id = @service_id AND ref = @ref AND scanned_at >= @since
 ORDER BY scanned_at, id;
 
 -- FindingsSearch lists the unsuppressed findings of a vulnerability ID in the
--- current state (latest scan per ref, artifact and kind) of every
--- non-archived service. The ID matches case-insensitively and exactly.
+-- current state (latest scan per ref, artifact and kind) of the non-archived
+-- services. The ID matches case-insensitively and exactly.
+--
+-- @all_refs says which refs are searched. When false, the default, a
+-- service's current state is searched for
+--   * the ref its dashboards show: the branch an administrator chose
+--     (services.default_ref), else the ref of its most recent scan, ties
+--     broken by ref (the rule of findings.pickRef and of the portfolio
+--     query), and
+--   * every protected ref: a (ref, artifact, kind) whose latest scan has
+--     ref_protected set (the rule data retention uses to keep a scan).
+-- When true, every ref of every service is searched.
 --
 -- It first finds the current scans by jumping from one (service, ref,
--- artifact, kind) group to the next in scans_current_cover_idx (a recursive
--- "skip scan"), then probes vulnerabilities_vuln_id_scan_idx once per current
--- scan. The work therefore follows the number of current scans, not the
--- number of historical findings with that ID: an ID that is in most scans
--- costs the same as a rare one. OFFSET 0 keeps the planner from turning the
--- per-scan probe into a join over every historical match.
+-- artifact, kind) group to the next (a recursive "skip scan"), then probes
+-- vulnerabilities_vuln_id_scan_idx once per current scan. The work therefore
+-- follows the number of current scans in scope, not the number of historical
+-- findings with that ID: an ID that is in most scans costs the same as a rare
+-- one. For the dashboard refs the jump stays inside one (service, ref) in
+-- scans_current_cover_idx. The protected groups are found by the same jump in
+-- scans_protected_idx, which holds only scans of protected refs, and each is
+-- checked against the latest scan of its group. Only @all_refs reads every
+-- group, which is about 100000 at 500 services after 90 days of branches.
+-- OFFSET 0 keeps the planner from turning the per-scan probe into a join over
+-- every historical match.
 --
 -- The most severe findings come first and at most @max_rows rows are
 -- returned; every row carries the true totals (matching current findings and
--- the services they are in), so the caller can report a cut list honestly.
+-- the services they are in, within the scope searched), so the caller can
+-- report a cut list honestly.
 -- name: FindingsSearch :many
-WITH RECURSIVE cur AS (
-    (SELECT id, service_id, ref, artifact_name, kind, scanned_at
-     FROM scans
-     ORDER BY service_id, ref, artifact_name, kind, scanned_at DESC, id DESC
-     LIMIT 1)
-    UNION ALL
-    SELECT n.*
-    FROM cur, LATERAL (
+WITH RECURSIVE all_cur AS (
+    SELECT * FROM (
         SELECT id, service_id, ref, artifact_name, kind, scanned_at
         FROM scans
-        WHERE (service_id, ref, artifact_name, kind) > (cur.service_id, cur.ref, cur.artifact_name, cur.kind)
+        ORDER BY service_id, ref, artifact_name, kind, scanned_at DESC, id DESC
+        LIMIT 1
+    ) first
+    WHERE @all_refs::boolean
+    UNION ALL
+    SELECT n.*
+    FROM all_cur, LATERAL (
+        SELECT id, service_id, ref, artifact_name, kind, scanned_at
+        FROM scans
+        WHERE (service_id, ref, artifact_name, kind) > (all_cur.service_id, all_cur.ref, all_cur.artifact_name, all_cur.kind)
         ORDER BY service_id, ref, artifact_name, kind, scanned_at DESC, id DESC
         LIMIT 1
     ) n
+), dash AS (
+    SELECT sv.id AS service_id, COALESCE(sv.default_ref, l.ref) AS ref
+    FROM services sv
+    LEFT JOIN LATERAL (
+        SELECT ref FROM scans WHERE service_id = sv.id ORDER BY scanned_at DESC, ref LIMIT 1
+    ) l ON sv.default_ref IS NULL
+    WHERE NOT sv.archived AND NOT @all_refs::boolean
+), dash_cur AS (
+    SELECT f.*
+    FROM dash d, LATERAL (
+        SELECT id, service_id, ref, artifact_name, kind, scanned_at
+        FROM scans
+        WHERE service_id = d.service_id AND ref = d.ref
+        ORDER BY artifact_name, kind, scanned_at DESC, id DESC
+        LIMIT 1
+    ) f
+    UNION ALL
+    SELECT n.*
+    FROM dash_cur, LATERAL (
+        SELECT id, service_id, ref, artifact_name, kind, scanned_at
+        FROM scans
+        WHERE service_id = dash_cur.service_id AND ref = dash_cur.ref
+          AND (artifact_name, kind) > (dash_cur.artifact_name, dash_cur.kind)
+        ORDER BY artifact_name, kind, scanned_at DESC, id DESC
+        LIMIT 1
+    ) n
+), prot_key AS (
+    SELECT * FROM (
+        SELECT service_id, ref, artifact_name, kind
+        FROM scans
+        WHERE ref_protected
+        ORDER BY service_id, ref, artifact_name, kind
+        LIMIT 1
+    ) first
+    WHERE NOT @all_refs::boolean
+    UNION ALL
+    SELECT n.*
+    FROM prot_key, LATERAL (
+        SELECT service_id, ref, artifact_name, kind
+        FROM scans
+        WHERE ref_protected
+          AND (service_id, ref, artifact_name, kind) > (prot_key.service_id, prot_key.ref, prot_key.artifact_name, prot_key.kind)
+        ORDER BY service_id, ref, artifact_name, kind
+        LIMIT 1
+    ) n
+), prot_cur AS (
+    SELECT l.id, l.service_id, l.ref, l.artifact_name, l.kind, l.scanned_at
+    FROM prot_key k, LATERAL (
+        SELECT id, service_id, ref, artifact_name, kind, scanned_at, ref_protected
+        FROM scans
+        WHERE service_id = k.service_id AND ref = k.ref AND artifact_name = k.artifact_name AND kind = k.kind
+        ORDER BY scanned_at DESC, id DESC
+        LIMIT 1
+    ) l
+    WHERE l.ref_protected
+), cur AS (
+    SELECT * FROM all_cur
+    UNION
+    SELECT * FROM dash_cur
+    UNION
+    SELECT * FROM prot_cur
 ), found AS MATERIALIZED (
     SELECT cur.service_id, cur.ref, cur.artifact_name, cur.id AS scan_id, cur.scanned_at,
            h.id AS vuln_row_id, h.pkg_name, h.installed_version, h.fixed_version, h.severity

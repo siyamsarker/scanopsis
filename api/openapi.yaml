@@ -734,10 +734,14 @@ paths:
   /api/v1/search/vulnerabilities:
     get:
       tags: [findings]
-      summary: Every service and artifact whose current state contains a vulnerability ID.
+      summary: Every service and artifact whose current state contains a vulnerability ID, by default on the dashboard branch of each service and on protected refs.
       operationId: searchVulnerabilities
       parameters:
         - { name: id, in: query, required: true, schema: { type: string, minLength: 3, maxLength: 100, example: CVE-2024-3094 } }
+        - name: scope
+          in: query
+          description: "Which refs are searched. dashboard (the default): for each service the ref its dashboards show (the branch an administrator chose, else the ref with the most recent scan) and every protected ref, that is every ref whose latest scan of an artifact was protected. all: every ref of every service, which reads far more data and is slower."
+          schema: { type: string, enum: [dashboard, all], default: dashboard }
       responses:
         "200": { description: Matches., content: { application/json: { schema: { $ref: "#/components/schemas/VulnerabilitySearch" } } } }
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1163,11 +1167,12 @@ components:
         generated_at: { type: string, format: date-time }
     VulnerabilitySearch:
       type: object
-      required: [vuln_id, items, truncated, total_findings, total_services]
+      required: [vuln_id, scope, items, truncated, total_findings, total_services]
       properties:
         vuln_id: { type: string }
-        total_findings: { type: integer, format: int64, description: "Number of unsuppressed findings of this ID in current scans, including any not listed in items." }
-        total_services: { type: integer, format: int64, description: "Number of non-archived services with at least one such finding." }
+        scope: { type: string, enum: [dashboard, all], description: "The scope that was searched, as asked for. The totals below count within it." }
+        total_findings: { type: integer, format: int64, description: "Number of unsuppressed findings of this ID in the current scans of the scope, including any not listed in items." }
+        total_services: { type: integer, format: int64, description: "Number of non-archived services with at least one such finding in the scope." }
         truncated: { type: boolean, description: "True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name." }
         items:
           type: array

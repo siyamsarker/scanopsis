@@ -163,13 +163,19 @@ export function useSecrets(id: number, ref: string | undefined, enabled: boolean
   });
 }
 
-export function useVulnerabilitySearch(vulnId: string | null) {
+/** Which refs a search covers: the dashboard branches and protected refs, or every ref. */
+export type SearchScope = 'dashboard' | 'all';
+
+export function useVulnerabilitySearch(vulnId: string | null, scope: SearchScope = 'dashboard') {
   return useQuery({
-    queryKey: ['findings', 'search', vulnId],
+    queryKey: ['findings', 'search', vulnId, scope],
     enabled: vulnId !== null,
     queryFn: async () =>
       unwrap(
-        await api.GET('/api/v1/search/vulnerabilities', { params: { query: { id: vulnId! } } }),
+        await api.GET('/api/v1/search/vulnerabilities', {
+          // The default scope is left out of the URL, as the API's default.
+          params: { query: scope === 'all' ? { id: vulnId!, scope } : { id: vulnId! } },
+        }),
       ),
   });
 }

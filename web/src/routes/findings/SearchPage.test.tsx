@@ -38,6 +38,7 @@ function searchApi(items: object[], extra?: Handler): Handler {
       const id = new URL(call.path, 'http://x').searchParams.get('id');
       return json(200, {
         vuln_id: id,
+        scope: new URL(call.path, 'http://x').searchParams.get('scope') ?? 'dashboard',
         items,
         truncated: false,
         total_findings: items.length,
@@ -101,6 +102,7 @@ describe('vulnerability search', () => {
       if (call.path.startsWith('/api/v1/search/vulnerabilities')) {
         return json(200, {
           vuln_id: 'CVE-2024-3094',
+          scope: 'dashboard',
           items: [ITEMS[0]],
           truncated: true,
           total_findings: 4200,
@@ -177,6 +179,61 @@ describe('vulnerability search', () => {
     expect(screen.getByRole('searchbox', { name: 'Vulnerability ID' })).toHaveValue(
       'CVE-2021-44228',
     );
+  });
+
+  it('searches dashboard branches and protected refs by default and says so', async () => {
+    const { calls } = mockFetch(searchApi(ITEMS));
+    renderApp('/search?id=CVE-2024-3094');
+    expect(await screen.findByText('dashboard branches and protected refs')).toBeInTheDocument();
+    expect(
+      screen.getByRole('radio', { name: 'Dashboard branches and protected refs' }),
+    ).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'All branches' })).not.toBeChecked();
+    expect(searchCalls(calls)[0].path).toBe('/api/v1/search/vulnerabilities?id=CVE-2024-3094');
+  });
+
+  it('switches to all branches, reflects it in the URL and searches again', async () => {
+    const { calls } = mockFetch(searchApi(ITEMS));
+    renderApp('/search?id=CVE-2024-3094');
+    await screen.findByText('dashboard branches and protected refs');
+    fireEvent.click(screen.getByRole('radio', { name: 'All branches' }));
+    expect(await screen.findByText('all branches')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/search?id=CVE-2024-3094&scope=all');
+    expect(searchCalls(calls).map((c) => c.path)).toEqual([
+      '/api/v1/search/vulnerabilities?id=CVE-2024-3094',
+      '/api/v1/search/vulnerabilities?id=CVE-2024-3094&scope=all',
+    ]);
+    // Back to the default: the parameter leaves the URL.
+    fireEvent.click(screen.getByRole('radio', { name: 'Dashboard branches and protected refs' }));
+    await screen.findByText('dashboard branches and protected refs');
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/search\?id=CVE-2024-3094$/);
+  });
+
+  it('opens with the scope from the URL and keeps it for a new search', async () => {
+    const { calls } = mockFetch(searchApi([ITEMS[0]]));
+    renderApp('/search?id=CVE-2024-3094&scope=all');
+    expect(await screen.findByText('all branches')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'All branches' })).toBeChecked();
+    const box = screen.getByRole('searchbox', { name: 'Vulnerability ID' });
+    fireEvent.change(box, { target: { value: 'CVE-2021-44228' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    await screen.findByText(
+      (_, el) =>
+        el?.tagName === 'P' && el.textContent?.startsWith('CVE-2021-44228 affects') === true,
+    );
+    expect(searchCalls(calls).at(-1)?.path).toBe(
+      '/api/v1/search/vulnerabilities?id=CVE-2021-44228&scope=all',
+    );
+    expect(screen.getByRole('link', { name: 'CVE-2024-3094' })).toHaveAttribute(
+      'href',
+      '/search?id=CVE-2024-3094&scope=all',
+    );
+  });
+
+  it('names the scope when nothing is found', async () => {
+    mockFetch(searchApi([]));
+    renderApp('/search?id=CVE-2000-0001&scope=all');
+    expect(await screen.findByText(/searching all branches\./)).toBeInTheDocument();
   });
 
   it('shows an error with a retry', async () => {

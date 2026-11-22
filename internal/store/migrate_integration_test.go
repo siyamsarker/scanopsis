@@ -166,7 +166,7 @@ func TestMigrateQueryIndexes(t *testing.T) {
 	}
 
 	after := indexes(t, pool)
-	for _, name := range []string{"vulnerabilities_scan_key_idx", "scans_current_cover_idx", "scans_latest_ref_idx", "vulnerabilities_vuln_id_scan_idx"} {
+	for _, name := range []string{"vulnerabilities_scan_key_idx", "scans_current_cover_idx", "scans_latest_ref_idx", "vulnerabilities_vuln_id_scan_idx", "scans_protected_idx"} {
 		if valid, ok := after[name]; !ok || !valid {
 			t.Errorf("index %s: present %v, valid %v", name, ok, valid)
 		}

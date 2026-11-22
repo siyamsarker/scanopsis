@@ -238,10 +238,16 @@ millions of findings):
   vulnerability ID, package and target. A hash is used because those fields
   can be 4,096 bytes long, more than an index entry can hold; the query also
   compares the real values.
-- The vulnerability search checks every current scan once, through an index
-  on the lower-case vulnerability ID and the scan. It lists at most 1,000
+- The vulnerability search checks the current scans in its scope once, through
+  an index on the lower-case vulnerability ID and the scan. By default the
+  scope is, for each service, the ref its dashboards show (the chosen
+  dashboard branch, else the ref with the most recent scan) and every
+  protected ref (a ref whose latest scan of an artifact was protected); a
+  partial index on the scans of protected refs finds the latter without
+  visiting every branch. `scope=all` searches every ref, which reads every
+  current scan. It lists at most 1,000
   findings, the most severe first, and reports the true totals with a
-  `truncated` flag. A scan diff lists at most 500 new and 500 fixed findings
+  `truncated` flag, counted within the scope. A scan diff lists at most 500 new and 500 fixed findings
   and reports the full counts the same way.
 - A service overview reads all its numbers in one read-only transaction, so
   they come from the same moment.
