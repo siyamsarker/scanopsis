@@ -1,24 +1,45 @@
 # Security policy
 
-## Reporting a vulnerability
+This page tells you how to report a security problem in Scanopsis privately, and what happens next.
 
-Please do not report security vulnerabilities in public issues, pull requests or discussions.
+**Audience:** Everyone · **Back to:** [README](README.md) · [All guides](README.md#documentation)
 
-Report them privately using one of the following methods.
+---
 
-- **Preferred:** use GitHub private vulnerability reporting. Open the [Security advisories page](https://github.com/siyamsarker/scanopsis/security/advisories/new), or select **Report a vulnerability** under the repository's **Security** tab.
-- **Alternative:** send an e-mail to [siyam.ts@gmail.com](mailto:siyam.ts@gmail.com).
+## Report a vulnerability
 
-Please include the following information in your report:
+Please do not report security problems in public issues, pull requests or
+discussions. Report them privately instead:
 
-- The affected version or commit.
-- Steps to reproduce the issue.
-- The impact you expect, including what an attacker could access or change.
+- **Preferred:** use GitHub's private vulnerability reporting. Open the
+  [new advisory form](https://github.com/siyamsarker/scanopsis/security/advisories/new),
+  or select **Report a vulnerability** on the repository's **Security** tab.
+- **Or** send an e-mail to [siyam.ts@gmail.com](mailto:siyam.ts@gmail.com).
 
-## Response
+Please include:
 
-The maintainer aims to acknowledge reports within 5 working days. This is a best-effort commitment, and timelines for a fix depend on its complexity. The maintainer will keep you informed of progress and will credit you in the advisory if you wish.
+- The affected version (for example `v0.2.0`) or commit.
+- The steps to reproduce the problem.
+- The impact you expect: what an attacker could see or change.
+
+## What happens next
+
+The maintainer aims to confirm your report within 5 working days. This is a
+best effort: the time to a fix depends on the problem. You hear about the
+progress, and you are credited in the advisory if you wish.
 
 ## Supported versions
 
-Only the newest version branch (`release/X.Y.Z`, see [versions and branches](docs/versions.md)) is supported. Version branches never change, so a security fix is made on `main` and published as a new version. No version has been published yet; until the first one exists, only `main` receives fixes, and it is development code.
+Only the newest version is supported, today **0.2.0** (the branch
+`release/0.2.0`). Version branches never change, so a security fix lands on
+`main` and ships as a new version. Upgrade to get it, as described in
+[versions and upgrades](docs/versions.md#upgrade-to-a-newer-version).
+
+## Hardening your installation
+
+The [security guide](docs/security.md) explains the threat model, the
+controls Scanopsis has, and a checklist for a safe deployment.
+
+---
+
+[Back to the README](README.md) · [All guides](README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)

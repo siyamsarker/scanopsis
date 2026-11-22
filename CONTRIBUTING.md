@@ -1,112 +1,150 @@
-# Contributing to Scanopsis
+# Contributing
 
-Thank you for your interest in contributing to Scanopsis. This guide explains how to set up your environment, run the checks, and submit changes.
+This page shows you how to propose a change to Scanopsis: the checks to run, how to write commits, and what a good pull request contains.
 
-## Ways to contribute
+**Audience:** Developers · **Back to:** [README](README.md) · [All guides](README.md#documentation)
 
-You can contribute in several ways:
+---
 
-- Report a bug or request a feature by opening an issue.
+Thank you for helping. Every fix, test and doc improvement counts.
+
+## Ways to help
+
+- Report a bug or ask for a feature in an
+  [issue](https://github.com/siyamsarker/scanopsis/issues).
 - Improve the documentation.
-- Fix a bug or implement a feature by submitting a pull request.
+- Fix a bug or build a feature in a pull request.
 
-Open an issue before you start a large change. This gives the maintainer and other contributors a chance to discuss the approach before you spend time on the implementation.
+For a large change, open an issue first. You can agree on the approach before
+you spend time on the code.
 
-## Prerequisites
+Found a security problem? Do not open an issue. Follow the
+[security policy](SECURITY.md) instead.
 
-Install the following tools before you start.
+## Set up
 
-- Go 1.27
-- Node.js 26 LTS. The exact version is set in the `.nvmrc` file at the root of the repository.
-- GNU Make
-- Docker, if you want to build the container image
+You need Go 1.27, Node.js 26 (the exact version is in `.nvmrc`), GNU Make,
+and Docker for the image and the slower tests. The
+[development guide](docs/development.md) shows how to build, run the server
+against a local database, and work on the web interface.
 
-## Local checks
+## Run the checks
 
-Run the checks before you open a pull request. The repository has no CI service, so reviewers rely on them.
+The repository has no CI service, so your local checks are the gate. Run them
+before you open a pull request:
 
-1. Run `make check` to run the fast checks. It performs the following steps:
-   - Checks that Go code is formatted.
-   - Lints the Go code.
-   - Runs the Go tests with the race detector.
-   - Checks Go dependencies for known vulnerabilities with `govulncheck`.
-   - Lints and type-checks the web interface.
-   - Runs the web unit tests.
-   - Audits the runtime npm dependencies for known vulnerabilities with `npm audit` (`make web-audit`).
-   - Builds `bin/scanopsis` with the web interface embedded.
-2. If `make check` reports formatting problems, run `make fmt` to format the Go code, and then run `make check` again.
-3. Run `make help` to list all available targets.
+```sh
+make check
+```
 
-To build the container image, run `make image`.
+`make check` formats and lints the Go code, runs the Go tests with the race
+detector, checks Go dependencies with `govulncheck`, lints, type-checks and
+tests the web interface, builds `bin/scanopsis`, checks the licence headers,
+tests the helper scripts, checks dependency licences and audits the runtime
+npm dependencies. If it reports formatting problems, run `make fmt` and try
+again. `make help` lists every target.
 
-Slower checks are not part of `make check`. They need Docker. Run them when you change code that they cover:
+The slower checks need Docker. Run the ones that cover your change:
 
-- `make coverage` enforces the test coverage minimums for Go and the web interface.
-- `make perf` checks the performance targets: bundle size, start-up time, idle memory, and the speed of the portfolio and report upload.
-- `make test-integration` runs the tests that need PostgreSQL, and `make e2e` the end-to-end tests in a browser.
-- `make image-scan` builds the image and scans it with Trivy.
-- `make dco` checks that your commits are signed off.
+| Command | What it checks |
+| --- | --- |
+| `make test-integration` | Go tests against a real PostgreSQL. |
+| `make e2e` | End-to-end tests in a browser. |
+| `make coverage` | The coverage minimums for Go and the web interface. |
+| `make perf` | Bundle size, start-up time, idle memory and response times. |
+| `make generate-check` | Generated code and `docs/api.md` are up to date. |
+| `make image-scan` | Builds the image and scans it with Trivy. |
+| `make dco` | Every commit is signed off. |
 
-See the [development guide](docs/development.md) for the details.
+## Write commit messages
 
-## Commit messages
-
-Write commit messages that follow the [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/) specification. A commit message has a type, an optional scope, and a short description. Examples:
+Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/):
+a type, an optional scope, and a short description.
 
 ```text
 feat(ingest): accept gzip-compressed reports
 fix(web): keep severity order in trend chart
 ```
 
-Use a body after a blank line to explain what changed and why, when the reason is not obvious from the description.
+After a blank line, add a body that says what changed and why, when the
+reason is not obvious.
 
-## Developer Certificate of Origin
+## Sign off your commits
 
-Every commit must be signed off to certify that you have the right to submit it under the project licence. Sign-off is based on the [Developer Certificate of Origin](https://developercertificate.org/), which you accept by adding a `Signed-off-by` line to each commit. The line states your name and e-mail address, and it is added when you commit with the `-s` flag:
+Every commit needs a `Signed-off-by` line. With it you certify the
+[Developer Certificate of Origin](https://developercertificate.org/): that you
+have the right to submit the change under the project's licence. Commit with
+`-s` to add it:
 
 ```sh
 git commit -s -m "fix(web): keep severity order in trend chart"
 ```
 
-If you forgot the sign-off on your latest commit, amend it:
+Forgot it on the last commit? Run `git commit --amend -s`. On several commits,
+run `git rebase --signoff main`, then push again with
+`git push --force-with-lease`.
 
-```sh
-git commit --amend -s
-```
+## Open a pull request
 
-If you forgot the sign-off on several commits, rebase your branch onto `main` and add the sign-off to each commit:
+Keep each pull request small and about one thing. Open it from your fork
+against `main`. Version branches (`release/X.Y.Z`) never change, so they
+never take pull requests; see [versions and upgrades](docs/versions.md).
 
-```sh
-git rebase --signoff main
-```
+Before you open it:
 
-Then push the branch again with `git push --force-with-lease`.
+1. Add or update tests for every change in behaviour.
+2. Update the guides your change affects (see below).
+3. Make sure `make check` passes.
 
-## Pull requests
+In the description, say:
 
-Keep each pull request small and focused on a single change. Open it from your fork and target `main`. The repository has only two kinds of branches: `main` and the frozen `release/X.Y.Z` version branches, which never accept pull requests, see [versions and branches](docs/versions.md). Follow these guidelines:
+- What changed, and why.
+- How you tested it.
+- Which tests and guides you added or updated.
+- That your commits are signed off.
 
-1. Add or update tests for any change in behaviour.
-2. Update the documentation that is affected by the change.
-3. Add an entry under the `Unreleased` section of `CHANGELOG.md`.
-4. Make sure `make check` passes.
-5. Write a description that says what changed and why, and how you tested it. Say which tests, documentation and changelog entries you added or updated, and confirm that your commits are signed off.
+## Keep the guides current
 
-## Code of conduct
+A change to a feature that users see, or to a critical part such as sign-in,
+uploads, settings or the database, updates the matching guide **in the same
+pull request**. A pull request that changes behaviour without its guide is not
+finished.
 
-All participants must follow the [Code of Conduct](CODE_OF_CONDUCT.md). Report unacceptable behaviour to the contact address given in that document.
-
-## Security issues
-
-Do not report security vulnerabilities in public issues or pull requests. Follow the process in [SECURITY.md](SECURITY.md) instead.
+| If you change... | Update |
+| --- | --- |
+| Features, requirements, screenshots | [README](README.md) |
+| Install steps, first start | [Getting started](docs/getting-started.md) |
+| A setting, variable, default or validation message | [Configuration reference](docs/configuration.md) |
+| Compose files, proxy, sizing, other ways to run | [Deployment](docs/deployment.md) |
+| Administration commands, backup, retention, health checks | [Operations](docs/operations.md) |
+| An error message or a failure mode | [Troubleshooting](docs/troubleshooting.md) |
+| Sign-in, sessions, two-factor, secrets, limits | [Security model](docs/security.md) |
+| Trivy upload or the CI script | [GitLab CI](docs/integrations/gitlab-ci.md) |
+| GitLab sign-in | [GitLab sign-in](docs/integrations/gitlab-sso.md) |
+| The SonarQube integration | [SonarQube](docs/integrations/sonarqube.md) |
+| The API | `api/openapi.yaml`, then run `make generate` to rebuild [docs/api.md](docs/api.md) |
+| How numbers are counted or shown | [Verifying the numbers](docs/verification.md) |
+| Components, data flow, schema | [Architecture](docs/architecture.md) |
+| Build, tooling, checks | [Development](docs/development.md) and this page |
+| Versioning or the release steps | [Versions and upgrades](docs/versions.md) |
 
 ## Licence
 
-Scanopsis is licensed under the [Apache License 2.0](LICENSE). By contributing, you agree that your contributions are licensed under the same licence.
+Scanopsis is licensed under the [Apache License 2.0](LICENSE). By contributing,
+you agree that your contributions are licensed under the same licence.
 
-Every new source file must begin with the following SPDX header:
+Every new source file starts with this header (in the comment style of its
+language); `make headers` checks it:
 
 ```text
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 ```
+
+## Code of conduct
+
+Everyone who takes part follows the [code of conduct](CODE_OF_CONDUCT.md).
+
+---
+
+[Back to the README](README.md) · [All guides](README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
