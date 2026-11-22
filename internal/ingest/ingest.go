@@ -61,7 +61,45 @@ const (
 	// codeUnavailable: the database could not be reached or could not take
 	// the work. The upload was not stored; retry.
 	codeUnavailable = "unavailable"
+	// codeProjectLimited: the project uploaded more often than it may.
+	codeProjectLimited = "project_rate_limited"
+	// codeJobLimited: one job uploaded more different artifacts than it may.
+	codeJobLimited = "job_artifact_limit"
 )
+
+// Defaults of the per-project limiter: a project may upload DefaultProjectBurst
+// reports at once and then one more every DefaultProjectEvery. The rate is
+// per project, not per client address, so it holds however many runners a
+// project has and whatever addresses they use.
+//
+// The figures come from the size of the installation: 3,000 pipelines a day
+// over 500 services is six a day for the average service. A monorepo that
+// scans 30 images uploads 31 reports per pipeline. The burst of 100 takes three
+// such pipelines finishing together. The refill of one report per 10 s is 360
+// an hour and 8,640 a day, which is 11 such pipelines an hour, round the
+// clock: far above the average project, and 10 times the average day fits in
+// working hours. A project that scripts uploads faster than that is answered 429,
+// and the retries of the script spread the rest out. What the limit bounds is
+// the growth of the database from one project: scans of different artifacts
+// are never replaced, so without it a project could add them as fast as the
+// network allows.
+const (
+	DefaultProjectBurst = 100
+	DefaultProjectEvery = 10 * time.Second
+)
+
+// MaxArtifactsPerJob is the most different artifacts (artifact name and kind
+// on the job's ref) one job may store. A job normally uploads one report for
+// each image it builds and one secret scan; 50 leaves room for a large
+// monorepo job and stops one job from creating scans without end, which the
+// project rate would only slow down. Uploading again an artifact the job
+// already has replaces it and does not count.
+const MaxArtifactsPerJob = 50
+
+// jobLimitedRetryAfter is the Retry-After value, in seconds, of a response for
+// a job over its artifact limit. Waiting does not help that job; the value is
+// above the retry time of the script in the CI guide so that it gives up.
+const jobLimitedRetryAfter = 3600
 
 // DefaultReadTimeout is how long an admitted upload has to send its whole
 // body when Options.ReadTimeout is 0. It replaces the server's read timeout
@@ -114,6 +152,10 @@ type Options struct {
 	AdmitWait time.Duration
 	// Limiter limits uploads per client address. nil means no limit.
 	Limiter *auth.RateLimiter
+	// ProjectLimiter limits uploads per GitLab project, keyed by the project
+	// ID of the verified token. nil means a burst of DefaultProjectBurst and
+	// then one per DefaultProjectEvery.
+	ProjectLimiter *auth.RateLimiter
 	// AuditLimiter limits how many rejections per client address are written
 	// to the audit log. nil means a burst of DefaultAuditBurst and then one
 	// per DefaultAuditEvery.
@@ -172,6 +214,9 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	}
 	if opts.AdmitWait <= 0 {
 		opts.AdmitWait = DefaultAdmitWait
+	}
+	if opts.ProjectLimiter == nil {
+		opts.ProjectLimiter = auth.NewRateLimiter(DefaultProjectEvery, DefaultProjectBurst, opts.Now)
 	}
 	if opts.AuditLimiter == nil {
 		opts.AuditLimiter = auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, opts.Now)
@@ -237,8 +282,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 
 	if l := i.opts.Limiter; l != nil {
 		if ok, wait := l.Allow(limitKey(ip)); !ok {
-			secs := max(1, int(wait/time.Second)+btoi(wait%time.Second != 0))
-			w.Header().Set("Retry-After", strconv.Itoa(secs))
+			w.Header().Set("Retry-After", strconv.Itoa(retrySeconds(wait)))
 			// Neither audited nor logged above debug level: the client needs
 			// no credentials to cause it, so it could fill the audit log.
 			i.log.DebugContext(ctx, "upload rate limited", "ip", ipString(ip))
@@ -291,6 +335,17 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	admitted = len(snap.IngestAllowedNamespaces) > 0
+
+	// A project is limited by its own rate, before its body is read. The
+	// rejection is audited, bounded per client address like those of a
+	// project that was not checked against an allow-list: a project that goes
+	// on uploading must not fill the audit log either.
+	if ok, wait := i.opts.ProjectLimiter.Allow(strconv.FormatInt(claims.ProjectID, 10)); !ok {
+		w.Header().Set("Retry-After", strconv.Itoa(retrySeconds(wait)))
+		i.reject(ctx, w, ip, claims, true, http.StatusTooManyRequests, codeProjectLimited,
+			"This project uploaded too often. Retry later.", "project_id", claims.ProjectID)
+		return
+	}
 
 	if mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mt != "application/json" {
 		reject(http.StatusUnsupportedMediaType, codeMediaType, "Content-Type must be application/json.")
@@ -383,6 +438,12 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, errServiceArchived):
 		reject(http.StatusConflict, codeArchived, "The service for this project is archived. Ask an administrator to unarchive it.")
+		return
+	case errors.Is(err, errJobArtifacts):
+		w.Header().Set("Retry-After", strconv.Itoa(jobLimitedRetryAfter))
+		i.reject(ctx, w, ip, claims, true, http.StatusTooManyRequests, codeJobLimited,
+			"This job already uploaded "+strconv.Itoa(MaxArtifactsPerJob)+" different artifacts, which is the most one job may upload. Uploading again one of them replaces it.",
+			"job_artifacts", MaxArtifactsPerJob)
 		return
 	case errors.Is(err, errPathTaken):
 		reject(http.StatusConflict, codeConflict,
@@ -611,9 +672,11 @@ func ipString(a netip.Addr) string {
 	return a.Unmap().String()
 }
 
-func btoi(b bool) int {
-	if b {
-		return 1
+// retrySeconds is wait as a Retry-After value: whole seconds, at least one.
+func retrySeconds(wait time.Duration) int {
+	secs := int(wait / time.Second)
+	if wait%time.Second != 0 {
+		secs++
 	}
-	return 0
+	return max(1, secs)
 }

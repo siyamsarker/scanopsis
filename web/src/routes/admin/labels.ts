@@ -14,6 +14,10 @@ export const rejectionReasons: Record<string, string> = {
   service_archived: 'The service is archived and receives no new uploads.',
   service_conflict: 'The project path conflicts with another service.',
   gitlab_unavailable: 'Scanopsis could not reach GitLab to verify the project.',
+  busy: 'Scanopsis was processing other uploads and had no memory free for this one in time.',
+  request_timeout: 'The upload did not send its whole body within the time allowed.',
+  project_rate_limited: 'The project uploaded more often than the per-project limit allows.',
+  job_artifact_limit: 'One job uploaded more different artifacts than a job may.',
 };
 
 /** Plain label for each audit action. */

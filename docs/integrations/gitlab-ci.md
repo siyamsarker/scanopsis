@@ -250,7 +250,7 @@ minutes, so a short outage does not lose a scan. curl decides what to retry:
 | Answer | Cause | Retried |
 | --- | --- | --- |
 | `408` `request_timeout` | The body did not arrive within 5 minutes. | yes |
-| `429` | Too many uploads from the address (`too_many_requests`). | yes, after the `Retry-After` seconds |
+| `429` | Too many uploads from the address (`too_many_requests`) or from the project (`project_rate_limited`), or the job is over its artifact limit (`job_artifact_limit`). | yes, after the `Retry-After` seconds; not for a job over its limit, whose `Retry-After` is an hour, so curl gives up |
 | `500`, `502`, `504` | An error in Scanopsis, or a proxy that could not reach it. | yes |
 | `503` | Scanopsis is busy (`busy`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`); each carries `Retry-After` except the GitLab one. | yes |
 | Connection refused, timeout | Scanopsis is down or restarting. | yes (`--retry-connrefused`) |
@@ -261,6 +261,26 @@ the last row and delay the job. Retrying is safe: a repeated upload of the same
 job, image and kind replaces the earlier one. curl 7.66 or later honours
 `Retry-After`; 8 retries with curl's doubling wait (1 s, 2 s, 4 s, up to 128 s)
 and `--retry-max-time 300` give the four minutes.
+
+Two limits protect the database from one project. They apply to projects
+that passed the namespace and protected-branch checks, and both are answered `429` with `Retry-After` and
+recorded in the audit log like other rejections (at most 10 per client address at
+once, then one more per minute):
+
+- **Uploads per project.** A project may upload 100 reports at once and then
+  one more every 10 seconds (360 an hour). The limit is per GitLab project, not
+  per address, so it does not matter how many runners the project has. It is
+  sized for 3,000 pipelines a day over 500 services, which is six pipelines a
+  day for the average service: a monorepo that scans 30 images uploads 31 reports
+  per pipeline, so three such pipelines can finish together, and 11 an hour can
+  go on all day. A project above that gets `project_rate_limited`, and the
+  retries of the script spread the rest out. Other projects are not affected.
+- **Artifacts per job.** One job may store at most 50 different artifacts
+  (the artifact name and the kind, on the job's branch or tag). Uploading again
+  an artifact the job already has replaces it and does not count. The 51st gets
+  `job_artifact_limit`. Scans of different artifacts are never replaced by
+  later ones, so without this limit one job could create them without end. Split
+  a job that scans more than 50 images into several jobs.
 
 Scanopsis reads an upload for at most 5 minutes after it accepted it. The limit
 is its own, longer than the 30 seconds of the rest of the server, so a large
@@ -298,9 +318,12 @@ records at most 10 of those rejections per client address at once and then one
 more per minute; the others are answered the same way but appear only in the
 server log at debug level. When allowed namespaces are set, every later
 rejection (media type, kind, report too large or invalid, archived service,
-service conflict, busy) comes from a project you chose to accept and is always
-recorded. Without allowed namespaces any project can get that far, so these
-rejections are bounded per client address in the same way. A rate-limited
+service conflict, busy, request timeout) comes from a project you chose to accept
+and is always recorded. Without allowed namespaces any project can get that far,
+so these rejections are bounded per client address in the same way. The
+rejections for the project limits (`project_rate_limited`, `job_artifact_limit`)
+are always bounded per client address, because a project that keeps uploading
+would otherwise fill the audit log. A rate-limited
 request (`429`) is never recorded. The "Recorded rejections" number on the
 Integrations page counts what was recorded.
 
@@ -356,6 +379,8 @@ error line above it: wrong URL, DNS, TLS or firewall).
 | `409` `service_archived`: `The service for this project is archived. ...` | An administrator archived the service of this project. Archived services receive no data. | Ask an administrator to unarchive it. |
 | `409` `service_conflict`: `A different service already uses the project path ...` | Another service has this project path, for example from a deleted project with the same path. | Archive or delete the old service in Scanopsis. |
 | `429` `too_many_requests`: `Too many uploads from this address. Retry later.` and a `Retry-After` header | More than the allowed number of uploads per second from one address. | Upload fewer reports at once, or wait the number of seconds in `Retry-After`. |
+| `429` `project_rate_limited`: `This project uploaded too often. Retry later.` and a `Retry-After` header | The project used its burst of 100 uploads and uploads faster than one every 10 seconds. | The script retries. Upload fewer reports, or wait the number of seconds in `Retry-After`. |
+| `429` `job_artifact_limit`: `This job already uploaded 50 different artifacts, ...` and `Retry-After: 3600` | One job tried to store more than 50 different artifacts (artifact name and kind). | Scan fewer images in one job, or split them over several jobs. Uploading an artifact again replaces it and does not count. |
 
 If the answer is `500` (`internal_error`), the upload was not stored and the
 cause is in the log of Scanopsis. The script retries it; if the retries fail too,

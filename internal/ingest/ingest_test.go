@@ -158,6 +158,17 @@ type req struct {
 	contentType *string
 }
 
+// doToken sends body with the given ID token.
+func (e *hEnv) doToken(token string, body []byte) *httptest.ResponseRecorder {
+	e.t.Helper()
+	hr := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/ingest/trivy", bytes.NewReader(body))
+	hr.Header.Set("Authorization", "Bearer "+token)
+	hr.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	e.in.Handlers()["ingestTrivy"].ServeHTTP(w, hr)
+	return w
+}
+
 func (e *hEnv) do(r req) *httptest.ResponseRecorder {
 	e.t.Helper()
 	hr := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/api/v1/ingest/trivy"+r.query, bytes.NewReader(r.body))

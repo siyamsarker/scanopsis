@@ -35,6 +35,10 @@ var errServiceArchived = errors.New("the service is archived")
 // service already uses the project path.
 var errPathTaken = errors.New("another service already uses this project path")
 
+// errJobArtifacts means the job already stored MaxArtifactsPerJob other
+// artifacts.
+var errJobArtifacts = errors.New("the job has uploaded too many different artifacts")
+
 // saveInput is everything one upload stores.
 type saveInput struct {
 	claims *Claims
@@ -124,6 +128,19 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 			return err
 		}
 		res.ServiceID, res.ServiceCreated = svc.ID, created
+
+		// The scans of this job other than the one this upload replaces. The
+		// project lock held here makes the count exact for concurrent uploads
+		// of the job, and the unique key of scans makes it an index lookup.
+		var others int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM scans
+			WHERE service_id = $1 AND gitlab_job_id = $2 AND NOT (artifact_name = $3 AND kind = $4)`,
+			svc.ID, c.JobID, in.report.ArtifactName, in.kind).Scan(&others); err != nil {
+			return fmt.Errorf("count scans of the job: %w", err)
+		}
+		if others >= MaxArtifactsPerJob {
+			return errJobArtifacts
+		}
 
 		n, err := q.DeleteScanForJob(ctx, store.DeleteScanForJobParams{
 			ServiceID: svc.ID, GitlabJobID: c.JobID, ArtifactName: in.report.ArtifactName, Kind: in.kind,
