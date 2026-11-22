@@ -12,7 +12,14 @@ import { Mono } from '../../components/Mono';
 import { SeverityMark } from '../../components/SeverityMark';
 import { SEVERITY_LABEL, severityKey } from '../../components/severityModel';
 import { Skeleton } from '../../components/states';
-import { countOf, formatExactTime, relativeTime, safeExternalUrl } from '../../format';
+import {
+  countOf,
+  findingStatusLabel,
+  formatExactTime,
+  packageClassLabel,
+  relativeTime,
+  safeExternalUrl,
+} from '../../format';
 import { linkClass } from '../../ui';
 import { RISK_WEIGHTS } from '../../viz';
 import { suggestedFix, upgradeCommand } from './model';
@@ -265,8 +272,8 @@ export function VulnDrawer({
             </Fact>
           ) : null}
           <Fact label="Package type">{vuln.pkg_type || '–'}</Fact>
-          <Fact label="Class">{vuln.class || '–'}</Fact>
-          <Fact label="Status">{vuln.status || '–'}</Fact>
+          <Fact label="Class">{packageClassLabel(vuln.class)}</Fact>
+          <Fact label="Status">{findingStatusLabel(vuln.status)}</Fact>
           <Fact label="First seen">
             <time dateTime={vuln.first_seen_at} title={formatExactTime(vuln.first_seen_at)}>
               {relativeTime(vuln.first_seen_at)}

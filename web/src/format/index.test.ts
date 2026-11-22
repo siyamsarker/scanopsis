@@ -3,10 +3,12 @@
 
 import {
   countOf,
+  findingStatusLabel,
   formatExactTime,
   formatInt,
   formatPercent,
   formatShortDate,
+  packageClassLabel,
   plural,
   relativeTime,
   safeExternalUrl,
@@ -127,5 +129,23 @@ describe('formatExactTime and shortSha', () => {
     expect(shortSha('0123456789abcdef0123')).toBe('01234567');
     expect(shortSha('0123456789abcdef', 7)).toBe('0123456');
     expect(shortSha('abc')).toBe('abc');
+  });
+});
+
+describe('findingStatusLabel and packageClassLabel', () => {
+  it('words the Trivy statuses and keeps unknown ones readable', () => {
+    expect(findingStatusLabel('will_not_fix')).toBe('Will not be fixed');
+    expect(findingStatusLabel('fixed')).toBe('Fixed in a newer version');
+    expect(findingStatusLabel('fix_deferred')).toBe('Fix deferred');
+    expect(findingStatusLabel('some_new_state')).toBe('Some new state');
+    expect(findingStatusLabel('')).toBe('–');
+    expect(findingStatusLabel(undefined)).toBe('–');
+  });
+
+  it('names the package classes as the filters do', () => {
+    expect(packageClassLabel('os-pkgs')).toBe('OS packages');
+    expect(packageClassLabel('lang-pkgs')).toBe('Language packages');
+    expect(packageClassLabel('config')).toBe('config');
+    expect(packageClassLabel(null)).toBe('–');
   });
 });

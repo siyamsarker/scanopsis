@@ -146,3 +146,34 @@ export function artifactLabel(name: string | null | undefined, kind: string | nu
   if (kind === 'secret-fs' && (raw === '.' || raw.trim() === '')) return SOURCE_TREE;
   return raw;
 }
+
+const STATUS_LABEL: Record<string, string> = {
+  affected: 'Affected',
+  fixed: 'Fixed in a newer version',
+  will_not_fix: 'Will not be fixed',
+  fix_deferred: 'Fix deferred',
+  end_of_life: 'End of life',
+  under_investigation: 'Under investigation',
+  not_affected: 'Not affected',
+  unknown: 'Unknown',
+};
+
+/** Trivy's status of a finding ("will_not_fix") in words; an unknown value is shown readably. */
+export function findingStatusLabel(status: string | null | undefined): string {
+  if (!status) return NO_VALUE;
+  const known = STATUS_LABEL[status];
+  if (known) return known;
+  const words = status.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+const CLASS_LABEL: Record<string, string> = {
+  'os-pkgs': 'OS packages',
+  'lang-pkgs': 'Language packages',
+};
+
+/** Trivy's result class ("os-pkgs") as the filters name it; any other class as reported. */
+export function packageClassLabel(cls: string | null | undefined): string {
+  if (!cls) return NO_VALUE;
+  return CLASS_LABEL[cls] ?? cls;
+}
