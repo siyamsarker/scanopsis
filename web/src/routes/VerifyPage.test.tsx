@@ -129,7 +129,7 @@ describe('two-factor code page', () => {
     fireEvent.change(await screen.findByLabelText('6-digit code'), { target: { value: '000000' } });
     fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Too many wrong codes. Ask an administrator to reset two-factor sign-in.',
+      'Too many wrong codes. Ask an administrator to reset two-factor authentication.',
     );
   });
 

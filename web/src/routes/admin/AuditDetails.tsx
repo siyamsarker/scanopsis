@@ -433,7 +433,7 @@ export function ChangeList({ changes }: { changes: Change[] }) {
                 >
                   <span className="sr-only">from </span>
                   {clip(show(c.from))}
-                </span>
+                </span>{' '}
                 <ArrowRight
                   size={12}
                   strokeWidth={2}

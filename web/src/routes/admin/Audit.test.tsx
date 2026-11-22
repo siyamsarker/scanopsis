@@ -155,8 +155,8 @@ describe('audit page', () => {
       .getAllByRole('definition')
       .map((d) => d.textContent);
     expect(values).toEqual([
-      'from 30mto 45m',
-      'from platformto platform, data',
+      'from 30m to 45m',
+      'from platform to platform, data',
       'Changed; secret values are never recorded',
     ]);
     // keys and changes are said in the view, so they are not repeated as raw details.
@@ -346,7 +346,7 @@ describe('audit wording', () => {
       { label: 'Dashboard branch', from: 'Latest scanned', to: 'main', mono: true },
     ]);
     render(<ChangeList changes={updated.changes!} />);
-    expect(screen.getByRole('definition')).toHaveTextContent('from Latest scannedto main');
+    expect(screen.getByRole('definition')).toHaveTextContent('from Latest scanned to main');
   });
 
   it('lists only the details the sentence did not use', () => {
