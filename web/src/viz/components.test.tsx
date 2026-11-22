@@ -209,7 +209,6 @@ describe('PipelineStrip', () => {
     const marks = container.querySelectorAll('.viz-mark');
     fireEvent.pointerEnter(marks[0]);
     expect(container.querySelector('.viz-crosshair')).not.toBeNull();
-    expect(container.querySelectorAll('.viz-columns > g[data-dim]')).toHaveLength(2);
     expect(screen.getByTestId('viz-tooltip')).toHaveTextContent('Custom 900');
     fireEvent.pointerLeave(container.querySelector('.viz-marks') as Element);
     expect(screen.queryByTestId('viz-tooltip')).toBeNull();

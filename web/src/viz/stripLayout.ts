@@ -258,7 +258,8 @@ export interface StackSegment {
 
 /**
  * Stacked segments of one column, critical at the baseline. Each segment keeps
- * at least 1 px; a 1.5 px gap separates segments tall enough to afford it.
+ * at least 1 px; a 1 px gap in the ground colour separates segments tall
+ * enough to afford it. Segments are drawn in full colour, never blended.
  */
 export function stackSegments(
   counts: SeverityCounts,
@@ -272,7 +273,7 @@ export function stackSegments(
     if (c === 0) continue;
     cum += c;
     const top = Math.min(y(cum), floor - 1);
-    const gap = out.length > 0 && floor - top > 4 ? 1.5 : 0;
+    const gap = out.length > 0 && floor - top > 2 ? 1 : 0;
     out.push({ severity, y: top, height: floor - gap - top, top: false });
     floor = top;
   }

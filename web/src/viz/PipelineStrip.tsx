@@ -380,7 +380,7 @@ export function PipelineStrip({
               const fixedH =
                 c.point.fixed > 0 ? Math.max(1, lane.y(-c.point.fixed) - lane.baseline) : 0;
               return (
-                <g key={rects[i].key} data-dim={active !== null && active !== i ? true : undefined}>
+                <g key={rects[i].key}>
                   <g className="viz-up">
                     {segs.map((s) =>
                       s.top ? (

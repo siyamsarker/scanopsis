@@ -60,13 +60,13 @@
   --lens-b: #0891b2;
   --brand: #5b4be8;
   --brand-ink: #ffffff;
-  --sev-critical: #be123c;
+  --sev-critical: #be185d;
   --sev-high: #c2410c;
   --sev-medium: #a16207;
   --sev-low: #1d4ed8;
   --sev-unknown: #64748b;
   --ok: #047857;
-  --fail: #be123c;
+  --fail: #be185d;
   --warn: #a16207;
 }
 

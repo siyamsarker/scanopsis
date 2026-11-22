@@ -149,7 +149,7 @@ describe('strip layout', () => {
     expect(segs.map((s) => s.severity)).toEqual(['critical', 'high']);
     expect(segs[0]).toMatchObject({ y: 180, height: 20, top: false });
     expect(segs[1].top).toBe(true);
-    expect(segs[1].y + segs[1].height).toBeCloseTo(180 - 1.5);
+    expect(segs[1].y + segs[1].height).toBeCloseTo(180 - 1);
     // A count far too small for a pixel still gets one.
     const tiny = stackSegments({ low: 1 }, scaleLinear().domain([0, 10_000]).range([100, 0]));
     expect(tiny[0].height).toBeGreaterThanOrEqual(1);
