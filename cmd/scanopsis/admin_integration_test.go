@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"net"
 	"net/url"
@@ -233,5 +234,55 @@ func TestIntegrationAdminWithoutSchema(t *testing.T) {
 	code, out, errs := e.run("reset-password", "root")
 	if code != 1 || out != "" || !strings.Contains(errs, "run the server once first") {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errs)
+	}
+}
+
+func (e *adminEnv) scan(t *testing.T, raw []byte) int64 {
+	t.Helper()
+	ctx := context.Background()
+	var svc, id int64
+	if err := e.pool.QueryRow(ctx,
+		`INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('s', 's', 'manual')
+		 ON CONFLICT (lower(gitlab_project_path)) DO UPDATE SET name = 's' RETURNING id`).Scan(&svc); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.pool.QueryRow(ctx, `
+		INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+		                   commit_sha, schema_version, scanned_at, raw_report)
+		VALUES ($1, 'image', 'app', 1, (SELECT count(*) + 1 FROM scans), 'main', false, 'abc', 2, now(), $2) RETURNING id`,
+		svc, raw).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestIntegrationAdminExportReport(t *testing.T) {
+	e := newAdminEnv(t)
+	const report = `{"SchemaVersion":2,"ArtifactName":"registry.example.com/app:1","Results":[{"Target":"app","Class":"os-pkgs"}]}`
+	var zipped bytes.Buffer
+	zw := gzip.NewWriter(&zipped)
+	_, _ = zw.Write([]byte(report))
+	_ = zw.Close()
+	id := e.scan(t, zipped.Bytes())
+
+	// The report comes out byte for byte as Trivy wrote it.
+	code, out, errs := e.run("export-report", strconv.FormatInt(id, 10))
+	if code != 0 || out != report || errs != "" {
+		t.Fatalf("code %d stdout %q stderr %q", code, out, errs)
+	}
+
+	// A scan that does not exist.
+	code, out, errs = e.run("export-report", strconv.FormatInt(id+100, 10))
+	if code != 1 || out != "" || !strings.Contains(errs, "there is no scan with ID") {
+		t.Fatalf("missing scan: code %d stdout %q stderr %q", code, out, errs)
+	}
+
+	// Retention clears the report: the export fails with a clear message.
+	if _, err := e.pool.Exec(context.Background(), `UPDATE scans SET raw_report = ''::bytea WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = e.run("export-report", strconv.FormatInt(id, 10))
+	if code != 1 || out != "" || !strings.Contains(errs, "was cleared by data retention") {
+		t.Fatalf("cleared report: code %d stdout %q stderr %q", code, out, errs)
 	}
 }

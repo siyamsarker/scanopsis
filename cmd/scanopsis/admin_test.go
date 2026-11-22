@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"os"
@@ -33,7 +34,7 @@ func runAdminArgs(env map[string]string, args ...string) (code int, stdout, stde
 func TestAdminHelp(t *testing.T) {
 	for _, a := range []string{"-h", "--help", "help", "-help"} {
 		code, out, errs := runAdminArgs(nil, a)
-		if code != 0 || errs != "" || !strings.Contains(out, "reset-password <username>") || !strings.Contains(out, "reset-2fa") {
+		if code != 0 || errs != "" || !strings.Contains(out, "reset-password <username>") || !strings.Contains(out, "reset-2fa") || !strings.Contains(out, "export-report <scan-id>") {
 			t.Errorf("%s: code %d stdout %q stderr %q", a, code, out, errs)
 		}
 	}
@@ -52,6 +53,12 @@ func TestAdminUsageErrors(t *testing.T) {
 		"reset-2fa bare name":   {"reset-2fa", "alice"},
 		"reset-2fa no username": {"reset-2fa", "local:"},
 		"reset-2fa bad source":  {"reset-2fa", "ldap:alice"},
+		"export none":           {"export-report"},
+		"export two":            {"export-report", "1", "2"},
+		"export not a number":   {"export-report", "abc"},
+		"export zero":           {"export-report", "0"},
+		"export negative":       {"export-report", "-5"},
+		"export flag":           {"export-report", "--all"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -322,5 +329,58 @@ func TestReset2FAPagesThroughUsers(t *testing.T) {
 	}
 	if !reflect.DeepEqual(f.resets, []int64{5000}) || f.lookups != 3 {
 		t.Fatalf("resets %v after %d pages; want [5000] after 3", f.resets, f.lookups)
+	}
+}
+
+func gz(t *testing.T, s string) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	w := gzip.NewWriter(&b)
+	if _, err := w.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func TestExportReport(t *testing.T) {
+	const report = `{"SchemaVersion":2,"ArtifactName":"app:1","Results":[]}`
+	stored := map[int64][]byte{1: gz(t, report), 2: {}, 3: []byte("not gzip"), 4: gz(t, report)[:20]}
+	b := &adminBackend{rawReport: func(_ context.Context, id int64) ([]byte, error) {
+		if id == 9 {
+			return nil, errors.New("connection reset")
+		}
+		raw, ok := stored[id]
+		if !ok {
+			return nil, pgx.ErrNoRows
+		}
+		return raw, nil
+	}}
+	cases := []struct {
+		id      int64
+		out     string
+		wantErr string
+	}{
+		{1, report, ""},
+		{2, "", "scan 2 was cleared by data retention"},
+		{3, "", "scan 3 is not readable"},
+		{4, "", "scan 4 is not readable"},
+		{5, "", "there is no scan with ID 5"},
+		{9, "", "read the report: connection reset"},
+	}
+	for _, c := range cases {
+		var out bytes.Buffer
+		err := b.exportReport(context.Background(), c.id, &out)
+		switch {
+		case c.wantErr == "" && err != nil:
+			t.Errorf("scan %d: %v", c.id, err)
+		case c.wantErr != "" && (err == nil || !strings.Contains(err.Error(), c.wantErr)):
+			t.Errorf("scan %d: error %v, want %q", c.id, err, c.wantErr)
+		}
+		if out.String() != c.out {
+			t.Errorf("scan %d: stdout %q, want %q", c.id, out.String(), c.out)
+		}
 	}
 }

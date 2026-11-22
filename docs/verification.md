@@ -225,6 +225,26 @@ critical=1 high=43 medium=57 low=31 unknown=3
 
 The suppressed total is the sum of the `Suppressed ... (Total: N)` lines: 1 + 2 = 3.
 
+### Check a scan that is already stored
+
+You do not need the file you uploaded. Scanopsis keeps the original report of
+every scan for as long as the scan is current, and for 30 days otherwise (see
+[original reports](operations.md#original-reports)). To get it back, use the
+scan ID (`scan_id` in the upload answer, or the scan's ID in the API) on the
+server:
+
+```sh
+docker compose exec scanopsis /scanopsis admin export-report 42 > report.json
+trivy convert --format table --quiet --show-suppressed --output table.txt report.json
+```
+
+The command writes the report exactly as Trivy wrote it, so the numbers in
+`table.txt` and in the jq count below are those of the stored scan. It needs
+no shell in the container. If the report was cleared (a scan that is not
+current and older than 30 days), it prints `the original report of scan 42 was
+cleared by data retention` and exits with status 1; upload the report again to
+check it.
+
 ### B. The independent count with jq
 
 This counts straight from the JSON and does not depend on Trivy's table:

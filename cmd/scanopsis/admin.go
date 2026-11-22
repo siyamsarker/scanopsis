@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +23,7 @@ import (
 
 	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/auth"
+	"github.com/siyamsarker/scanopsis/internal/ingest"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
@@ -38,6 +42,14 @@ Commands:
   reset-2fa <local:username|gitlab:username>
       Remove the two-factor enrolment and recovery codes of an account and
       sign it out everywhere. The user enrols again at the next sign-in.
+
+  export-report <scan-id>
+      Write the original Trivy report of a scan to standard output as JSON,
+      for example to check it with "trivy convert". The scan ID is the number
+      in the scan's address or in the API. The report is cleared by data
+      retention 30 days after the scan unless the scan is current; the
+      command then fails. In the container:
+      docker compose exec scanopsis /scanopsis admin export-report 42 > report.json
 
 Exit status: 0 on success, 1 on failure, 2 on a usage error.
 `
@@ -60,7 +72,10 @@ type adminBackend struct {
 	// sessions of the user, in one transaction.
 	setPassword func(ctx context.Context, id int64, hash string) error
 	resetMFA    func(ctx context.Context, id int64) error
-	audit       auth.AuditRecorder
+	// rawReport returns the stored, gzip-compressed report of a scan; empty
+	// when it was cleared, pgx.ErrNoRows when the scan does not exist.
+	rawReport func(ctx context.Context, id int64) ([]byte, error)
+	audit     auth.AuditRecorder
 }
 
 // runAdmin runs "scanopsis admin ..." and returns the process exit status.
@@ -76,6 +91,7 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 	}
 
 	// Check the arguments before touching the database.
+	var err error
 	var exec func(context.Context, *adminBackend, io.Writer) error
 	switch cmd, rest := args[0], args[1:]; cmd {
 	case "reset-password":
@@ -95,6 +111,17 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 		}
 		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
 			return b.reset2FA(ctx, source, username, out)
+		}
+	case "export-report":
+		var id int64
+		if len(rest) == 1 {
+			id, err = strconv.ParseInt(rest[0], 10, 64)
+		}
+		if len(rest) != 1 || err != nil || id <= 0 {
+			return usageError(stderr, "export-report needs exactly one argument: the ID of a scan, a positive number.")
+		}
+		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
+			return b.exportReport(ctx, id, out)
 		}
 	default:
 		return usageError(stderr, fmt.Sprintf("unknown command %q.", args[0]))
@@ -134,8 +161,9 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 				return tq.DeleteUserSessions(ctx, id)
 			})
 		},
-		resetMFA: func(ctx context.Context, id int64) error { return store.ResetMFA(ctx, pool, id) },
-		audit:    audit.New(q, slog.New(slog.NewTextHandler(stderr, nil))),
+		resetMFA:  func(ctx context.Context, id int64) error { return store.ResetMFA(ctx, pool, id) },
+		rawReport: q.ScanRawReport,
+		audit:     audit.New(q, slog.New(slog.NewTextHandler(stderr, nil))),
 	}
 	if err := exec(ctx, b, stdout); err != nil {
 		_, _ = fmt.Fprintf(stderr, "scanopsis admin: %s\n", describeAdminError(err))
@@ -228,6 +256,40 @@ func (b *adminBackend) reset2FA(ctx context.Context, source, username string, st
 	b.audit.Record(ctx, actorCLI, actionMFAReset, map[string]any{"username": user.Username, "source": user.Source})
 	_, _ = fmt.Fprintf(stdout, "Two-factor authentication was reset for %s:%s. The account was signed out everywhere "+
 		"and enrols again at the next sign-in.\n", source, user.Username)
+	return nil
+}
+
+// exportReport writes the decompressed original report of a scan to stdout.
+// Nothing is written unless the report can be read.
+func (b *adminBackend) exportReport(ctx context.Context, id int64, stdout io.Writer) error {
+	raw, err := b.rawReport(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("there is no scan with ID %d", id)
+	}
+	if err != nil {
+		return fmt.Errorf("read the report: %w", err)
+	}
+	if len(raw) == 0 {
+		return fmt.Errorf("the original report of scan %d was cleared by data retention, 30 days after the scan; "+
+			"only the reports of scans that are current are kept", id)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("the stored report of scan %d is not readable: %w", id, err)
+	}
+	// Decompress fully before writing, so a damaged report leaves stdout empty.
+	// A report was limited to this size when it was uploaded.
+	var out bytes.Buffer
+	n, err := io.Copy(&out, io.LimitReader(zr, ingest.DefaultMaxReportBytes+1))
+	if err != nil {
+		return fmt.Errorf("the stored report of scan %d is not readable: %w", id, err)
+	}
+	if n > ingest.DefaultMaxReportBytes {
+		return fmt.Errorf("the stored report of scan %d is larger than the upload limit of %d bytes", id, ingest.DefaultMaxReportBytes)
+	}
+	if _, err := out.WriteTo(stdout); err != nil {
+		return fmt.Errorf("write the report: %w", err)
+	}
 	return nil
 }
 
