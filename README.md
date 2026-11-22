@@ -1,8 +1,31 @@
+<div align="center">
+
+<img src="docs/images/logo.svg" alt="Scanopsis logo" width="120" height="120">
+
 # Scanopsis
 
-A small, self-hosted dashboard that shows SonarQube and Trivy results from your GitLab CI/CD pipelines in one view.
+**Code quality and container security for every service, in one view.**<br>
+SonarQube and Trivy results from your GitLab CI/CD pipelines, side by side.
 
-[![Licence: Apache 2.0](https://img.shields.io/badge/licence-Apache%202.0-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.2.0-4f46e5?style=flat-square)](docs/versions.md)
+[![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](web/package.json)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?style=flat-square&logo=postgresql&logoColor=white)](docs/deployment.md)
+[![Docker Compose](https://img.shields.io/badge/deploy-Docker%20Compose-2496ED?style=flat-square&logo=docker&logoColor=white)](docs/getting-started.md)
+[![License](https://img.shields.io/badge/license-Apache%202.0-2E8B57?style=flat-square)](LICENSE)
+
+[Quick start](#quick-start) · [Documentation](#documentation) · [Screenshots](#screenshots) · [Report a problem](https://github.com/siyamsarker/scanopsis/issues)
+
+</div>
+
+---
+
+Scanopsis is a small, self-hosted dashboard for teams that build software in
+GitLab CI. Your pipelines already run **SonarQube** for code quality and
+**Trivy** for vulnerabilities and leaked secrets. Scanopsis collects both
+results as the pipelines run and shows them together, per service and across
+all services, so you can answer "which services need attention?" in seconds
+instead of clicking through job logs and SonarQube projects.
 
 ![The service dashboard in the dark theme: Trivy findings by severity next to the SonarQube quality gate, ratings and coverage](docs/images/service-dark.png)
 
@@ -11,65 +34,97 @@ A small, self-hosted dashboard that shows SonarQube and Trivy results from your 
 > end to end, but the accuracy check against real pipeline data is still
 > open. Deploy a version branch, never `main`, which is development code.
 
+**Contents:** [Why Scanopsis](#why-scanopsis) · [Principles](#principles) ·
+[Use cases](#use-cases) · [How it works](#how-it-works) · [Features](#features) ·
+[Screenshots](#screenshots) · [How it compares](#how-it-compares) ·
+[Requirements](#requirements) · [Quick start](#quick-start) ·
+[Documentation](#documentation) · [Versions and upgrading](#versions-and-upgrading) ·
+[Security](#security) · [Contributing](#contributing) · [Licence and author](#licence-and-author)
+
+---
+
 ## Why Scanopsis
 
-Many teams run two scanners in GitLab CI: **SonarQube** for code quality and
-**Trivy** for vulnerabilities in container images and for leaked secrets. Each
-tool is good at its job, but the results end up in different places. Trivy
-writes a report per pipeline job. SonarQube keeps its results in its own
-interface, one project at a time. To answer a simple question, such as "which
-of our services is in bad shape?" or "where do we still ship this CVE?", you
-click through pipelines, job logs and SonarQube projects.
+Each scanner is good at its job, but the results end up in different places.
+Trivy writes a report per pipeline job. SonarQube keeps its results in its own
+interface, one project at a time. Simple questions turn into a hunt:
 
-Scanopsis collects both results as your pipelines run and puts them side by
-side, per service and across all services. It is meant for a platform,
-security or development team that wants one clear overview, without a large
-platform to install and run.
+- Which of our services is in the worst shape right now?
+- Where do we still ship this CVE?
+- Did the last release fix anything, or add new problems?
+- Is test coverage going up or down?
+
+Scanopsis keeps both results for every pipeline, links them to the service
+they belong to, and puts the answers on one page. It is meant for platform,
+security and development teams that want one clear overview without
+installing and running a large platform.
+
+## Principles
+
+- **One view.** Code quality and container security of every service on one
+  dashboard, from the pipelines you already run.
+- **Every number is traceable.** Each figure links back to the pipeline, job
+  and commit that produced it.
+- **No shared secrets.** CI jobs prove who they are with GitLab CI/CD ID
+  tokens; there is no upload key to store, leak or rotate.
+- **Small and self-hosted.** One Go binary with the web interface built in,
+  plus PostgreSQL. Nothing leaves your network except the calls to your GitLab
+  and SonarQube.
+- **Secure by default.** Two-factor authentication for every user, secrets
+  encrypted in the database, and an audit log of sign-ins and administrative
+  changes.
+
+## Use cases
+
+- **Weekly health review.** A platform or engineering lead opens the portfolio
+  and sees which services fail their quality gate, have critical
+  vulnerabilities, or have not been scanned lately.
+- **Responding to a new CVE.** A security engineer searches for the CVE and
+  gets every affected service, branch and image, with the package version to
+  upgrade to.
+- **Before a release.** A developer checks the service dashboard: what is new
+  since the previous scan, what was fixed, and which packages to upgrade
+  first.
+- **Tracking progress.** Trends per service show whether vulnerabilities and
+  coverage move in the right direction over the last 30, 90 or 180 days.
+- **Audit and compliance.** The audit log records sign-ins, setting changes,
+  user changes and rejected uploads, and the original Trivy report of a
+  current scan can be exported to check any number against Trivy itself.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    CI["GitLab CI job<br/>runs Trivy"] -- "Trivy JSON report<br/>+ CI/CD ID token" --> S["Scanopsis"]
+    SQ["SonarQube"] -- "signed webhook<br/>after each analysis" --> S
+    S -- "reads quality gate,<br/>ratings, coverage" --> SQ
+    S --- DB[("PostgreSQL")]
+    U["You, in the browser<br/>(GitLab or local sign-in + 2FA)"] --> S
+```
+
 1. A job in your GitLab pipeline runs Trivy and uploads the JSON report to
    Scanopsis. The job proves who it is with a GitLab CI/CD **ID token** (a
-   short-lived signed token that GitLab gives each job), so there is no shared
-   secret to store or rotate.
+   short-lived signed token that GitLab gives each job).
 2. SonarQube sends a signed webhook after each analysis. Scanopsis then reads
    the quality gate, ratings and coverage through the SonarQube Web API, and
    syncs regularly in case a webhook was missed.
 3. Scanopsis stores everything in PostgreSQL and shows it in the browser.
-   Every number is traceable to the pipeline, job and commit that produced
-   it.
-
-It is one Go binary with the web interface built in, plus PostgreSQL. You run
-it on your own host; nothing leaves your network except the calls to your
-GitLab and SonarQube.
 
 ## Features
 
-- **Portfolio.** All services at a glance, as a grid or a treemap: open
-  vulnerabilities, quality gate and how fresh the data is.
-- **Service dashboard.** Trivy and SonarQube results for the branch an
-  administrator chooses, with trends across pipelines, the recent scans, and
-  a "fix first" list: the packages with the most findings and the version to
-  upgrade to.
-- **Findings explorer.** Every vulnerability and secret finding of a service.
-- **Scan comparison.** What is new and what was fixed since the previous scan.
-- **CVE search across services.** By default on the dashboard branches and
-  the protected branches and tags, or on every branch.
-- **Uploads without shared secrets.** GitLab CI/CD ID tokens authenticate each
-  upload. You can limit uploads to certain GitLab groups and to protected
-  branches and tags.
-- **SonarQube.** Quality gate, ratings, coverage and duplication, through
-  signed webhooks and the Web API, in MQR and Standard mode.
-- **Sign-in.** With GitLab (OpenID Connect) or local accounts, with mandatory
-  two-factor authentication (an authenticator app plus recovery codes) for
-  everyone. Two roles: admin and viewer.
-- **Administration.** A Settings page, secrets encrypted in the database, an
-  audit log, user and session management, configurable data retention, and
-  command-line tools to recover access.
-- **Small and fast.** A container image of about 27 MB. It starts in well
-  under a second and uses less than 10 MiB of memory when idle.
-- **Pleasant to use.** Dark and light themes with a switch, and it works on
-  phones.
+| Feature | What you get |
+| :--- | :--- |
+| **Portfolio** | All services at a glance, as a grid or a treemap: open vulnerabilities, quality gate and how fresh the data is. |
+| **Service dashboard** | Trivy and SonarQube results for the branch an administrator chooses, with trends across pipelines, the recent scans, and a "fix first" list: the packages with the most findings and the version to upgrade to. |
+| **Findings explorer** | Every vulnerability and secret finding of a service, with filters. |
+| **Scan comparison** | What is new and what was fixed since the previous scan. |
+| **CVE search across services** | By default on the dashboard branches and the protected branches and tags, or on every branch. |
+| **Uploads without shared secrets** | GitLab CI/CD ID tokens authenticate each upload. You can limit uploads to certain GitLab groups and to protected branches and tags. |
+| **SonarQube** | Quality gate, ratings, coverage and duplication, through signed webhooks and the Web API, in MQR and Standard mode. |
+| **Sign-in** | GitLab (OpenID Connect) or local accounts, with mandatory two-factor authentication (an authenticator app plus recovery codes) for everyone. Two roles: admin and viewer. |
+| **Administration** | A Settings page, secrets encrypted in the database, an audit log, user and session management, configurable data retention, and command-line tools to recover access. |
+| **Small and fast** | A container image of about 27 MB. It starts in well under a second and uses less than 10 MiB of memory when idle. |
+| **Pleasant to use** | Dark and light themes with a switch, and it works on phones. |
 
 ## Screenshots
 
@@ -141,7 +196,9 @@ Then:
 
 The [getting started guide](docs/getting-started.md) gives the exact commands
 for each step, what you should see, and what to do when something fails. It
-takes about 15 minutes.
+takes about 15 minutes. Then connect your pipelines with the
+[GitLab CI guide](docs/integrations/gitlab-ci.md) and, if you use it,
+[SonarQube](docs/integrations/sonarqube.md).
 
 ## Documentation
 
