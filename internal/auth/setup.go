@@ -32,6 +32,7 @@ import (
 type SetupStore interface {
 	CountAdmins(ctx context.Context) (int64, error)
 	CreateLocalUser(ctx context.Context, arg store.CreateLocalUserParams) (store.User, error)
+	TouchLastLogin(ctx context.Context, id int64) error
 }
 
 // Setup creates the first administrator, guarded by a one-time token that
@@ -194,6 +195,11 @@ func (s *Setup) complete(w http.ResponseWriter, r *http.Request) {
 		s.log.ErrorContext(r.Context(), "setup: cannot start session", "error", err)
 		writeSetupInternalError(w)
 		return
+	}
+	// Setup signs the administrator in, so it is their first sign-in. A
+	// failure here only leaves "never signed in" on the users page.
+	if err := s.store.TouchLastLogin(r.Context(), user.ID); err != nil {
+		s.log.ErrorContext(r.Context(), "setup: cannot record sign-in time", "error", err)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)

@@ -27,6 +27,8 @@ type fakeSetupStore struct {
 	created  []store.CreateLocalUserParams
 	countErr error
 	makeErr  error
+	touchErr error
+	touched  []int64
 }
 
 func (f *fakeSetupStore) CountAdmins(context.Context) (int64, error) {
@@ -44,6 +46,16 @@ func (f *fakeSetupStore) CreateLocalUser(_ context.Context, arg store.CreateLoca
 	f.created = append(f.created, arg)
 	f.admins++
 	return store.User{ID: int64(100 + len(f.created)), Source: SourceLocal, Username: arg.Username, Role: arg.Role}, nil
+}
+
+func (f *fakeSetupStore) TouchLastLogin(_ context.Context, id int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.touchErr != nil {
+		return f.touchErr
+	}
+	f.touched = append(f.touched, id)
+	return nil
 }
 
 // lockedAudit is a fakeAudit safe for concurrent use.
@@ -192,6 +204,10 @@ func TestSetupSuccess(t *testing.T) {
 	}
 	if !reflect.DeepEqual(f.start.started, []int64{101}) || len(w.Result().Cookies()) != 1 {
 		t.Fatalf("started %v cookies %d", f.start.started, len(w.Result().Cookies()))
+	}
+	// Setup signs the administrator in: that is their first sign-in.
+	if !reflect.DeepEqual(f.store.touched, []int64{101}) {
+		t.Fatalf("sign-in time recorded for %v; want [101]", f.store.touched)
 	}
 	want := []auditEvent{{Actor: "local:root", Action: "setup.completed",
 		Detail: map[string]any{"username": "root", "ip": "192.0.2.1"}}}
@@ -445,6 +461,18 @@ func TestSetupInternalErrors(t *testing.T) {
 		// The administrator exists, so setup is over.
 		if w := f.do(http.MethodPost, setupBody(f.token, "root", goodSetupPass), ""); w.Code != http.StatusConflict {
 			t.Fatalf("status %d; want 409", w.Code)
+		}
+		if len(f.store.touched) != 0 {
+			t.Fatalf("sign-in time recorded without a session: %v", f.store.touched)
+		}
+	})
+	t.Run("sign-in time", func(t *testing.T) {
+		// Not recording the time does not undo a setup that signed the user in.
+		f := newSetupFixture(t, 5)
+		f.store.touchErr = boom
+		w := f.do(http.MethodPost, setupBody(f.token, "root", goodSetupPass), "")
+		if w.Code != http.StatusNoContent || len(w.Result().Cookies()) != 1 {
+			t.Fatalf("status %d cookies %d", w.Code, len(w.Result().Cookies()))
 		}
 	})
 	t.Run("busy", func(t *testing.T) {
