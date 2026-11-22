@@ -193,6 +193,26 @@ describe('integrations page', () => {
     expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
   });
 
+  it('shows the first deliveries and the rest on request', async () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({
+      ...sonar.recent_deliveries[0],
+      task_id: `task-${i}`,
+      received_at: `2026-11-19T0${i}:00:00Z`,
+    }));
+    mockFetch(
+      api((call) =>
+        call.path.endsWith('/sonarqube')
+          ? json(200, { ...sonar, recent_deliveries: many })
+          : undefined,
+      ),
+    );
+    renderApp('/admin/integrations');
+    const table = await screen.findByRole('table', { name: 'Recent SonarQube deliveries' });
+    expect(within(table).getAllByRole('row')).toHaveLength(7);
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 8' }));
+    expect(within(table).getAllByRole('row')).toHaveLength(9);
+  });
+
   it('labels and explains every known rejection code in plain words', () => {
     for (const code of [
       'invalid_token',

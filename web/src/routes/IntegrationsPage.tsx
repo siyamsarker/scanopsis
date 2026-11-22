@@ -368,8 +368,10 @@ const outcomes: Record<string, { status: StatusKind; text: string }> = {
   failed: { status: 'fail', text: 'Failed' },
 };
 
-function DeliveriesTable({ rows }: { rows: Delivery[] }) {
-  if (rows.length === 0) {
+function DeliveriesTable({ rows: all }: { rows: Delivery[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const rows = expanded ? all : all.slice(0, FIRST_ROWS);
+  if (all.length === 0) {
     return (
       <EmptyState
         compact
@@ -380,7 +382,7 @@ function DeliveriesTable({ rows }: { rows: Delivery[] }) {
       />
     );
   }
-  return (
+  const table = (
     <FlatTable
       caption="Recent SonarQube deliveries"
       head={
@@ -433,6 +435,14 @@ function DeliveriesTable({ rows }: { rows: Delivery[] }) {
         );
       })}
     </FlatTable>
+  );
+  return (
+    <>
+      {table}
+      {!expanded && all.length > FIRST_ROWS ? (
+        <ShowAll total={all.length} onClick={() => setExpanded(true)} />
+      ) : null}
+    </>
   );
 }
 
@@ -586,7 +596,7 @@ function Integrations() {
             id="deliveries"
             padded
             title="SonarQube deliveries"
-            description="Webhooks received after each analysis, newest first."
+            description="Webhooks received after each analysis, newest first; the last 50 are kept."
           />
           {s ? (
             <DeliveriesTable rows={s.recent_deliveries} />
