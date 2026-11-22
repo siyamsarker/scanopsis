@@ -1,6 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { Fragment, type ReactNode } from 'react';
 import { Link, type To } from 'react-router';
 import { shortSha } from '../format';
 import { CopyIconButton } from './CopyIconButton';
@@ -22,6 +23,22 @@ export interface MonoProps {
 }
 
 /**
+ * Offers a line break after every slash, so a long image name or path wraps
+ * between its parts ("registry.example.com/platform/" then "payments-api:4.12.0")
+ * and breaks inside a part only when that part alone is too wide.
+ */
+function withBreaks(value: string): ReactNode {
+  const parts = value.split(/(?<=\/)/);
+  if (parts.length < 2) return value;
+  return parts.map((part, i) => (
+    <Fragment key={i}>
+      {i > 0 ? <wbr /> : null}
+      {part}
+    </Fragment>
+  ));
+}
+
+/**
  * Identifiers, versions, package names, paths and commit hashes in JetBrains
  * Mono. Digits are tabular so columns of versions line up.
  */
@@ -39,9 +56,9 @@ export function Mono({
   const text = (
     <span
       title={tip}
-      className={`font-mono tabular-nums ${truncate ? 'block max-w-full truncate' : 'break-all'}`}
+      className={`font-mono tabular-nums ${truncate ? 'block max-w-full truncate' : 'wrap-anywhere'}`}
     >
-      {shown}
+      {truncate ? shown : withBreaks(shown)}
     </span>
   );
   return (

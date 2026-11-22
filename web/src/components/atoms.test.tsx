@@ -271,6 +271,15 @@ describe('Mono', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Copied to the clipboard');
   });
 
+  it('lets a long name wrap after each slash and keeps its text whole', () => {
+    const name = 'registry.example.com/platform/payments-api:4.12.0';
+    const { container } = render(<Mono value={name} />);
+    const el = screen.getByText(name);
+    expect(el).toHaveClass('wrap-anywhere');
+    expect(el).not.toHaveClass('break-all');
+    expect(container.querySelectorAll('wbr')).toHaveLength(2);
+  });
+
   it('can be a link', () => {
     renderInRouter(<Mono value="openssl" to="/packages/openssl" />);
     expect(screen.getByRole('link', { name: 'openssl' })).toHaveAttribute(
