@@ -27,15 +27,21 @@ only **seeds** it:
 2. From then on, the saved value wins. Changing or removing the variable has
    no effect on a setting that is already saved.
 3. A change on the Settings page replaces the saved value.
-4. **Reset to environment or default**, then save, deletes the saved value.
-   The setting falls back to the variable if it is set, else to the default.
+4. **Reset to environment or default**, then **Save changes**, deletes the
+   saved value. The setting falls back to the variable if it is set, else to
+   the default.
 
-The Settings page shows where each value comes from:
+Changes collect in a bar at the foot of the page, which counts them and offers
+**Discard** and **Save changes**. Nothing applies until you save.
+
+The Settings page shows where each value comes from, in a tag under each
+setting. Hover over the tag for the variable's name and, for a saved value, who
+saved it and when:
 
 | Source | Meaning |
 | --- | --- |
 | Default | Nothing is saved and no variable is set. The built-in default applies. |
-| Environment | The value came from the variable and nobody changed it on the Settings page. |
+| From environment | The value came from the variable and nobody changed it on the Settings page. |
 | Set here | An administrator saved it on the Settings page. The page shows who and when. |
 
 In short: use the environment to set up a new deployment from a file, and the

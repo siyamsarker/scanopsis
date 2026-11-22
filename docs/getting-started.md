@@ -241,15 +241,16 @@ If the command prints nothing, an administrator already exists. Go to
    opens. You are signed in, but you cannot use Scanopsis until you finish
    the next steps.
 4. In your authenticator app, add an account and scan the QR code. If you
-   cannot scan it, type the secret shown under the code. Select **Next**.
-5. Enter the 6-digit code from the app and select **Confirm**. A code changes
-   every 30 seconds, so be quick. The page **Save your recovery codes** shows
-   10 codes.
+   cannot scan it, type the key shown under the code, in groups of four, or
+   copy it with **Copy key**. Select **Next**.
+5. Enter the 6-digit code from the app. It is checked as soon as the sixth
+   digit is in. A code changes every 30 seconds, so be quick. The page **Save
+   your recovery codes** shows 10 codes.
 6. Store the recovery codes in a password manager or another safe place. Use
    **Copy all** or **Download as text file**. Each code works once, in place of
    an app code, and you see them only now.
 7. Select **I have saved these codes**, then **Continue**. You land on the home
-   page and see **Users** and **Settings** in the navigation bar.
+   page and see **Users** and **Settings** in the sidebar.
 
 If this step fails:
 

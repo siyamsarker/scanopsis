@@ -55,11 +55,11 @@ The application now appears in the list with the three scopes.
 ## Step 2. Enter the application in Scanopsis
 
 1. Sign in to Scanopsis as an administrator and open **Settings**.
-2. In the group **GitLab**, fill in:
-   - `gitlab.url`: the base URL of your GitLab, for example
+2. In the section **GitLab**, fill in:
+   - **GitLab URL** (`gitlab.url`): the base URL of your GitLab, for example
      `https://gitlab.example.com`, without a path.
-   - `gitlab.client_id`: the application ID.
-   - `gitlab.client_secret`: the secret. Scanopsis stores it encrypted and never
+   - **Application ID** (`gitlab.client_id`): the application ID.
+   - **Application secret** (`gitlab.client_secret`): the secret. Scanopsis stores it encrypted and never
      shows it again.
    - `gitlab.allowed_groups`: the groups whose members may sign in, one per
      line. Read [Choose who may sign in](#choose-who-may-sign-in) first. If you
@@ -121,9 +121,9 @@ If something fails, see [Troubleshooting](#troubleshooting).
   user finishes the enrolment, the application answers "Set up two-factor
   authentication to continue."
 - To make someone an administrator, open **Users** and choose **Admin** in the
-  role list next to them.
+  role list next to them, or **Make admin** in their actions menu.
 - A user who loses their phone needs an administrator to select **Reset
-  two-factor** on the **Users** page, or to run the `reset-2fa` command
+  two-factor** in their actions menu on the **Users** page, or to run the `reset-2fa` command
   described in [operations](../operations.md).
 - Ten wrong two-factor codes in a row lock the second factor, and Scanopsis
   signs the user out everywhere. The user sees "Too many wrong codes. Ask an
@@ -151,8 +151,8 @@ groups. The rules:
   case it was created with, and Scanopsis compares that text. Copy the path from
   GitLab: the entry `Platform` does not match the group `platform`.
 - **Checked at sign-in only:** changing the list does not end existing sessions.
-  To make someone pass the check again now, select **Disable** and then
-  **Enable** on the **Users** page. Disabling signs the user out everywhere.
+  To make someone pass the check again now, select **Disable user** and then
+  **Enable user** in their actions menu on the **Users** page. Disabling signs the user out everywhere.
 - **No fallback:** if GitLab cannot return the groups, sign-in fails with
   `login_failed`. It never lets the user in by default.
 
@@ -178,7 +178,7 @@ A line looks like this:
 | --- | --- | --- | --- |
 | `access_denied` | You cancelled the sign-in on GitLab. | The user selected **Deny** on the GitLab authorization page, or GitLab refused the request. | Sign in again and select **Authorize**. If the user did not deny, check in GitLab that the application still exists. |
 | `group_not_allowed` | Your GitLab account is not in a group that may use Scanopsis. Ask an administrator to add your group. | The user is in none of the allowed groups. | Check in GitLab that the user is a member of a listed group, directly or through a parent group. Check that the entry is the full path, with the same upper and lower case. Then ask the user to sign in again. |
-| `account_disabled` | Your account is disabled. Ask an administrator to enable it. | An administrator disabled the account in Scanopsis. | Select **Enable** next to the user on the **Users** page, if they should have access. |
+| `account_disabled` | Your account is disabled. Ask an administrator to enable it. | An administrator disabled the account in Scanopsis. | Select **Enable user** in the user's actions menu on the **Users** page, if they should have access. |
 | `login_expired` | The sign-in took too long or was started in another tab. Try again. | The browser did not send back the sign-in cookie, more than 10 minutes passed, or the user started a second sign-in in another tab. | Start again from the Scanopsis sign-in page. Open Scanopsis with exactly the host name in `SCANOPSIS_PUBLIC_URL`: another name, such as an IP address or a short name, loses the cookie. Check that the reverse proxy passes `Set-Cookie` headers. |
 | `login_failed` | Sign-in with GitLab failed. Try again, and contact an administrator if it keeps failing. | Any other failure, for example a wrong application secret, GitLab unreachable during the exchange, an untrusted certificate or a wrong clock. | Read the `error` field of the log line and find it in the next table. |
 
