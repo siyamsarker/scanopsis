@@ -1,0 +1,30 @@
+# Copyright 2026 The Scanopsis Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Override for an existing PostgreSQL server. It removes the bundled `db`
+# service, its password secret and its volume. Use it together with
+# compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.external-db.yaml up -d
+#
+# Put the connection URL of your server in ./secrets/database_url, see
+# docs/deployment.md ("Use an existing PostgreSQL"). Scanopsis reaches the
+# server through the `frontend` network, which has a route to the outside.
+
+services:
+  db: !reset null
+  scanopsis:
+    depends_on: !reset null
+    networks: !override
+      - frontend
+    # Only if the server presents a certificate from your own certificate
+    # authority and the URL uses sslmode=verify-full. Uncomment the next two
+    # lines and put the CA in ./db-ca.pem.
+    # volumes:
+    #   - ./db-ca.pem:/etc/scanopsis/db-ca.pem:ro
+
+secrets:
+  postgres_password: !reset null
+
+volumes:
+  db-data: !reset null
