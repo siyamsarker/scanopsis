@@ -5,6 +5,7 @@ import { scaleSqrt } from 'd3-scale';
 import { useRef, type ReactNode, type RefObject } from 'react';
 import { Legend, severityLegend } from './frame';
 import { useStyles, useWidth } from './hooks';
+import { isSafeHref, SafeLink } from './links';
 import {
   countOf,
   describeCounts,
@@ -23,7 +24,11 @@ export interface SeverityBarProps {
   counts: SeverityCounts | null | undefined;
   /** sm 6 px and md 10 px are thin bars without text; lg is 28 px with counts inside where they fit. */
   size?: SeverityBarSize;
-  /** A link per segment, e.g. to the findings filtered by that severity. */
+  /**
+   * A link per segment, e.g. to the findings filtered by that severity: an
+   * internal path ("/services/2/findings?severity=high") or an http(s) URL.
+   * Any other value is not linked.
+   */
   hrefFor?: (severity: Severity) => string | undefined;
   /** What the bar counts, for the accessible name. */
   label?: string;
@@ -56,9 +61,9 @@ function Grow({
 }) {
   const ref = useRef<HTMLElement | null>(null);
   useStyles(ref as RefObject<HTMLElement>, { flexGrow: grow });
-  if (href) {
+  if (isSafeHref(href)) {
     return (
-      <a
+      <SafeLink
         ref={(el) => {
           ref.current = el;
         }}
@@ -68,7 +73,7 @@ function Grow({
         data-tip={tip}
       >
         {children}
-      </a>
+      </SafeLink>
     );
   }
   return (
@@ -104,7 +109,7 @@ export function SeverityBar({
   const present = SEVERITIES.filter((s) => countOf(counts, s) > 0);
   const showLegend = legend ?? size === 'lg';
   const summary = `${label}: ${total === 0 ? 'none' : describeCounts(counts)}`;
-  const linked = Boolean(hrefFor) && total > 0;
+  const linked = total > 0 && present.some((s) => isSafeHref(hrefFor?.(s)));
   const gaps = Math.max(0, present.length - 1) * 2;
 
   return (

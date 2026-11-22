@@ -4,6 +4,7 @@
 import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { GateGlyph, SeverityGlyph } from './frame';
 import { nextIndex, useStyles } from './hooks';
+import { isSafeHref, SafeLink } from './links';
 import { riskPoints } from './risk';
 import {
   countOf,
@@ -28,7 +29,10 @@ export interface HeatRow {
   scannedAt?: TimeInput | null;
   /** Secondary line, e.g. the GitLab project path. */
   path?: string;
-  /** Makes the service name a link. */
+  /**
+   * Makes the service name a link: an internal path ("/services/2") renders
+   * as a router link, an http(s) URL as an external link, anything else as text.
+   */
   href?: string;
 }
 
@@ -222,10 +226,10 @@ export function HeatStrip({
                   <th scope="row" className="viz-heat-name">
                     {renderName ? (
                       renderName(row)
-                    ) : row.href ? (
-                      <a href={row.href} tabIndex={interactive ? -1 : undefined}>
+                    ) : isSafeHref(row.href) ? (
+                      <SafeLink href={row.href} tabIndex={interactive ? -1 : undefined}>
                         {row.name}
-                      </a>
+                      </SafeLink>
                     ) : (
                       <span>{row.name}</span>
                     )}

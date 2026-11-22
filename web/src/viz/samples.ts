@@ -121,7 +121,7 @@ export function sampleServices(count = NAMES.length, seed = 11): HeatRow[] {
       scannedAt: noScan
         ? null
         : new Date(SAMPLE_NOW - rand() * rand() * 30 * 24 * HOUR).toISOString(),
-      href: `#service-${i + 1}`,
+      href: `/services/${i + 1}`,
     });
   }
   return out;

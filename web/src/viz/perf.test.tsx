@@ -1,10 +1,14 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { act, fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render as baseRender } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { MemoryRouter } from 'react-router';
 import { HeatStrip } from './HeatStrip';
 import { PipelineStrip } from './PipelineStrip';
 import { SAMPLE_NOW, samplePipelines, sampleServices } from './samples';
+
+const render = (ui: ReactElement) => baseRender(ui, { wrapper: MemoryRouter });
 
 /**
  * Render budgets in jsdom, which is several times slower than a browser: the

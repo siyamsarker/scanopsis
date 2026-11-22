@@ -1,7 +1,9 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render as baseRender, screen, within } from '@testing-library/react';
+import type { ReactElement } from 'react';
+import { MemoryRouter } from 'react-router';
 import Gallery from './Gallery';
 import { HeatStrip, type HeatRow } from './HeatStrip';
 import { PipelineSpark } from './PipelineSpark';
@@ -12,6 +14,10 @@ import { DistributionMini, SeverityBar } from './SeverityBar';
 import { Delta, Sparkline } from './Sparkline';
 import type { PipelinePoint } from './stripLayout';
 import { TrendArea } from './TrendArea';
+import { internalPath, isSafeHref, SafeLink } from './links';
+
+/** Every render gets a router, since kit links are router links. */
+const render = (ui: ReactElement) => baseRender(ui, { wrapper: MemoryRouter });
 
 function reduceMotion(reduce: boolean) {
   vi.stubGlobal(
@@ -541,5 +547,77 @@ describe('Gallery', () => {
     expect(samplePipelines(5)).toEqual(samplePipelines(5));
     expect(sampleServices(3)).toEqual(sampleServices(3));
     expect(sampleUploads(3)).toHaveLength(3);
+  });
+});
+
+describe('links from data', () => {
+  const hostile = [
+    'javascript:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    '//evil.example',
+    '/\\evil.example',
+    '/path\u0000with-null',
+    ' /leading-space',
+    '',
+  ];
+
+  it('accepts only internal paths with exactly one leading slash', () => {
+    expect(internalPath('/services/2')).toBe('/services/2');
+    expect(internalPath('/services/2/findings?severity=high')).toBe(
+      '/services/2/findings?severity=high',
+    );
+    for (const value of hostile) expect(internalPath(value)).toBeUndefined();
+    expect(internalPath(null)).toBeUndefined();
+    expect(internalPath('https://gitlab.example.com')).toBeUndefined();
+  });
+
+  it('renders internal paths as router links, http(s) as external links, anything else as text', () => {
+    render(
+      <>
+        <SafeLink href="/services/2">internal</SafeLink>
+        <SafeLink href="https://gitlab.example.com/a/b">external</SafeLink>
+        {hostile.map((h, i) => (
+          <SafeLink key={i} href={h}>
+            {`hostile ${i}`}
+          </SafeLink>
+        ))}
+      </>,
+    );
+    expect(screen.getByRole('link', { name: 'internal' })).toHaveAttribute('href', '/services/2');
+    const external = screen.getByRole('link', { name: 'external' });
+    expect(external).toHaveAttribute('href', 'https://gitlab.example.com/a/b');
+    expect(external).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getAllByRole('link')).toHaveLength(2);
+    hostile.forEach((_, i) => expect(screen.getByText(`hostile ${i}`).tagName).toBe('SPAN'));
+    expect(isSafeHref('javascript:alert(1)')).toBe(false);
+  });
+
+  it('never links a heat strip row or a severity segment to a hostile target', () => {
+    const rows: HeatRow[] = hostile.map((href, i) => ({
+      id: i,
+      name: `svc-${i}`,
+      counts: { high: i + 1 },
+      href,
+    }));
+    const heat = render(<HeatStrip rows={rows} />);
+    expect(heat.container.querySelectorAll('a')).toHaveLength(0);
+    expect(screen.getByText('svc-0')).toBeInTheDocument();
+    heat.unmount();
+    const bar = render(
+      <SeverityBar
+        counts={{ critical: 1, high: 2, medium: 3, low: 4 }}
+        hrefFor={(s) =>
+          ({
+            critical: 'javascript:alert(1)',
+            high: 'data:text/html,<b>x</b>',
+            medium: '//evil.example',
+            low: '/\\evil.example',
+          })[s as 'critical']
+        }
+      />,
+    );
+    expect(bar.container.querySelectorAll('a')).toHaveLength(0);
+    // With nothing linkable the bar stays one image.
+    expect(screen.getByRole('img')).toBeInTheDocument();
   });
 });

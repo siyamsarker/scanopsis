@@ -9,6 +9,7 @@
  */
 
 import { useMemo, useState, type ReactNode } from 'react';
+import { MemoryRouter, useInRouterContext } from 'react-router';
 import { DistributionMini, SeverityBar } from './SeverityBar';
 import { HeatStrip } from './HeatStrip';
 import { PipelineSpark } from './PipelineSpark';
@@ -79,7 +80,18 @@ function Panel({ title, children }: { title?: string; children: ReactNode }) {
   );
 }
 
-export default function Gallery({ theme: initial = 'dark' }: { theme?: GalleryTheme }) {
+/** Links in the kit are router links; outside the app the gallery brings its own router. */
+export default function Gallery({ theme = 'dark' }: { theme?: GalleryTheme }) {
+  const inRouter = useInRouterContext();
+  if (inRouter) return <GalleryBody theme={theme} />;
+  return (
+    <MemoryRouter>
+      <GalleryBody theme={theme} />
+    </MemoryRouter>
+  );
+}
+
+function GalleryBody({ theme: initial }: { theme: GalleryTheme }) {
   const [theme, setTheme] = useState<GalleryTheme>(initial);
   const [selected, setSelected] = useState('Nothing selected yet');
   const many = useMemo(() => samplePipelines(96), []);
@@ -269,7 +281,7 @@ export default function Gallery({ theme: initial = 'dark' }: { theme?: GalleryTh
               <SeverityBar
                 counts={PAYMENTS}
                 size="lg"
-                hrefFor={(s) => `#findings-${s}`}
+                hrefFor={(s) => `/services/1/findings?severity=${s}`}
                 label="Open vulnerabilities"
               />
             </Panel>
