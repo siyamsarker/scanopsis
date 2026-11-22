@@ -47,19 +47,31 @@ async function signInLocal(page: Page, user: string, password: string): Promise<
   await page.getByRole('button', { name: 'Sign in' }).click();
 }
 
+// The code field sends the code as soon as it has six digits.
 async function enterCode(page: Page, secret: string): Promise<void> {
   await page.getByLabel('6-digit code').fill(await freshCode(secret));
-  await page.getByRole('button', { name: 'Verify' }).click();
+}
+
+/** The enrolment key, read whole from the element that shows it in groups of four. */
+async function shownSecret(page: Page): Promise<string> {
+  const secret = page.getByLabel('Secret', { exact: true });
+  await expect(secret).toHaveText(/^([A-Z2-7]{1,4} ?)+$/);
+  return (await secret.getAttribute('data-secret')) ?? '';
+}
+
+/** Opens the row menu of a user or service and chooses an item. */
+async function rowAction(page: Page, name: string, item: string): Promise<void> {
+  await page.getByRole('button', { name: `Actions for ${name}` }).click();
+  await page.getByRole('menuitem', { name: item }).click();
 }
 
 // Walks the enrolment screens and returns the secret that was shown.
 async function enrol(page: Page): Promise<string> {
   await expect(page).toHaveURL(/\/2fa\/setup$/);
   await expect(page.getByRole('heading', { name: 'Set up two-factor sign-in' })).toBeVisible();
-  const secret = (await page.getByLabel('Secret', { exact: true }).innerText()).trim();
+  const secret = await shownSecret(page);
   await page.getByRole('button', { name: 'Next' }).click();
   await page.getByLabel('6-digit code').fill(await freshCode(secret));
-  await page.getByRole('button', { name: 'Confirm' }).click();
   await expect(page.getByRole('list', { name: 'Recovery codes' })).toBeVisible();
   await page.getByLabel('I have saved these codes').check();
   await page.getByRole('button', { name: 'Continue' }).click();
@@ -91,6 +103,7 @@ test('1. setup creates the administrator and enrols two-factor', async ({ browse
   await root.goto('/');
   await expect(root).toHaveURL(/\/setup$/);
   await expect(root.getByRole('heading', { name: 'Set up Scanopsis' })).toBeVisible();
+  await expect(root.getByText('Step 1 of 3')).toBeVisible();
 
   const create = async (token: string) => {
     await root.getByLabel('Setup token').fill(token);
@@ -109,11 +122,13 @@ test('1. setup creates the administrator and enrols two-factor', async ({ browse
 
   // Enrolment: QR code and secret, then a code from that secret.
   await expect(root.getByRole('img', { name: 'QR code for your authenticator app' })).toBeVisible();
-  rootSecret = (await root.getByLabel('Secret', { exact: true }).innerText()).trim();
+  // Setup continues its steps into the enrolment.
+  await expect(root.getByText('Step 2 of 3')).toBeVisible();
+  rootSecret = await shownSecret(root);
   expect(rootSecret).toMatch(/^[A-Z2-7]{16,}$/);
   await root.getByRole('button', { name: 'Next' }).click();
+  // The code confirms itself on the sixth digit.
   await root.getByLabel('6-digit code').fill(await freshCode(rootSecret));
-  await root.getByRole('button', { name: 'Confirm' }).click();
 
   const codes = root.getByRole('list', { name: 'Recovery codes' }).getByRole('listitem');
   await expect(codes).toHaveCount(10);
@@ -154,7 +169,6 @@ test('3. sign-in asks for the second factor; recovery codes work once', async ()
   await expect(root.getByRole('heading', { name: 'Enter your code' })).toBeVisible();
 
   await root.getByLabel('6-digit code').fill('000000');
-  await root.getByRole('button', { name: 'Verify' }).click();
   await expect(root.getByText('That code is not correct.')).toBeVisible();
 
   await enterCode(root, rootSecret);
@@ -192,29 +206,37 @@ test('4. settings: GitLab sign-in is configured and the secret stays hidden', as
   await expect(root.getByRole('heading', { name: 'Settings' })).toBeVisible();
 
   // Local sign-in cannot be turned off while GitLab is not configured.
-  const local = root.getByRole('switch', { name: /sign in with a local username and password/ });
+  const local = root.getByRole('switch', { name: 'Local accounts' });
+  const saveBar = root.getByRole('region', { name: 'Unsaved changes' });
   await expect(local).toBeChecked();
-  await local.uncheck();
-  await root.getByRole('button', { name: 'Save changes' }).click();
-  await expect(root.getByText('Some settings need attention. Nothing was saved.')).toBeVisible();
+  await expect(saveBar).toBeHidden();
+  await local.click();
+  await expect(local).not.toBeChecked();
+  await expect(saveBar).toContainText('1 unsaved change');
+  await saveBar.getByRole('button', { name: 'Save changes' }).click();
+  await expect(saveBar.getByText('Nothing was saved.')).toBeVisible();
   await expect(
     root.getByText('Local sign-in can be disabled only when GitLab sign-in is fully configured.'),
   ).toBeVisible();
+  // Discard puts the switch back without saving.
+  await saveBar.getByRole('button', { name: 'Discard' }).click();
+  await expect(local).toBeChecked();
   await root.reload();
   await expect(local).toBeChecked();
 
   // Configure GitLab against the fake provider.
-  await root.getByLabel('Base URL of the GitLab instance').fill('http://fake-gitlab:19000');
-  await root.getByLabel('Application ID of the GitLab OAuth application').fill('e2e-client');
-  await root.getByLabel('Secret of the GitLab OAuth application').fill(gitlabSecret);
-  await root.getByRole('button', { name: 'Save changes' }).click();
-  await expect(root.getByText('Settings saved. Changes apply now.')).toBeVisible();
+  await root.getByLabel('GitLab URL', { exact: true }).fill('http://fake-gitlab:19000');
+  await root.getByLabel('Application ID', { exact: true }).fill('e2e-client');
+  await root.getByLabel('Application secret', { exact: true }).fill(gitlabSecret);
+  await expect(saveBar).toContainText('3 unsaved changes');
+  await saveBar.getByRole('button', { name: 'Save changes' }).click();
+  await expect(root.getByText('Settings saved', { exact: true })).toBeVisible();
   await expect(root.getByText('Set here', { exact: true })).toHaveCount(3);
 
   // The secret is saved, and never shown again, on screen or from the API.
   await root.reload();
   await expect(root.getByText('Set here', { exact: true })).toHaveCount(3);
-  await expect(root.getByLabel('Secret of the GitLab OAuth application')).toHaveValue('');
+  await expect(root.getByLabel('Application secret', { exact: true })).toHaveValue('');
   expect(await root.content()).not.toContain(gitlabSecret);
   const settings = await rootContext.request.get('/api/v1/settings');
   expect(settings.ok()).toBe(true);
@@ -250,7 +272,7 @@ test('6. an administrator promotes a viewer', async () => {
   await root.goto('/admin/users');
   await expect(select(root, 'Role for alice')).toHaveText('Viewer');
   await choose(root, 'Role for alice', 'Admin');
-  await expect(root.getByText('Role changed to Admin.')).toBeVisible();
+  await expect(root.getByText('Alice Example is now an admin.', { exact: true })).toBeVisible();
 
   await alice.goto('/');
   await expect(account(alice).getByText('Admin', { exact: true })).toBeVisible();
@@ -261,9 +283,9 @@ test('6. an administrator promotes a viewer', async () => {
 
 test('7. the group allow-list admits subgroups and refuses others', async ({ browser }) => {
   await root.goto('/settings');
-  await root.getByLabel(/whose members may sign in/).fill('platform');
+  await root.getByLabel('Groups that may sign in', { exact: true }).fill('platform');
   await root.getByRole('button', { name: 'Save changes' }).click();
-  await expect(root.getByText('Settings saved. Changes apply now.')).toBeVisible();
+  await expect(root.getByText('Settings saved', { exact: true })).toBeVisible();
 
   const bob = await newUser(browser);
   await signInWithGitLab(bob.page, 'bob');
@@ -284,13 +306,15 @@ test('7. the group allow-list admits subgroups and refuses others', async ({ bro
 
 test('8. resetting two-factor ends the sessions and forces a new enrolment', async () => {
   await root.goto('/admin/users');
-  await root.getByRole('button', { name: 'Reset two-factor for alice' }).click();
+  await expect(root.getByRole('row', { name: /^Alice Example/ })).toContainText('On');
+  await rowAction(root, 'alice', 'Reset two-factor');
   const dialog = root.getByRole('alertdialog');
-  await expect(dialog.getByText('Reset two-factor for alice?')).toBeVisible();
+  await expect(dialog.getByText('Reset two-factor for Alice Example?')).toBeVisible();
   await dialog.getByRole('button', { name: 'Reset two-factor' }).click();
   await expect(
-    root.getByText('Two-factor reset. alice sets it up again at the next sign-in.'),
+    root.getByText('Alice Example sets it up again at the next sign-in.', { exact: true }),
   ).toBeVisible();
+  await expect(root.getByRole('row', { name: /^Alice Example/ })).toContainText('Not set up');
 
   await alice.reload();
   await expect(alice).toHaveURL(/\/login/);
@@ -417,6 +441,8 @@ test('23. the account page lists sessions and ends other ones', async ({ browser
   await expect(list.getByRole('listitem')).toHaveCount(2);
   await expect(list.getByText('This browser')).toHaveCount(1);
   await list.getByRole('button', { name: /^End session/ }).click();
+  await root.getByRole('alertdialog').getByRole('button', { name: 'End session' }).click();
+  await expect(root.getByText('Session ended', { exact: true })).toBeVisible();
   await expect(list.getByRole('listitem')).toHaveCount(1);
 
   await laptop.page.reload();
@@ -431,7 +457,7 @@ test('23. the account page lists sessions and ends other ones', async ({ browser
   await expect(list.getByText('Second factor not completed')).toBeVisible();
   await root.getByRole('button', { name: 'End all other sessions' }).click();
   await root.getByRole('alertdialog').getByRole('button', { name: 'End other sessions' }).click();
-  await expect(root.getByText('Ended 1 other session.')).toBeVisible();
+  await expect(root.getByText('1 session signed out. This browser stays signed in.', { exact: true })).toBeVisible();
   await expect(list.getByRole('listitem')).toHaveCount(1);
   await expect(root.getByRole('button', { name: 'End all other sessions' })).toBeDisabled();
 
@@ -439,22 +465,29 @@ test('23. the account page lists sessions and ends other ones', async ({ browser
   await expect(phone.page).toHaveURL(/\/login/);
   await phone.context.close();
 
-  await root.goto('/admin/audit');
-  const audit = root.getByRole('main').getByRole('table', { name: 'Audit log' });
-  await expect(audit).toContainText('session.revoked');
-  await expect(audit).toContainText('Sessions ended');
+  await root.goto('/admin/audit?action=session.revoked');
+  const audit = root.getByRole('main');
+  await expect(audit.getByRole('listitem')).toHaveCount(2);
+  await expect(audit).toContainText(/root.*ended 1 other session/);
+  await expect(audit).toContainText(/root.*ended one of their sessions/);
 });
 
 test('24. an administrator disables, enables and deletes users', async () => {
   await root.goto('/admin/users');
   const row = (name: string) => root.getByRole('row', { name: new RegExp(`^${name}\\b`) });
-  await expect(row('root').getByText('Your account')).toBeVisible();
+  // Your own account cannot be disabled or deleted.
+  await root.getByRole('button', { name: 'Actions for root' }).click();
+  await expect(root.getByRole('menuitem', { name: 'Disable user' })).toBeDisabled();
+  await expect(root.getByRole('menuitem', { name: 'Delete user' })).toBeDisabled();
+  await root.keyboard.press('Escape');
 
   // Disabling ends alice's session and refuses her next GitLab sign-in.
-  await root.getByRole('button', { name: 'Disable alice' }).click();
-  await root.getByRole('alertdialog').getByRole('button', { name: 'Disable' }).click();
-  await expect(root.getByText('alice is disabled and was signed out.')).toBeVisible();
-  await expect(row('alice').getByText('Disabled', { exact: true })).toBeVisible();
+  await rowAction(root, 'alice', 'Disable user');
+  await root.getByRole('alertdialog').getByRole('button', { name: 'Disable user' }).click();
+  await expect(
+    root.getByText('Alice Example was signed out everywhere and cannot sign in.', { exact: true }),
+  ).toBeVisible();
+  await expect(row('Alice Example').getByText('Disabled', { exact: true })).toBeVisible();
 
   await alice.reload();
   await expect(alice).toHaveURL(/\/login/);
@@ -465,37 +498,43 @@ test('24. an administrator disables, enables and deletes users', async () => {
   ).toBeVisible();
 
   // Enabling restores access, with the same two-factor setup.
-  await root.getByRole('button', { name: 'Enable alice' }).click();
-  await expect(root.getByText('alice can sign in again.')).toBeVisible();
+  await rowAction(root, 'alice', 'Enable user');
+  await expect(root.getByText('Alice Example can sign in again.', { exact: true })).toBeVisible();
   await signInWithGitLab(alice, 'alice');
   await enterCode(alice, aliceSecret);
   await expect(alice).toHaveURL(/\/$/);
   await expect(account(alice).getByText('Alice Example')).toBeVisible();
 
   // Deleting removes carol from the list.
-  await root.getByRole('button', { name: 'Delete carol' }).click();
+  await rowAction(root, 'carol', 'Delete user');
   await root.getByRole('alertdialog').getByRole('button', { name: 'Delete user' }).click();
-  await expect(row('carol')).toHaveCount(0);
+  await expect(root.getByText('User deleted', { exact: true })).toBeVisible();
+  await expect(row('Carol Example')).toHaveCount(0);
 
   await root.goto('/admin/audit');
-  const audit = root.getByRole('main').getByRole('table', { name: 'Audit log' });
-  for (const action of ['user.disabled', 'user.enabled', 'user.deleted']) {
-    await expect(audit).toContainText(action);
+  const audit = root.getByRole('main');
+  for (const sentence of ['disabled alice', 'enabled alice', 'deleted carol']) {
+    await expect(audit).toContainText(sentence);
   }
 });
 
 test('25. a settings change is audited with the values before and after', async () => {
   await root.goto('/settings');
-  await root.getByLabel(/may stay unused before the user must sign in again/).fill('45m');
+  await root.getByLabel('Idle timeout', { exact: true }).fill('45m');
   await root.getByRole('button', { name: 'Save changes' }).click();
-  await expect(root.getByText('Settings saved. Changes apply now.')).toBeVisible();
+  await expect(root.getByText('Settings saved', { exact: true })).toBeVisible();
 
   await root.goto('/admin/audit');
-  await choose(root, 'Action', /\(settings\.changed\)$/);
-  const audit = root.getByRole('main').getByRole('table', { name: 'Audit log' });
-  // The details are stored as JSON, which lists the shorter key first.
-  await expect(audit).toContainText('[{"to":"45m","key":"session.idle_timeout","from":"30m"}]');
+  await choose(root, 'Action', 'Settings changed');
+  await expect(root).toHaveURL(/action=settings\.changed/);
+  const audit = root.getByRole('main');
+  const newest = audit.getByRole('listitem').first();
+  await expect(newest).toContainText(/root.*changed 1 setting/);
+  const change = newest.getByRole('definition');
+  await expect(newest.getByRole('term')).toHaveText('Idle timeout');
+  await expect(change).toHaveText('from 30m to 45m');
   // Flow 4 saved the GitLab client secret: the log says only that it changed.
+  await expect(audit).toContainText('Changed; secret values are never recorded');
   await expect(audit).not.toContainText(gitlabSecret);
   const response = await rootContext.request.get('/api/v1/admin/audit?action=settings.changed');
   expect(await response.text()).not.toContain(gitlabSecret);
