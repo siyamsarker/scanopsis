@@ -265,6 +265,22 @@ times.
 | No `Strict-Transport-Security` header | The public URL starts with `http://`. | Use `https://`. |
 | GitLab says the redirect URI is invalid | The application's redirect URI is not `<public URL>/api/v1/auth/gitlab/callback`. | Correct it in GitLab. |
 | CI tokens are refused with "The token audience (aud) does not contain ..." | `aud` in `id_tokens` differs from the public URL by a character. | Use the exact public URL. |
+| The page is blank or the sign-in page has no style when Scanopsis is served under a path such as `/scanopsis/` | Sub-paths are not supported. The web interface loads its files from `/assets/...`, which the proxy does not forward. The public URL cannot contain a path either. | Serve Scanopsis at the root of its own host name, see [reverse proxy and TLS](deployment.md#reverse-proxy-and-tls). |
+| An upload fails with `413` and an HTML page | nginx limits the body to 1 MB by default. | Set `client_max_body_size 100m;`, see [verify the proxy](deployment.md#verify-the-proxy). |
+| Requests fail with `429` before the application limit is reached | A rate limit at the proxy, for example `limit_req`, counts all users behind one address together. | Raise the proxy limit or its `burst`, see [limit rates and restrict the webhook](deployment.md#limit-rates-and-restrict-the-webhook-optional). |
+| The SonarQube webhook gets `403` from the proxy | The webhook is restricted to an address, and SonarQube calls from another one. | Allow the address that the proxy sees for SonarQube. |
+| Responses are not compressed | No `gzip` (nginx) or `encode` (Caddy) setting, or the client sends no `Accept-Encoding`. | Add it, see [verify the proxy](deployment.md#verify-the-proxy), step 5. |
+
+## Containers and the database
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `connect to database: ... tls: failed to verify certificate: x509: certificate signed by unknown authority` | The database server uses a certificate from your own authority and the URL has `sslmode=verify-full`. `SCANOPSIS_CA_FILE` does not apply to the database. | Add `sslrootcert=/etc/scanopsis/db-ca.pem` to the URL and mount the file, see [use an existing PostgreSQL](deployment.md#step-2-write-the-database-url). |
+| `parse database URL: ... invalid percent-encoded token` | A special character in the password is not percent-encoded. | Encode the password, see [use an existing PostgreSQL](deployment.md#step-2-write-the-database-url). |
+| `apply migrations: ... permission denied for schema public (SQLSTATE 42501)` | The database role cannot create tables. | Make the role the owner of the database, or run `GRANT CREATE ON SCHEMA public TO scanopsis;`, see [step 1](deployment.md#step-1-create-the-role-and-the-database). |
+| `docker compose` warns about orphan containers after you switched to an existing database | The `db` container of the bundled database still exists. | Run `docker compose up -d --remove-orphans`. |
+| `docker inspect <container> --format '{{.State.OOMKilled}}'` prints `true` | The container exceeded `mem_limit`. | Raise `mem_limit` and keep `GOMEMLIMIT` about 20% below it, see [host settings](deployment.md#memory-and-process-limits). |
+| Log timestamps are in UTC and you expected local time | The container runs in UTC. | Set `TZ` in `.env`, see [time zone](deployment.md#time-zone). |
 
 If nothing here matches, collect the log (`docker compose logs --since 30m scanopsis`),
 the output of `curl -s <public URL>/api/v1/version`, and the steps to reproduce,
