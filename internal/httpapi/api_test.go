@@ -68,6 +68,7 @@ var rbacRoutes = []struct {
 	{"POST", "/api/v1/ingest/trivy", "", [6]string{"204", "204", "204", "204", "204", "204"}},
 	{"POST", "/api/v1/hooks/sonarqube", "", [6]string{"204", "204", "204", "204", "204", "204"}},
 	{"GET", "/api/v1/portfolio", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/portfolio/history", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/services", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"POST", "/api/v1/services", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 	{"GET", "/api/v1/services/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
@@ -498,7 +499,7 @@ func TestNotEnabled(t *testing.T) {
 }
 
 var featureIDs = []string{
-	"ingestTrivy", "sonarWebhook", "getPortfolio", "listServices", "createService", "getService",
+	"ingestTrivy", "sonarWebhook", "getPortfolio", "getPortfolioHistory", "listServices", "createService", "getService",
 	"updateService", "deleteService", "getServiceOverview", "listServiceScans", "getScan", "getScanDiff",
 	"listEarlierScans",
 	"listServiceVulnerabilities", "listServiceSecrets", "getServiceTrends", "getServiceSonar",

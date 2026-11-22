@@ -49,6 +49,8 @@ export interface PipelineStripProps {
   points: readonly PipelinePoint[];
   /** The quality gate's coverage condition, 0 to 100; drawn dashed on the coverage track. */
   gateCoverageThreshold?: number;
+  /** Name of the coverage track, e.g. "Coverage on new code". */
+  coverageLabel?: string;
   /** Height of the findings plot in px (one lane). */
   height?: number;
   /** Offer the "split by branch" toggle when more than one ref is present. */
@@ -83,7 +85,11 @@ function gateWord(p: StripPoint) {
 }
 
 /** What a column says to assistive technology; the tooltip shows the same. */
-export function describePipeline(p: StripPoint, timeZone?: string): string {
+export function describePipeline(
+  p: StripPoint,
+  timeZone?: string,
+  coverageLabel = 'Coverage',
+): string {
   const parts = [
     `Pipeline ${p.name}, ${formatDateTime(p.time, timeZone)}, ${p.ref}`,
     p.newTotal > 0
@@ -93,11 +99,21 @@ export function describePipeline(p: StripPoint, timeZone?: string): string {
     gateWord(p),
   ];
   if (p.coverage != null && Number.isFinite(p.coverage))
-    parts.push(`coverage ${formatPct(p.coverage)}`);
+    parts.push(`${coverageLabel.toLowerCase()} ${formatPct(p.coverage)}`);
   return parts.join(', ');
 }
 
-function DetailCard({ p, timeZone, hint }: { p: StripPoint; timeZone?: string; hint: boolean }) {
+function DetailCard({
+  p,
+  timeZone,
+  hint,
+  coverageLabel,
+}: {
+  p: StripPoint;
+  timeZone?: string;
+  hint: boolean;
+  coverageLabel: string;
+}) {
   return (
     <>
       <p className="viz-tip-title">
@@ -131,7 +147,7 @@ function DetailCard({ p, timeZone, hint }: { p: StripPoint; timeZone?: string; h
       {p.coverage != null && Number.isFinite(p.coverage) && (
         <TipRow
           glyph={<span className="viz-key-line" />}
-          label="Coverage"
+          label={coverageLabel}
           value={formatPct(p.coverage)}
         />
       )}
@@ -163,6 +179,7 @@ function yTicks(layout: StripLayout): Tick[] {
 export function PipelineStrip({
   points,
   gateCoverageThreshold,
+  coverageLabel = 'Coverage',
   height = 168,
   lanes = true,
   defaultSplit = false,
@@ -252,7 +269,7 @@ export function PipelineStrip({
       y: top,
       width: step,
       height: bottom - top,
-      label: describePipeline(c.point, timeZone),
+      label: describePipeline(c.point, timeZone, coverageLabel),
     };
   });
 
@@ -264,7 +281,11 @@ export function PipelineStrip({
     { key: 'fixed', label: 'Fixed', glyph: <span className="viz-key-fixed" /> },
   ];
   if (coverage) {
-    legend.push({ key: 'coverage', label: 'Coverage', glyph: <span className="viz-key-line" /> });
+    legend.push({
+      key: 'coverage',
+      label: coverageLabel,
+      glyph: <span className="viz-key-line" />,
+    });
     if (gateCoverageThreshold != null)
       legend.push({
         key: 'threshold',
@@ -428,7 +449,7 @@ export function PipelineStrip({
           {coverage && (
             <g className="viz-coverage">
               <text className="viz-direct" x={layout.left} y={coverage.top - 6}>
-                Coverage
+                {coverageLabel}
               </text>
               <Gridlines
                 ticks={coverage.y.domain().map((v) => ({ value: v, y: coverage.y(v), text: '' }))}
@@ -486,7 +507,12 @@ export function PipelineStrip({
             {renderTooltip ? (
               renderTooltip(activeColumn.point.source)
             ) : (
-              <DetailCard p={activeColumn.point} timeZone={timeZone} hint={Boolean(onSelect)} />
+              <DetailCard
+                p={activeColumn.point}
+                timeZone={timeZone}
+                hint={Boolean(onSelect)}
+                coverageLabel={coverageLabel}
+              />
             )}
           </ChartTooltip>
         )}
@@ -501,7 +527,7 @@ export function PipelineStrip({
           ...SEVERITIES.map((s) => `New ${s}`),
           'Fixed',
           'Gate',
-          'Coverage',
+          coverageLabel,
         ]}
         rows={all.map((p) => [
           p.name,

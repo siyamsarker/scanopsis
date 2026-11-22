@@ -21,11 +21,14 @@ import (
 // the heavy shape that makes first-seen lookups expensive: 3 artifacts x 50
 // scans x 2000 findings, and a newest scan with 300 new findings. The p95
 // over 30 calls of the overview, the findings page, a scan diff with the
-// previous and with the oldest scan, the list of earlier scans and three
-// searches in the default scope, the dashboard branches and protected refs
-// (an ID in a few services, in a twenty-fifth of them and in three quarters of
-// them), must stay under 150 ms. Searches of every ref are measured and
-// reported, and every search's totals are checked against a plain join.
+// previous and with the oldest scan, the list of earlier scans, the 90-day
+// trends of a background service (its dashboard branch, and every branch)
+// and three searches in the default scope, the dashboard branches and
+// protected refs (an ID in a few services, in a twenty-fifth of them and in
+// three quarters of them), must stay under 150 ms. Searches of every ref and
+// the trends of the heavy service, which compare 300000 findings, are
+// measured and reported; every search's totals are checked against a plain
+// join, and the trends' new and fixed counts against the scan diffs.
 func TestReadPerformance(t *testing.T) {
 	if testing.Short() {
 		t.Skip("seeds 540000 scans")
@@ -99,12 +102,15 @@ func TestReadPerformance(t *testing.T) {
 		{"search, ID in a few services", "/api/v1/search/vulnerabilities?id=" + typical, nil},
 		{"search, ID in every 25th service", "/api/v1/search/vulnerabilities?id=" + storetest.CommonVulnID, nil},
 		{"search, ID in 3 of 4 services", "/api/v1/search/vulnerabilities?id=" + storetest.WidespreadVulnID, nil},
+		{"trends, 90 days", "/api/v1/services/7/trends?days=90", nil},
+		{"trends, 90 days, every branch", "/api/v1/services/7/trends?days=90&all_refs=true", nil},
 	}
 	// Every ref of every service is searched only on request. It reads every
 	// current scan, so it is measured and reported but has no limit.
 	allRefs := []struct{ name, path string }{
 		{"search, every ref, ID in every 25th service", "/api/v1/search/vulnerabilities?scope=all&id=" + storetest.CommonVulnID},
 		{"search, every ref, ID in 3 of 4 services", "/api/v1/search/vulnerabilities?scope=all&id=" + storetest.WidespreadVulnID},
+		{"trends of the heavy service, 150 scans of 2000 findings", fmt.Sprintf("/api/v1/services/%d/trends?days=90", svc)},
 	}
 	for _, c := range allRefs {
 		get(t, mux, c.path)
@@ -137,7 +143,37 @@ func TestReadPerformance(t *testing.T) {
 		}
 	}
 
-	// The measured calls return what they should.
+	// The measured calls return what they should. The trends of the
+	// background service list the newest 300 of the 900 or more scans of
+	// main in 90 days, say how many there are, and carry the new and fixed
+	// counts of each scan's diff (checked for a sample).
+	var tr trendsJSON
+	getJSON(t, mux, "/api/v1/services/7/trends?days=90", &tr)
+	var inWindow int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM scans WHERE service_id = 7 AND ref = 'main'
+		AND scanned_at >= now() - interval '90 days'`).Scan(&inWindow); err != nil {
+		t.Fatal(err)
+	}
+	if len(tr.Points) != maxTrendScans || tr.Total != inWindow || !tr.Truncated || inWindow < 900 {
+		t.Errorf("trends: %d points of %d, truncated %v; want %d of %d (900 or more), truncated",
+			len(tr.Points), tr.Total, tr.Truncated, maxTrendScans, inWindow)
+	}
+	changed := 0
+	for i := 0; i < len(tr.Points); i += 7 {
+		p := tr.Points[i]
+		var d scanDiffJSON
+		getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff", p.ScanID), &d)
+		n := p.New.Critical + p.New.High + p.New.Medium + p.New.Low + p.New.Unknown
+		if n != d.NewTotal || p.Fixed != d.FixedTotal {
+			t.Errorf("trend point %d: new %d fixed %d, diff new %d fixed %d", p.ScanID, n, p.Fixed, d.NewTotal, d.FixedTotal)
+		}
+		if n+p.Fixed > 0 {
+			changed++
+		}
+	}
+	if changed == 0 {
+		t.Error("trends: no sampled point changed anything; the check proves nothing")
+	}
 	var diff struct {
 		NewTotal int `json:"new_total"`
 		New      []struct {

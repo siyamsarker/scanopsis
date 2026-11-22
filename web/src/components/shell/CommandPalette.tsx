@@ -23,6 +23,7 @@ import { useTheme, type Theme } from '../../theme';
 import { useReturnFocus } from '../Dialog';
 import { Kbd } from '../inputs';
 import { navFor, vulnerabilityId } from './nav';
+import { paletteFilter } from './paletteFilter';
 
 const itemClass =
   'flex min-h-10 cursor-default items-center gap-3 rounded-[8px] px-3 text-body-s text-text select-none ' +
@@ -76,7 +77,8 @@ function ServiceItems({ run }: { run: (to: string) => void }) {
       {items.map(({ service }) => (
         <Item
           key={service.id}
-          value={`service ${service.name} ${service.gitlab_project_path}`}
+          value={`service:${service.id}`}
+          keywords={[service.name, service.gitlab_project_path]}
           icon={Boxes}
           hint={<span className="font-mono">{service.gitlab_project_path}</span>}
           onSelect={() => run(`/services/${service.id}`)}
@@ -145,7 +147,12 @@ export default function CommandPalette({
           className="overlay anim-pop fixed inset-x-3 top-3 z-50 mx-auto flex max-h-[min(34rem,calc(100dvh-1.5rem))] max-w-[640px] flex-col overflow-hidden rounded-panel sm:top-[12vh]"
         >
           <RadixDialog.Title className="sr-only">Command palette</RadixDialog.Title>
-          <Command label="Command palette" loop className="flex min-h-0 flex-col">
+          <Command
+            label="Command palette"
+            loop
+            filter={paletteFilter}
+            className="flex min-h-0 flex-col"
+          >
             <div className="flex items-center gap-3 border-b border-line px-4">
               <Search size={18} strokeWidth={1.75} aria-hidden="true" className="text-text-muted" />
               <Command.Input
@@ -163,7 +170,7 @@ export default function CommandPalette({
               {vulnId ? (
                 <Command.Group heading="Vulnerability" forceMount className={groupClass}>
                   <Item
-                    value={`vulnerability ${vulnId}`}
+                    value={`vulnerability:${vulnId}`}
                     icon={ShieldAlert}
                     forceMount
                     hint={<CornerDownLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
@@ -182,8 +189,8 @@ export default function CommandPalette({
                   {group.items.map((item) => (
                     <Item
                       key={item.to}
-                      value={`page ${item.label}`}
-                      keywords={item.keywords}
+                      value={`page:${item.to}`}
+                      keywords={[item.label, ...(item.keywords ?? [])]}
                       icon={item.Icon}
                       onSelect={() => run(item.to)}
                     >

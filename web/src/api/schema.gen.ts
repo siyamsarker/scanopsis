@@ -487,6 +487,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/portfolio/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recent pipelines of every service and the portfolio over the last week.
+         * @description For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts. The answer is computed at most once every 30 seconds and may be that far behind the latest upload; when nothing changed it is reused for up to 2 minutes. generated_at says when it was computed.
+         */
+        get: operations["getPortfolioHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/services": {
         parameters: {
             query?: never;
@@ -647,7 +667,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Severity counts per scan over time for one ref. */
+        /** Severity counts per scan over time, with what each scan changed. */
         get: operations["getServiceTrends"];
         put?: never;
         post?: never;
@@ -958,13 +978,20 @@ export interface components {
         SecretFindingList: {
             items: components["schemas"]["SecretFinding"][];
         };
+        /** @description One installed package and what upgrading it clears. Risk points weigh each finding critical 10, high 5, medium 3, low 1, unknown 5 (the OWASP Dependency-Track weights). */
         PackageImpact: {
             pkg_name: string;
             installed_version: string;
-            /** @description Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. */
+            /** @description Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable. */
             fix_version: string;
             findings: number;
             by_severity: components["schemas"]["SeverityCounts"];
+            /** @description Findings that report a fixed version. */
+            fixable: number;
+            /** @description Risk points of all the findings. */
+            risk: number;
+            /** @description Risk points of the fixable findings, which the upgrade to fix_version clears. */
+            risk_cleared: number;
         };
         /**
          * @description How the ref was chosen: requested (the ref parameter), default (the dashboard branch an administrator chose, even without scans yet) or latest (the ref with the most recent scan).
@@ -990,6 +1017,7 @@ export interface components {
             by_class: {
                 [key: string]: components["schemas"]["SeverityCounts"];
             };
+            /** @description Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last. */
             top_packages: components["schemas"]["PackageImpact"][];
             /**
              * Format: date-time
@@ -1032,6 +1060,7 @@ export interface components {
             scan_id: number;
             /** @enum {string} */
             kind: "image" | "secret-fs";
+            ref: string;
             /** Format: date-time */
             scanned_at: string;
             /** Format: int64 */
@@ -1040,11 +1069,25 @@ export interface components {
             artifact_name: string;
             counts: components["schemas"]["SeverityCounts"];
             fixable: number;
+            /**
+             * Format: int64
+             * @description The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan.
+             */
+            previous_scan_id: number | null;
+            /** @description Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none. */
+            new: components["schemas"]["SeverityCounts"];
+            /** @description Findings of the previous scan that this scan no longer has, as fixed_total of the scan diff counts them. */
+            fixed: number;
         };
         Trends: {
             ref: string | null;
             ref_source: components["schemas"]["RefSource"];
+            /** @description The newest 300 scans of the window at most, by scan time over every ref listed, oldest first. */
             points: components["schemas"]["TrendPoint"][];
+            /** @description Number of scans in the window, including any left out of points. */
+            total: number;
+            /** @description True when the oldest scans of the window were left out because more than 300 fall in it. */
+            truncated: boolean;
         };
         /**
          * @description null when SonarQube did not report the metric.
@@ -1119,6 +1162,34 @@ export interface components {
                 services_with_critical: number;
                 fixable: number;
             };
+            /** Format: date-time */
+            generated_at: string;
+        };
+        PortfolioHistory: {
+            /** @description Every non-archived service with at least one scan on its dashboard ref, by id. */
+            services: {
+                /** Format: int64 */
+                service_id: number;
+                /** @description The dashboard ref, chosen as in the portfolio. */
+                ref: string;
+                /** @description The latest pipelines of the ref, oldest first. */
+                points: {
+                    /** Format: int64 */
+                    pipeline_id: number;
+                    /**
+                     * Format: date-time
+                     * @description Scan time of the pipeline's last scan.
+                     */
+                    at: string;
+                    counts: components["schemas"]["SeverityCounts"];
+                }[];
+            }[];
+            /** @description The state of the listed services together at 7, 6, ... and 1 times 24 hours before generated_at, oldest first. */
+            days: {
+                /** Format: date-time */
+                at: string;
+                counts: components["schemas"]["SeverityCounts"];
+            }[];
             /** Format: date-time */
             generated_at: string;
         };
@@ -2471,6 +2542,28 @@ export interface operations {
             503: components["responses"]["Busy"];
         };
     };
+    getPortfolioHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Portfolio history. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortfolioHistory"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            503: components["responses"]["Busy"];
+        };
+    };
     listServices: {
         parameters: {
             query?: {
@@ -2980,6 +3073,8 @@ export interface operations {
                 /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
                 days?: number;
+                /** @description Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. The 300 scans listed at most are counted over every ref together. */
+                all_refs?: boolean;
             };
             header?: never;
             path: {
@@ -2989,7 +3084,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Trend points, oldest first. */
+            /** @description Trend points, oldest first: the newest 300 scans of the window at most. */
             200: {
                 headers: {
                     [name: string]: unknown;

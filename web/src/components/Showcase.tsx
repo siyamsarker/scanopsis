@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Archive, ChevronDown, GitBranch, Pencil, Plus, Settings, Trash2 } from 'lucide-react';
-import { useMemo, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { MemoryRouter, useInRouterContext } from 'react-router';
-import { Chart } from '../charts/Chart';
-import { lineSeries, stackedSeverityBars, treemap } from '../charts/options';
+import { HeatStrip, PipelineStrip, RiskIris } from '../viz';
+import { samplePipelines, sampleServices } from '../viz/samples';
 import { buttonClass, iconButtonClass, inputClass, monoInputClass } from '../ui';
 import { StepIndicator } from './AuthShell';
 import { Chip, GateBadge, RatingBadge, StatusPill, Tag } from './badges';
@@ -32,7 +32,7 @@ import { Popover, PopoverContent, PopoverTrigger } from './Popover';
 import { Segmented } from './Segmented';
 import { SeverityBadge, SeverityBar, SeverityCounts } from './Severity';
 import { SeverityMark, StatusMark } from './SeverityMark';
-import { SEVERITY_ORDER, worstSeverity, type SeverityCountValues } from './severityModel';
+import { SEVERITY_ORDER, type SeverityCountValues } from './severityModel';
 import { StatTile } from './StatTile';
 import {
   EmptyState,
@@ -170,25 +170,8 @@ const FINDING_COLUMNS: Column<Finding>[] = [
   },
 ];
 
-const POINTS = Array.from({ length: 14 }, (_, i) => ({
-  label: `#${4200 + i}`,
-  detail: `commit ${(0x9f3c2a + i * 977).toString(16)}`,
-  counts: {
-    critical: i % 5 === 0 ? 2 : 1,
-    high: 44 - i,
-    medium: 130 - i * 3,
-    low: 60 + (i % 4),
-    unknown: i % 3,
-  },
-}));
-
-const TREE = SERVICES.map((s) => ({
-  id: String(s.id),
-  name: s.name,
-  value: total(s.counts),
-  severity: worstSeverity(s.counts),
-  detail: `platform/${s.name}`,
-}));
+const PIPELINES = samplePipelines(24);
+const HEAT_ROWS = sampleServices(5);
 
 const THEMED_TOKENS = [
   ['bg', 'Canvas'],
@@ -679,17 +662,6 @@ function Body() {
   const [view, setView] = useState<'table' | 'treemap'>('table');
   const [chips, setChips] = useState<string[]>(['high']);
   const [branch, setBranch] = useState('main');
-  const stacked = useMemo(() => stackedSeverityBars(POINTS), []);
-  const coverage = useMemo(
-    () =>
-      lineSeries({
-        categories: POINTS.map((p) => p.label),
-        series: [{ name: 'Coverage', values: POINTS.map((_, i) => 70 + i * 1.2) }],
-        percent: true,
-      }),
-    [],
-  );
-  const tree = useMemo(() => treemap(TREE), []);
 
   return (
     <div className="mx-auto max-w-[1344px] px-4 py-8 sm:px-6 lg:px-8">
@@ -883,37 +855,27 @@ function Body() {
       </Section>
 
       <Section title="Charts">
+        <p className="mb-4 text-body-s text-text-muted">
+          The visual kit, with every variant, is at /gallery.html.
+        </p>
         <Grid cols={2}>
-          <Card padded={false}>
-            <CardHeader padded title="How did findings change scan by scan?" />
-            <div className="px-4 pb-4">
-              <Chart option={stacked} ariaLabel="Findings per scan by severity, last 14 scans" />
+          <Card>
+            <CardHeader title="Risk iris" />
+            <div className="flex items-center gap-6">
+              <RiskIris counts={{ critical: 2, high: 14, medium: 30, low: 9 }} gate="fail" />
+              <RiskIris counts={{ low: 3 }} gate="pass" size={40} />
             </div>
           </Card>
-          <Card padded={false}>
-            <CardHeader padded title="How is test coverage moving?" />
-            <div className="px-4 pb-4">
-              <Chart option={coverage} ariaLabel="Coverage percentage per scan, last 14 scans" />
-            </div>
+          <Card>
+            <CardHeader title="Loading" />
+            <SkeletonChart className="h-24" />
           </Card>
-          <Card padded={false}>
-            <CardHeader padded title="Which services carry the most findings?" />
-            <div className="px-4 pb-4">
-              <Chart option={tree} ariaLabel="Findings per service, coloured by worst severity" />
-            </div>
+          <Card className="sm:col-span-2">
+            <CardHeader title="Pipeline strip" />
+            <PipelineStrip points={PIPELINES} gateCoverageThreshold={80} animate={false} />
           </Card>
-          <Card padded={false}>
-            <CardHeader padded title="Loading, empty and error states" />
-            <div className="grid gap-2 px-4 pb-4">
-              <SkeletonChart className="h-24" />
-              <Chart
-                option={tree}
-                ariaLabel="empty"
-                status="empty"
-                heightClass="h-32"
-                emptyTitle="No scans yet"
-              />
-            </div>
+          <Card className="sm:col-span-2" padded={false}>
+            <HeatStrip rows={HEAT_ROWS} caption="Sample services" />
           </Card>
         </Grid>
       </Section>

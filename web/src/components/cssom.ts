@@ -12,7 +12,9 @@ import { useLayoutEffect, type RefObject } from 'react';
  */
 export function useCssom<T extends HTMLElement>(
   ref: RefObject<T | null>,
-  styles: Partial<Record<'flexGrow' | 'flexBasis' | 'height' | 'transform', string | number>>,
+  styles: Partial<
+    Record<'flexGrow' | 'flexBasis' | 'height' | 'width' | 'transform', string | number>
+  >,
 ) {
   useLayoutEffect(() => {
     const el = ref.current;

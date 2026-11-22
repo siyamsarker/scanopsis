@@ -154,7 +154,7 @@ func TestOptString(t *testing.T) {
 func TestHandlersRejectBadInput(t *testing.T) {
 	c := New(nil, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	h := c.Handlers()
-	for _, op := range []string{"getPortfolio", "listServices", "createService", "getService", "updateService", "deleteService", "getTrivyIntegration"} {
+	for _, op := range []string{"getPortfolio", "getPortfolioHistory", "listServices", "createService", "getService", "updateService", "deleteService", "getTrivyIntegration"} {
 		if h[op] == nil {
 			t.Errorf("missing handler %s", op)
 		}

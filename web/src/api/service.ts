@@ -19,8 +19,8 @@ const keys = {
   service: (id: number) => ['service', id] as const,
   overview: (id: number, ref: string | undefined) =>
     ['service', id, 'overview', ref ?? ''] as const,
-  trends: (id: number, ref: string | undefined, days: number) =>
-    ['service', id, 'trends', ref ?? '', days] as const,
+  trends: (id: number, ref: string | undefined, days: number, allRefs: boolean) =>
+    ['service', id, 'trends', ref ?? '', days, allRefs] as const,
   scans: (id: number, ref: string | undefined) => ['service', id, 'scans', ref ?? ''] as const,
   sonar: (id: number) => ['service', id, 'sonar'] as const,
   scan: (scanId: number) => ['service', 'scan', scanId] as const,
@@ -53,15 +53,23 @@ export function useOverview(id: number, ref: string | undefined, enabled = true)
   });
 }
 
-export function useTrends(id: number, ref: string | undefined, days: number) {
+/**
+ * Scans of a ref over the last `days`, with the findings each one added and
+ * fixed. `allRefs` returns the scans of every branch, for branch lanes.
+ */
+export function useTrends(id: number, ref: string | undefined, days: number, allRefs = false) {
   return useQuery({
-    queryKey: keys.trends(id, ref, days),
+    queryKey: keys.trends(id, ref, days, allRefs),
     queryFn: async () =>
       unwrap(
         await api.GET('/api/v1/services/{id}/trends', {
-          params: { path: { id }, query: { ref, days } },
+          params: { path: { id }, query: { ref, days, all_refs: allRefs || undefined } },
         }),
       ),
+    // Changing the range or the lanes keeps the strip on screen until the new
+    // points arrive; another ref never shows the old ref's points.
+    placeholderData: (previous, query) =>
+      query?.queryKey[1] === id && query.queryKey[3] === (ref ?? '') ? previous : undefined,
     retry: false,
   });
 }

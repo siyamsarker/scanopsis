@@ -552,6 +552,16 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
 
         "503": { $ref: "#/components/responses/Busy" }
+  /api/v1/portfolio/history:
+    get:
+      tags: [services]
+      summary: Recent pipelines of every service and the portfolio over the last week.
+      description: "For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts. The answer is computed at most once every 30 seconds and may be that far behind the latest upload; when nothing changed it is reused for up to 2 minutes. generated_at says when it was computed."
+      operationId: getPortfolioHistory
+      responses:
+        "200": { description: Portfolio history., content: { application/json: { schema: { $ref: "#/components/schemas/PortfolioHistory" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services:
     get:
       tags: [services]
@@ -726,14 +736,15 @@ paths:
   /api/v1/services/{id}/trends:
     get:
       tags: [services]
-      summary: Severity counts per scan over time for one ref.
+      summary: Severity counts per scan over time, with what each scan changed.
       operationId: getServiceTrends
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
         - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
         - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 90 } }
+        - { name: all_refs, in: query, description: "Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. The 300 scans listed at most are counted over every ref together.", schema: { type: boolean, default: false } }
       responses:
-        "200": { description: "Trend points, oldest first.", content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
+        "200": { description: "Trend points, oldest first: the newest 300 scans of the window at most.", content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1049,13 +1060,17 @@ components:
         items: { type: array, items: { $ref: "#/components/schemas/SecretFinding" } }
     PackageImpact:
       type: object
-      required: [pkg_name, installed_version, fix_version, findings, by_severity]
+      description: "One installed package and what upgrading it clears. Risk points weigh each finding critical 10, high 5, medium 3, low 1, unknown 5 (the OWASP Dependency-Track weights)."
+      required: [pkg_name, installed_version, fix_version, findings, by_severity, fixable, risk, risk_cleared]
       properties:
         pkg_name: { type: string }
         installed_version: { type: string }
-        fix_version: { type: string, description: Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. }
+        fix_version: { type: string, description: "Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable." }
         findings: { type: integer }
         by_severity: { $ref: "#/components/schemas/SeverityCounts" }
+        fixable: { type: integer, description: "Findings that report a fixed version." }
+        risk: { type: integer, description: "Risk points of all the findings." }
+        risk_cleared: { type: integer, description: "Risk points of the fixable findings, which the upgrade to fix_version clears." }
     RefSource:
       type: string
       enum: [requested, default, latest]
@@ -1079,7 +1094,7 @@ components:
           type: object
           additionalProperties: { $ref: "#/components/schemas/SeverityCounts" }
           description: Counts per Trivy result class (os-pkgs, lang-pkgs).
-        top_packages: { type: array, maxItems: 10, items: { $ref: "#/components/schemas/PackageImpact" } }
+        top_packages: { type: array, maxItems: 10, description: "Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last.", items: { $ref: "#/components/schemas/PackageImpact" } }
         data_at: { type: [string, "null"], format: date-time, description: Scan time of the newest scan in this overview. }
     ScanDiff:
       type: object
@@ -1100,23 +1115,31 @@ components:
         unchanged_counts: { $ref: "#/components/schemas/SeverityCounts", description: "Every unchanged finding by its severity in this scan." }
     TrendPoint:
       type: object
-      required: [scan_id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable]
+      required: [scan_id, kind, ref, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable, previous_scan_id, new, fixed]
       properties:
         scan_id: { type: integer, format: int64 }
         kind: { type: string, enum: [image, secret-fs] }
+        ref: { type: string }
         scanned_at: { type: string, format: date-time }
         gitlab_pipeline_id: { type: integer, format: int64 }
         commit_sha: { type: string }
         artifact_name: { type: string }
         counts: { $ref: "#/components/schemas/SeverityCounts" }
         fixable: { type: integer }
+        previous_scan_id: { type: [integer, "null"], format: int64, description: "The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan." }
+        new:
+          $ref: "#/components/schemas/SeverityCounts"
+          description: "Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none."
+        fixed: { type: integer, description: "Findings of the previous scan that this scan no longer has, as fixed_total of the scan diff counts them." }
     Trends:
       type: object
-      required: [ref, ref_source, points]
+      required: [ref, ref_source, points, total, truncated]
       properties:
         ref: { type: [string, "null"] }
         ref_source: { $ref: "#/components/schemas/RefSource" }
-        points: { type: array, items: { $ref: "#/components/schemas/TrendPoint" } }
+        points: { type: array, maxItems: 300, description: "The newest 300 scans of the window at most, by scan time over every ref listed, oldest first.", items: { $ref: "#/components/schemas/TrendPoint" } }
+        total: { type: integer, description: "Number of scans in the window, including any left out of points." }
+        truncated: { type: boolean, description: "True when the oldest scans of the window were left out because more than 300 fall in it." }
     Rating:
       type: [string, "null"]
       enum: [A, B, C, D, E, null]
@@ -1190,6 +1213,42 @@ components:
             failing_quality_gates: { type: integer }
             services_with_critical: { type: integer }
             fixable: { type: integer }
+        generated_at: { type: string, format: date-time }
+    PortfolioHistory:
+      type: object
+      required: [services, days, generated_at]
+      properties:
+        services:
+          type: array
+          description: "Every non-archived service with at least one scan on its dashboard ref, by id."
+          items:
+            type: object
+            required: [service_id, ref, points]
+            properties:
+              service_id: { type: integer, format: int64 }
+              ref: { type: string, description: "The dashboard ref, chosen as in the portfolio." }
+              points:
+                type: array
+                maxItems: 20
+                description: "The latest pipelines of the ref, oldest first."
+                items:
+                  type: object
+                  required: [pipeline_id, at, counts]
+                  properties:
+                    pipeline_id: { type: integer, format: int64 }
+                    at: { type: string, format: date-time, description: "Scan time of the pipeline's last scan." }
+                    counts: { $ref: "#/components/schemas/SeverityCounts" }
+        days:
+          type: array
+          minItems: 7
+          maxItems: 7
+          description: "The state of the listed services together at 7, 6, ... and 1 times 24 hours before generated_at, oldest first."
+          items:
+            type: object
+            required: [at, counts]
+            properties:
+              at: { type: string, format: date-time }
+              counts: { $ref: "#/components/schemas/SeverityCounts" }
         generated_at: { type: string, format: date-time }
     VulnerabilitySearch:
       type: object

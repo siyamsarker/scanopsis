@@ -107,6 +107,27 @@ function main(page: Page) {
   return page.getByRole('main');
 }
 
+// Weights and the iris wording of the risk points (see riskOf above).
+const weights = { critical: 10, high: 5, medium: 3, low: 1, unknown: 5 } as const;
+const severities = ['critical', 'high', 'medium', 'low', 'unknown'] as const;
+/** The iris' accessible explanation: "Risk 455: 1 critical × 10 = 10, …". */
+const explainRisk = (counts: Counts) =>
+  `Risk ${riskOf(counts)}: ${severities
+    .filter((k) => counts[k] > 0)
+    .map((k) => `${counts[k]} ${k} × ${weights[k]} = ${counts[k] * weights[k]}`)
+    .join(', ')}.`;
+const formatInt = (n: number) => n.toLocaleString('en-US');
+
+/** The link to a service on its portfolio card. */
+function serviceLink(page: Page, name: string): Locator {
+  return page.getByRole('list', { name: 'Services' }).getByRole('link', { name, exact: true });
+}
+
+/** The services the portfolio counts: "Showing 2 of 2 services". */
+function shownServices(page: Page): Locator {
+  return page.getByText(/^Showing \d+ of \d+ services?/);
+}
+
 async function expectUploaded(
   response: Awaited<ReturnType<typeof upload>>,
   report: Report,
@@ -186,30 +207,52 @@ export function registerDashboardFlows(session: Session): void {
     expect(other.service_id).not.toBe(first.service_id);
   });
 
-  test('14. portfolio: summary, tiles, sorting, treemap and URL filters', async () => {
+  test('14. portfolio: summary band, cards, sorting, list and URL filters', async () => {
     const page = root();
     await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Portfolio' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Portfolio', exact: true })).toBeVisible();
 
-    const summaryTiles = page.getByRole('region', { name: 'Summary' });
-    await expect(summaryTiles).toContainText(/Services\s*2(?!\d)/);
-    await expect(summaryTiles).toContainText(/Failing quality gates\s*0/);
-    await expect(summaryTiles).toContainText(/Services with critical vulnerabilities\s*2/);
-    await expect(summaryTiles).toContainText(new RegExp(`Fixable vulnerabilities\\s*${fixableTotal}`));
-    await expect(page.getByText('Showing 2 of 2 services')).toBeVisible();
+    // The band sums both services' current state.
+    const band = page.getByRole('region', { name: 'Summary' });
+    const risk = riskOf(current.counts) + riskOf(imageFull.counts);
+    await expect(band.getByTestId('portfolio-risk')).toHaveText(formatInt(risk));
+    await expect(band).toContainText(
+      `${formatInt(sum(current.counts) + sum(imageFull.counts))} open findings in 2 services`,
+    );
+    const critical = band.getByRole('button', { name: /services have critical findings/ });
+    await expect(critical).toContainText(/^2/);
+    await expect(band.getByRole('button', { name: /findings have a fixed version/ })).toContainText(
+      new RegExp(`^${formatInt(fixableTotal)}\\b`),
+    );
+    await expect(band).toContainText('No SonarQube analysis yet');
+    await expect(shownServices(page)).toHaveText('Showing 2 of 2 services');
 
-    // Each tile shows the current state of its service.
-    const payTile = page.getByRole('listitem').filter({ hasText: 'platform/payments-api' });
-    await expect(payTile).toContainText(summary(current.counts));
-    await expect(payTile).toContainText(`${current.fixable} fixable`);
-    await expect(payTile).toContainText('No SonarQube analysis yet');
-    const billTile = page.getByRole('listitem').filter({ hasText: 'platform/billing-worker' });
-    await expect(billTile).toContainText(summary(imageFull.counts));
-    await expect(billTile).toContainText(`${imageFull.fixable} fixable`);
+    // Each card shows the current state of its service: risk, counts, branch.
+    const payCard = page.getByRole('listitem').filter({ hasText: 'platform/payments-api' });
+    await expect(payCard.getByRole('img', { name: `payments-api: ${explainRisk(current.counts)}` })).toBeVisible();
+    await expect(payCard).toContainText(summary(current.counts));
+    await expect(payCard).toContainText(`${current.fixable} fixable`);
+    await expect(payCard).toContainText('main');
+    await expect(payCard).toContainText('No SonarQube analysis yet');
+    const billCard = page.getByRole('listitem').filter({ hasText: 'platform/billing-worker' });
+    await expect(billCard.getByRole('img', { name: `billing-worker: ${explainRisk(imageFull.counts)}` })).toBeVisible();
+    await expect(billCard).toContainText(summary(imageFull.counts));
+    await expect(billCard).toContainText(`${imageFull.fixable} fixable`);
 
-    // Sorting by name is alphabetical; by freshness the service whose newest
-    // report is newest comes first (the secret scan of payments-api).
-    const names = page.getByRole('heading', { level: 3 });
+    // A signal is a filter: choosing it narrows the cards, again clears it.
+    await critical.click();
+    await expect(page).toHaveURL(/filter=critical/);
+    await expect(critical).toHaveAttribute('aria-pressed', 'true');
+    await critical.click();
+    await expect(page).toHaveURL(/\/$/);
+
+    // Ranked by risk; sorting by name is alphabetical; by freshness the
+    // service whose newest report is newest comes first.
+    const names = page.getByRole('list', { name: 'Services' }).getByRole('heading', { level: 3 });
+    const byRisk = riskOf(imageFull.counts) >= riskOf(current.counts)
+      ? ['billing-worker', 'payments-api']
+      : ['payments-api', 'billing-worker'];
+    await expect(names).toHaveText(byRisk);
     await chooseOption(page, 'Sort by', 'Sort by name');
     await expect(page).toHaveURL(/sort=name/);
     await expect(names).toHaveText(['billing-worker', 'payments-api']);
@@ -219,80 +262,99 @@ export function registerDashboardFlows(session: Session): void {
     const paymentsFirst = Math.max(newestReport(current), newestReport(secretFs)) > newestReport(imageFull);
     await expect(names).toHaveText(paymentsFirst ? ['payments-api', 'billing-worker'] : ['billing-worker', 'payments-api']);
 
-    // The treemap is a canvas; the grid lists the same tiles.
-    await page.getByRole('radio', { name: 'Treemap' }).click();
-    await expect(page).toHaveURL(/view=treemap/);
-    const chart = page.getByRole('img', { name: /^Open vulnerabilities per service/ });
-    await expect(chart.locator('canvas')).toBeVisible();
-    await expect(page.getByText('Treemap tiles are also listed in the grid view.')).toBeVisible();
-    const chartTable = page.getByRole('table', { name: /^Open vulnerabilities per service/ });
-    await expect(chartTable).toContainText(new RegExp(`billing-worker\\s*Critical\\s*${sum(imageFull.counts)}`));
-    await expect(chartTable).toContainText(new RegExp(`payments-api\\s*Critical\\s*${sum(current.counts)}`));
+    // The list ranks by risk with every count, and is remembered.
+    await page.goto('/');
+    await page.getByRole('radio', { name: 'List' }).click();
+    await expect(page).toHaveURL(/view=list/);
+    const table = page.getByRole('table', { name: /^Services ranked by risk/ });
+    for (const [name, counts] of [['payments-api', current.counts], ['billing-worker', imageFull.counts]] as const) {
+      const row = table.getByRole('row').filter({ hasText: name });
+      await expect(row).toContainText(String(riskOf(counts)));
+      for (const k of severities) await expect(row).toContainText(`${counts[k]} ${k}`);
+    }
+    await page.goto('/');
+    await expect(page.getByRole('table', { name: /^Services ranked by risk/ })).toBeVisible();
+    await page.getByRole('radio', { name: 'Cards' }).click();
+    await expect(page.getByRole('list', { name: 'Services' })).toBeVisible();
 
     // Filters live in the URL.
     await page.goto('/?filter=critical');
-    await expect(page.getByText('Showing 2 of 2 services')).toBeVisible();
+    await expect(shownServices(page)).toHaveText('Showing 2 of 2 services');
     await expect(page.getByRole('button', { name: /^Has critical\s*2$/ })).toHaveAttribute('aria-pressed', 'true');
     await page.goto('/?filter=gate-failed');
     await expect(page.getByText('No services match')).toBeVisible();
     await page.goto('/?filter=fixable&q=payments');
-    await expect(page.getByText('Showing 1 of 2 services')).toBeVisible();
-    await expect(page.getByRole('heading', { level: 3 })).toHaveText(['payments-api']);
+    await expect(shownServices(page)).toHaveText('Showing 1 of 2 services');
+    await expect(names).toHaveText(['payments-api']);
   });
 
   test('15. service dashboard shows the current state of payments-api', async () => {
     const page = root();
     await page.goto('/');
-    await page.getByRole('link', { name: 'payments-api' }).click();
+    await serviceLink(page, 'payments-api').click();
     await expect(page).toHaveURL(/\/services\/\d+$/);
     await expect(page.getByRole('heading', { name: 'payments-api', level: 1 })).toBeVisible();
     const m = main(page);
 
-    // Counts are those of the scan with the later report time.
-    await expect(m).toContainText('Current state of main, latest scan per artifact');
-    await expect(m).toContainText(summary(current.counts));
-    const tile = (href: string) => m.locator(`a[href*="${href}"]`).first();
-    await expect(tile('severity=CRITICAL')).toHaveText(new RegExp(`Critical\\s*${current.counts.critical}$`));
-    await expect(tile('severity=HIGH')).toHaveText(new RegExp(`High\\s*${current.counts.high}$`));
-    await expect(tile('fixable=true')).toContainText(new RegExp(`Fixable\\s*${current.fixable}`));
-    await expect(tile('tab=secrets')).toContainText(new RegExp(`Secrets\\s*${secretFs.secretRules.length}`));
-    await expect(m).toContainText(new RegExp(`New since previous scan\\s*${newKeys.length}\\s*Findings not in the previous scan`));
-    await expect(m).toContainText(new RegExp(`Fixed since previous scan\\s*${fixedKeys.length}\\s*Findings gone since the previous scan`));
+    // The verdict: risk of the scan with the later report time, and what
+    // changed against the scan before it.
+    await expect(m.getByRole('img', { name: `payments-api: ${explainRisk(current.counts)}` })).toBeVisible();
+    expect(current.counts.critical).toBeGreaterThan(0);
+    await expect(page.getByTestId('verdict')).toHaveText(
+      `${current.counts.critical} critical; ${fixedKeys.length} fixed and ${newKeys.length} new since pipeline #${previousJob.pipelineId}.`,
+    );
 
-    // The package that clears the most findings comes first and is in the fixture.
-    const perPackage = new Map<string, number>();
-    for (const f of current.findings) {
-      const key = `${f.pkg}@${f.installed}`;
-      perPackage.set(key, (perPackage.get(key) ?? 0) + 1);
+    // The pipelines: one column per image pipeline. The older report is the
+    // artifact's first scan, so only the later one counts new and fixed.
+    const strip = m.getByRole('group', { name: 'Pipelines on main in the last 90 days: pipelines' });
+    await expect(strip.getByRole('button')).toHaveCount(2);
+    await expect(page.getByTestId('strip-totals')).toHaveText(
+      `2 pipelines on main in the last 90 days: ${newKeys.length} new and ${fixedKeys.length} fixed. The first scan of an artifact is its starting point and does not count as new.`,
+    );
+
+    // Open findings, shown once, each severity linked to its findings.
+    const open = m.getByRole('region', { name: 'Open findings' });
+    await expect(open).toContainText('Current state of main, latest scan per artifact');
+    for (const k of severities) {
+      if (current.counts[k] === 0) continue;
+      await expect(
+        open.locator(`a[href*="severity=${k.toUpperCase()}"]`),
+      ).toHaveAccessibleName(new RegExp(`^${current.counts[k]} ${k},`));
     }
-    const fixFirst = m.locator('ol > li');
-    await expect(fixFirst).toHaveCount(Math.min(10, perPackage.size));
+    await expect(open.getByRole('link', { name: new RegExp(`^${current.fixable} fixable`) })).toHaveAttribute('href', /fixable=true/);
+    await expect(open.getByRole('link', { name: new RegExp(`^${secretFs.secretRules.length} secrets`) })).toHaveAttribute('href', /tab=secrets/);
+    // Artifacts: the image and the source tree of the secret scan.
+    await expect(open).toContainText('Source tree');
+    await expect(open).toContainText('Secret scan');
+    await expect(open).toContainText(current.artifact);
+    await expect(open).toContainText(plural(sum(current.counts), 'vulnerability', 'vulnerabilities'));
+    await expect(open).toContainText('2 secrets');
+
+    // Fix first: the upgrade that clears the most risk points comes first,
+    // and its points are those of its findings that have a fixed version.
+    const cleared = new Map<string, number>();
+    for (const f of current.findings) {
+      if (!f.fixed) continue;
+      const key = `${f.pkg}@${f.installed}`;
+      cleared.set(key, (cleared.get(key) ?? 0) + weights[f.severity]);
+    }
+    const fixFirst = m.getByRole('list', { name: 'Packages to upgrade' }).getByRole('listitem');
+    await expect(fixFirst).toHaveCount(10);
     const top = await flat(fixFirst.first());
-    const topName = /^\d+\s+(\S+)\s+(\S+)/.exec(top);
+    const topName = /^\d+\s*(\S+?)\s*(\S+)\s*→/.exec(top);
     expect(topName, top).not.toBeNull();
     const [, pkg, installed] = topName ?? [];
-    const topFindings = perPackage.get(`${pkg}@${installed}`);
-    expect(topFindings, `${pkg}@${installed} is in ${current.name}`).toBeDefined();
-    expect(top).toContain(plural(topFindings ?? 0, 'finding'));
-    expect(topFindings).toBe(Math.max(...perPackage.values()));
-
-    // Artifacts: the image and the source tree of the secret scan.
-    await expect(m).toContainText('Source tree');
-    await expect(m).toContainText('Secret scan');
-    await expect(m).toContainText(current.artifact);
-    await expect(m).toContainText(plural(sum(current.counts), 'vulnerability', 'vulnerabilities'));
-    await expect(m).toContainText('2 secrets');
+    const topRisk = cleared.get(`${pkg}@${installed}`);
+    expect(topRisk, `${pkg}@${installed} is fixable in ${current.name}`).toBeDefined();
+    expect(top).toContain(`−${topRisk} risk`);
+    expect(topRisk).toBe(Math.max(...cleared.values()));
 
     // No SonarQube project is linked in this stack.
-    await expect(m).toContainText('SonarQube posture');
     await expect(m).toContainText('No SonarQube project linked');
 
-    // The trend chart: a canvas, with one point per image scan in its table.
-    await expect(m.getByText('How did the findings change scan by scan?')).toBeVisible();
-    const trend = page.getByRole('img', { name: /^Findings per scan/ });
-    await expect(trend.locator('canvas')).toBeVisible();
-    const points = page.getByRole('table', { name: /^Findings per scan/ }).getByRole('row');
-    await expect(points).toHaveCount(3); // header and the two image scans
+    // Choosing a pipeline opens its scan.
+    await strip.getByRole('button', { name: new RegExp(`^Pipeline #${currentJob.pipelineId},`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/scans/${scanIds[current.name]}$`));
   });
 
   test('16. findings explorer: counts, filters, grouping, details, secrets and the upgrade plan', async () => {
@@ -543,7 +605,7 @@ export function registerDashboardFlows(session: Session): void {
     await expect(table).not.toContainText('billing-worker');
 
     await page.goto('/');
-    await expect(summaryTile(page, 'Services')).toContainText(/Services\s*1(?!\d)/);
+    await expect(shownServices(page)).toHaveText('Showing 1 of 1 service');
     await expect(page.getByRole('heading', { level: 3 })).toHaveText(['payments-api']);
 
     const refused = await upload(request, imageFull, { ...jobs.billing, pipelineId: 2003, jobId: 6003 });
@@ -559,7 +621,7 @@ export function registerDashboardFlows(session: Session): void {
 
     await page.goto('/');
     await expect(page.getByRole('heading', { level: 3 })).toHaveText(['billing-worker', 'payments-api']);
-    await expect(summaryTile(page, 'Services')).toContainText(/Services\s*2(?!\d)/);
+    await expect(shownServices(page)).toHaveText('Showing 2 of 2 services');
   });
 
   test('20. a viewer sees the dashboard but not the admin screens', async () => {
@@ -574,11 +636,11 @@ export function registerDashboardFlows(session: Session): void {
 
     await viewer.goto('/');
     await expect(account(viewer).getByText('Viewer')).toBeVisible();
-    await expect(viewer.getByRole('heading', { name: 'Portfolio' })).toBeVisible();
-    await expect(summaryTile(viewer, 'Services')).toContainText(/Services\s*2(?!\d)/);
+    await expect(viewer.getByRole('heading', { name: 'Portfolio', exact: true })).toBeVisible();
+    await expect(shownServices(viewer)).toHaveText('Showing 2 of 2 services');
     await expect(viewer.getByRole('listitem').filter({ hasText: 'platform/payments-api' })).toContainText(summary(current.counts));
 
-    await viewer.getByRole('link', { name: 'payments-api' }).click();
+    await serviceLink(viewer, 'payments-api').click();
     await viewer.getByRole('link', { name: 'Explore findings' }).click();
     await expect(main(viewer).getByText(`${sum(current.counts)} vulnerabilities, ${current.fixable} fixable`)).toBeVisible();
 
@@ -643,10 +705,14 @@ export function registerDashboardFlows(session: Session): void {
     await expect(tile()).toContainText(summary(imageFull.counts));
     await expect(tile()).toContainText(`${imageFull.fixable} fixable`);
     await tile().getByRole('link', { name: 'payments-api' }).click();
-    await expect(page.getByTestId('ref-source')).toHaveText('Showing feature/login · dashboard branch');
+    await expect(page.getByTestId('ref-source')).toHaveText('Showing feature/login, the dashboard branch');
     await expect(m).toContainText('Current state of feature/login, latest scan per artifact');
-    await expect(m).toContainText(summary(imageFull.counts));
-    await expect(select(page, 'Git ref')).toHaveText('feature/login');
+    await expect(m.getByRole('img', { name: `payments-api: ${explainRisk(imageFull.counts)}` })).toBeVisible();
+    // The feature branch has one scan: its findings are the start, not news.
+    await expect(page.getByTestId('verdict')).toHaveText(
+      `${imageFull.counts.critical} critical; first scan on this branch.`,
+    );
+    await expect(select(page, 'Branch')).toHaveText('feature/login');
     await page.getByRole('link', { name: 'Explore findings' }).click();
     await expect(m.getByText(`${sum(imageFull.counts)} vulnerabilities, ${imageFull.fixable} fixable`)).toBeVisible();
 
@@ -656,8 +722,8 @@ export function registerDashboardFlows(session: Session): void {
     await expect(tile()).toContainText('No scans of release/9 yet.');
     await tile().getByRole('link', { name: 'payments-api' }).click();
     await expect(m).toContainText('No scans of release/9 yet');
-    await expect(page.getByTestId('ref-source')).toHaveText('Showing release/9 · dashboard branch');
-    await expect(m).not.toContainText('Findings by severity');
+    await expect(page.getByTestId('ref-source')).toHaveText('Showing release/9, the dashboard branch');
+    await expect(m.getByRole('region', { name: 'Open findings' })).toHaveCount(0);
 
     // Clearing the choice brings back the latest scanned branch.
     await page.goto('/admin/services');
@@ -670,10 +736,10 @@ export function registerDashboardFlows(session: Session): void {
     await expect(tile()).toContainText(summary(current.counts));
     await tile().getByRole('link', { name: 'payments-api' }).click();
     await expect(page.getByTestId('ref-source')).toHaveText(
-      'Showing main · latest scan (no dashboard branch chosen)',
+      'Showing main, the latest scanned branch; no dashboard branch is chosen',
     );
     await expect(m).toContainText('Current state of main, latest scan per artifact');
-    await expect(m).toContainText(summary(current.counts));
+    await expect(m.getByRole('img', { name: `payments-api: ${explainRisk(current.counts)}` })).toBeVisible();
 
     // Every change is in the audit log with the old and the new branch.
     await page.goto('/admin/audit');
@@ -728,6 +794,3 @@ export function registerDashboardFlows(session: Session): void {
   });
 }
 
-function summaryTile(page: Page, label: string): Locator {
-  return page.getByRole('region', { name: 'Summary' }).getByRole('link').filter({ hasText: label }).first();
-}

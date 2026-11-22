@@ -83,9 +83,11 @@ WHERE scan_id = ANY(@scan_ids::bigint[]) AND NOT suppressed
 GROUP BY class, severity;
 
 -- FindingsPackageGroups counts unsuppressed vulnerabilities per package,
--- installed version and severity, with the fixed versions reported.
+-- installed version and severity, how many of them report a fixed version,
+-- and the fixed versions reported.
 -- name: FindingsPackageGroups :many
 SELECT pkg_name, installed_version, severity, count(*)::bigint AS findings,
+       count(*) FILTER (WHERE fixed_version <> '')::bigint AS fixable,
        coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
 FROM vulnerabilities
 WHERE scan_id = ANY(@scan_ids::bigint[]) AND NOT suppressed
@@ -203,12 +205,90 @@ JOIN scans s ON s.id = f.scan_id
 WHERE f.scan_id = ANY(@scan_ids::bigint[])
 ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 ELSE 4 END, f.id;
 
+-- FindingsTrends returns the scans of a service since a time, oldest first,
+-- of one ref or, with @all_refs, of every ref. Each scan carries what it
+-- changed against the previous scan of the same ref, artifact and kind (which
+-- may lie before the window): the findings it introduced, by severity, and
+-- the number it fixed. The keys compared are (vuln_id, pkg_name, target) of
+-- unsuppressed vulnerabilities, each counted once, as in the scan diff; a
+-- key reported with several severities counts at its most severe. A first
+-- scan has every finding new; secret scans change nothing here.
+--
+-- Only the newest @max_scans scans of the window are returned, by
+-- (scanned_at, id) over every ref asked for; window_total on every row is
+-- the number of scans in the window before that cut, so the caller can say
+-- that older ones were left out.
+--
+-- One statement serves the whole window. The previous scan comes from lag()
+-- inside the window, and from an index probe only for the first scan of each
+-- (ref, artifact, kind). The keys of every scan involved are read once, by
+-- scan_id, and new and fixed are hash anti-joins over them, so the cost
+-- follows the number of findings of at most @max_scans scans and their
+-- predecessors, not the number of pairs times a per-pair lookup.
 -- name: FindingsTrends :many
-SELECT id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name,
-       count_critical, count_high, count_medium, count_low, count_unknown, count_fixable
-FROM scans
-WHERE service_id = @service_id AND ref = @ref AND scanned_at >= @since
-ORDER BY scanned_at, id;
+WITH capped AS MATERIALIZED (
+    SELECT s.id, s.service_id, s.kind, s.ref, s.scanned_at, s.gitlab_pipeline_id, s.commit_sha, s.artifact_name,
+           s.count_critical, s.count_high, s.count_medium, s.count_low, s.count_unknown, s.count_fixable,
+           count(*) OVER () AS window_total
+    FROM scans s
+    WHERE s.service_id = @service_id AND (@all_refs::boolean OR s.ref = @ref) AND s.scanned_at >= @since
+    ORDER BY s.scanned_at DESC, s.id DESC
+    LIMIT @max_scans
+), win AS MATERIALIZED (
+    SELECT c.*,
+           lag(c.id) OVER (PARTITION BY c.ref, c.artifact_name, c.kind ORDER BY c.scanned_at, c.id) AS prev_in_window
+    FROM capped c
+), pairs AS MATERIALIZED (
+    SELECT w.id, w.kind, COALESCE(w.prev_in_window, (
+               SELECT p.id FROM scans p
+               WHERE p.service_id = w.service_id AND p.ref = w.ref
+                 AND p.artifact_name = w.artifact_name AND p.kind = w.kind
+                 AND (p.scanned_at, p.id) < (w.scanned_at, w.id)
+               ORDER BY p.scanned_at DESC, p.id DESC
+               LIMIT 1)) AS prev_id
+    FROM win w
+), keys AS MATERIALIZED (
+    SELECT v.scan_id, v.vuln_id, v.pkg_name, v.target,
+           min(CASE v.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2
+                               WHEN 'LOW' THEN 3 ELSE 4 END) AS rank
+    FROM vulnerabilities v
+    WHERE v.scan_id = ANY(ARRAY(SELECT x.id FROM pairs x WHERE x.kind = 'image'
+                                UNION SELECT y.prev_id FROM pairs y WHERE y.kind = 'image' AND y.prev_id IS NOT NULL))
+      AND NOT v.suppressed
+    GROUP BY v.scan_id, v.vuln_id, v.pkg_name, v.target
+), added AS (
+    SELECT p.id,
+           count(*) FILTER (WHERE c.rank = 0) AS critical, count(*) FILTER (WHERE c.rank = 1) AS high,
+           count(*) FILTER (WHERE c.rank = 2) AS medium, count(*) FILTER (WHERE c.rank = 3) AS low,
+           count(*) FILTER (WHERE c.rank = 4) AS unknown
+    FROM pairs p
+    JOIN keys c ON c.scan_id = p.id
+    LEFT JOIN keys o ON o.scan_id = p.prev_id
+                    AND o.vuln_id = c.vuln_id AND o.pkg_name = c.pkg_name AND o.target = c.target
+    WHERE o.scan_id IS NULL
+    GROUP BY p.id
+), removed AS (
+    SELECT p.id, count(*) AS fixed
+    FROM pairs p
+    JOIN keys o ON o.scan_id = p.prev_id
+    LEFT JOIN keys c ON c.scan_id = p.id
+                    AND c.vuln_id = o.vuln_id AND c.pkg_name = o.pkg_name AND c.target = o.target
+    WHERE c.scan_id IS NULL
+    GROUP BY p.id
+)
+SELECT w.id, w.kind, w.ref, w.scanned_at, w.gitlab_pipeline_id, w.commit_sha, w.artifact_name,
+       w.count_critical, w.count_high, w.count_medium, w.count_low, w.count_unknown, w.count_fixable,
+       prev.id AS previous_scan_id,
+       coalesce(a.critical, 0)::bigint AS new_critical, coalesce(a.high, 0)::bigint AS new_high,
+       coalesce(a.medium, 0)::bigint AS new_medium, coalesce(a.low, 0)::bigint AS new_low,
+       coalesce(a.unknown, 0)::bigint AS new_unknown, coalesce(r.fixed, 0)::bigint AS fixed,
+       w.window_total::bigint AS window_total
+FROM win w
+JOIN pairs pr ON pr.id = w.id
+LEFT JOIN scans prev ON prev.id = pr.prev_id
+LEFT JOIN added a ON a.id = w.id
+LEFT JOIN removed r ON r.id = w.id
+ORDER BY w.scanned_at, w.id;
 
 -- FindingsSearch lists the unsuppressed findings of a vulnerability ID in the
 -- current state (latest scan per ref, artifact and kind) of the non-archived

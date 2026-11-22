@@ -273,12 +273,14 @@ look at it closely before you go on.
 
 Read the same numbers in three places and compare each with A and B:
 
-1. **The portfolio** (home page). Each service card shows the severity bar
-   and the fixable count: sums over the artifacts of the branch named on the
-   card. Secrets are not on the card.
-2. **The service dashboard.** **Findings by severity** and the **Critical**,
-   **High**, **Fixable** and **Secrets** tiles, plus the artifacts of the
-   current state with their own counts.
+1. **The portfolio** (home page). Each service card shows the count of each
+   severity next to its risk number: sums over the artifacts of the branch
+   named on the card. Hover the risk number to see how it is counted.
+   Secrets are not on the card. The list view shows the same counts per
+   service.
+2. **The service dashboard.** The **Open findings** panel: the severity bar
+   (hover a segment for its count), the **fixable** and **secrets** counts,
+   and the artifacts of the current state with their own counts.
 3. **The findings explorer.** Pick the branch, filter by severity and count
    the rows, or open the **Secrets** tab. The rows of one severity must add up
    to that severity's count.

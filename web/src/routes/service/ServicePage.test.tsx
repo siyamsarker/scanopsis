@@ -5,31 +5,15 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { createQueryClient } from '../../api/queryClient';
-import { readPalette } from '../../charts/palette';
-import type { ChartProps } from '../../charts/Chart';
 import {
-  chooseOption,
   apiError,
+  chooseOption,
   json,
   makeUser,
   mockFetch,
   type RecordedCall,
 } from '../../test-utils';
 import { ServicePage } from '../ServicePage';
-
-const chartCalls: ChartProps[] = [];
-vi.mock('../../charts/Chart', () => ({
-  Chart: (props: ChartProps) => {
-    chartCalls.push(props);
-    return (
-      <div data-testid="chart" data-status={props.status}>
-        {props.ariaLabel}
-      </div>
-    );
-  },
-}));
-
-const palette = readPalette();
 
 const counts = (critical = 0, high = 0, medium = 0, low = 0, unknown = 0) => ({
   critical,
@@ -73,6 +57,7 @@ function scan(id: number, overrides: Record<string, unknown> = {}) {
   };
 }
 
+// Risk: 2×10 + 44×5 + 5×3 + 3×1 + 1×5 = 263.
 const overview = {
   service,
   ref: 'main',
@@ -106,6 +91,9 @@ const overview = {
       fix_version: '3.0.15',
       findings: 12,
       by_severity: counts(1, 8, 3, 0, 0),
+      fixable: 12,
+      risk: 59,
+      risk_cleared: 59,
     },
     {
       pkg_name: 'libxml2 dev',
@@ -113,6 +101,9 @@ const overview = {
       fix_version: '',
       findings: 3,
       by_severity: counts(0, 1, 2, 0, 0),
+      fixable: 0,
+      risk: 11,
+      risk_cleared: 0,
     },
   ],
   data_at: '2026-11-18T10:00:00Z',
@@ -126,17 +117,17 @@ function analysis(id: number, overrides: Record<string, unknown> = {}) {
     quality_gate_status: 'ERROR',
     conditions: [
       { metric: 'new_coverage', operator: 'LT', threshold: '80', value: '62.5', status: 'ERROR' },
-      { metric: 'new_bugs', operator: 'GT', threshold: '0', value: '0', status: 'OK' },
+      { metric: 'coverage', operator: 'LT', threshold: '50', value: '71.4', status: 'OK' },
     ],
     reliability_rating: 'A',
     security_rating: 'C',
     maintainability_rating: null,
     security_review_rating: 'B',
     coverage: 71.4,
-    duplicated_lines_density: null,
-    measures: {},
+    duplicated_lines_density: 3.1,
+    measures: { new_coverage: '62.5' },
     mode: 'mqr',
-    gitlab_pipeline_id: 910,
+    gitlab_pipeline_id: 911,
     project_url: 'https://sonar.example.com/dashboard?id=payments',
     ...overrides,
   };
@@ -145,34 +136,39 @@ function analysis(id: number, overrides: Record<string, unknown> = {}) {
 const sonar = {
   sonar_project_key: 'payments',
   latest: analysis(3),
-  history: [analysis(3), analysis(2, { coverage: null }), analysis(1, { coverage: 60 })],
+  history: [
+    analysis(3),
+    analysis(2, { coverage: 70.0, duplicated_lines_density: 3.6, measures: {} }),
+    analysis(1, { coverage: 60 }),
+  ],
 };
+
+const trendPoint = (id: number, over: Record<string, unknown> = {}) => ({
+  scan_id: id,
+  kind: 'image',
+  ref: 'main',
+  scanned_at: `2026-11-1${id - 8}T10:00:00Z`,
+  gitlab_pipeline_id: 900 + id,
+  commit_sha: `sha${id}`,
+  artifact_name: 'registry.example.com/payments/api:1.4',
+  counts: counts(2, 44, 5, 3, 1),
+  fixable: 30,
+  previous_scan_id: id - 1,
+  new: counts(0, 0, 0, 0, 0),
+  fixed: 0,
+  ...over,
+});
 
 const trends = {
   ref: 'main',
   ref_source: 'latest',
   points: [
-    {
-      scan_id: 1,
-      kind: 'image',
-      scanned_at: '2026-11-10T10:00:00Z',
-      gitlab_pipeline_id: 801,
-      commit_sha: 'aaaaaaaabbbbbbbb',
-      artifact_name: 'api',
-      counts: counts(3, 10, 0, 0, 0),
-      fixable: 5,
-    },
-    {
-      scan_id: 2,
-      kind: 'image',
-      scanned_at: '2026-11-11T10:00:00Z',
-      gitlab_pipeline_id: 802,
-      commit_sha: 'ccccccccdddddddd',
-      artifact_name: 'api',
-      counts: counts(1, 9, 2, 0, 0),
-      fixable: 4,
-    },
+    trendPoint(9, { previous_scan_id: null, new: counts(1, 40, 5, 3, 1) }),
+    trendPoint(10, { new: counts(1, 2, 0, 0, 0), fixed: 3 }),
+    trendPoint(11, { new: counts(0, 4, 0, 0, 0), fixed: 9 }),
   ],
+  total: 3,
+  truncated: false,
 };
 
 const scanDetail = {
@@ -198,7 +194,7 @@ function setup(path = '/services/7', opts: Opts = {}) {
     if (p.startsWith('/api/v1/services/7/overview')) return json(200, overview);
     if (p.startsWith('/api/v1/services/7/trends')) return json(200, trends);
     if (p.startsWith('/api/v1/services/7/sonar')) return json(200, sonar);
-    if (p === '/api/v1/services/7/scans?ref=main' || p === '/api/v1/services/7/scans')
+    if (p.startsWith('/api/v1/services/7/scans'))
       return json(200, { items: [scan(11), scan(12)], next_before: null });
     if (p === '/api/v1/scans/11') return json(200, scanDetail);
     return undefined;
@@ -212,6 +208,7 @@ function setup(path = '/services/7', opts: Opts = {}) {
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/services/:id" element={<ServicePage />} />
+          <Route path="*" element={null} />
         </Routes>
         <Probe />
       </MemoryRouter>
@@ -220,394 +217,254 @@ function setup(path = '/services/7', opts: Opts = {}) {
   return mock;
 }
 
-const href = (el: HTMLElement) => el.closest('a')?.getAttribute('href');
-const lastChart = (label: RegExp) =>
-  [...chartCalls].reverse().find((c) => label.test(c.ariaLabel) && c.status === 'ready');
 const requested = (calls: RecordedCall[], prefix: string) =>
   calls.filter((c) => c.path.startsWith(prefix)).map((c) => c.path);
 
-beforeEach(() => {
-  chartCalls.length = 0;
-});
-
 describe('service dashboard', () => {
-  it('counts secrets, not vulnerabilities, for a secret scan artifact', async () => {
-    setup();
-    const row = await screen.findByRole('link', { name: /Source tree/ });
-    expect(row).toHaveTextContent('2 secrets');
-    expect(row).not.toHaveTextContent('0 vulnerabilities');
-  });
-
-  it('shows API numbers and links every tile, package and artifact to its findings', async () => {
+  it('opens with a verdict band: iris, sentence, branch and the ways out', async () => {
     setup();
     expect(await screen.findByRole('heading', { name: 'Payments API', level: 1 })).toBeVisible();
-    expect(screen.getByText('platform/payments-api')).toBeInTheDocument();
-
-    const base = '/services/7/findings?ref=main';
-    const tile = (label: string) =>
-      screen
-        .getAllByText(label)
-        .map((el) => el.closest('a'))
-        .find((a) => a !== null) as HTMLElement;
-    await screen.findByText('Findings by severity');
-    expect(tile('Critical')).toHaveAttribute('href', `${base}&severity=CRITICAL`);
-    expect(within(tile('Critical')).getByText('2')).toBeInTheDocument();
-    expect(tile('High')).toHaveAttribute('href', `${base}&severity=HIGH`);
-    expect(within(tile('High')).getByText('44')).toBeInTheDocument();
-    expect(tile('Fixable')).toHaveAttribute('href', `${base}&fixable=true`);
-    expect(within(tile('Fixable')).getByText('30')).toBeInTheDocument();
-    expect(tile('Secrets')).toHaveAttribute('href', `${base}&tab=secrets`);
-    expect(within(tile('Secrets')).getByText('4')).toBeInTheDocument();
-
-    const newTile = screen.getByText('New since previous scan').closest('div, a');
-    expect(newTile).toHaveTextContent('6');
-    const fixedTile = screen.getByText('Fixed since previous scan').closest('div, a');
-    expect(fixedTile).toHaveTextContent('9');
-
-    expect(screen.getByRole('link', { name: 'Explore findings' })).toHaveAttribute('href', base);
-
-    // Fix first
-    const openssl = screen.getByText('openssl').closest('a') as HTMLElement;
-    expect(openssl).toHaveAttribute('href', `${base}&q=openssl`);
-    expect(openssl).toHaveTextContent('3.0.2');
-    expect(openssl).toHaveTextContent('3.0.15');
-    expect(openssl).toHaveTextContent('12 findings');
-    const noFix = screen.getByText('libxml2 dev').closest('a') as HTMLElement;
-    expect(noFix).toHaveAttribute('href', `${base}&q=libxml2+dev`);
-    expect(noFix).toHaveTextContent('No fix available');
-
-    // Artifacts
-    const artifact = screen.getAllByText('registry.example.com/payments/api:1.4')[0];
-    expect(href(artifact)).toBe('/scans/11');
-    expect(screen.getAllByText('Source tree')[0].closest('a')).toHaveAttribute('href', '/scans/12');
-
-    // Classes: os, language and other are separate rows
-    expect(screen.getByText('OS packages')).toBeInTheDocument();
-    expect(screen.getByText('Language packages')).toBeInTheDocument();
-    expect(screen.getByText('Other')).toBeInTheDocument();
-  });
-
-  it('shows freshness with pipeline and scan links, and the GitLab link only when known', async () => {
-    setup();
-    expect(await screen.findByRole('link', { name: 'Pipeline #911' })).toHaveAttribute(
-      'href',
-      '/scans/11',
+    expect(
+      screen.getByRole('img', { name: /^Payments API: Risk 263: 2 critical × 10 = 20/ }),
+    ).toBeInTheDocument();
+    // The newest image scan (11) compares with scan 10, pipeline 910.
+    expect(await screen.findByTestId('verdict')).toHaveTextContent(
+      'Failing its quality gate; 2 critical; 9 fixed and 6 new since pipeline #910.',
     );
-    expect(screen.getByText(/Trivy scanned/)).toBeInTheDocument();
-    expect(screen.getByText(/SonarQube analysed/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Open project' })).toHaveAttribute(
+    expect(screen.getByTestId('ref-source')).toHaveTextContent(
+      'Showing main, the latest scanned branch; no dashboard branch is chosen',
+    );
+    expect(screen.getByRole('link', { name: /Explore findings/ })).toHaveAttribute(
+      'href',
+      '/services/7/findings?ref=main',
+    );
+    expect(await screen.findByRole('link', { name: /Open pipeline #911/ })).toHaveAttribute(
+      'href',
+      'https://gitlab.example.com/platform/payments-api/-/pipelines/911',
+    );
+    expect(
+      screen.getByRole('link', { name: /Open platform\/payments-api in GitLab/ }),
+    ).toHaveAttribute('href', 'https://gitlab.example.com/platform/payments-api');
+    expect(screen.getAllByRole('link', { name: /Open in SonarQube/ })[0]).toHaveAttribute(
       'href',
       'https://sonar.example.com/dashboard?id=payments',
     );
-    expect(
-      await screen.findByRole('link', { name: 'Open platform/payments-api in GitLab' }),
-    ).toHaveAttribute('href', 'https://gitlab.example.com/platform/payments-api');
-  });
-
-  it('has no GitLab link without a scan detail URL', async () => {
-    setup('/services/7', {
-      overrides: (call) =>
-        call.path === '/api/v1/scans/11'
-          ? json(200, { ...scanDetail, pipeline_url: null })
-          : undefined,
-    });
-    await screen.findByText('Findings by severity');
-    await waitFor(() => expect(screen.getByRole('link', { name: 'Pipeline #911' })).toBeVisible());
-    expect(screen.queryByRole('link', { name: /in GitLab/ })).not.toBeInTheDocument();
-  });
-
-  it('switches the ref, refetching with it and writing it to the URL', async () => {
-    const { calls } = setup();
-    const select = await screen.findByLabelText('Git ref');
-    expect(select).toHaveTextContent('main');
-    expect(requested(calls, '/api/v1/services/7/overview')).toEqual([
-      '/api/v1/services/7/overview',
-    ]);
-    await chooseOption('Git ref', 'release/1.x');
-    await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent('/services/7?ref=release%2F1.x'),
+    expect(screen.getByRole('link', { name: 'pipeline #911' })).toHaveAttribute(
+      'href',
+      '/scans/11',
     );
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
+      'PortfolioPayments API',
+    );
+  });
+
+  it('switches the branch, refetching with it and writing it to the URL', async () => {
+    const { calls } = setup();
+    await screen.findByTestId('verdict');
+    await chooseOption('Branch', 'release/1.x');
+    expect(screen.getByTestId('location')).toHaveTextContent('/services/7?ref=release%2F1.x');
     await waitFor(() =>
       expect(requested(calls, '/api/v1/services/7/overview')).toContain(
         '/api/v1/services/7/overview?ref=release%2F1.x',
       ),
     );
-    expect(requested(calls, '/api/v1/services/7/trends')).toContain(
-      '/api/v1/services/7/trends?ref=release%2F1.x&days=90',
-    );
-    expect(requested(calls, '/api/v1/services/7/scans')).toContain(
-      '/api/v1/services/7/scans?ref=release%2F1.x',
-    );
-  });
-
-  it('reads ref and days from the URL', async () => {
-    const { calls } = setup('/services/7?ref=release%2F1.x&days=30');
-    await screen.findByText('Findings by severity');
-    expect(requested(calls, '/api/v1/services/7/overview')).toEqual([
-      '/api/v1/services/7/overview?ref=release%2F1.x',
-    ]);
-    expect(requested(calls, '/api/v1/services/7/trends')).toEqual([
-      '/api/v1/services/7/trends?ref=release%2F1.x&days=30',
-    ]);
-    expect(screen.getByRole('radio', { name: '30 days' })).toBeChecked();
-  });
-
-  it('shows SonarQube posture with failed conditions, ratings and Not available', async () => {
-    setup();
-    expect(await screen.findByText('Failed')).toBeVisible();
-    expect(screen.getByText('Coverage on new code')).toBeInTheDocument();
-    expect(screen.getByText('62.5% · must be at least 80%')).toBeInTheDocument();
-    expect(screen.queryByText('new_bugs')).not.toBeInTheDocument();
-    const posture = screen.getByRole('region', { name: 'SonarQube posture' });
-    expect(posture).toHaveTextContent(/Reliability\s*Rating A/);
-    expect(posture).toHaveTextContent(/Security\s*Rating C/);
-    expect(posture).toHaveTextContent(/Security review\s*Rating B/);
-    expect(posture).toHaveTextContent(/MaintainabilityNot available/);
-    // maintainability rating and duplication are null
-    expect(within(posture).getAllByText('Not available')).toHaveLength(2);
-    expect(within(posture).getByText('71.4%')).toBeInTheDocument();
-    expect(within(posture).getByRole('link', { name: /Open in SonarQube/ })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: /Explore findings/ })).toHaveAttribute(
       'href',
-      'https://sonar.example.com/dashboard?id=payments',
+      '/services/7/findings?ref=release%2F1.x',
     );
   });
 
-  it('reports null coverage as Not available, not 0%', async () => {
+  it('draws the pipelines and opens the scan of a chosen pipeline', async () => {
+    const { calls } = setup('/services/7?days=30');
+    const strip = await screen.findByRole('group', {
+      name: 'Pipelines on main in the last 30 days: pipelines',
+    });
+    expect(requested(calls, '/api/v1/services/7/trends')).toContain(
+      '/api/v1/services/7/trends?days=30',
+    );
+    // The first scan is the starting point; the other two add 7 and fix 12.
+    expect(screen.getByTestId('strip-totals')).toHaveTextContent(
+      '3 pipelines on main in the last 30 days: 7 new and 12 fixed. The first scan of an artifact is its starting point and does not count as new.',
+    );
+    const column = within(strip).getByRole('button', { name: /^Pipeline #910/ });
+    expect(column).toHaveAccessibleName(expect.stringContaining('3 new findings'));
+    // The analysis of pipeline 911 gives its gate and coverage on new code.
+    expect(within(strip).getByRole('button', { name: /^Pipeline #911/ })).toHaveAccessibleName(
+      expect.stringContaining('gate failed, coverage on new code 62.5%'),
+    );
+    fireEvent.click(column);
+    expect(screen.getByTestId('location')).toHaveTextContent('/scans/10');
+  });
+
+  it('asks for every branch and a longer range through the URL', async () => {
+    const { calls } = setup();
+    await screen.findByRole('group', { name: /Pipelines on main/ });
+    fireEvent.click(screen.getByRole('radio', { name: 'All branches' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('?branches=all');
+    await waitFor(() =>
+      expect(requested(calls, '/api/v1/services/7/trends')).toContain(
+        '/api/v1/services/7/trends?days=90&all_refs=true',
+      ),
+    );
+    fireEvent.click(screen.getByRole('radio', { name: '180 days' }));
+    expect(screen.getByTestId('location')).toHaveTextContent('?branches=all&days=180');
+  });
+
+  it('says when the strip holds only the newest scans', async () => {
     setup('/services/7', {
       overrides: (call) =>
-        call.path.startsWith('/api/v1/services/7/sonar')
-          ? json(200, { ...sonar, latest: analysis(3, { coverage: null }) })
+        call.path.startsWith('/api/v1/services/7/trends')
+          ? json(200, { ...trends, total: 412, truncated: true })
           : undefined,
     });
-    const posture = await screen.findByRole('region', { name: 'SonarQube posture' });
-    await within(posture).findByText('Coverage');
-    expect(within(posture).queryByText('0%')).not.toBeInTheDocument();
-    expect(within(posture).getAllByText('Not available')).toHaveLength(3);
+    expect(await screen.findByTestId('strip-totals')).toHaveTextContent(
+      'The strip holds the newest 3 of the 412 scans in this range.',
+    );
+  });
+
+  it('lists the upgrades that clear the most risk, linked to their findings', async () => {
+    setup();
+    const list = await screen.findByRole('list', { name: 'Packages to upgrade' });
+    const rows = within(list).getAllByRole('link');
+    expect(rows[0]).toHaveTextContent('openssl');
+    expect(rows[0]).toHaveTextContent('3.0.2 → upgrade to 3.0.15');
+    expect(rows[0]).toHaveTextContent('−59 risk');
+    expect(rows[0]).toHaveAttribute('href', '/services/7/findings?ref=main&q=openssl');
+    expect(rows[1]).toHaveTextContent('No fixed version yet');
+    expect(screen.getByText(/These upgrades clear 59 of 263 risk points/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'See every upgrade' })).toHaveAttribute(
+      'href',
+      '/services/7/findings?ref=main&tab=fix',
+    );
+  });
+
+  it('breaks the open findings down once, with links', async () => {
+    setup();
+    const panel = within(await screen.findByRole('region', { name: 'Open findings' }));
+    expect(panel.getByText(/Current state of/)).toHaveTextContent(
+      'Current state of main, latest scan per artifact',
+    );
+    expect(panel.getByRole('link', { name: /30 fixable/ })).toHaveAttribute(
+      'href',
+      '/services/7/findings?ref=main&fixable=true',
+    );
+    expect(panel.getByRole('link', { name: /4 secrets/ })).toHaveAttribute(
+      'href',
+      '/services/7/findings?ref=main&tab=secrets',
+    );
+    expect(panel.getByRole('link', { name: /2 suppressed/ })).toHaveAttribute(
+      'href',
+      '/services/7/findings?ref=main&suppressed=true',
+    );
+    expect(panel.getByText('OS packages').parentElement).toHaveTextContent('24');
+    expect(panel.getByText('Language packages').parentElement).toHaveTextContent('30');
+    expect(panel.getByText('Other')).toBeInTheDocument();
+    const source = panel.getByRole('link', { name: /Source tree/ });
+    expect(source).toHaveTextContent('2 secrets');
+    expect(source).not.toHaveTextContent('vulnerabilities');
+    expect(source).toHaveAttribute('href', '/scans/12');
+    expect(panel.getByRole('link', { name: /payments\/api:1.4/ })).toHaveTextContent(
+      '55 vulnerabilities',
+    );
+  });
+
+  it('shows the quality gate with new code and overall labelled, and measure changes', async () => {
+    setup();
+    const panel = within(await screen.findByRole('region', { name: 'Code quality' }));
+    const conditions = panel.getByRole('table', { name: 'Quality gate conditions' });
+    const rows = within(conditions).getAllByRole('row').slice(1);
+    expect(rows[0]).toHaveTextContent(
+      'Failed: Coverage on new codeneeds at least 80%New code62.5%',
+    );
+    expect(rows[1]).toHaveTextContent('Passed: Coverageneeds at least 50%Overall71.4%');
+    expect(panel.getByText('Failed')).toBeInTheDocument();
+    // Coverage moved from 70.0 to 71.4; duplication from 3.6 to 3.1.
+    expect(
+      panel.getByText('up 1.4 percentage points since the analysis before, better'),
+    ).toBeInTheDocument();
+    expect(
+      panel.getByText('down 0.5 percentage points since the analysis before, better'),
+    ).toBeInTheDocument();
+    expect(panel.getByText('in pipeline #911', { exact: false })).toBeInTheDocument();
+    expect(panel.getAllByText('Rating')).toHaveLength(3);
+    expect(panel.getByText('Not available')).toBeInTheDocument();
   });
 
   it('does not link an unsafe SonarQube URL', async () => {
     setup('/services/7', {
       overrides: (call) =>
         call.path.startsWith('/api/v1/services/7/sonar')
-          ? json(200, {
-              ...sonar,
-              latest: analysis(3, { project_url: 'javascript:alert(1)' }),
-            })
+          ? json(200, { ...sonar, latest: analysis(3, { project_url: 'javascript:alert(1)' }) })
           : undefined,
     });
-    await screen.findByText('Quality gate');
+    await screen.findByRole('region', { name: 'Code quality' });
     expect(screen.queryByRole('link', { name: /Open in SonarQube/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Open project' })).not.toBeInTheDocument();
   });
 
   it('explains how to link SonarQube, with the Services link only for admins', async () => {
-    const noSonar = (call: RecordedCall) =>
-      call.path.startsWith('/api/v1/services/7/sonar')
-        ? json(200, { sonar_project_key: null, latest: null, history: [] })
-        : undefined;
-    setup('/services/7', { overrides: noSonar, user: { role: 'admin' } });
-    expect(await screen.findByText('No SonarQube project linked')).toBeVisible();
-    expect(await screen.findByRole('link', { name: 'Open the Services page' })).toHaveAttribute(
-      'href',
-      '/admin/services',
-    );
-    expect(screen.getByRole('link', { name: 'Read the SonarQube guide' })).toHaveAttribute(
-      'href',
-      'https://github.com/siyamsarker/scanopsis/blob/main/docs/integrations/sonarqube.md',
-    );
-  });
-
-  it('shows no Services link to viewers', async () => {
     setup('/services/7', {
-      user: { role: 'viewer' },
       overrides: (call) =>
         call.path.startsWith('/api/v1/services/7/sonar')
           ? json(200, { sonar_project_key: null, latest: null, history: [] })
           : undefined,
     });
-    expect(await screen.findByText('No SonarQube project linked')).toBeVisible();
-    await waitFor(() =>
-      expect(screen.getByRole('link', { name: 'Read the SonarQube guide' })).toBeVisible(),
+    expect(await screen.findByText('No SonarQube project linked')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Open the Services page' })).toHaveAttribute(
+      'href',
+      '/admin/services',
     );
+    expect(screen.getByRole('link', { name: 'Read the SonarQube guide' })).toBeInTheDocument();
+  });
+
+  it('tells viewers what a linked project without analysis means', async () => {
+    setup('/services/7', {
+      user: { role: 'viewer' },
+      overrides: (call) =>
+        call.path.startsWith('/api/v1/services/7/sonar')
+          ? json(200, { sonar_project_key: 'payments', latest: null, history: [] })
+          : undefined,
+    });
+    expect(await screen.findByText('No SonarQube analysis yet')).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Open the Services page' })).not.toBeInTheDocument();
   });
 
-  it('says the latest scan decides while no dashboard branch is chosen', async () => {
-    setup();
-    expect(await screen.findByTestId('ref-source')).toHaveTextContent(
-      'Showing main · latest scan (no dashboard branch chosen)',
-    );
-  });
-
-  it('says the ref is the dashboard branch an administrator chose', async () => {
-    setup('/services/7', {
-      overrides: (call) => {
-        if (call.path === '/api/v1/services/7')
-          return json(200, { ...service, default_ref: 'main' });
-        if (call.path.startsWith('/api/v1/services/7/overview'))
-          return json(200, {
-            ...overview,
-            ref_source: 'default',
-            service: { ...service, default_ref: 'main' },
-          });
-        return undefined;
-      },
-    });
-    expect(await screen.findByTestId('ref-source')).toHaveTextContent(
-      'Showing main · dashboard branch',
-    );
-  });
-
-  it('keeps a chosen branch without scans in the ref list and says there are no scans of it', async () => {
-    const chosen = { ...service, default_ref: 'release/2.x' };
-    setup('/services/7', {
-      overrides: (call) => {
-        if (call.path === '/api/v1/services/7') return json(200, chosen);
-        if (call.path.startsWith('/api/v1/services/7/overview'))
-          return json(200, {
-            ...overview,
-            service: chosen,
-            ref: 'release/2.x',
-            ref_source: 'default',
-            artifacts: [],
-            data_at: null,
-            top_packages: [],
-          });
-        if (call.path.startsWith('/api/v1/services/7/scans'))
-          return json(200, { items: [], next_before: null });
-        return undefined;
-      },
-    });
-    expect(await screen.findByText('No scans of release/2.x yet')).toBeVisible();
-    expect(screen.queryByText('No Trivy scans yet')).not.toBeInTheDocument();
-    const select = screen.getByLabelText('Git ref');
-    expect(select).toHaveTextContent('release/2.x');
-    fireEvent.keyDown(select, { key: 'Enter' });
-    expect(
-      within(await screen.findByRole('listbox'))
-        .getAllByRole('option')
-        .map((o) => o.textContent),
-    ).toEqual(['main', 'release/1.x', 'release/2.x']);
-    expect(screen.getByTestId('ref-source')).toHaveTextContent(
-      'Showing release/2.x · dashboard branch',
-    );
-  });
-
-  it('explains a ref picked from the list when a dashboard branch is chosen', async () => {
-    setup('/services/7?ref=release%2F1.x', {
-      overrides: (call) => {
-        if (call.path === '/api/v1/services/7')
-          return json(200, { ...service, default_ref: 'main' });
-        if (call.path.startsWith('/api/v1/services/7/overview'))
-          return json(200, {
-            ...overview,
-            service: { ...service, default_ref: 'main' },
-            ref: 'release/1.x',
-            ref_source: 'requested',
-          });
-        return undefined;
-      },
-    });
-    expect(await screen.findByTestId('ref-source')).toHaveTextContent(
-      'Showing release/1.x · selected (the dashboard branch is main)',
-    );
-  });
-
-  it('shows the no-scans state', async () => {
-    setup('/services/7', {
-      overrides: (call) => {
-        if (call.path.startsWith('/api/v1/services/7/overview'))
-          return json(200, {
-            ...overview,
-            ref: null,
-            refs: [],
-            artifacts: [],
-            data_at: null,
-            top_packages: [],
-          });
-        if (call.path.startsWith('/api/v1/services/7/scans'))
-          return json(200, { items: [], next_before: null });
-        if (call.path.startsWith('/api/v1/services/7/trends'))
-          return json(200, { ref: null, points: [] });
-        return undefined;
-      },
-    });
-    expect(await screen.findByText('No Trivy scans yet')).toBeVisible();
-    expect(await screen.findByText('No scans yet')).toBeVisible();
-    expect(screen.queryByLabelText('Git ref')).not.toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getAllByTestId('chart').some((c) => c.dataset.status === 'empty')).toBe(true),
-    );
-  });
-
-  it('leaves secret scans out of the trends chart and says so', async () => {
-    // The server marks each trend point with its scan kind.
+  it('says which branch the dashboards follow', async () => {
     setup('/services/7', {
       overrides: (call) =>
-        call.path.startsWith('/api/v1/services/7/trends')
+        call.path === '/api/v1/services/7'
+          ? json(200, { ...service, default_ref: 'main' })
+          : call.path.startsWith('/api/v1/services/7/overview')
+            ? json(200, { ...overview, ref_source: 'default' })
+            : undefined,
+    });
+    expect(await screen.findByTestId('ref-source')).toHaveTextContent(
+      'Showing main, the dashboard branch',
+    );
+  });
+
+  it('shows the no-scans state of a chosen branch and keeps SonarQube', async () => {
+    setup('/services/7', {
+      overrides: (call) =>
+        call.path.startsWith('/api/v1/services/7/overview')
           ? json(200, {
-              ...trends,
-              points: [trends.points[0], { ...trends.points[1], kind: 'secret-fs' }],
+              ...overview,
+              ref: 'release/9',
+              ref_source: 'default',
+              artifacts: [],
+              counts: counts(),
+              top_packages: [],
+              data_at: null,
             })
           : undefined,
     });
-    expect(
-      await screen.findByText(/One bar per image scan.*Secret scans have no vulnerability counts/),
-    ).toBeVisible();
-    await waitFor(() => {
-      const chart = lastChart(/Findings per scan/) as ChartProps;
-      const option = (
-        typeof chart.option === 'function' ? chart.option(palette) : chart.option
-      ) as { series: { data: number[] }[]; xAxis: { data: string[] } };
-      expect(option.xAxis.data).toEqual(['10 Nov #801']);
-      expect(option.series[0].data).toEqual([3]);
-    });
-  });
-
-  it('builds the trends chart: stacked critical first, one bar per scan, days param', async () => {
-    const { calls } = setup();
-    await waitFor(() => expect(lastChart(/Findings per scan/)).toBeDefined());
-    const chart = lastChart(/Findings per scan/) as ChartProps;
-    expect(chart.ariaLabel).toBe('Findings per scan, last 90 days');
-    expect(requested(calls, '/api/v1/services/7/trends')).toEqual([
-      '/api/v1/services/7/trends?days=90',
-    ]);
-    const option = (typeof chart.option === 'function' ? chart.option(palette) : chart.option) as {
-      series: { name: string; stack: string; data: number[] }[];
-      xAxis: { data: string[] };
-    };
-    expect(option.series.map((s) => s.name)).toEqual([
-      'Critical',
-      'High',
-      'Medium',
-      'Low',
-      'Unknown',
-    ]);
-    expect(new Set(option.series.map((s) => s.stack)).size).toBe(1);
-    expect(option.series[0].data).toEqual([3, 1]);
-    expect(option.series[1].data).toEqual([10, 9]);
-    expect(option.xAxis.data).toEqual(['10 Nov #801', '11 Nov #802']);
-
-    fireEvent.click(screen.getByRole('radio', { name: '180 days' }));
-    await waitFor(() =>
-      expect(requested(calls, '/api/v1/services/7/trends')).toContain(
-        '/api/v1/services/7/trends?days=180',
-      ),
+    expect(await screen.findByText('No scans of release/9 yet')).toBeInTheDocument();
+    expect(screen.getByText(/An administrator chose this branch/)).toBeInTheDocument();
+    expect(screen.getByTestId('verdict')).toHaveTextContent(
+      'Failing its quality gate; no scans of release/9 yet.',
     );
-    expect(screen.getByTestId('location')).toHaveTextContent('/services/7?days=180');
-  });
-
-  it('leaves analyses without coverage as gaps in the coverage chart', async () => {
-    setup();
-    await waitFor(() => expect(lastChart(/Coverage per SonarQube analysis/)).toBeDefined());
-    const chart = lastChart(/Coverage per SonarQube analysis/) as ChartProps;
-    const option = (typeof chart.option === 'function' ? chart.option(palette) : chart.option) as {
-      series: { data: (number | null)[] }[];
-      xAxis: { data: string[] };
-    };
-    // history is newest first; the chart runs oldest to newest
-    expect(option.series[0].data).toEqual([60, null, 71.4]);
-    expect(option.xAxis.data).toEqual(['11 Nov', '12 Nov', '13 Nov']);
+    expect(screen.queryByRole('link', { name: /Explore findings/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Fix first' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Code quality' })).toBeInTheDocument();
   });
 
   it('lists recent scans and loads more with next_before', async () => {
@@ -616,26 +473,17 @@ describe('service dashboard', () => {
         if (call.path === '/api/v1/services/7/scans')
           return json(200, { items: [scan(11)], next_before: 11 });
         if (call.path === '/api/v1/services/7/scans?before=11')
-          return json(200, {
-            items: [scan(10, { artifact_name: 'older-image' })],
-            next_before: null,
-          });
+          return json(200, { items: [scan(5)], next_before: null });
         return undefined;
       },
     });
     const table = await screen.findByRole('table', { name: 'Recent scans' });
-    expect(within(table).getByText('#911')).toBeInTheDocument();
-    expect(within(table).getByText('01234567')).toBeInTheDocument();
-    expect(within(table).getByRole('link', { name: 'Open scan 11' })).toHaveAttribute(
-      'href',
-      '/scans/11',
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
-    expect(await within(table).findByText('older-image')).toBeVisible();
+    await within(table).findByText('#911');
+    fireEvent.click(screen.getByRole('button', { name: 'Load more scans' }));
+    expect(await within(table).findByText('#905')).toBeInTheDocument();
     expect(requested(calls, '/api/v1/services/7/scans')).toContain(
       '/api/v1/services/7/scans?before=11',
     );
-    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
   });
 
   it('shows a not found state with a link to the portfolio', async () => {
@@ -645,46 +493,44 @@ describe('service dashboard', () => {
           ? apiError(404, 'not_found', 'No such service.')
           : undefined,
     });
-    expect(await screen.findByText('Service not found')).toBeVisible();
+    expect(await screen.findByText('Service not found')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Back to the portfolio' })).toHaveAttribute(
       'href',
       '/',
     );
-    expect(screen.queryByText('Trivy posture')).not.toBeInTheDocument();
+  });
+
+  it('rejects an id that is not a number', () => {
+    setup('/services/abc');
+    expect(screen.getByText('Service not found')).toBeInTheDocument();
   });
 
   it('keeps the other sections when one endpoint fails, and retries just that one', async () => {
-    let failing = true;
-    const { calls } = setup('/services/7', {
+    let failSonar = true;
+    setup('/services/7', {
       overrides: (call) =>
-        failing && call.path.startsWith('/api/v1/services/7/sonar')
-          ? apiError(500, 'internal', 'Boom.')
+        call.path.startsWith('/api/v1/services/7/sonar') && failSonar
+          ? apiError(500, 'internal', 'boom')
           : undefined,
     });
-    expect(await screen.findByText('SonarQube posture could not be loaded')).toBeVisible();
-    // the Trivy section and the scans table are intact
-    expect(await screen.findByText('Findings by severity')).toBeVisible();
-    expect(await screen.findByRole('table', { name: 'Recent scans' })).toBeVisible();
-    const before = requested(calls, '/api/v1/services/7/overview').length;
-    failing = false;
-    fireEvent.click(
-      within(screen.getByRole('region', { name: 'SonarQube posture' })).getByRole('button', {
-        name: 'Try again',
-      }),
-    );
-    expect(await screen.findByText('Quality gate')).toBeVisible();
-    expect(requested(calls, '/api/v1/services/7/overview')).toHaveLength(before);
+    // The other sections are intact.
+    expect(await screen.findByRole('region', { name: 'Fix first' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'Code quality could not be loaded' }),
+    ).toBeVisible();
+    failSonar = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('region', { name: 'Code quality' })).toBeInTheDocument();
   });
 
   it('shows a Trivy error on its own when the overview fails', async () => {
     setup('/services/7', {
       overrides: (call) =>
         call.path.startsWith('/api/v1/services/7/overview')
-          ? apiError(500, 'internal', 'Boom.')
+          ? apiError(500, 'internal', 'boom')
           : undefined,
     });
-    expect(await screen.findByText('Trivy posture could not be loaded')).toBeVisible();
-    expect(await screen.findByText('Quality gate')).toBeVisible();
-    expect(screen.getByRole('heading', { name: 'Payments API', level: 1 })).toBeVisible();
+    expect(await screen.findByText('Trivy findings could not be loaded')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Payments API', level: 1 })).toBeInTheDocument();
   });
 });

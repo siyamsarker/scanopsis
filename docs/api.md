@@ -430,6 +430,23 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
+### `GET /api/v1/portfolio/history`
+
+Recent pipelines of every service and the portfolio over the last week.
+
+For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts. The answer is computed at most once every 30 seconds and may be that far behind the latest upload; when nothing changed it is reused for up to 2 minutes. generated_at says when it was computed.
+
+- Operation ID: `getPortfolioHistory`
+- Authentication: Session
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Portfolio history. | `application/json` [PortfolioHistory](#portfoliohistory) |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+
 ### `GET /api/v1/scans/{id}`
 
 - Operation ID: `getScan`
@@ -737,7 +754,7 @@ Responses:
 
 ### `GET /api/v1/services/{id}/trends`
 
-Severity counts per scan over time for one ref.
+Severity counts per scan over time, with what each scan changed.
 
 - Operation ID: `getServiceTrends`
 - Authentication: Session
@@ -747,6 +764,7 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
+| `all_refs` | query | no | boolean (default false) | Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. The 300 scans listed at most are counted over every ref together. |
 | `days` | query | no | integer (minimum 1, maximum 365, default 90) |  |
 | `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 
@@ -754,7 +772,7 @@ Responses:
 
 | Status | Description | Body |
 |---|---|---|
-| 200 | Trend points, oldest first. | `application/json` [Trends](#trends) |
+| 200 | Trend points, oldest first: the newest 300 scans of the window at most. | `application/json` [Trends](#trends) |
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
@@ -1140,9 +1158,11 @@ Type: object
 | `secrets` | integer | yes |  |
 | `service` | [Service](#service) | yes |  |
 | `suppressed` | integer | yes |  |
-| `top_packages` | array of [PackageImpact](#packageimpact) | yes |  |
+| `top_packages` | array of [PackageImpact](#packageimpact) | yes | Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last. |
 
 ### PackageImpact
+
+One installed package and what upgrading it clears. Risk points weigh each finding critical 10, high 5, medium 3, low 1, unknown 5 (the OWASP Dependency-Track weights).
 
 Type: object
 
@@ -1150,9 +1170,12 @@ Type: object
 |---|---|---|---|
 | `by_severity` | [SeverityCounts](#severitycounts) | yes |  |
 | `findings` | integer | yes |  |
-| `fix_version` | string | yes | Highest fixed version among the findings; upgrading to it clears them. Empty when none is fixable. |
+| `fix_version` | string | yes | Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable. |
+| `fixable` | integer | yes | Findings that report a fixed version. |
 | `installed_version` | string | yes |  |
 | `pkg_name` | string | yes |  |
+| `risk` | integer | yes | Risk points of all the findings. |
+| `risk_cleared` | integer | yes | Risk points of the fixable findings, which the upgrade to fix_version clears. |
 
 ### PasswordChange
 
@@ -1181,6 +1204,16 @@ Properties of `totals`:
 | `fixable` | integer | yes |  |
 | `services` | integer | yes |  |
 | `services_with_critical` | integer | yes |  |
+
+### PortfolioHistory
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `days` | array of object | yes | The state of the listed services together at 7, 6, ... and 1 times 24 hours before generated_at, oldest first. |
+| `generated_at` | string (date-time) | yes |  |
+| `services` | array of object | yes | Every non-archived service with at least one scan on its dashboard ref, by id. |
 
 ### PortfolioItem
 
@@ -1551,8 +1584,12 @@ Type: object
 | `commit_sha` | string | yes |  |
 | `counts` | [SeverityCounts](#severitycounts) | yes |  |
 | `fixable` | integer | yes |  |
+| `fixed` | integer | yes | Findings of the previous scan that this scan no longer has, as fixed_total of the scan diff counts them. |
 | `gitlab_pipeline_id` | integer (int64) | yes |  |
 | `kind` | string (one of `image`, `secret-fs`) | yes |  |
+| `new` | [SeverityCounts](#severitycounts) | yes | Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none. |
+| `previous_scan_id` | integer or null (int64) | yes | The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan. |
+| `ref` | string | yes |  |
 | `scan_id` | integer (int64) | yes |  |
 | `scanned_at` | string (date-time) | yes |  |
 
@@ -1562,9 +1599,11 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `points` | array of [TrendPoint](#trendpoint) | yes |  |
+| `points` | array of [TrendPoint](#trendpoint) | yes | The newest 300 scans of the window at most, by scan time over every ref listed, oldest first. |
 | `ref` | string or null | yes |  |
 | `ref_source` | [RefSource](#refsource) | yes |  |
+| `total` | integer | yes | Number of scans in the window, including any left out of points. |
+| `truncated` | boolean | yes | True when the oldest scans of the window were left out because more than 300 fall in it. |
 
 ### TrivyIntegration
 
