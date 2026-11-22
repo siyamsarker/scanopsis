@@ -1,55 +1,57 @@
-# Verifying the numbers
+# Check that the numbers are right
 
-Scanopsis is only useful if its numbers are right. This guide describes the
-accuracy check that you run with real data: you compare what Scanopsis shows
-with what Trivy and SonarQube report for the same scans. Operators run it after
-setting up Scanopsis and after each upgrade. The project runs it before it
-publishes a version.
+Scanopsis is only useful if its numbers are right. This guide walks you
+through the accuracy check: compare what Scanopsis shows with what Trivy and
+SonarQube report for the same scans, and record the result.
 
-The result is a table of numbers and one decision. The acceptance rule is
-strict:
+**Audience:** Operators · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
 
-> **Any mismatch blocks the version.** A number that differs by even one finding
-> is a defect. Do not round, and do not explain it away. Record it, find the
-> cause, and run the check again after the fix.
+---
 
-The outputs in this guide come from a test instance with a fake GitLab, using
-the real Trivy 0.76.2 reports in `internal/ingest/testdata`. Commands that need
-your GitLab or SonarQube are marked "example". Adapt them. They were not run
-against your systems.
+Run the check after you set Scanopsis up and after each upgrade. The project
+runs it before it publishes a version. The rule is strict:
+
+> **Any mismatch blocks the version.** A number that is off by even one
+> finding is a defect. Do not round it and do not explain it away. Record it,
+> find the cause, and run the check again after the fix.
+
+The Trivy and `jq` commands below were run with Trivy 0.76.2 on the real
+reports in `internal/ingest/testdata`. The upload and API outputs come from a
+test instance with a stand-in GitLab. Commands marked **example** need your
+GitLab or SonarQube.
 
 ## What you need
 
-- A test instance of Scanopsis, with the GitLab URL set, that you can upload to.
-  Do not use the production instance: the check adds services.
-- A GitLab project where you can run a pipeline, to upload through a real ID
-  token. A token cannot be made by hand.
-- An administrator account in Scanopsis, for the integration page.
-- `trivy` (0.50 or later), `jq`, `curl` and `awk` on your machine.
-- For the SonarQube part: a user who can open the projects in SonarQube.
+- A test instance of Scanopsis with the GitLab URL set. Do not use
+  production: the check adds services.
+- A GitLab project where you can run a pipeline. Uploads need a real ID
+  token, which you cannot make by hand.
+- An administrator account in Scanopsis.
+- `trivy` (0.50 or later), `jq`, `curl` and `awk`.
+- For SonarQube: a user who can open the projects there.
 
-## Step 1. Choose the services
+## Step 1. Pick the services
 
-Pick at least five services, or 10% of the services if that is more. Cover
-what differs between services:
+Pick at least five services, or 10% of them if that is more. Cover what makes
+services different:
 
-| Pick | Why |
+| Pick | What it tests |
 |---|---|
-| A service with many findings (hundreds) | Tests volume. |
-| A service with fixed and unfixed findings | Tests the fixable count. |
-| A service with an ignore file (`.trivyignore`) or VEX document | Tests suppressed findings. |
-| A service with more than one image | Tests the sum over artifacts. |
-| A service with a secret scan | Tests the secret count. |
-| A clean image (Trivy writes no `Results`) | Tests the zero case. |
-| A service with a SonarQube project: one with a passing gate, one failing, one without coverage | Tests the SonarQube values and the empty values. |
+| A service with hundreds of findings | Volume. |
+| A service with fixed and unfixed findings | The fixable count. |
+| A service with a `.trivyignore` or VEX document | Suppressed findings. |
+| A service with more than one image | The sum over artifacts. |
+| A service with a secret scan | The secret count. |
+| A clean image (Trivy writes no `Results`) | The zero case. |
+| SonarQube projects with a passing gate, a failing gate, and no coverage | SonarQube values and empty values. |
 
-Write the choice in the results table (see [the end of this page](#record-the-results)).
+Write your picks in the [results table](#record-the-results).
 
-## Step 2. Export the Trivy reports
+## Step 2. Keep the Trivy reports
 
-The reports must be the ones that the pipeline uploaded. Make the job keep
-them as artifacts. The script in the [GitLab CI guide](integrations/gitlab-ci.md)
-writes them to `scanopsis-out/`. Add this to the job:
+Compare against the very reports the pipeline uploaded. The script in the
+[GitLab CI guide](integrations/gitlab-ci.md) writes them to `scanopsis-out/`;
+keep them as job artifacts by adding this to the job:
 
 ```yaml
   artifacts:
@@ -59,9 +61,8 @@ writes them to `scanopsis-out/`. Add this to the job:
     when: always
 ```
 
-After the pipeline, download the artifact of the job: in GitLab, open the job
-and select **Download** under **Job artifacts**, or use the API (example, with
-your own project ID, job ID and token):
+After the pipeline, download them from the job page (**Download** under
+**Job artifacts**), or with the API (example):
 
 ```sh
 curl --fail --header "PRIVATE-TOKEN: $GITLAB_TOKEN" --output artifacts.zip \
@@ -69,36 +70,36 @@ curl --fail --header "PRIVATE-TOKEN: $GITLAB_TOKEN" --output artifacts.zip \
 unzip artifacts.zip -d reports
 ```
 
-Write down the project, the pipeline ID and the job ID of every report.
+Note the project, pipeline ID and job ID of every report.
 
-You can practise every later step with the fixtures in the repository, which
-are real reports: `internal/ingest/testdata/image-full.json`,
-`image-suppressed.json` and `secret-fs.json`.
+To practise, use the real reports in the repository:
+`internal/ingest/testdata/image-full.json`, `image-suppressed.json` and
+`secret-fs.json`.
 
-## Step 3. Anonymise the reports if needed
+## Step 3. Anonymise the reports (if you must)
 
-Skip this step if the reports may stay on the test instance as they are. If
-they must not, change only what identifies you, and keep everything that
-Scanopsis reads.
+Skip this if the reports may stay on the test instance as they are. Otherwise
+change only what identifies you, and keep everything Scanopsis reads.
 
-**What to replace:**
+**Replace:**
 
-- The image name and registry host, in `ArtifactName` and in every `Target`.
-- Internal project or path names in `Target`, `PkgPath` or `Results[].Secrets[].Target`.
-- `Metadata.RepoTags`, `Metadata.RepoDigests`, `Metadata.ImageConfig`,
-  `Metadata.DiffIDs` and `Metadata.Layers`: they name your registry and build
-  steps. Scanopsis does not use them.
-- `Code` and `Match` of secret findings. Scanopsis never reads them. Trivy
-  masks the value in `Match`, but `Code` can show the lines around it.
+- the image name and registry host, in `ArtifactName` and every `Target`;
+- internal project or path names in `Target`, `PkgPath` and secret targets;
+- `Metadata.RepoTags`, `RepoDigests`, `ImageConfig`, `DiffIDs` and `Layers`,
+  which name your registry and build steps (Scanopsis ignores them);
+- `Code` and `Match` of secret findings. Scanopsis never reads them, and
+  `Code` can show the lines around a secret.
 
-**What must stay unchanged** (Scanopsis reads these, and so does `trivy convert`):
+**Keep unchanged** (Scanopsis and `trivy convert` read them):
 
-- `SchemaVersion` and `CreatedAt`. `CreatedAt` decides which scan is current.
-- In every result: `Class`, `Type`, `Target` (its structure, not necessarily its words).
-- In every vulnerability: `VulnerabilityID`, `PkgName`, `InstalledVersion`,
-  `FixedVersion`, `Severity`, `Status`, `Title`, `PrimaryURL`, `PkgPath`.
-- In every secret finding: `RuleID`, `Category`, `Severity`, `Title`, `StartLine`, `EndLine`.
-- `ExperimentalModifiedFindings` with its `Type`, `Status`, `Statement` and
+- `SchemaVersion` and `CreatedAt` (it decides which scan is current);
+- `Class`, `Type` and the structure of `Target` in every result;
+- `VulnerabilityID`, `PkgName`, `InstalledVersion`, `FixedVersion`,
+  `Severity`, `Status`, `Title`, `PrimaryURL` and `PkgPath` of every
+  vulnerability;
+- `RuleID`, `Category`, `Severity`, `Title`, `StartLine` and `EndLine` of
+  every secret;
+- `ExperimentalModifiedFindings` with `Type`, `Status`, `Statement` and
   `Source`: these are the suppressed findings.
 
 Save this filter as `anonymise.jq`:
@@ -109,8 +110,8 @@ walk(if type == "string" then split($old) | join($new) else . end)
 | del(.Results[]?.Secrets[]? | .Code, .Match)
 ```
 
-and apply it. `$old` is the text to replace, `$new` its replacement. The match
-is literal text, not a pattern:
+Apply it. `$old` is literal text to replace (not a pattern), `$new` its
+replacement:
 
 ```sh
 jq --arg old 'python:3.9-slim-buster' --arg new 'registry.example.com/team/app:1.0' \
@@ -123,8 +124,7 @@ registry.example.com/team/app:1.0
 registry.example.com/team/app:1.0 (debian 10.13)
 ```
 
-Check that the anonymised file still gives the same totals as the original, in
-Trivy's own words:
+Check that Trivy still counts the same as for the original:
 
 ```sh
 trivy convert --format table --quiet --output anon.txt anon-image-full.json
@@ -136,15 +136,14 @@ Total: 125 (UNKNOWN: 3, LOW: 29, MEDIUM: 51, HIGH: 40, CRITICAL: 2)
 Total: 13 (UNKNOWN: 0, LOW: 2, MEDIUM: 7, HIGH: 4, CRITICAL: 0)
 ```
 
-These are the same two lines as for the original report. Search the result for
-anything that should not be there, for example your domain name:
+Then search the result for anything that must not be there, for example
 `grep -c 'corp.example' anon-image-full.json` must print `0`.
 
 ## Step 4. Upload to the test instance
 
-Upload through a real pipeline. In a test project of your GitLab, add a job
-that sends the anonymised file with the job's ID token (example; see the
-[GitLab CI guide](integrations/gitlab-ci.md) for the settings that make it work):
+Upload through a real pipeline. In a test project, add a job that sends the
+file with the job's ID token (example; the [GitLab CI guide](integrations/gitlab-ci.md)
+has the settings that make it work):
 
 ```yaml
 verify-upload:
@@ -165,39 +164,38 @@ verify-upload:
 ```
 
 Use `kind=secret-fs` for a secret scan. Each upload answers `201` with the
-stored counts. This is the first number to compare:
+counts it stored. That is your first number to compare:
 
 ```text
 {"scan_id":5,"service_id":4,"service_created":true,"replaced":false,"counts":{"critical":2,"high":44,"medium":58,"low":31,"unknown":3},"fixable":66,"secrets":0,"suppressed":0}
 ```
 
-If the answer is an error, use the table in the GitLab CI guide.
+If you get an error, see the [GitLab CI guide](integrations/gitlab-ci.md).
 
-Remember how Scanopsis decides what to show, because the comparison depends on it:
+Keep in mind how Scanopsis counts, because the comparison depends on it:
 
-- The dashboards show the **current state** of a **ref**: the latest scan of
-  each artifact and kind, by the time in the report (`CreatedAt`). The ref
-  shown is the one you select, else the dashboard branch an administrator chose
-  for the service, else the ref of the most recent scan. The service page and
-  the portfolio tile name the branch.
+- Dashboards show the **current state of one branch**: the latest scan of
+  each artifact and kind, by the report's `CreatedAt`. The branch is the one
+  you pick, else the dashboard branch an administrator chose, else the branch
+  of the most recent scan. The page names it.
 - **Severity counts** are the **unsuppressed** vulnerabilities. Suppressed
-  findings (those in `ExperimentalModifiedFindings`) are counted separately.
-- **Fixable** is the number of unsuppressed vulnerabilities that have a fixed version.
-- **Secrets** are the unsuppressed secret findings of the `secret-fs` scans.
-  They are not in the severity counts.
-- Several artifacts in one service add up.
+  ones (in `ExperimentalModifiedFindings`) are counted apart.
+- **Fixable** counts unsuppressed vulnerabilities that have a fixed version.
+- **Secrets** are the unsuppressed findings of `secret-fs` scans, never part
+  of the severity counts.
+- The artifacts of one service add up.
 
-Upload every report of a service from the same ref. If the reports have
-different `CreatedAt` times, the newest one for each artifact is the current one.
+Upload every report of a service from the same branch. If two reports of one
+artifact have different `CreatedAt` times, the newer one is current.
 
 ## Step 5. Compare the Trivy numbers
 
-For every report, get three sets of numbers and compare them.
+For every report, get three sets of numbers: A, B and C.
 
 ### A. What Trivy says
 
-Trivy prints one `Total:` line for each result (for example the operating
-system packages, then the Python packages). The numbers for the artifact are the sums:
+Trivy prints one `Total:` line per result (for example the OS packages, then
+the Python packages). The artifact's numbers are their sums:
 
 ```sh
 trivy convert --format table --quiet --show-suppressed --output table.txt image-suppressed.json
@@ -211,7 +209,7 @@ Total: 11 (UNKNOWN: 0, LOW: 2, MEDIUM: 6, HIGH: 3, CRITICAL: 0)
 Suppressed Vulnerabilities (Total: 2)
 ```
 
-Sum the `Total:` lines per severity:
+Add up the `Total:` lines per severity:
 
 ```sh
 grep -E '^Total:' table.txt \
@@ -223,31 +221,25 @@ grep -E '^Total:' table.txt \
 critical=1 high=43 medium=57 low=31 unknown=3
 ```
 
-The suppressed total is the sum of the `Suppressed ... (Total: N)` lines: 1 + 2 = 3.
+The suppressed total is the sum of the `Suppressed ... (Total: N)` lines:
+1 + 2 = 3.
 
-### Check a scan that is already stored
-
-You do not need the file you uploaded. Scanopsis keeps the original report of
-every scan for as long as the scan is current, and for 30 days otherwise (see
-[original reports](operations.md#original-reports)). To get it back, use the
-scan ID (`scan_id` in the upload answer, or the scan's ID in the API) on the
-server:
+**Already uploaded?** You do not need the original file. Scanopsis keeps the
+report of every scan while it is current, and for 30 days otherwise. Get it
+back by scan ID (`scan_id` in the upload answer), on the server:
 
 ```sh
 docker compose exec scanopsis /scanopsis admin export-report 42 > report.json
 trivy convert --format table --quiet --show-suppressed --output table.txt report.json
 ```
 
-The command writes the report exactly as Trivy wrote it, so the numbers in
-`table.txt` and in the jq count below are those of the stored scan. It needs
-no shell in the container. If the report was cleared (a scan that is not
-current and older than 30 days), it prints `the original report of scan 42 was
-cleared by data retention` and exits with status 1; upload the report again to
-check it.
+If retention already emptied the report, the command says so and exits with
+1; upload the report again. See
+[export the original report of a scan](operations.md#export-the-original-report-of-a-scan).
 
-### B. The independent count with jq
+### B. An independent count with jq
 
-This counts straight from the JSON and does not depend on Trivy's table:
+This counts straight from the JSON, without Trivy's table:
 
 ```sh
 jq -r '[.Results[]?.Vulnerabilities[]?.Severity] as $s
@@ -262,7 +254,7 @@ jq -r '[.Results[]?.Vulnerabilities[]?.Severity] as $s
   internal/ingest/testdata/image-suppressed.json | tr -s ' \n' ' '; echo
 ```
 
-Real output for the three fixtures:
+The result for the three test reports:
 
 ```text
 image-full.json:       critical=2 high=44 medium=58 low=31 unknown=3 fixable=66 secrets=0 suppressed=0
@@ -270,34 +262,29 @@ image-suppressed.json: critical=1 high=43 medium=57 low=31 unknown=3 fixable=64 
 secret-fs.json:        critical=0 high=0 medium=0 low=0 unknown=0 fixable=0 secrets=2 suppressed=0
 ```
 
-For the secret scan, Trivy's table says `Total: 2 (UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 2)`. Scanopsis keeps
-secrets out of the severity counts and shows the number `secrets=2`.
+For the secret scan, Trivy's table says
+`Total: 2 (UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 2)`. Scanopsis
+keeps secrets out of the severity counts and shows `secrets=2`.
 
-The table (A) and the jq count (B) must agree with each other for every report.
-If they do not, the report is unusual. Examine it before you go on.
+A and B must agree for every report. If they do not, the report is unusual:
+look at it closely before you go on.
 
 ### C. What Scanopsis shows
 
-Read the same numbers in three places. Compare each one with A and B.
+Read the same numbers in three places and compare each with A and B:
 
-**1. The portfolio** (home page). The tile of each service shows the severity
-bar and the number of fixable findings. These are the sums over the
-artifacts of the branch named on the tile. Secrets are not on the tile: read them on the
-service dashboard.
+1. **The portfolio** (home page). Each service card shows the severity bar
+   and the fixable count: sums over the artifacts of the branch named on the
+   card. Secrets are not on the card.
+2. **The service dashboard.** **Findings by severity** and the **Critical**,
+   **High**, **Fixable** and **Secrets** tiles, plus the artifacts of the
+   current state with their own counts.
+3. **The findings explorer.** Pick the branch, filter by severity and count
+   the rows, or open the **Secrets** tab. The rows of one severity must add up
+   to that severity's count.
 
-**2. The service dashboard.** Open the service. **Findings by severity** and
-the tiles **Critical**, **High**, **Fixable** and **Secrets** show the same
-numbers, and the artifacts of the current state are listed with their own
-counts.
-
-**3. The findings explorer.** On the service page, open the findings. Select a
-ref. Filter by severity and count the rows, or open the **Secrets** tab. The rows
-are the unsuppressed findings of the current state. The number of rows with a
-severity must be the count of that severity.
-
-To read the same numbers without the browser, sign in with curl. The password
-and the code are the ones you use in the browser. The code changes every 30
-seconds, and a code works once:
+To read them without a browser, sign in with curl. Use your own password and
+a fresh two-factor code (each works once):
 
 ```sh
 URL=https://scanopsis-test.example.com
@@ -312,10 +299,10 @@ login HTTP 204
 verify HTTP 204
 ```
 
-The server replaces the session cookie when it accepts the code. Keep `-c jar.txt`
-on the second command, so that the file holds the new cookie.
+The server swaps the session cookie when it accepts the code, so keep
+`-c jar.txt` on the second command.
 
-Then the portfolio:
+The portfolio:
 
 ```sh
 curl -sS -b jar.txt $URL/api/v1/portfolio \
@@ -327,7 +314,8 @@ curl -sS -b jar.txt $URL/api/v1/portfolio \
 {"id":3,"name":"verification-demo-2","ref":"main","counts":{"critical":1,"high":43,"medium":57,"low":31,"unknown":3},"fixable":64,"secrets":0}
 ```
 
-The counts per artifact, from the service dashboard (replace `2` with the service ID):
+The counts per artifact, from the service dashboard (replace `2` with your
+service ID):
 
 ```sh
 curl -sS -b jar.txt $URL/api/v1/services/2/overview \
@@ -339,12 +327,11 @@ curl -sS -b jar.txt $URL/api/v1/services/2/overview \
 {"kind":"image","artifact_name":"python:3.9-slim-buster","counts":{"critical":2,"high":44,"medium":58,"low":31,"unknown":3},"fixable":66,"secrets":0,"suppressed":0}
 ```
 
-For service 3, which was made from `image-suppressed.json`, the same command
-shows `"suppressed":3`, which is the third number of that fixture.
+For service 3, made from `image-suppressed.json`, the same command shows
+`"suppressed":3`.
 
-The findings explorer lists the vulnerabilities page by page. Save this as
-`collect.sh` and run it with the service ID. It writes every vulnerability of
-the current state to a file:
+The findings explorer pages through the vulnerabilities. Save this as
+`collect.sh`; it writes every vulnerability of the current state to a file:
 
 ```sh
 #!/bin/sh
@@ -370,61 +357,56 @@ jq -s 'group_by(.severity) | map({(.[0].severity | ascii_downcase): length}) | a
 {"critical":2,"high":44,"low":31,"medium":58,"unknown":3}
 ```
 
-138 rows, and the same five numbers as in A and B. The secrets list works the
-same way, at `/api/v1/services/<id>/secrets`.
+138 rows, and the same five numbers as A and B. Secrets work the same way at
+`/api/v1/services/<id>/secrets`.
 
-### Record and decide
-
-For every artifact, write the numbers of A, B and C next to each other. They
-must be equal in every column: critical, high, medium, low, unknown, fixable,
-secrets and suppressed.
+Write A, B and C next to each other for every artifact. They must match in
+every column: critical, high, medium, low, unknown, fixable, secrets and
+suppressed.
 
 ## Step 6. Compare the SonarQube numbers
 
-Scanopsis shows what SonarQube reports for the whole project (**Overall
-Code**), not for new code. Compare with the **Overall Code** tab in SonarQube.
+Scanopsis shows SonarQube's values for the whole project (**Overall Code**),
+not for new code. Compare with the **Overall Code** tab in SonarQube.
 
-For every project in the sample:
+For every project in your sample:
 
-1. In SonarQube, open the project. Write down:
-   - the **Quality Gate** status (Passed, Failed, or no value),
-   - the ratings **Reliability**, **Security**, **Maintainability** and **Security Review** (A to E),
-   - **Coverage** and **Duplications** (percent, one decimal).
-2. In Scanopsis, open the service. The **Quality gate** card shows the gate, the
-   four ratings, **Coverage** and **Duplication**.
-3. Compare. Percentages are shown with at most one decimal, as in SonarQube. A
-   value that SonarQube does not report must show "Not available", never `0%`.
-4. Check that Scanopsis has the same analysis as SonarQube. **Last analysis** on
-   the portfolio tile, and `analysed_at` in the API output below, must be the
-   time of the last analysis in SonarQube. If SonarQube has a newer analysis,
-   wait for the webhook, or for the next sync (15 minutes by default), and look
-   again.
+1. In SonarQube, note the **Quality Gate** (Passed, Failed or no value), the
+   **Reliability**, **Security**, **Maintainability** and **Security Review**
+   ratings (A to E), and **Coverage** and **Duplications** (percent, one
+   decimal).
+2. In Scanopsis, open the service. The quality gate card shows the gate, the
+   four ratings, coverage and duplication.
+3. Compare. Percentages have at most one decimal, as in SonarQube. A value
+   SonarQube does not report must read "Not available", never `0%`.
+4. Check that both show the same analysis: **Last analysis** on the portfolio
+   card (or `analysed_at` in the API) must be SonarQube's last analysis time.
+   If SonarQube has a newer one, wait for the webhook or the next sync (every
+   15 minutes by default) and look again.
 
-To read SonarQube's numbers without the browser, ask its Web API (example;
-replace the URL, the token and the project key, and use the metric keys of your
-SonarQube mode, see [modes](integrations/sonarqube.md#5-modes-mqr-and-standard)):
+To read SonarQube's values without a browser (example; use the metric keys of
+your SonarQube mode, see the [SonarQube guide](integrations/sonarqube.md)):
 
 ```sh
 curl -s -u "$SONAR_TOKEN:" "https://sonarqube.example.com/api/measures/component?component=platform:payments-api&metricKeys=alert_status,software_quality_reliability_rating,software_quality_security_rating,software_quality_maintainability_rating,security_review_rating,coverage,duplicated_lines_density" \
   | jq -c '.component.measures[] | {metric, value}'
 ```
 
-In Scanopsis, the same analysis, with every measure as SonarQube reported it
-(example; a SonarQube instance was not part of the test of this page):
+And the same analysis in Scanopsis (example):
 
 ```sh
 curl -sS -b jar.txt $URL/api/v1/services/2/sonar \
   | jq '.latest | {analysed_at, quality_gate_status, reliability_rating, security_rating, maintainability_rating, security_review_rating, coverage, duplicated_lines_density, measures}'
 ```
 
-Ratings in the Web API are numbers from `1.0` to `5.0`. Scanopsis shows A to E:
-`1.0` is A, `2.0` is B, `3.0` is C, `4.0` is D and `5.0` is E.
+SonarQube's API gives ratings as numbers from `1.0` to `5.0`. Scanopsis shows
+letters: `1.0` is A, `2.0` B, `3.0` C, `4.0` D and `5.0` E.
 
 ## Record the results
 
-Copy this table into your record of the check. Fill one row for each artifact and one
-for each SonarQube project. Keep the exported reports (anonymised) and the
-screenshots or API output with it.
+Copy these tables into your record. Fill one row per artifact and per
+SonarQube project, and keep the (anonymised) reports and the screenshots or
+API output with it.
 
 | Field | Value |
 |---|---|
@@ -434,7 +416,7 @@ screenshots or API output with it.
 | Date, and who ran the check | |
 | Test instance | |
 
-Trivy, one row for each artifact:
+Trivy, per artifact:
 
 | Service | Artifact | Ref | Pipeline / job | Source | Critical | High | Medium | Low | Unknown | Fixable | Secrets | Suppressed | Match |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -444,22 +426,26 @@ Trivy, one row for each artifact:
 | | | | | Service dashboard | | | | | | | | | |
 | | | | | Findings explorer | | | | | | | | n/a | |
 
-SonarQube, one row for each project:
+SonarQube, per project:
 
 | Service | Project key | Source | Gate | Reliability | Security | Maintainability | Security review | Coverage | Duplication | Analysis time | Match |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | | | SonarQube | | | | | | | | | |
 | | | Scanopsis | | | | | | | | | |
 
-"Match" is yes or no, for the whole row, with no exceptions.
+"Match" is yes or no for the whole row, with no exceptions.
 
-**Decision.** If every Match is yes, the numbers are accurate for this sample,
-and you write "accepted" with the date. If one Match is no:
+**Decide.** If every Match is yes, the numbers are right for this sample:
+write "accepted" and the date. If one is no:
 
 1. Write down the report, the service and the two numbers.
-2. Do not edit data or settings to make them agree.
-3. Find the cause: the data (a report with an unusual shape, a different ref,
-   an older `CreatedAt`), the comparison (a suppressed finding, a second
-   artifact), or Scanopsis. Open an issue with the report, anonymised.
-4. The version is blocked until the cause is fixed and the whole check passes
-   again on the same sample.
+2. Do not change data or settings to make them agree.
+3. Find the cause: the data (an unusual report, another branch, an older
+   `CreatedAt`), the comparison (a suppressed finding, a second artifact), or
+   Scanopsis. Open an issue with the anonymised report.
+4. The version stays blocked until the cause is fixed and the whole check
+   passes again on the same sample.
+
+---
+
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
