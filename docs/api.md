@@ -11,9 +11,9 @@ it is authenticated.
 
 This page is generated from the OpenAPI document `api/openapi.yaml`, the
 contract of the API. To change it, change that file and run `make generate`.
-Version of the OpenAPI document: 0.1.0.
+Version of the OpenAPI document: 0.2.0.
 
-JSON API of Scanopsis. Every endpoint under /api/v1 except the authentication endpoints requires a session cookie. State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers).
+JSON API of Scanopsis. Most endpoints require a signed-in session (a session cookie); each endpoint states how it is authenticated: a session, an administrator session, a GitLab CI/CD ID token (the Trivy upload), a signed webhook (SonarQube) or none (setup, version, health). State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers).
 
 The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. One client address may hold at most a quarter of the slots, so one client cannot use them all. The probes, the web interface and the Trivy upload are not counted.
 

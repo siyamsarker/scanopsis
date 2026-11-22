@@ -281,7 +281,8 @@ with the new version.
 3. Add the version to the [version history](#version-history): a heading
    `### X.Y.Z (YYYY-MM-DD)` with today's date, the main changes in a few plain
    bullets, and the upgrade notes. Update the newest version named at the top
-   of this page and in the README.
+   of this page and in the README. If the API changed, set `info.version` in
+   `api/openapi.yaml` to `X.Y.Z` and run `make generate`.
 
 4. Commit the change with a sign-off:
 
