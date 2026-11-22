@@ -69,13 +69,13 @@
     --brand: #5b4be8;
     --brand-ink: #ffffff;
 
-    --sev-critical: #be123c;
+    --sev-critical: #be185d;
     --sev-high: #c2410c;
     --sev-medium: #a16207;
     --sev-low: #1d4ed8;
     --sev-unknown: #64748b;
     --ok: #047857;
-    --fail: #be123c;
+    --fail: #be185d;
     --warn: #a16207;
     --fail-ink: #ffffff;
 
@@ -106,13 +106,13 @@
   --brand: #5b4be8;
   --brand-ink: #ffffff;
 
-  --sev-critical: #be123c;
+  --sev-critical: #be185d;
   --sev-high: #c2410c;
   --sev-medium: #a16207;
   --sev-low: #1d4ed8;
   --sev-unknown: #64748b;
   --ok: #047857;
-  --fail: #be123c;
+  --fail: #be185d;
   --warn: #a16207;
   --fail-ink: #ffffff;
 
@@ -121,6 +121,12 @@
   --elev-1: 0 1px 2px rgb(15 26 46 / 0.06);
   --elev-2: 0 1px 2px rgb(15 26 46 / 0.06), 0 8px 24px -12px rgb(15 26 46 / 0.14);
   --elev-3: 0 24px 48px -16px rgb(15 26 46 / 0.25);
+}
+
+/* A themed subtree paints its own canvas and text colour. */
+[data-theme-scope] {
+  background-color: var(--bg);
+  color: var(--text);
 }
 
 /* Theme-independent tokens: shape, motion, derived colours. */
