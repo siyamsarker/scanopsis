@@ -4,10 +4,6 @@ This guide takes you from nothing to a running Scanopsis with one
 administrator who signs in with two-factor authentication. It uses Docker
 Compose on a single host. It takes about 15 minutes.
 
-> **Status:** Scanopsis does not ingest or display scan results yet. After
-> this guide you have a working sign-in, user management and settings. Do not
-> rely on it for production data until scan ingestion is released.
-
 ## Prerequisites
 
 You need:
@@ -23,6 +19,8 @@ You need:
 
 Scanopsis listens on plain HTTP. Compose publishes it on `127.0.0.1:8080`
 only, so nothing outside the host can reach it until you add a reverse proxy.
+After the build, Scanopsis needs no outbound access except to your GitLab
+instance and, if you use it, your SonarQube.
 
 ## Step 1. Build the image
 
@@ -42,32 +40,33 @@ example to adapt: use your own clone location.
    Replace `X.Y.Z` with the newest version, for example `0.1.0`. See
    [find the newest version](versions.md#find-the-newest-version).
 
-2. Build the image:
+2. Build the image with a tag that names the version. Use the same
+   version as in step 1:
 
    ```sh
-   make image
+   make image IMAGE=scanopsis:vX.Y.Z
    ```
 
    The build downloads dependencies and takes a few minutes the first time.
    The last lines look like this:
 
    ```text
-   #24 unpacking to docker.io/library/scanopsis:dev 0.0s done
+   #24 unpacking to docker.io/library/scanopsis:vX.Y.Z 0.0s done
    #24 DONE 0.3s
    ```
 
 3. Check that the image exists:
 
    ```sh
-   docker image ls scanopsis:dev
+   docker image ls scanopsis:vX.Y.Z
    ```
 
    Expected result: one line with the repository `scanopsis` and the tag
-   `dev`.
+   `vX.Y.Z`. You use this tag in step 3.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, you passed
 a version string with unusual characters. Use a plain one, for example
-`make image VERSION=1.0.0`. If it fails while downloading, check the host's
+`make image IMAGE=scanopsis:v1.0.0 VERSION=1.0.0`. If it fails while downloading, check the host's
 network access and proxy settings for Docker.
 
 ## Step 2. Create the secrets
@@ -130,14 +129,21 @@ Do not commit the `secrets` directory or the `.env` file to a repository.
    ```
 
 2. Open `.env` and set `SCANOPSIS_PUBLIC_URL` to the address users will type
-   in the browser, without a path. For a trial on your own machine, use
-   `http://localhost:8080`. For a real deployment, use the HTTPS address of
-   your reverse proxy, for example `https://scanopsis.example.com`.
+   in the browser, without a path. The address may include a port. For a trial
+   on your own machine, use `http://localhost:8080`. For a real deployment, use
+   the HTTPS address of your reverse proxy, for example
+   `https://scanopsis.example.com`, or `https://scanopsis.example.com:8443` if
+   the proxy listens on another port. Scanopsis must be served at the root of
+   its own host name: a sub-path such as `https://example.com/scanopsis/` is
+   not supported.
 
    The URL decides the cookie settings, so you must open Scanopsis in the
    browser with exactly this host name. A mismatch makes sign-in fail.
 
-3. Keep `SCANOPSIS_IMAGE=scanopsis:dev` while you use the image from step 1.
+3. Set `SCANOPSIS_IMAGE` to the image tag from step 1, for example
+   `SCANOPSIS_IMAGE=scanopsis:vX.Y.Z`. Compose runs exactly this image, and the
+   [upgrade](versions.md#upgrade-to-a-newer-version) later changes only this
+   line.
 
 Verify that Compose accepts the files:
 
@@ -320,7 +326,9 @@ If sign-in fails, see [recovering access](operations.md#recovering-access-when-l
 
 1. Put a reverse proxy with TLS in front of `127.0.0.1:8080` and set
    `SCANOPSIS_PUBLIC_URL` to its HTTPS address. See
-   [reverse proxy and TLS](configuration.md#reverse-proxy-and-tls).
+   [reverse proxy and TLS](deployment.md#reverse-proxy-and-tls) and the
+   [host settings](deployment.md#host-settings) (restart after a reboot, log
+   rotation, time zone, limits).
 2. Let your colleagues sign in with GitLab. See the
    [GitLab sign-in guide](integrations/gitlab-sso.md).
 3. Learn what every setting does in the

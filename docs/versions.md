@@ -77,17 +77,19 @@ Replace `X.Y.Z` with the version you picked.
    see a version followed by `-dirty`, you changed a file, and the image would
    carry that suffix.
 
-2. Build the image. It takes the version from the tag:
+2. Build the image. It takes the version from the tag, and you give it a tag
+   of its own that names the version:
 
    ```sh
-   make image
+   make image IMAGE=scanopsis:vX.Y.Z
    ```
 
    Expected result: the build ends without an error, and
-   `docker image ls scanopsis:dev` lists the image.
+   `docker image ls scanopsis:vX.Y.Z` lists the image.
 
 3. Continue with the [getting started guide](getting-started.md#step-2-create-the-secrets)
-   from step 2, or with your existing Compose files in `deploy/compose`.
+   from step 2. In step 3 of that guide, set `SCANOPSIS_IMAGE=scanopsis:vX.Y.Z`
+   in `deploy/compose/.env`. With existing Compose files, set it there.
 
 To try `main` instead, use `--branch main` in step 1. The version then shows as
 a commit hash and not as `vX.Y.Z`.
@@ -109,8 +111,8 @@ a commit hash and not as `vX.Y.Z`.
 2. If `version` is not `vX.Y.Z`, you are running an image that was built from
    another commit. Build the image again from the version branch.
 
-You can also run `docker run --rm scanopsis:dev --version` to see the version
-that an image contains.
+You can also run `docker run --rm scanopsis:vX.Y.Z --version` to see the
+version that an image contains.
 
 ## Upgrade to a newer version
 

@@ -52,15 +52,16 @@ image, and then start Scanopsis and PostgreSQL with Docker Compose. Replace
 ```sh
 git clone --branch release/X.Y.Z --depth 1 https://github.com/siyamsarker/scanopsis.git
 cd scanopsis
-make image
+make image IMAGE=scanopsis:vX.Y.Z
 cd deploy/compose
 ```
 
 Replace `X.Y.Z` with the newest version, for example `0.1.0`. See
 [find the newest version](docs/versions.md#find-the-newest-version).
 
-Then create the secrets and the configuration file, run `docker compose up -d`
-and finish the setup in the browser. The
+Then create the secrets and the configuration file (set
+`SCANOPSIS_IMAGE=scanopsis:vX.Y.Z` in `.env`), run `docker compose up -d` and
+finish the setup in the browser. The
 [getting started guide](docs/getting-started.md) explains each step, how to
 check it and what to do when it fails.
 

@@ -6,9 +6,9 @@
 # Run all commands in this directory. The guide is docs/getting-started.md.
 #
 # Image: Scanopsis publishes no container image. Build one from a version
-# branch with `make image` in the repository root (docs/versions.md), then set
-# SCANOPSIS_IMAGE=scanopsis:dev in the file named .env next to this one
-# (.env.example already does). SCANOPSIS_IMAGE is required, so Compose never
+# branch with `make image IMAGE=scanopsis:vX.Y.Z` in the repository root
+# (docs/versions.md), then set SCANOPSIS_IMAGE=scanopsis:vX.Y.Z in the file
+# named .env next to this one. SCANOPSIS_IMAGE is required, so Compose never
 # falls back to an unpinned image.
 #
 # TLS: the port is published on the loopback interface only (set
