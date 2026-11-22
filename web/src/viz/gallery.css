@@ -1,0 +1,275 @@
+/*
+ * Copyright 2026 The Scanopsis Authors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Gallery only. Repeats the design tokens inside a scoped class so the gallery
+ * shows the intended palette whatever the app's stylesheet currently defines.
+ * Nothing outside the gallery uses these rules.
+ */
+
+.viz-gallery {
+  --font-mono: 'IBM Plex Mono', 'JetBrains Mono Variable', ui-monospace, monospace;
+  min-height: 100vh;
+  padding: 32px clamp(16px, 4vw, 32px) 64px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'IBM Plex Sans', 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  font-size: 16px;
+  line-height: 24px;
+}
+
+.viz-gallery[data-viz-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0d1526;
+  --surface: #121c31;
+  --surface-raised: #18243d;
+  --surface-overlay: #1f2c49;
+  --sunken: #0a1120;
+  --line: #26344f;
+  --line-strong: #3a4a6b;
+  --text: #e8edf7;
+  --text-muted: #9da9c2;
+  --text-faint: #6f7c97;
+  --lens-a: #8b7cf6;
+  --lens-b: #22d3ee;
+  --brand: #8b7cf6;
+  --brand-ink: #0d1526;
+  --sev-critical: #f43f5e;
+  --sev-high: #fb923c;
+  --sev-medium: #facc15;
+  --sev-low: #60a5fa;
+  --sev-unknown: #94a3b8;
+  --ok: #34d399;
+  --fail: #f43f5e;
+  --warn: #facc15;
+}
+
+.viz-gallery[data-viz-theme='light'] {
+  color-scheme: light;
+  --bg: #f4f6fb;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --surface-overlay: #ffffff;
+  --sunken: #edf1f8;
+  --line: #dce2ee;
+  --line-strong: #9aa6bd;
+  --text: #0f1a2e;
+  --text-muted: #4f5b73;
+  --text-faint: #6b778e;
+  --lens-a: #6d5df0;
+  --lens-b: #0891b2;
+  --brand: #5b4be8;
+  --brand-ink: #ffffff;
+  --sev-critical: #be123c;
+  --sev-high: #c2410c;
+  --sev-medium: #a16207;
+  --sev-low: #1d4ed8;
+  --sev-unknown: #64748b;
+  --ok: #047857;
+  --fail: #be123c;
+  --warn: #a16207;
+}
+
+.viz-gallery-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.viz-gallery header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+.viz-gallery h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+}
+
+.viz-gallery h2 {
+  margin: 0 0 4px;
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 600;
+}
+
+.viz-gallery h3 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
+.viz-gallery p.lede {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.viz-gallery section {
+  margin-bottom: 56px;
+}
+
+.viz-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 24px;
+}
+
+.viz-gallery-panel {
+  --viz-ground: var(--surface);
+  padding: 20px;
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.04);
+}
+
+.viz-gallery[data-viz-theme='light'] .viz-gallery-panel {
+  box-shadow:
+    0 1px 2px rgb(15 26 46 / 0.06),
+    0 8px 24px -12px rgb(15 26 46 / 0.14);
+}
+
+.viz-gallery-panel .viz-strip,
+.viz-gallery-panel .viz-trend,
+.viz-gallery-panel .viz-heat,
+.viz-gallery-panel .viz-sevbar-wrap,
+.viz-gallery-panel .viz-sparkline,
+.viz-gallery-panel .viz-iris,
+.viz-gallery-panel .viz-spark,
+.viz-gallery-panel .viz-mini,
+.viz-gallery-panel .viz-delta {
+  --viz-ground: var(--surface);
+}
+
+.viz-gallery-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 24px 40px;
+}
+
+.viz-gallery-stack > * + * {
+  margin-top: 28px;
+}
+
+.viz-gallery-caption {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.viz-gallery-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.viz-gallery-tile .label {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.viz-gallery-tile .value {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 32px;
+  line-height: 40px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.viz-gallery-tile .value .viz-delta {
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.viz-gallery-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.viz-gallery-card .name {
+  font-weight: 500;
+}
+
+.viz-gallery-card .meta {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--text-muted);
+}
+
+.viz-gallery-mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.viz-gallery-mini-table td {
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.viz-gallery-switch {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--sunken);
+}
+
+.viz-gallery-switch button {
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.viz-gallery-switch button[aria-pressed='true'] {
+  background: var(--surface-raised);
+  color: var(--text);
+}
+
+.viz-gallery-iris-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 32px 48px;
+}
+
+.viz-gallery-iris-row figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.viz-gallery-iris-row figcaption {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+
+.viz-gallery-gap {
+  margin-top: 24px;
+}

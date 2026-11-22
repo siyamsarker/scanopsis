@@ -1,0 +1,1031 @@
+/*
+ * Copyright 2026 The Scanopsis Authors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Styles of the visual kit. Every colour is a design token read through var();
+ * the second value in each var() is the name the previous palette used, so the
+ * kit renders correctly while the token rename is under way.
+ *
+ * --viz-ground is the colour the chart sits on. It defaults to the app canvas;
+ * a page that places a chart on a panel sets it to var(--surface).
+ */
+
+.viz-strip,
+.viz-spark,
+.viz-sparkline,
+.viz-iris,
+.viz-sevbar-wrap,
+.viz-mini,
+.viz-heat,
+.viz-trend,
+.viz-delta {
+  --viz-line: var(--line, var(--border));
+  --viz-line-strong: var(--line-strong, var(--border-strong));
+  --viz-faint: var(--text-faint, var(--text-muted));
+  --viz-ok: var(--ok, var(--pass));
+  --viz-fail: var(--fail, var(--sev-critical));
+  --viz-warn: var(--warn, var(--sev-medium));
+  --viz-overlay: var(--surface-overlay, var(--surface-raised));
+  --viz-ground: var(--bg);
+  --viz-series: var(--lens-b, #22d3ee);
+  --viz-ease-enter: cubic-bezier(0.2, 0.8, 0.2, 1);
+  font-variant-numeric: tabular-nums;
+}
+
+.viz-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.viz-faint {
+  color: var(--viz-faint);
+}
+
+/* ---------------------------------------------------------------- colours */
+
+.viz-sev-critical {
+  fill: var(--sev-critical);
+  color: var(--sev-critical);
+}
+.viz-sev-high {
+  fill: var(--sev-high);
+  color: var(--sev-high);
+}
+.viz-sev-medium {
+  fill: var(--sev-medium);
+  color: var(--sev-medium);
+}
+.viz-sev-low {
+  fill: var(--sev-low);
+  color: var(--sev-low);
+}
+.viz-sev-unknown {
+  fill: var(--sev-unknown);
+  color: var(--sev-unknown);
+}
+.viz-bg-critical {
+  background-color: var(--sev-critical);
+}
+.viz-bg-high {
+  background-color: var(--sev-high);
+}
+.viz-bg-medium {
+  background-color: var(--sev-medium);
+}
+.viz-bg-low {
+  background-color: var(--sev-low);
+}
+.viz-bg-unknown {
+  background-color: var(--sev-unknown);
+}
+
+.viz-tone-neutral {
+  --viz-series: var(--text-muted);
+}
+.viz-tone-brand {
+  --viz-series: var(--brand);
+}
+.viz-tone-risk {
+  --viz-series: var(--sev-critical);
+}
+.viz-tone-ok {
+  --viz-series: var(--ok, var(--pass));
+}
+
+/* ----------------------------------------------------------------- glyphs */
+
+.viz-glyph-svg {
+  flex: none;
+  overflow: visible;
+}
+.viz-glyph-hollow {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+}
+.viz-glyph-dashed {
+  stroke-dasharray: 2 1.6;
+}
+
+.viz-gate circle {
+  stroke: none;
+}
+.viz-gate-pass circle {
+  fill: var(--ok, var(--pass));
+}
+.viz-gate-fail circle {
+  fill: var(--fail, var(--sev-critical));
+}
+.viz-gate-none circle {
+  fill: none;
+  stroke: var(--text-faint, var(--text-muted));
+  stroke-width: 1.2;
+  stroke-dasharray: 2 1.5;
+}
+.viz-gate-mark {
+  fill: none;
+  stroke: var(--bg);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.viz-gate-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ------------------------------------------------------------- chart frame */
+
+.viz-stage {
+  position: relative;
+}
+.viz-svg {
+  display: block;
+  overflow: visible;
+}
+.viz-axis text {
+  font-size: 12px;
+  fill: var(--viz-faint);
+}
+.viz-grid line {
+  stroke: var(--viz-line);
+  stroke-opacity: 0.6;
+  shape-rendering: crispEdges;
+}
+.viz-baseline {
+  stroke: var(--viz-line-strong);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.viz-baseline-empty {
+  stroke-dasharray: 3 3;
+}
+.viz-direct {
+  font-size: 12px;
+  fill: var(--text-muted);
+}
+.viz-lane-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  fill: var(--text-muted);
+}
+.viz-break path {
+  fill: none;
+  stroke: var(--viz-faint);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.viz-break text {
+  font-size: 12px;
+  fill: var(--viz-faint);
+}
+.viz-fixed {
+  fill: var(--viz-faint);
+  fill-opacity: 0.55;
+}
+.viz-threshold {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+}
+.viz-line {
+  fill: none;
+  stroke: var(--viz-series);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.viz-area {
+  fill: var(--viz-series);
+  fill-opacity: 0.1;
+}
+.viz-dot {
+  fill: var(--viz-series);
+  stroke: var(--viz-ground);
+  stroke-width: 2;
+}
+.viz-crosshair {
+  fill: var(--text);
+  fill-opacity: 0.07;
+}
+.viz-crosshair-line {
+  stroke: var(--viz-line-strong);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.viz-columns > g {
+  transition: opacity 120ms var(--viz-ease-enter);
+}
+.viz-columns > g[data-dim] {
+  opacity: 0.4;
+}
+.viz-gate-tick-pass {
+  fill: var(--viz-ok);
+}
+.viz-gate-tick-fail {
+  fill: var(--viz-fail);
+}
+.viz-gate-tick-none {
+  fill: var(--viz-line-strong);
+}
+
+/* Focusable marks laid over the drawing. */
+.viz-marks {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.viz-mark {
+  position: absolute;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.viz-mark:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 0;
+}
+
+/* Tooltip layer. */
+.viz-tip {
+  position: absolute;
+  z-index: 20;
+  width: max-content;
+  min-width: 160px;
+  max-width: 240px;
+  padding: 10px 12px;
+  border: 1px solid var(--viz-line);
+  border-radius: 10px;
+  background: var(--viz-overlay);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 18px;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.04),
+    0 24px 48px -12px rgb(0 0 0 / 0.35);
+  pointer-events: none;
+  animation: viz-fade 120ms var(--viz-ease-enter);
+}
+.viz-tip p {
+  margin: 0;
+}
+.viz-tip-title {
+  margin-bottom: 4px !important;
+}
+.viz-tip-title strong {
+  font-weight: 600;
+}
+.viz-tip-muted {
+  color: var(--text-muted);
+}
+.viz-tip-code {
+  margin-bottom: 6px !important;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.viz-tip-artifact {
+  display: block;
+  color: var(--viz-faint);
+}
+.viz-tip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 1px 0;
+}
+.viz-tip-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+.viz-tip-value {
+  font-weight: 600;
+  color: var(--text);
+}
+.viz-tip-foot {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--viz-line);
+}
+.viz-tip-note {
+  margin-top: 6px !important;
+  font-size: 12px;
+  color: var(--viz-faint);
+}
+
+/* Legend keys. */
+.viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+.viz-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.viz-key-fixed {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--viz-faint);
+  opacity: 0.55;
+}
+.viz-key-line {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--viz-series);
+}
+.viz-key-dash {
+  display: inline-block;
+  flex: none;
+  width: 12px;
+  border-top: 2px dashed var(--text-muted);
+}
+
+/* Empty state in the chart's footprint. */
+.viz-empty {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 140px;
+  padding: 24px 16px;
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 20px;
+  text-align: center;
+}
+.viz-empty-rule {
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  border-top: 1px dashed var(--viz-line-strong);
+}
+.viz-empty p {
+  position: relative;
+  max-width: 44ch;
+  margin: 0;
+  padding: 0 12px;
+  background: var(--viz-ground);
+}
+
+/* ---------------------------------------------------------- pipeline strip */
+
+.viz-strip {
+  min-width: 0;
+}
+.viz-strip-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+.viz-strip-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--viz-faint);
+}
+.viz-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  margin-left: auto;
+  padding: 0 12px;
+  border: 1px solid var(--viz-line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    border-color 120ms,
+    color 120ms;
+}
+.viz-toggle:hover {
+  border-color: var(--viz-line-strong);
+  color: var(--text);
+}
+.viz-toggle:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.viz-toggle-box {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid var(--viz-line-strong);
+  border-radius: 3px;
+}
+.viz-toggle[aria-pressed='true'] {
+  border-color: var(--viz-line-strong);
+  color: var(--text);
+}
+.viz-toggle[aria-pressed='true'] .viz-toggle-box {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--lens-a, #8b7cf6), var(--lens-b, #22d3ee));
+}
+
+.viz-spark {
+  display: block;
+  overflow: visible;
+}
+.viz-spark-gate-pass {
+  fill: var(--viz-ok);
+}
+.viz-spark-gate-fail {
+  fill: var(--viz-fail);
+}
+.viz-spark-gate-none {
+  fill: none;
+  stroke: var(--viz-faint);
+  stroke-dasharray: 2 1.5;
+}
+.viz-sparkline {
+  display: block;
+  overflow: visible;
+}
+
+/* -------------------------------------------------------------- risk iris */
+
+.viz-iris {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  color: var(--text);
+  line-height: 1;
+}
+.viz-iris > svg,
+.viz-iris > .viz-iris-centre {
+  grid-area: 1 / 1;
+}
+.viz-iris > svg {
+  display: block;
+  overflow: visible;
+}
+.viz-iris:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.viz-iris-centre {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+.viz-iris-number {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: proportional-nums;
+}
+.viz-iris-40 .viz-iris-number {
+  font-size: 13px;
+  letter-spacing: -0.01em;
+}
+.viz-iris-40 .viz-iris-number[data-long] {
+  font-size: 11px;
+}
+.viz-iris-96 .viz-iris-number {
+  font-size: 24px;
+}
+.viz-iris-96 .viz-iris-number[data-long] {
+  font-size: 20px;
+}
+.viz-iris-168 .viz-iris-number {
+  font-size: 44px;
+}
+.viz-iris-caption {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--text-muted);
+}
+.viz-iris[data-state='none'] .viz-iris-number {
+  color: var(--viz-faint);
+}
+.viz-iris-seg {
+  transition: opacity 120ms var(--viz-ease-enter);
+}
+.viz-iris-seg[data-dim] {
+  opacity: 0.28;
+}
+.viz-iris-gate {
+  fill: none;
+}
+.viz-iris-gate-pass {
+  stroke: var(--viz-ok);
+}
+.viz-iris-gate-fail {
+  stroke: var(--viz-fail);
+}
+.viz-iris-gate-none {
+  stroke: var(--viz-faint);
+  stroke-dasharray: 3 3;
+}
+.viz-iris-track {
+  fill: none;
+  stroke: var(--viz-line-strong);
+  stroke-dasharray: 3 4;
+}
+.viz-iris[data-state='calm'] .viz-iris-track {
+  stroke: var(--viz-ok);
+  stroke-opacity: 0.32;
+  stroke-dasharray: none;
+}
+.viz-iris-tip {
+  top: 0;
+  left: calc(100% + 12px);
+  width: 248px;
+  max-width: none;
+  line-height: 18px;
+}
+.viz-iris-tip[data-flip] {
+  left: auto;
+  right: calc(100% + 12px);
+}
+.viz-iris-term {
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: 6px;
+}
+.viz-iris-term[data-zero] {
+  opacity: 0.55;
+}
+.viz-iris-term[data-active] {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+}
+
+/* ---------------------------------------------------------- severity bar */
+
+.viz-sevbar-wrap {
+  min-width: 0;
+}
+.viz-sevbar {
+  display: flex;
+  gap: 2px;
+  width: 100%;
+}
+.viz-sevbar-sm {
+  height: 6px;
+}
+.viz-sevbar-md {
+  height: 10px;
+}
+.viz-sevbar-lg {
+  height: 28px;
+}
+.viz-seg {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-basis: 0;
+  min-width: 2px;
+  text-decoration: none;
+  transition: filter 120ms;
+}
+.viz-seg-rest {
+  flex-basis: 0;
+  background: var(--viz-line);
+  opacity: 0.6;
+}
+.viz-sevbar-sm > :first-child,
+.viz-sevbar-md > :first-child {
+  border-start-start-radius: 999px;
+  border-end-start-radius: 999px;
+}
+.viz-sevbar-sm > :last-child,
+.viz-sevbar-md > :last-child {
+  border-start-end-radius: 999px;
+  border-end-end-radius: 999px;
+}
+.viz-sevbar-lg > .viz-seg,
+.viz-sevbar-lg > .viz-seg-rest {
+  border-radius: 4px;
+}
+.viz-sevbar[data-empty] {
+  border-radius: 999px;
+  background: var(--viz-line);
+}
+.viz-sevbar-lg[data-empty] {
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--viz-line-strong);
+  border-radius: 4px;
+  background: transparent;
+}
+.viz-sevbar-none {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.viz-seg-label {
+  padding-inline: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--surface);
+  white-space: nowrap;
+}
+a.viz-seg:hover {
+  filter: brightness(1.12);
+}
+a.viz-seg:focus-visible {
+  z-index: 1;
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+.viz-seg[data-tip]:hover::after,
+a.viz-seg[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  z-index: 5;
+  padding: 4px 8px;
+  border: 1px solid var(--viz-line);
+  border-radius: 6px;
+  background: var(--viz-overlay);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.viz-mini {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 8px;
+  vertical-align: middle;
+}
+.viz-mini svg {
+  display: block;
+}
+.viz-mini-zero {
+  fill: var(--viz-line-strong);
+}
+.viz-mini-total {
+  font-size: 13px;
+  line-height: 14px;
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------------ delta */
+
+.viz-delta {
+  display: inline-flex;
+  align-items: baseline;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.viz-delta > span[aria-hidden] {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.viz-delta-arrow {
+  font-size: 0.72em;
+}
+.viz-delta[data-tone='bad'] {
+  color: var(--viz-fail);
+}
+.viz-delta[data-tone='good'] {
+  color: var(--viz-ok);
+}
+.viz-delta[data-tone='none'] {
+  color: var(--text-muted);
+}
+
+/* -------------------------------------------------------------- heat strip */
+
+.viz-heat {
+  container-type: inline-size;
+  min-width: 0;
+}
+.viz-heat-empty {
+  padding: 32px 16px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.viz-heat-empty p {
+  margin: 0;
+}
+.viz-heat-scroll[data-bounded] {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.viz-heat-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+.viz-heat-table thead th {
+  position: sticky;
+  top: var(--viz-sticky-top, 0px);
+  z-index: 2;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--viz-line);
+  background: var(--viz-ground);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  text-align: left;
+  white-space: nowrap;
+}
+.viz-heat-table td,
+.viz-heat-table tbody th {
+  padding: 3px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--viz-line) 70%, transparent);
+  background: var(--viz-ground);
+  text-align: left;
+  vertical-align: middle;
+}
+.viz-heat-table thead th.viz-heat-sev {
+  text-align: right;
+}
+.viz-heat-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.viz-heat-row[data-interactive] {
+  cursor: pointer;
+}
+.viz-heat-row[data-interactive]:hover > *,
+.viz-heat-row:focus-visible > * {
+  background: color-mix(in srgb, var(--text) 5%, var(--viz-ground));
+}
+.viz-heat-row:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: -2px;
+}
+.viz-heat-rank {
+  width: 2.5em;
+  color: var(--viz-faint);
+  font-size: 12px;
+  text-align: right !important;
+}
+th.viz-heat-name {
+  min-width: 10rem;
+  font-weight: 500;
+}
+.viz-heat-name a,
+.viz-heat-name > span:first-child {
+  color: var(--text);
+  text-decoration: none;
+}
+.viz-heat-name a:hover {
+  text-decoration: underline;
+}
+.viz-heat-path {
+  display: block;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 16px;
+  color: var(--viz-faint);
+}
+td.viz-heat-risk {
+  white-space: nowrap;
+}
+td.viz-heat-risk > .viz-heat-risk-num {
+  display: inline-block;
+  min-width: 3.2em;
+  font-weight: 600;
+}
+.viz-heat-meter {
+  display: inline-block;
+  width: 48px;
+  height: 4px;
+  margin-left: 6px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--viz-line) 70%, transparent);
+  vertical-align: middle;
+  overflow: hidden;
+}
+.viz-heat-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--text-muted);
+  transform-origin: left center;
+}
+td.viz-heat-cell {
+  padding: 3px 2px;
+  min-width: 4.25rem;
+}
+.viz-heat-fill {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--tint) var(--heat), transparent);
+  --heat: 0%;
+}
+.viz-tint-critical {
+  --tint: var(--sev-critical);
+}
+.viz-tint-high {
+  --tint: var(--sev-high);
+}
+.viz-tint-medium {
+  --tint: var(--sev-medium);
+}
+.viz-tint-low {
+  --tint: var(--sev-low);
+}
+.viz-tint-unknown {
+  --tint: var(--sev-unknown);
+}
+.viz-heat-fill[data-level='0'] {
+  color: var(--viz-faint);
+  background: transparent;
+}
+.viz-heat-fill[data-level='1'] {
+  --heat: 9%;
+}
+.viz-heat-fill[data-level='2'] {
+  --heat: 16%;
+}
+.viz-heat-fill[data-level='3'] {
+  --heat: 24%;
+}
+.viz-heat-fill[data-level='4'] {
+  --heat: 32%;
+  font-weight: 600;
+}
+.viz-heat-fill[data-level='5'] {
+  --heat: 42%;
+  font-weight: 600;
+}
+.viz-heat-gate,
+.viz-heat-fresh {
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.viz-heat-fresh[data-stale] {
+  color: var(--text);
+}
+.viz-stale-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--viz-warn);
+  color: var(--bg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: -2px;
+}
+
+@container (max-width: 760px) {
+  .viz-heat-scroll {
+    overflow-x: auto;
+  }
+  .viz-heat-table .viz-heat-name {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+  }
+  .viz-heat-table thead th.viz-heat-name {
+    z-index: 3;
+  }
+  .viz-heat-head-text {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .viz-heat-rank,
+  .viz-heat-path {
+    display: none;
+  }
+  .viz-heat-meter {
+    display: none;
+  }
+  td.viz-heat-cell {
+    min-width: 3rem;
+  }
+  .viz-heat-fill {
+    padding: 0 8px;
+  }
+}
+
+/* ------------------------------------------------------------------ trend */
+
+.viz-trend {
+  min-width: 0;
+}
+
+/* ------------------------------------------------------- one-time drawing */
+
+@keyframes viz-sweep {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes viz-grow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes viz-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.viz-iris-sweep,
+.viz-draw-line {
+  stroke-dasharray: 1 1;
+  stroke-dashoffset: 1;
+  animation: viz-sweep 600ms var(--viz-ease-enter, ease-out) forwards;
+}
+.viz-draw-grow .viz-up,
+.viz-draw-grow .viz-down {
+  transform-box: fill-box;
+  animation: viz-grow 600ms var(--viz-ease-enter, ease-out) both;
+}
+.viz-draw-grow .viz-up {
+  transform-origin: 50% 100%;
+}
+.viz-draw-grow .viz-down {
+  transform-origin: 50% 0%;
+}
+.viz-draw-fade {
+  animation: viz-fade 600ms var(--viz-ease-enter, ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viz-iris-sweep,
+  .viz-draw-line {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+    animation: none;
+  }
+  .viz-draw-grow .viz-up,
+  .viz-draw-grow .viz-down,
+  .viz-draw-fade {
+    animation: none;
+  }
+  .viz-tip {
+    animation-duration: 0ms;
+  }
+  .viz-columns > g,
+  .viz-iris-seg,
+  .viz-toggle,
+  .viz-seg {
+    transition: none;
+  }
+}

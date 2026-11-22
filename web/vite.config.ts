@@ -29,10 +29,17 @@ export default defineConfig({
         'src/auth/**',
         'src/theme.ts',
         'src/api/client.ts',
+        'src/viz/**',
       ],
       // ChartCore wraps the lazily loaded ECharts renderer, which jsdom cannot
       // draw; the end-to-end suite exercises it in a browser.
-      exclude: ['**/*.test.{ts,tsx}', '**/*.gen.ts', 'src/charts/ChartCore.tsx'],
+      // The gallery entry only mounts the gallery in the dev server.
+      exclude: [
+        '**/*.test.{ts,tsx}',
+        '**/*.gen.ts',
+        'src/charts/ChartCore.tsx',
+        'src/viz/gallery-main.tsx',
+      ],
       reporter: ['text', 'json-summary'],
       // Under node_modules so formatters, linters and git never see it.
       reportsDirectory: 'node_modules/.coverage',
