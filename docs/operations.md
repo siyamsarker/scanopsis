@@ -404,6 +404,9 @@ URL or in the API, for example `42`):
 docker compose exec scanopsis /scanopsis admin export-report 42 > report.json
 ```
 
+A successful export is recorded in the audit log as **Scan report exported**
+(`report.exported`, actor `cli`) with the scan ID only, never the content.
+
 The command writes the decompressed JSON to standard output, so you can
 compare it with `trivy convert` (see [verification](verification.md)). For a
 scan whose report was cleared, it prints `the original report of scan 42 was

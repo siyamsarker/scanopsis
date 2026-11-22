@@ -8,6 +8,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -348,7 +349,8 @@ func gz(t *testing.T, s string) []byte {
 func TestExportReport(t *testing.T) {
 	const report = `{"SchemaVersion":2,"ArtifactName":"app:1","Results":[]}`
 	stored := map[int64][]byte{1: gz(t, report), 2: {}, 3: []byte("not gzip"), 4: gz(t, report)[:20]}
-	b := &adminBackend{rawReport: func(_ context.Context, id int64) ([]byte, error) {
+	rec := &recordingAudit{}
+	b := &adminBackend{audit: rec, rawReport: func(_ context.Context, id int64) ([]byte, error) {
 		if id == 9 {
 			return nil, errors.New("connection reset")
 		}
@@ -383,4 +385,14 @@ func TestExportReport(t *testing.T) {
 			t.Errorf("scan %d: stdout %q, want %q", c.id, out.String(), c.out)
 		}
 	}
+	// One event, for the one successful export, with the ID and nothing else.
+	if len(rec.events) != 1 || rec.events[0] != `cli report.exported map[scan_id:1]` {
+		t.Errorf("audit events = %q", rec.events)
+	}
+}
+
+type recordingAudit struct{ events []string }
+
+func (r *recordingAudit) Record(_ context.Context, actor, action string, detail map[string]any) {
+	r.events = append(r.events, fmt.Sprint(actor, " ", action, " ", detail))
 }

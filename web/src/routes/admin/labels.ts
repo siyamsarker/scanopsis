@@ -37,5 +37,6 @@ export const auditActions: Record<string, string> = {
   'service.deleted': 'Service deleted',
   'ingest.rejected': 'Upload rejected',
   'webhook.rejected': 'Webhook rejected',
+  'report.exported': 'Scan report exported',
   'retention.deleted': 'Old data deleted',
 };

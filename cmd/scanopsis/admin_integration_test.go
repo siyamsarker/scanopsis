@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"net"
 	"net/url"
 	"strconv"
@@ -270,6 +271,13 @@ func TestIntegrationAdminExportReport(t *testing.T) {
 	if code != 0 || out != report || errs != "" {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errs)
 	}
+	exported := func() int {
+		return e.count(t, `SELECT count(*) FROM audit_log WHERE actor = 'cli' AND action = 'report.exported' AND detail = $1::jsonb`,
+			fmt.Sprintf(`{"scan_id": %d}`, id))
+	}
+	if n := exported(); n != 1 {
+		t.Fatalf("report.exported events = %d, want 1", n)
+	}
 
 	// A scan that does not exist.
 	code, out, errs = e.run("export-report", strconv.FormatInt(id+100, 10))
@@ -284,5 +292,9 @@ func TestIntegrationAdminExportReport(t *testing.T) {
 	code, out, errs = e.run("export-report", strconv.FormatInt(id, 10))
 	if code != 1 || out != "" || !strings.Contains(errs, "was cleared by data retention") {
 		t.Fatalf("cleared report: code %d stdout %q stderr %q", code, out, errs)
+	}
+	// Failed exports write no event.
+	if n := e.count(t, `SELECT count(*) FROM audit_log WHERE action = 'report.exported'`); n != 1 {
+		t.Fatalf("report.exported events = %d after failed exports, want 1", n)
 	}
 }

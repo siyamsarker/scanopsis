@@ -40,6 +40,10 @@ const (
 	// the detail carries "reason" and "ip".
 	ActionWebhookRejected = "webhook.rejected"
 
+	// An original scan report was exported with "scanopsis admin
+	// export-report". The actor is "cli"; the detail carries only "scan_id".
+	ActionReportExported = "report.exported"
+
 	// Data retention. The actor is "retention"; the detail carries the
 	// period, the cutoffs and how many rows of each kind were deleted.
 	ActionRetentionDeleted = "retention.deleted"

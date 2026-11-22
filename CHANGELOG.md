@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `scanopsis admin export-report <scan-id>` writes the original Trivy report of a scan to standard output, for checking a stored scan with `trivy convert`. It works in the container without a shell: `docker compose exec scanopsis /scanopsis admin export-report 42 > report.json`. A report cleared by data retention fails with a clear message.
+- `scanopsis admin export-report <scan-id>` writes the original Trivy report of a scan to standard output, for checking a stored scan with `trivy convert`. It works in the container without a shell: `docker compose exec scanopsis /scanopsis admin export-report 42 > report.json`. A successful export is recorded in the audit log as `report.exported`; a report cleared by data retention fails with a clear message.
 - Rejected SonarQube webhooks (wrong signature, oversized or invalid body) are recorded in the audit log as `webhook.rejected` with the reason and client address, at most 10 per address and then one per minute.
 
 ## [0.1.0] - 2026-11-22

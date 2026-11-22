@@ -290,6 +290,8 @@ func (b *adminBackend) exportReport(ctx context.Context, id int64, stdout io.Wri
 	if _, err := out.WriteTo(stdout); err != nil {
 		return fmt.Errorf("write the report: %w", err)
 	}
+	// Only the ID is recorded, never the content.
+	b.audit.Record(ctx, actorCLI, audit.ActionReportExported, map[string]any{"scan_id": id})
 	return nil
 }
 
