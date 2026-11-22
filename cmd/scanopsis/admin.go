@@ -287,11 +287,14 @@ func (b *adminBackend) exportReport(ctx context.Context, id int64, stdout io.Wri
 	if n > ingest.DefaultMaxReportBytes {
 		return fmt.Errorf("the stored report of scan %d is larger than the upload limit of %d bytes", id, ingest.DefaultMaxReportBytes)
 	}
+	// Recorded before the report leaves the process, so that an export that
+	// is interrupted half way is recorded too. Only the ID, never the content.
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	b.audit.Record(actx, actorCLI, audit.ActionReportExported, map[string]any{"scan_id": id})
 	if _, err := out.WriteTo(stdout); err != nil {
 		return fmt.Errorf("write the report: %w", err)
 	}
-	// Only the ID is recorded, never the content.
-	b.audit.Record(ctx, actorCLI, audit.ActionReportExported, map[string]any{"scan_id": id})
 	return nil
 }
 
