@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Sign-in rate limits can no longer be reset by flooding the server with made-up user names: a name whose failure budget is spent is kept apart from the bounded list that new names push old ones out of. IPv6 clients are now counted by `/48` instead of `/64` for sign-in and setup.
 - GitLab users are identified by the GitLab URL and the user id there, instead of the user id alone, so a sign-in through another GitLab instance never takes over an existing account. Existing GitLab users are assigned to the GitLab URL stored in the settings. After a change of the GitLab URL, GitLab users sign in as new viewers (see the operations guide). The administration commands refuse a `gitlab:<name>` that matches accounts of several instances and accept `gitlab-id:<n>` and `id:<n>`.
 - New recovery codes have 20 characters in four groups of five (about 99 bits, was about 50) and are stored as an HMAC-SHA-256 over the user id and the code, keyed from `SCANOPSIS_SECRET_KEY`, instead of a plain SHA-256. Codes issued before keep working until they are used or replaced by a new enrolment.
 - GitLab sign-in no longer redirects to another site when `return_to` hides a backslash behind a dot segment, such as `/./%5Cevil.example`. The value is now cleaned before it is checked, any backslash or control character (raw or percent-encoded) is refused, and the redirect is built from the path and query only. The web interface applies the same rule.

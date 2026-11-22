@@ -59,7 +59,7 @@ type localLogin struct {
 // NewLocalLogin returns the handler for POST /api/v1/auth/local/login.
 // Callers should use NewRateLimiter(12*time.Second, 10, nil) for both
 // limiters: byAddr limits every attempt per client network (an IPv4 address or
-// an IPv6 /64) and byUser the failed password checks per username (as given),
+// an IPv6 /48) and byUser the failed password checks per username (as given),
 // each to ten attempts and then five per minute. Once the byUser
 // budget of a name is spent, every password for it is refused until it
 // refills, the correct one included, so the limit cannot be used to test

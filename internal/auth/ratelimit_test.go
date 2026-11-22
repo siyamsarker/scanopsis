@@ -162,7 +162,8 @@ func TestRateLimiterIsBoundedUnderAFlood(t *testing.T) {
 
 func TestRateLimiterEvictsTheLeastRecentlyUsedKey(t *testing.T) {
 	clk := newFakeClock()
-	l := NewRateLimiter(time.Second, 2, clk.Now)
+	// A burst of 3, so two uses leave budget and k0 stays in the list.
+	l := NewRateLimiter(time.Second, 3, clk.Now)
 	for i := range limiterMaxKeys {
 		l.Allow(fmt.Sprintf("k%d", i))
 	}
@@ -180,9 +181,9 @@ func TestAddrKey(t *testing.T) {
 	for in, want := range map[string]string{
 		"192.0.2.7":            "192.0.2.7",
 		"::ffff:192.0.2.7":     "192.0.2.7",
-		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
-		"2001:db8:1:2:ffff::1": "2001:db8:1:2::/64",
-		"2001:db8:1:3::1":      "2001:db8:1:3::/64",
+		"2001:db8:1:2:3:4:5:6": "2001:db8:1::/48",
+		"2001:db8:1:ffff::1":   "2001:db8:1::/48",
+		"2001:db8:2::1":        "2001:db8:2::/48",
 	} {
 		if got := addrKey(netip.MustParseAddr(in)); got != want {
 			t.Errorf("addrKey(%s) = %s; want %s", in, got, want)
@@ -224,5 +225,85 @@ func TestRateLimiterBlockedDoesNotConsume(t *testing.T) {
 	}
 	if ok, _ := l.Allow("k"); ok {
 		t.Fatal("Blocked granted an extra token")
+	}
+}
+
+// spendAll uses up the whole budget of key.
+func spendAll(t *testing.T, l *RateLimiter, key string) {
+	t.Helper()
+	for {
+		if ok, _ := l.Allow(key); !ok {
+			return
+		}
+	}
+}
+
+func TestRateLimiterFloodDoesNotEvictASpentKey(t *testing.T) {
+	clk := newFakeClock()
+	l := NewRateLimiter(12*time.Second, 10, clk.Now)
+	spendAll(t, l, "victim")
+	// More distinct keys than the list holds, each with budget left.
+	for i := range 2 * limiterMaxKeys {
+		l.Allow(fmt.Sprintf("junk-%d", i))
+	}
+	if blocked, _ := l.Blocked("victim"); !blocked {
+		t.Fatal("a flood of other keys gave the victim a fresh budget")
+	}
+	if ok, _ := l.Allow("victim"); ok {
+		t.Fatal("the victim was allowed after the flood")
+	}
+	if n := len(l.buckets); n != limiterMaxKeys {
+		t.Fatalf("list holds %d keys; want %d", n, limiterMaxKeys)
+	}
+}
+
+func TestRateLimiterSpentKeyReturnsWhenRefilled(t *testing.T) {
+	clk := newFakeClock()
+	l := NewRateLimiter(10*time.Second, 2, clk.Now)
+	spendAll(t, l, "k")
+	if _, ok := l.spent["k"]; !ok {
+		t.Fatal("a spent key is not set aside")
+	}
+	clk.Advance(10 * time.Second)
+	if ok, _ := l.Allow("k"); !ok {
+		t.Fatal("refilled token refused")
+	}
+	// That token spent the budget again.
+	if _, ok := l.spent["k"]; !ok {
+		t.Fatal("the key left the set while spent")
+	}
+	clk.Advance(30 * time.Second)
+	if ok, _ := l.Allow("k"); !ok {
+		t.Fatal("refilled token refused")
+	}
+	if _, inList := l.buckets["k"]; !inList {
+		t.Fatal("a key with budget left is not back in the list")
+	}
+	if _, ok := l.spent["k"]; ok {
+		t.Fatal("a key with budget left is still set aside")
+	}
+}
+
+func TestRateLimiterSpentSetIsBoundedAndSwept(t *testing.T) {
+	clk := newFakeClock()
+	l := NewRateLimiter(time.Second, 1, clk.Now)
+	for i := range limiterMaxSpent + 50 {
+		spendAll(t, l, fmt.Sprintf("s-%d", i))
+	}
+	if n := len(l.spent); n != limiterMaxSpent {
+		t.Fatalf("set aside %d keys; want at most %d", n, limiterMaxSpent)
+	}
+	// The overflow stays in the list, still limited.
+	if n := len(l.buckets); n != 50 {
+		t.Fatalf("list holds %d keys; want the 50 that did not fit", n)
+	}
+	if ok, _ := l.Allow(fmt.Sprintf("s-%d", limiterMaxSpent+49)); ok {
+		t.Fatal("an overflow key was allowed")
+	}
+	clk.Advance(limiterMinIdle + time.Minute)
+	l.Allow("fresh")
+	_, freshAside := l.spent["fresh"]
+	if len(l.spent)+len(l.buckets) != 1 || !freshAside {
+		t.Fatalf("after the idle time: %d set aside, %d listed; want only the fresh key", len(l.spent), len(l.buckets))
 	}
 }

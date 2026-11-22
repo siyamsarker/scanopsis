@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -536,16 +537,37 @@ func TestLocalLoginSuccessDoesNotSpendTheUsernameBudget(t *testing.T) {
 	}
 }
 
-func TestLocalLoginIPv6SharesTheSlash64(t *testing.T) {
+func TestLocalLoginIPv6SharesTheSlash48(t *testing.T) {
 	f := newLoginFixture(t, 12*time.Second, 1)
 	if w := f.do(http.MethodPost, creds("a", "x"), "[2001:db8:1:2::1]:1000"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("first: status %d", w.Code)
 	}
-	if w := f.do(http.MethodPost, creds("b", "x"), "[2001:db8:1:2:ffff::9]:1000"); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("same /64: status %d; want 429", w.Code)
+	// Another /64 of the same /48 is the same client network.
+	if w := f.do(http.MethodPost, creds("b", "x"), "[2001:db8:1:ff00::9]:1000"); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("same /48: status %d; want 429", w.Code)
 	}
-	if w := f.do(http.MethodPost, creds("c", "x"), "[2001:db8:1:3::1]:1000"); w.Code != http.StatusUnauthorized {
-		t.Fatalf("other /64: status %d", w.Code)
+	if w := f.do(http.MethodPost, creds("c", "x"), "[2001:db8:2::1]:1000"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("other /48: status %d", w.Code)
+	}
+}
+
+// TestLocalLoginJunkNamesDoNotResetASpentBudget floods the per-name limiter
+// with more distinct names than it keeps, after the victim's budget is spent:
+// the victim stays refused, even with the right password.
+func TestLocalLoginJunkNamesDoNotResetASpentBudget(t *testing.T) {
+	f := newLoginFixture(t, time.Hour, 2)
+	f.limit = NewRateLimiter(time.Nanosecond, 1_000_000, f.clock.Now) // no per-address limit here
+	f.h = NewLocalLogin(f.users, f.start, f.audit, func(*http.Request) netip.Addr { return netip.MustParseAddr("192.0.2.1") }, f.limit, f.byUser, nil)
+	for range 2 {
+		if w := f.post(creds(goodUser, "wrong")); w.Code != http.StatusUnauthorized && w.Code != http.StatusTooManyRequests {
+			t.Fatalf("status %d", w.Code)
+		}
+	}
+	for i := range limiterMaxKeys + 10 {
+		f.byUser.Allow(fmt.Sprintf("junk-%d", i))
+	}
+	if w := f.post(creds(goodUser, goodPass)); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("right password after the flood: status %d; want 429 (budget kept)", w.Code)
 	}
 }
 

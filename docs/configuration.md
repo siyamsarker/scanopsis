@@ -292,8 +292,13 @@ sign-in attempts. Wait N seconds and try again."
 | Two-factor code and enrolment confirmation | User | 5 | one every 30 seconds |
 | Password change | User | 10 | one every 12 seconds |
 
-A client address is an IPv4 address or an IPv6 `/64` range. The limits are
-kept in memory, so a restart clears them.
+For sign-in and setup, a client address is an IPv4 address or an IPv6 `/48`
+range, because one client often holds many `/64` ranges. Scan uploads count
+an IPv6 client by its `/64`. The limits are kept in memory, so a restart
+clears them. Each limit keeps at most 10,000 keys with budget left, dropping
+the least recently used one to make room, and sets up to 10,000 keys whose
+budget is spent aside where no flood of other keys can push them out, so
+sending many made-up user names does not give a real one a fresh budget.
 
 Behind a reverse proxy, Scanopsis can tell clients apart only if you set
 `SCANOPSIS_TRUSTED_PROXIES`. Without it, all users share the proxy's address

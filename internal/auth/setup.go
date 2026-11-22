@@ -53,7 +53,7 @@ type Setup struct {
 
 // NewSetup returns a Setup. Callers should use
 // NewRateLimiter(12*time.Second, 5, nil) as limiter, which limits POSTs per
-// client address (an IPv4 address or an IPv6 /64). Server-side failures are
+// client address (an IPv4 address or an IPv6 /48). Server-side failures are
 // logged to log (nil discards them).
 func NewSetup(s SetupStore, sessions SessionStarter, audit AuditRecorder, clientIP func(*http.Request) netip.Addr, limiter *RateLimiter, log *slog.Logger) *Setup {
 	if log == nil {
