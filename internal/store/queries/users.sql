@@ -7,6 +7,12 @@ SELECT * FROM users WHERE id = $1;
 -- name: GetLocalUserByUsername :one
 SELECT * FROM users WHERE source = 'local' AND username = $1;
 
+-- name: ListGitLabUsersByUsername :many
+SELECT * FROM users WHERE source = 'gitlab' AND username = $1 ORDER BY id;
+
+-- name: ListGitLabUsersByGitLabID :many
+SELECT * FROM users WHERE source = 'gitlab' AND gitlab_user_id = $1 ORDER BY id;
+
 -- name: CountAdmins :one
 SELECT count(*) FROM users WHERE role = 'admin';
 
@@ -19,11 +25,12 @@ RETURNING *;
 -- viewer role; an existing user keeps their role and stays disabled if an
 -- administrator disabled the account, in which case the sign-in time is not
 -- updated (the caller refuses the sign-in).
+-- A user is identified by the GitLab instance (issuer) and the user id there.
 -- name: UpsertGitLabUser :one
-INSERT INTO users (source, gitlab_user_id, username, name, email, role, last_login_at)
-VALUES ('gitlab', @gitlab_user_id, @username, @name, @email,
+INSERT INTO users (source, gitlab_issuer, gitlab_user_id, username, name, email, role, last_login_at)
+VALUES ('gitlab', @gitlab_issuer, @gitlab_user_id, @username, @name, @email,
         'viewer', now())
-ON CONFLICT (gitlab_user_id) DO UPDATE
+ON CONFLICT (gitlab_issuer, gitlab_user_id) DO UPDATE
 SET username      = EXCLUDED.username,
     name          = EXCLUDED.name,
     email         = EXCLUDED.email,

@@ -127,6 +127,7 @@ func TestIntegrationPasswordChangeRejectsNonLocalUser(t *testing.T) {
 	e := newIntegrationEnv(t)
 	ctx := context.Background()
 	gl, err := e.q.UpsertGitLabUser(ctx, store.UpsertGitLabUserParams{
+		GitlabIssuer: pgtype.Text{String: "https://gitlab.example.com", Valid: true},
 		GitlabUserID: pgtype.Int8{Int64: 5, Valid: true}, Username: "ada", Name: "Ada", Email: "ada@example.com",
 	})
 	if err != nil {

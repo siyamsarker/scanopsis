@@ -356,7 +356,10 @@ func (g *GitLab) complete(w http.ResponseWriter, r *http.Request) (string, *fail
 		}
 	}
 
+	// The user is identified by this GitLab instance and the id there: the
+	// same id on another instance is another person.
 	user, err := g.users.UpsertGitLabUser(ctx, store.UpsertGitLabUserParams{
+		GitlabIssuer: pgtype.Text{String: g.opts.IssuerURL, Valid: true},
 		GitlabUserID: pgtype.Int8{Int64: id, Valid: true},
 		Username:     username,
 		Name:         claims.Name,

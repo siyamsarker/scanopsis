@@ -239,6 +239,7 @@ func TestSuccessfulSignIn(t *testing.T) {
 	}
 	got := e.users.calls[0]
 	want := store.UpsertGitLabUserParams{
+		GitlabIssuer: pgtype.Text{String: e.fake.IssuerURL(), Valid: true},
 		GitlabUserID: got.GitlabUserID, Username: "alice", Name: "Alice Example",
 		Email: "alice@example.com",
 	}

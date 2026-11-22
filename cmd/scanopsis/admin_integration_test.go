@@ -158,7 +158,7 @@ func TestIntegrationAdminResetPassword(t *testing.T) {
 func TestIntegrationAdminResetPasswordFailures(t *testing.T) {
 	e := newAdminEnv(t)
 	if _, err := e.pool.Exec(context.Background(),
-		"INSERT INTO users (source, gitlab_user_id, username, name, email, role) VALUES ('gitlab', 9, 'ada', 'Ada', 'a@example.com', 'viewer')"); err != nil {
+		"INSERT INTO users (source, gitlab_issuer, gitlab_user_id, username, name, email, role) VALUES ('gitlab', 'https://gitlab.example.com', 9, 'ada', 'Ada', 'a@example.com', 'viewer')"); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"nobody", "ada"} { // unknown, and a GitLab account
@@ -182,7 +182,7 @@ func TestIntegrationAdminReset2FA(t *testing.T) {
 	e.session(t, u.ID, 1)
 	var glID int64
 	if err := e.pool.QueryRow(ctx,
-		"INSERT INTO users (source, gitlab_user_id, username, name, email, role, totp_secret_enc, totp_enabled_at) VALUES ('gitlab', 9, 'ada', 'Ada', 'a@example.com', 'viewer', '\\x0304', now()) RETURNING id").Scan(&glID); err != nil {
+		"INSERT INTO users (source, gitlab_issuer, gitlab_user_id, username, name, email, role, totp_secret_enc, totp_enabled_at) VALUES ('gitlab', 'https://gitlab.example.com', 9, 'ada', 'Ada', 'a@example.com', 'viewer', '\\x0304', now()) RETURNING id").Scan(&glID); err != nil {
 		t.Fatal(err)
 	}
 	e.session(t, glID, 2)
@@ -263,6 +263,39 @@ func TestIntegrationAdminDisableEnableDeleteUser(t *testing.T) {
 	}
 	if code, _, _ := e.run("delete-user", "local:root"); code != 1 {
 		t.Fatalf("deleting a missing account: code %d", code)
+	}
+}
+
+func TestIntegrationAdminAmbiguousGitLabName(t *testing.T) {
+	e := newAdminEnv(t)
+	ctx := context.Background()
+	for _, row := range []struct {
+		issuer string
+		id     int64
+	}{{"https://gitlab.example.com", 9}, {"https://gitlab.other.example", 11}} {
+		if _, err := e.pool.Exec(ctx,
+			"INSERT INTO users (source, gitlab_issuer, gitlab_user_id, username, role, totp_secret_enc, totp_enabled_at) VALUES ('gitlab', $1, $2, 'ada', 'viewer', '\\x01', now())",
+			row.issuer, row.id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	code, out, errs := e.run("reset-2fa", "gitlab:ada")
+	if code != 1 || out != "" || !strings.Contains(errs, "gitlab:ada matches 2 accounts") ||
+		!strings.Contains(errs, "gitlab-id:9") || !strings.Contains(errs, "gitlab-id:11") {
+		t.Fatalf("ambiguous name: code %d stdout %q stderr %q", code, out, errs)
+	}
+	if n := e.count(t, "SELECT count(*) FROM users WHERE totp_enabled_at IS NULL"); n != 0 {
+		t.Fatal("an ambiguous name reset an account")
+	}
+	code, out, errs = e.run("reset-2fa", "gitlab-id:11")
+	if code != 0 || !strings.Contains(out, "gitlab:ada") {
+		t.Fatalf("gitlab-id: code %d stdout %q stderr %q", code, out, errs)
+	}
+	if n := e.count(t, "SELECT count(*) FROM users WHERE totp_enabled_at IS NULL AND gitlab_user_id = 11"); n != 1 {
+		t.Fatal("gitlab-id:11 was not reset")
+	}
+	if n := e.count(t, "SELECT count(*) FROM users WHERE totp_enabled_at IS NULL AND gitlab_user_id = 9"); n != 0 {
+		t.Fatal("the other instance's user was reset")
 	}
 }
 

@@ -25,7 +25,7 @@ func (q *Queries) CountAdmins(ctx context.Context) (int64, error) {
 const createLocalUser = `-- name: CreateLocalUser :one
 INSERT INTO users (source, username, role, password_hash)
 VALUES ('local', $1, $2, $3)
-RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at
+RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer
 `
 
 type CreateLocalUserParams struct {
@@ -54,12 +54,13 @@ func (q *Queries) CreateLocalUser(ctx context.Context, arg CreateLocalUserParams
 		&i.TotpLastStep,
 		&i.MfaFailedAttempts,
 		&i.DisabledAt,
+		&i.GitlabIssuer,
 	)
 	return i, err
 }
 
 const deleteUser = `-- name: DeleteUser :one
-DELETE FROM users WHERE id = $1 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at
+DELETE FROM users WHERE id = $1 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer
 `
 
 // DeleteUser removes a user. Sessions and recovery codes go with it; audit
@@ -84,6 +85,7 @@ func (q *Queries) DeleteUser(ctx context.Context, id int64) (User, error) {
 		&i.TotpLastStep,
 		&i.MfaFailedAttempts,
 		&i.DisabledAt,
+		&i.GitlabIssuer,
 	)
 	return i, err
 }
@@ -104,7 +106,7 @@ func (q *Queries) EnableTOTP(ctx context.Context, arg EnableTOTPParams) error {
 }
 
 const getLocalUserByUsername = `-- name: GetLocalUserByUsername :one
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at FROM users WHERE source = 'local' AND username = $1
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer FROM users WHERE source = 'local' AND username = $1
 `
 
 func (q *Queries) GetLocalUserByUsername(ctx context.Context, username string) (User, error) {
@@ -127,13 +129,14 @@ func (q *Queries) GetLocalUserByUsername(ctx context.Context, username string) (
 		&i.TotpLastStep,
 		&i.MfaFailedAttempts,
 		&i.DisabledAt,
+		&i.GitlabIssuer,
 	)
 	return i, err
 }
 
 const getUser = `-- name: GetUser :one
 
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at FROM users WHERE id = $1
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer FROM users WHERE id = $1
 `
 
 // Copyright 2026 The Scanopsis Authors
@@ -158,12 +161,97 @@ func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 		&i.TotpLastStep,
 		&i.MfaFailedAttempts,
 		&i.DisabledAt,
+		&i.GitlabIssuer,
 	)
 	return i, err
 }
 
+const listGitLabUsersByGitLabID = `-- name: ListGitLabUsersByGitLabID :many
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer FROM users WHERE source = 'gitlab' AND gitlab_user_id = $1 ORDER BY id
+`
+
+func (q *Queries) ListGitLabUsersByGitLabID(ctx context.Context, gitlabUserID pgtype.Int8) ([]User, error) {
+	rows, err := q.db.Query(ctx, listGitLabUsersByGitLabID, gitlabUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.GitlabUserID,
+			&i.Username,
+			&i.Name,
+			&i.Email,
+			&i.Role,
+			&i.PasswordHash,
+			&i.CreatedAt,
+			&i.LastLoginAt,
+			&i.MustChangePassword,
+			&i.TotpSecretEnc,
+			&i.TotpEnabledAt,
+			&i.TotpLastStep,
+			&i.MfaFailedAttempts,
+			&i.DisabledAt,
+			&i.GitlabIssuer,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGitLabUsersByUsername = `-- name: ListGitLabUsersByUsername :many
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer FROM users WHERE source = 'gitlab' AND username = $1 ORDER BY id
+`
+
+func (q *Queries) ListGitLabUsersByUsername(ctx context.Context, username string) ([]User, error) {
+	rows, err := q.db.Query(ctx, listGitLabUsersByUsername, username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Source,
+			&i.GitlabUserID,
+			&i.Username,
+			&i.Name,
+			&i.Email,
+			&i.Role,
+			&i.PasswordHash,
+			&i.CreatedAt,
+			&i.LastLoginAt,
+			&i.MustChangePassword,
+			&i.TotpSecretEnc,
+			&i.TotpEnabledAt,
+			&i.TotpLastStep,
+			&i.MfaFailedAttempts,
+			&i.DisabledAt,
+			&i.GitlabIssuer,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUsers = `-- name: ListUsers :many
-SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at FROM users
+SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer FROM users
 WHERE id > $1
 ORDER BY id
 LIMIT $2
@@ -200,6 +288,7 @@ func (q *Queries) ListUsers(ctx context.Context, arg ListUsersParams) ([]User, e
 			&i.TotpLastStep,
 			&i.MfaFailedAttempts,
 			&i.DisabledAt,
+			&i.GitlabIssuer,
 		); err != nil {
 			return nil, err
 		}
@@ -309,7 +398,7 @@ const setUserDisabled = `-- name: SetUserDisabled :one
 UPDATE users
 SET disabled_at = CASE WHEN $1::boolean THEN coalesce(disabled_at, now()) ELSE NULL END
 WHERE id = $2
-RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at
+RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer
 `
 
 type SetUserDisabledParams struct {
@@ -338,12 +427,13 @@ func (q *Queries) SetUserDisabled(ctx context.Context, arg SetUserDisabledParams
 		&i.TotpLastStep,
 		&i.MfaFailedAttempts,
 		&i.DisabledAt,
+		&i.GitlabIssuer,
 	)
 	return i, err
 }
 
 const setUserRole = `-- name: SetUserRole :one
-UPDATE users SET role = $1 WHERE id = $2 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at
+UPDATE users SET role = $1 WHERE id = $2 RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer
 `
 
 type SetUserRoleParams struct {
@@ -371,6 +461,7 @@ func (q *Queries) SetUserRole(ctx context.Context, arg SetUserRoleParams) (User,
 		&i.TotpLastStep,
 		&i.MfaFailedAttempts,
 		&i.DisabledAt,
+		&i.GitlabIssuer,
 	)
 	return i, err
 }
@@ -385,18 +476,19 @@ func (q *Queries) TouchLastLogin(ctx context.Context, id int64) error {
 }
 
 const upsertGitLabUser = `-- name: UpsertGitLabUser :one
-INSERT INTO users (source, gitlab_user_id, username, name, email, role, last_login_at)
-VALUES ('gitlab', $1, $2, $3, $4,
+INSERT INTO users (source, gitlab_issuer, gitlab_user_id, username, name, email, role, last_login_at)
+VALUES ('gitlab', $1, $2, $3, $4, $5,
         'viewer', now())
-ON CONFLICT (gitlab_user_id) DO UPDATE
+ON CONFLICT (gitlab_issuer, gitlab_user_id) DO UPDATE
 SET username      = EXCLUDED.username,
     name          = EXCLUDED.name,
     email         = EXCLUDED.email,
     last_login_at = CASE WHEN users.disabled_at IS NULL THEN now() ELSE users.last_login_at END
-RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at
+RETURNING id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer
 `
 
 type UpsertGitLabUserParams struct {
+	GitlabIssuer pgtype.Text
 	GitlabUserID pgtype.Int8
 	Username     string
 	Name         string
@@ -407,8 +499,10 @@ type UpsertGitLabUserParams struct {
 // viewer role; an existing user keeps their role and stays disabled if an
 // administrator disabled the account, in which case the sign-in time is not
 // updated (the caller refuses the sign-in).
+// A user is identified by the GitLab instance (issuer) and the user id there.
 func (q *Queries) UpsertGitLabUser(ctx context.Context, arg UpsertGitLabUserParams) (User, error) {
 	row := q.db.QueryRow(ctx, upsertGitLabUser,
+		arg.GitlabIssuer,
 		arg.GitlabUserID,
 		arg.Username,
 		arg.Name,
@@ -432,6 +526,7 @@ func (q *Queries) UpsertGitLabUser(ctx context.Context, arg UpsertGitLabUserPara
 		&i.TotpLastStep,
 		&i.MfaFailedAttempts,
 		&i.DisabledAt,
+		&i.GitlabIssuer,
 	)
 	return i, err
 }

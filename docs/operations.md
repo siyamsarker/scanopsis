@@ -157,7 +157,14 @@ administrator lost a password or a phone.
 | `enable-user <account>` | Lets a disabled account sign in again. |
 | `delete-user <account>` | Deletes an account. |
 
-An account is written `local:<username>` or `gitlab:<username>`.
+An account is written in one of these ways:
+
+| Form | Account |
+|---|---|
+| `local:<username>` | The local account with that name. |
+| `gitlab:<username>` | The GitLab account with that name. If the name matches more than one account (users of different GitLab instances, see [GitLab users and the GitLab URL](#gitlab-users-and-the-gitlab-url)), the command changes nothing and lists the accounts, each as `gitlab-id:<n>`. |
+| `gitlab-id:<n>` | The GitLab account with the GitLab user id `n` (shown on the user's GitLab profile). If two GitLab instances have a user with that id, the command lists them, each as `id:<n>`. |
+| `id:<n>` | The account with the Scanopsis user id `n`, as in `GET /api/v1/users`. |
 
 ```sh
 docker compose exec scanopsis /scanopsis admin <command>
@@ -212,7 +219,8 @@ If it fails:
 ### Reset two-factor authentication
 
 Use this when a user lost the phone and has no recovery code left. Write the
-account as `local:<username>` or `gitlab:<username>`. The prefix is required.
+account as described in [administration commands](#administration-commands),
+for example `local:root` or `gitlab:alice`. The prefix is required.
 
 ```sh
 docker compose exec scanopsis /scanopsis admin reset-2fa local:root
@@ -245,7 +253,8 @@ If it fails:
 
 | Message | Meaning and fix |
 |---|---|
-| `the account must be written local:<username> or gitlab:<username>.` | You wrote only the name, for example `root`. Add the prefix, exit status 2. |
+| `the account must be written local:<username>, gitlab:<username>, gitlab-id:<n> or id:<n>.` | You wrote only the name, for example `root`. Add the prefix, exit status 2. |
+| `gitlab:alice matches 2 accounts; name one of them:` followed by a list | Users of two GitLab instances are called `alice`. Run the command again with the `gitlab-id:<n>` of the right one from the list. |
 | `there is no gitlab account named "alice"` (or `local`) | The account does not exist. A GitLab account exists only after its owner signed in once. |
 
 ## Disable or delete a user
@@ -292,6 +301,31 @@ If it fails:
 |---|---|
 | `local:root is the last enabled administrator; enable or promote another administrator first` | The change would leave nobody who can administer Scanopsis. Enable or promote another administrator, then run the command again. |
 | `there is no gitlab account named "alice"` (or `local`) | The account does not exist. Check the spelling and the prefix. |
+
+## GitLab users and the GitLab URL
+
+A GitLab user is identified by the GitLab instance (the GitLab URL at the time
+of the sign-in) together with the user id there. A user id of another GitLab
+instance is another person, so a sign-in through a different GitLab URL never
+uses an existing account, its role or its two-factor setup: it creates a new
+viewer.
+
+When the GitLab URL setting changes, every GitLab user therefore starts over
+as a new viewer at the next sign-in, and the old accounts stay on the
+**Users** page. Delete them once they are no longer needed.
+
+If the same GitLab instance only moved to a new address, you can keep the
+accounts by moving them to the new URL in the database, before anyone signs
+in through it. Write both URLs exactly as the Settings page shows them:
+
+```sh
+docker compose exec db psql -U scanopsis -d scanopsis -c \
+  "UPDATE users SET gitlab_issuer = 'https://gitlab.new.example.com' WHERE gitlab_issuer = 'https://gitlab.example.com';"
+```
+
+GitLab users created by version 0.1.0 are assigned to the GitLab URL stored in
+the settings during the upgrade. Without a stored URL they get an empty one,
+and their next sign-in creates a new account.
 
 ## Recovering access when locked out
 

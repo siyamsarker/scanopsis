@@ -143,6 +143,7 @@ type User struct {
 	TotpLastStep       int64
 	MfaFailedAttempts  int32
 	DisabledAt         pgtype.Timestamptz
+	GitlabIssuer       pgtype.Text
 }
 
 type Vulnerability struct {

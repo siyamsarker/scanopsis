@@ -95,7 +95,7 @@ invalid.
 
 | Key | Seeding variable | Type | Default | Example | Effect and validation |
 |---|---|---|---|---|---|
-| `gitlab.url` | `SCANOPSIS_GITLAB_URL` | URL | empty | `https://gitlab.example.com` | Base URL of the GitLab instance. Also the OpenID Connect issuer and the issuer of CI job tokens: set it to accept scan uploads, even without GitLab sign-in. Same rules as the public URL: absolute `http` or `https`, no path, query, fragment or credentials. |
+| `gitlab.url` | `SCANOPSIS_GITLAB_URL` | URL | empty | `https://gitlab.example.com` | Base URL of the GitLab instance. Also the OpenID Connect issuer and the issuer of CI job tokens: set it to accept scan uploads, even without GitLab sign-in. Same rules as the public URL: absolute `http` or `https`, no path, query, fragment or credentials. GitLab users are tied to this URL: after a change, GitLab users sign in as new viewers, see [GitLab users and the GitLab URL](operations.md#gitlab-users-and-the-gitlab-url). |
 | `gitlab.client_id` | `SCANOPSIS_GITLAB_CLIENT_ID` | text | empty | `d4c3...` | Application ID of the GitLab OAuth application. |
 | `gitlab.client_secret` | `SCANOPSIS_GITLAB_CLIENT_SECRET` | secret | not set | | Secret of the GitLab OAuth application. Stored encrypted and never shown again. It cannot be empty; reset it instead. |
 | `gitlab.allowed_groups` | `SCANOPSIS_GITLAB_ALLOWED_GROUPS` | list | empty | `platform,security/appsec` | GitLab groups, by full path, whose members may sign in. Empty allows every GitLab user. Each path must not be empty, must not start or end with `/` and must not contain spaces. In the environment, separate entries with commas. On the Settings page, write one entry per line. See the [GitLab sign-in guide](integrations/gitlab-sso.md#allowed-groups). |

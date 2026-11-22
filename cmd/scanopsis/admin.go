@@ -64,7 +64,12 @@ Commands:
       command then fails. In the container:
       docker compose exec scanopsis /scanopsis admin export-report 42 > report.json
 
-An account is written local:<username> or gitlab:<username>.
+An account is written one of these ways:
+  local:<username>   a local account
+  gitlab:<username>  a GitLab account; refused if the name matches more than
+                     one account (users of different GitLab instances)
+  gitlab-id:<n>      the GitLab account with GitLab user id n
+  id:<n>             the account with Scanopsis user id n (as in the API)
 
 Exit status: 0 on success, 1 on failure, 2 on a usage error.
 `
@@ -73,7 +78,6 @@ Exit status: 0 on success, 1 on failure, 2 on a usage error.
 const (
 	tempPasswordAlphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
 	tempPasswordLength   = 20
-	userPageSize         = 500
 	actorCLI             = "cli"
 	actionMFAReset       = "mfa.reset"
 )
@@ -82,7 +86,11 @@ const (
 // it from a connection pool and tests use fakes.
 type adminBackend struct {
 	localUser func(ctx context.Context, username string) (store.User, error)
-	listUsers func(ctx context.Context, afterID int64, limit int32) ([]store.User, error)
+	userByID  func(ctx context.Context, id int64) (store.User, error)
+	// gitlabByName and gitlabByID list the GitLab accounts with a username
+	// or a GitLab user id, of every GitLab instance.
+	gitlabByName func(ctx context.Context, username string) ([]store.User, error)
+	gitlabByID   func(ctx context.Context, gitlabID int64) ([]store.User, error)
 	// setPassword stores the hash with must_change_password set and ends all
 	// sessions of the user, in one transaction.
 	setPassword func(ctx context.Context, id int64, hash string) error
@@ -118,16 +126,19 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
 			return b.resetPassword(ctx, rest[0], out)
 		}
-	case "reset-2fa":
+	case "reset-2fa", "disable-user", "enable-user", "delete-user":
 		if len(rest) != 1 {
-			return usageError(stderr, "reset-2fa needs exactly one argument: local:<username> or gitlab:<username>.")
+			return usageError(stderr, cmd+" needs exactly one argument: the account, such as local:<username> or gitlab:<username>.")
 		}
-		source, username, ok := parseAccount(rest[0])
+		ref, ok := parseAccount(rest[0])
 		if !ok {
-			return usageError(stderr, "the account must be written local:<username> or gitlab:<username>.")
+			return usageError(stderr, "the account must be written local:<username>, gitlab:<username>, gitlab-id:<n> or id:<n>.")
 		}
 		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
-			return b.reset2FA(ctx, source, username, out)
+			if cmd == "reset-2fa" {
+				return b.reset2FA(ctx, ref, out)
+			}
+			return b.changeAccess(ctx, cmd, ref, out)
 		}
 	case "export-report":
 		var id int64
@@ -139,17 +150,6 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 		}
 		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
 			return b.exportReport(ctx, id, out)
-		}
-	case "disable-user", "enable-user", "delete-user":
-		if len(rest) != 1 {
-			return usageError(stderr, cmd+" needs exactly one argument: local:<username> or gitlab:<username>.")
-		}
-		source, username, ok := parseAccount(rest[0])
-		if !ok {
-			return usageError(stderr, "the account must be written local:<username> or gitlab:<username>.")
-		}
-		exec = func(ctx context.Context, b *adminBackend, out io.Writer) error {
-			return b.changeAccess(ctx, cmd, source, username, out)
 		}
 	default:
 		return usageError(stderr, fmt.Sprintf("unknown command %q.", args[0]))
@@ -170,9 +170,11 @@ func runAdmin(ctx context.Context, args []string, stdout, stderr io.Writer, gete
 	defer pool.Close()
 	q := store.New(pool)
 	b := &adminBackend{
-		localUser: q.GetLocalUserByUsername,
-		listUsers: func(ctx context.Context, afterID int64, limit int32) ([]store.User, error) {
-			return q.ListUsers(ctx, store.ListUsersParams{AfterID: afterID, MaxRows: limit})
+		localUser:    q.GetLocalUserByUsername,
+		userByID:     q.GetUser,
+		gitlabByName: q.ListGitLabUsersByUsername,
+		gitlabByID: func(ctx context.Context, gitlabID int64) ([]store.User, error) {
+			return q.ListGitLabUsersByGitLabID(ctx, pgtype.Int8{Int64: gitlabID, Valid: true})
 		},
 		setPassword: func(ctx context.Context, id int64, hash string) error {
 			return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
@@ -209,13 +211,37 @@ func usageError(stderr io.Writer, msg string) int {
 	return 2
 }
 
-// parseAccount splits "local:name" or "gitlab:name".
-func parseAccount(s string) (source, username string, ok bool) {
-	source, username, ok = strings.Cut(s, ":")
-	if !ok || username == "" || (source != auth.SourceLocal && source != auth.SourceGitLab) {
-		return "", "", false
+// accountRef names an account on the command line.
+type accountRef struct {
+	kind string // "local", "gitlab", "gitlab-id" or "id"
+	name string // for local and gitlab
+	num  int64  // for gitlab-id and id
+}
+
+func (a accountRef) String() string {
+	if a.name != "" {
+		return a.kind + ":" + a.name
 	}
-	return source, username, true
+	return a.kind + ":" + strconv.FormatInt(a.num, 10)
+}
+
+// parseAccount reads local:<name>, gitlab:<name>, gitlab-id:<n> or id:<n>.
+func parseAccount(s string) (accountRef, bool) {
+	kind, value, ok := strings.Cut(s, ":")
+	if !ok || value == "" {
+		return accountRef{}, false
+	}
+	switch kind {
+	case auth.SourceLocal, auth.SourceGitLab:
+		return accountRef{kind: kind, name: value}, true
+	case "gitlab-id", "id":
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n < 1 {
+			return accountRef{}, false
+		}
+		return accountRef{kind: kind, num: n}, true
+	}
+	return accountRef{}, false
 }
 
 // databaseURL reads the connection string the way the server does: from
@@ -274,20 +300,20 @@ func (b *adminBackend) resetPassword(ctx context.Context, username string, stdou
 	return nil
 }
 
-func (b *adminBackend) reset2FA(ctx context.Context, source, username string, stdout io.Writer) error {
-	user, err := b.findUser(ctx, source, username)
+func (b *adminBackend) reset2FA(ctx context.Context, ref accountRef, stdout io.Writer) error {
+	user, err := b.findUser(ctx, ref)
 	if err != nil {
 		return err
 	}
 	if err := b.resetMFA(ctx, user.ID); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return fmt.Errorf("the account %s:%s no longer exists", source, username)
+			return fmt.Errorf("the account %s no longer exists", accountName(user))
 		}
 		return fmt.Errorf("reset two-factor authentication: %w", err)
 	}
 	b.audit.Record(ctx, actorCLI, actionMFAReset, map[string]any{"username": user.Username, "source": user.Source})
-	_, _ = fmt.Fprintf(stdout, "Two-factor authentication was reset for %s:%s. The account was signed out everywhere "+
-		"and enrols again at the next sign-in.\n", source, user.Username)
+	_, _ = fmt.Fprintf(stdout, "Two-factor authentication was reset for %s. The account was signed out everywhere "+
+		"and enrols again at the next sign-in.\n", accountName(user))
 	return nil
 }
 
@@ -330,9 +356,12 @@ func (b *adminBackend) exportReport(ctx context.Context, id int64, stdout io.Wri
 	return nil
 }
 
+// accountName is how output names an account: source:username.
+func accountName(u store.User) string { return u.Source + ":" + u.Username }
+
 // changeAccess runs disable-user, enable-user or delete-user.
-func (b *adminBackend) changeAccess(ctx context.Context, cmd, source, username string, stdout io.Writer) error {
-	user, err := b.findUser(ctx, source, username)
+func (b *adminBackend) changeAccess(ctx context.Context, cmd string, ref accountRef, stdout io.Writer) error {
+	user, err := b.findUser(ctx, ref)
 	if err != nil {
 		return err
 	}
@@ -350,47 +379,72 @@ func (b *adminBackend) changeAccess(ctx context.Context, cmd, source, username s
 	}
 	switch {
 	case errors.Is(err, store.ErrLastAdmin):
-		return fmt.Errorf("%s:%s is the last enabled administrator; enable or promote another administrator first", source, user.Username)
+		return fmt.Errorf("%s is the last enabled administrator; enable or promote another administrator first", accountName(user))
 	case errors.Is(err, store.ErrNotFound):
-		return fmt.Errorf("the account %s:%s no longer exists", source, user.Username)
+		return fmt.Errorf("the account %s no longer exists", accountName(user))
 	case err != nil:
 		return fmt.Errorf("%s: %w", cmd, err)
 	}
 	b.audit.Record(ctx, actorCLI, action, map[string]any{"user_id": user.ID, "username": user.Username, "source": user.Source})
-	_, _ = fmt.Fprintf(stdout, "The account %s:%s %s.\n", source, user.Username, done)
+	_, _ = fmt.Fprintf(stdout, "The account %s %s.\n", accountName(user), done)
 	return nil
 }
 
-func (b *adminBackend) findUser(ctx context.Context, source, username string) (store.User, error) {
-	notFound := fmt.Errorf("there is no %s account named %q", source, username)
-	if source == auth.SourceLocal {
-		u, err := b.localUser(ctx, username)
-		if errors.Is(err, pgx.ErrNoRows) || errors.Is(err, store.ErrNotFound) {
-			return store.User{}, notFound
+func (b *adminBackend) findUser(ctx context.Context, ref accountRef) (store.User, error) {
+	missing := func(err error) bool { return errors.Is(err, pgx.ErrNoRows) || errors.Is(err, store.ErrNotFound) }
+	var (
+		user  store.User
+		users []store.User
+		err   error
+	)
+	switch ref.kind {
+	case auth.SourceLocal:
+		user, err = b.localUser(ctx, ref.name)
+		if missing(err) {
+			return store.User{}, fmt.Errorf("there is no local account named %q", ref.name)
 		}
-		if err != nil {
-			return store.User{}, fmt.Errorf("look up the account: %w", err)
+	case "id":
+		user, err = b.userByID(ctx, ref.num)
+		if missing(err) {
+			return store.User{}, fmt.Errorf("there is no account with id %d", ref.num)
 		}
-		return u, nil
+	case auth.SourceGitLab:
+		users, err = b.gitlabByName(ctx, ref.name)
+		if err == nil && len(users) == 0 {
+			return store.User{}, fmt.Errorf("there is no gitlab account named %q", ref.name)
+		}
+	default: // gitlab-id
+		users, err = b.gitlabByID(ctx, ref.num)
+		if err == nil && len(users) == 0 {
+			return store.User{}, fmt.Errorf("there is no gitlab account with GitLab user id %d", ref.num)
+		}
 	}
-	// There is no query by GitLab username; the user table is small and this
-	// is an operator command, so page through it.
-	var after int64
-	for {
-		page, err := b.listUsers(ctx, after, userPageSize)
-		if err != nil {
-			return store.User{}, fmt.Errorf("look up the account: %w", err)
-		}
-		for _, u := range page {
-			if u.Source == source && u.Username == username {
-				return u, nil
-			}
-		}
-		if len(page) < userPageSize {
-			return store.User{}, notFound
-		}
-		after = page[len(page)-1].ID
+	if err != nil {
+		return store.User{}, fmt.Errorf("look up the account: %w", err)
 	}
+	if users == nil {
+		return user, nil
+	}
+	if len(users) > 1 {
+		return store.User{}, ambiguous(ref, users)
+	}
+	return users[0], nil
+}
+
+// ambiguous explains that ref matches several GitLab accounts, which happens
+// when users of different GitLab instances share a name or a user id, and
+// how to name each one.
+func ambiguous(ref accountRef, users []store.User) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s matches %d accounts; name one of them:", ref, len(users))
+	for _, u := range users {
+		alt := fmt.Sprintf("gitlab-id:%d", u.GitlabUserID.Int64)
+		if ref.kind == "gitlab-id" {
+			alt = fmt.Sprintf("id:%d", u.ID)
+		}
+		fmt.Fprintf(&b, "\n  %s (%s, GitLab %s)", alt, accountName(u), u.GitlabIssuer.String)
+	}
+	return errors.New(b.String())
 }
 
 // newTempPassword returns tempPasswordLength characters from

@@ -18,6 +18,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/siyamsarker/scanopsis/internal/auth"
 	"github.com/siyamsarker/scanopsis/internal/store"
@@ -67,6 +68,7 @@ func TestAdminUsageErrors(t *testing.T) {
 		"enable-user bare name": {"enable-user", "alice"},
 		"delete-user two":       {"delete-user", "local:a", "local:b"},
 		"delete-user bad":       {"delete-user", "ldap:a"},
+		"reset-2fa bad id":      {"reset-2fa", "gitlab-id:abc"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -157,11 +159,20 @@ func TestNewTempPassword(t *testing.T) {
 }
 
 func TestParseAccount(t *testing.T) {
-	if s, u, ok := parseAccount("gitlab:ada:lovelace"); !ok || s != "gitlab" || u != "ada:lovelace" {
-		t.Fatalf("%q %q %v", s, u, ok)
+	for in, want := range map[string]accountRef{
+		"gitlab:ada:lovelace": {kind: "gitlab", name: "ada:lovelace"},
+		"local:root":          {kind: "local", name: "root"},
+		"gitlab-id:42":        {kind: "gitlab-id", num: 42},
+		"id:7":                {kind: "id", num: 7},
+	} {
+		if got, ok := parseAccount(in); !ok || got != want || got.String() != in {
+			t.Errorf("%q: %+v %v", in, got, ok)
+		}
 	}
-	if s, u, ok := parseAccount("local:root"); !ok || s != "local" || u != "root" {
-		t.Fatalf("%q %q %v", s, u, ok)
+	for _, bad := range []string{"", "root", "local:", "gitlab-id:", "gitlab-id:x", "gitlab-id:0", "id:-3", "ldap:x", "gitlab-id:1.5"} {
+		if got, ok := parseAccount(bad); ok {
+			t.Errorf("%q accepted as %+v", bad, got)
+		}
 	}
 }
 
@@ -195,6 +206,28 @@ type fakeBackend struct {
 	accessErr error
 }
 
+func (f *fakeBackend) gitlab(match func(store.User) bool) ([]store.User, error) {
+	f.lookups++
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	var out []store.User
+	for _, u := range f.users {
+		if u.Source == "gitlab" && match(u) {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+func gitlabUser(id int64, name, issuer string, gitlabID int64) store.User {
+	return store.User{
+		ID: id, Source: "gitlab", Username: name,
+		GitlabIssuer: pgtype.Text{String: issuer, Valid: true},
+		GitlabUserID: pgtype.Int8{Int64: gitlabID, Valid: true},
+	}
+}
+
 func (f *fakeBackend) backend() *adminBackend {
 	f.rec = &recAudit{}
 	f.setHash = map[int64]string{}
@@ -207,18 +240,19 @@ func (f *fakeBackend) backend() *adminBackend {
 			}
 			return store.User{}, pgx.ErrNoRows
 		},
-		listUsers: func(_ context.Context, after int64, limit int32) ([]store.User, error) {
-			f.lookups++
-			if f.listErr != nil {
-				return nil, f.listErr
-			}
-			var out []store.User
+		userByID: func(_ context.Context, id int64) (store.User, error) {
 			for _, u := range f.users {
-				if u.ID > after && len(out) < int(limit) {
-					out = append(out, u)
+				if u.ID == id {
+					return u, nil
 				}
 			}
-			return out, nil
+			return store.User{}, pgx.ErrNoRows
+		},
+		gitlabByName: func(_ context.Context, name string) ([]store.User, error) {
+			return f.gitlab(func(u store.User) bool { return u.Username == name })
+		},
+		gitlabByID: func(_ context.Context, id int64) ([]store.User, error) {
+			return f.gitlab(func(u store.User) bool { return u.GitlabUserID.Int64 == id })
 		},
 		setPassword: func(_ context.Context, id int64, hash string) error {
 			if f.setErr != nil {
@@ -296,64 +330,103 @@ func TestResetPasswordLookupFailure(t *testing.T) {
 	}
 }
 
+func ref(t *testing.T, s string) accountRef {
+	t.Helper()
+	r, ok := parseAccount(s)
+	if !ok {
+		t.Fatalf("bad account %q", s)
+	}
+	return r
+}
+
 func TestReset2FACommand(t *testing.T) {
 	f := &fakeBackend{users: []store.User{
 		{ID: 3, Source: "local", Username: "ada"},
-		{ID: 4, Source: "gitlab", Username: "ada"},
+		gitlabUser(4, "ada", "https://gitlab.example.com", 9),
 	}}
 	b := f.backend()
+	ctx := context.Background()
 	var out bytes.Buffer
-	if err := b.reset2FA(context.Background(), "gitlab", "ada", &out); err != nil {
+	if err := b.reset2FA(ctx, ref(t, "gitlab:ada"), &out); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(f.resets, []int64{4}) || !strings.Contains(out.String(), "gitlab:ada") {
 		t.Fatalf("resets %v output %q", f.resets, out.String())
 	}
 	out.Reset()
-	if err := b.reset2FA(context.Background(), "local", "ada", &out); err != nil || !reflect.DeepEqual(f.resets, []int64{4, 3}) {
+	if err := b.reset2FA(ctx, ref(t, "local:ada"), &out); err != nil || !reflect.DeepEqual(f.resets, []int64{4, 3}) {
 		t.Fatalf("%v resets %v", err, f.resets)
 	}
-	if !reflect.DeepEqual(f.rec.events, []string{"cli mfa.reset ada", "cli mfa.reset ada"}) {
+	for _, r := range []string{"gitlab-id:9", "id:4"} {
+		if err := b.reset2FA(ctx, ref(t, r), &out); err != nil {
+			t.Fatalf("%s: %v", r, err)
+		}
+	}
+	if !reflect.DeepEqual(f.resets, []int64{4, 3, 4, 4}) {
+		t.Fatalf("resets %v", f.resets)
+	}
+	if len(f.rec.events) != 4 || f.rec.events[0] != "cli mfa.reset ada" {
 		t.Fatalf("audit %v", f.rec.events)
 	}
-	for _, src := range []string{"local", "gitlab"} {
-		if err := b.reset2FA(context.Background(), src, "ghost", &out); err == nil || !strings.Contains(err.Error(), "no "+src+" account") {
-			t.Fatalf("%s ghost: %v", src, err)
+	for r, want := range map[string]string{
+		"local:ghost":  `no local account named "ghost"`,
+		"gitlab:ghost": `no gitlab account named "ghost"`,
+		"gitlab-id:77": "no gitlab account with GitLab user id 77",
+		"id:77":        "no account with id 77",
+	} {
+		if err := b.reset2FA(ctx, ref(t, r), &out); err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: %v", r, err)
 		}
 	}
 	f.resetErr = store.ErrNotFound
-	if err := b.reset2FA(context.Background(), "local", "ada", &out); err == nil || !strings.Contains(err.Error(), "no longer exists") {
+	if err := b.reset2FA(ctx, ref(t, "local:ada"), &out); err == nil || !strings.Contains(err.Error(), "no longer exists") {
 		t.Fatalf("%v", err)
 	}
 	f.resetErr = errors.New("boom")
-	if err := b.reset2FA(context.Background(), "local", "ada", &out); err == nil || !strings.Contains(err.Error(), "boom") {
+	if err := b.reset2FA(ctx, ref(t, "local:ada"), &out); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("%v", err)
 	}
-	if len(f.rec.events) != 2 {
+	if len(f.rec.events) != 4 {
 		t.Fatalf("a failed reset was audited: %v", f.rec.events)
 	}
 	f.listErr = errors.New("list failed")
-	if err := b.reset2FA(context.Background(), "gitlab", "ada", &out); err == nil || !strings.Contains(err.Error(), "list failed") {
+	if err := b.reset2FA(ctx, ref(t, "gitlab:ada"), &out); err == nil || !strings.Contains(err.Error(), "list failed") {
 		t.Fatalf("%v", err)
 	}
 	b.localUser = func(context.Context, string) (store.User, error) { return store.User{}, errors.New("db down") }
-	if err := b.reset2FA(context.Background(), "local", "ada", &out); err == nil || !strings.Contains(err.Error(), "db down") {
+	if err := b.reset2FA(ctx, ref(t, "local:ada"), &out); err == nil || !strings.Contains(err.Error(), "db down") {
 		t.Fatalf("%v", err)
 	}
 }
 
-func TestReset2FAPagesThroughUsers(t *testing.T) {
-	f := &fakeBackend{}
-	for i := 1; i <= 1200; i++ {
-		f.users = append(f.users, store.User{ID: int64(i), Source: "gitlab", Username: "user" + string(rune('a'+i%26)) + strings.Repeat("x", i%7)})
-	}
-	f.users = append(f.users, store.User{ID: 5000, Source: "gitlab", Username: "the-one"})
+func TestGitLabNameOfTwoInstancesIsRefused(t *testing.T) {
+	f := &fakeBackend{users: []store.User{
+		gitlabUser(4, "ada", "https://gitlab.example.com", 9),
+		gitlabUser(5, "ada", "https://gitlab.other.example", 12),
+		gitlabUser(6, "bob", "https://gitlab.other.example", 9),
+	}}
 	b := f.backend()
-	if err := b.reset2FA(context.Background(), "gitlab", "the-one", &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
+	ctx := context.Background()
+	var out bytes.Buffer
+	err := b.reset2FA(ctx, ref(t, "gitlab:ada"), &out)
+	if err == nil || out.Len() != 0 || len(f.resets) != 0 {
+		t.Fatalf("an ambiguous name was accepted: %v, resets %v", err, f.resets)
 	}
-	if !reflect.DeepEqual(f.resets, []int64{5000}) || f.lookups != 3 {
-		t.Fatalf("resets %v after %d pages; want [5000] after 3", f.resets, f.lookups)
+	for _, want := range []string{"gitlab:ada matches 2 accounts", "gitlab-id:9 (gitlab:ada, GitLab https://gitlab.example.com)", "gitlab-id:12 (gitlab:ada, GitLab https://gitlab.other.example)"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("message lacks %q:\n%s", want, err)
+		}
+	}
+	if err := b.reset2FA(ctx, ref(t, "gitlab-id:12"), &out); err != nil || !reflect.DeepEqual(f.resets, []int64{5}) {
+		t.Fatalf("gitlab-id: %v, resets %v", err, f.resets)
+	}
+	// The same GitLab id on two instances: name the account by its id.
+	err = b.changeAccess(ctx, "disable-user", ref(t, "gitlab-id:9"), &out)
+	if err == nil || !strings.Contains(err.Error(), "id:4 (gitlab:ada") || !strings.Contains(err.Error(), "id:6 (gitlab:bob") {
+		t.Fatalf("ambiguous GitLab id: %v", err)
+	}
+	if err := b.changeAccess(ctx, "disable-user", ref(t, "id:6"), &out); err != nil || !reflect.DeepEqual(f.access, []string{"+6"}) {
+		t.Fatalf("id: %v, access %v", err, f.access)
 	}
 }
 
@@ -424,7 +497,7 @@ func (r *recordingAudit) Record(_ context.Context, actor, action string, detail 
 func TestAccessCommands(t *testing.T) {
 	f := &fakeBackend{users: []store.User{
 		{ID: 3, Source: "local", Username: "root"},
-		{ID: 4, Source: "gitlab", Username: "ada"},
+		gitlabUser(4, "ada", "https://gitlab.example.com", 9),
 	}}
 	b := f.backend()
 	ctx := context.Background()
@@ -435,7 +508,7 @@ func TestAccessCommands(t *testing.T) {
 		{"delete-user", "local", "root", "The account local:root was deleted."},
 	} {
 		out.Reset()
-		if err := b.changeAccess(ctx, c.cmd, c.source, c.name, &out); err != nil || strings.TrimSpace(out.String()) != c.want {
+		if err := b.changeAccess(ctx, c.cmd, ref(t, c.source+":"+c.name), &out); err != nil || strings.TrimSpace(out.String()) != c.want {
 			t.Fatalf("%s: %v, output %q", c.cmd, err, out.String())
 		}
 	}
@@ -445,7 +518,7 @@ func TestAccessCommands(t *testing.T) {
 	if !reflect.DeepEqual(f.rec.events, []string{"cli user.disabled ada", "cli user.enabled ada", "cli user.deleted root"}) {
 		t.Fatalf("audit %v", f.rec.events)
 	}
-	if err := b.changeAccess(ctx, "disable-user", "gitlab", "ghost", &out); err == nil || !strings.Contains(err.Error(), "no gitlab account") {
+	if err := b.changeAccess(ctx, "disable-user", ref(t, "gitlab:ghost"), &out); err == nil || !strings.Contains(err.Error(), "no gitlab account") {
 		t.Fatalf("ghost: %v", err)
 	}
 	for err, want := range map[error]string{
@@ -454,7 +527,7 @@ func TestAccessCommands(t *testing.T) {
 		errors.New("boom"): "boom",
 	} {
 		f.accessErr = err
-		if got := b.changeAccess(ctx, "delete-user", "local", "root", &out); got == nil || !strings.Contains(got.Error(), want) {
+		if got := b.changeAccess(ctx, "delete-user", ref(t, "local:root"), &out); got == nil || !strings.Contains(got.Error(), want) {
 			t.Fatalf("%v: %v", err, got)
 		}
 	}

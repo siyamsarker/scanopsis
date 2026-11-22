@@ -50,6 +50,7 @@ func mustLocal(t *testing.T, q *store.Queries, name, role string) store.User {
 func upsert(t *testing.T, q *store.Queries, id int64, username string) store.User {
 	t.Helper()
 	u, err := q.UpsertGitLabUser(context.Background(), store.UpsertGitLabUserParams{
+		GitlabIssuer: text(testIssuer),
 		GitlabUserID: pgtype.Int8{Int64: id, Valid: true},
 		Username:     username,
 		Name:         "Name " + username,
@@ -60,6 +61,9 @@ func upsert(t *testing.T, q *store.Queries, id int64, username string) store.Use
 	}
 	return u
 }
+
+// testIssuer is the GitLab instance of the users that upsert creates.
+const testIssuer = "https://gitlab.example.com"
 
 func assertPgCode(t *testing.T, err error, code string) {
 	t.Helper()
@@ -153,8 +157,21 @@ func TestSchemaConstraints(t *testing.T) {
 		}
 	})
 	t.Run("duplicate gitlab id", func(t *testing.T) {
-		_, err := pool.Exec(ctx, `INSERT INTO users (source, gitlab_user_id, username, role) VALUES ('gitlab', 777, 'x', 'viewer'), ('gitlab', 777, 'y', 'viewer')`)
+		_, err := pool.Exec(ctx, `INSERT INTO users (source, gitlab_issuer, gitlab_user_id, username, role) VALUES ('gitlab', 'https://a', 777, 'x', 'viewer'), ('gitlab', 'https://a', 777, 'y', 'viewer')`)
 		assertPgCode(t, err, pgUnique)
+	})
+	t.Run("same gitlab id on another instance", func(t *testing.T) {
+		if _, err := pool.Exec(ctx, `INSERT INTO users (source, gitlab_issuer, gitlab_user_id, username, role) VALUES ('gitlab', 'https://a', 778, 'x', 'viewer'), ('gitlab', 'https://b', 778, 'x', 'viewer')`); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("gitlab user without issuer", func(t *testing.T) {
+		_, err := pool.Exec(ctx, `INSERT INTO users (source, gitlab_user_id, username, role) VALUES ('gitlab', 779, 'x', 'viewer')`)
+		assertPgCode(t, err, pgCheck)
+	})
+	t.Run("local user with issuer", func(t *testing.T) {
+		_, err := pool.Exec(ctx, `INSERT INTO users (source, gitlab_issuer, username, role, password_hash) VALUES ('local', 'https://a', 'issuer-local', 'viewer', 'x')`)
+		assertPgCode(t, err, pgCheck)
 	})
 	t.Run("session hash length", func(t *testing.T) {
 		u := mustLocal(t, q, "sh", "viewer")
@@ -293,6 +310,7 @@ func TestUpsertGitLabUser(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := q.UpsertGitLabUser(ctx, store.UpsertGitLabUserParams{
+			GitlabIssuer: text(testIssuer),
 			GitlabUserID: pgtype.Int8{Int64: 12, Valid: true}, Username: "renamed", Name: "New Name", Email: "new@example.com",
 		})
 		if err != nil {
@@ -315,6 +333,33 @@ func TestUpsertGitLabUser(t *testing.T) {
 		}
 		if got := upsert(t, q, 13, "adm"); got.Role != "admin" {
 			t.Errorf("role = %s, want admin", got.Role)
+		}
+	})
+	t.Run("another instance is another user", func(t *testing.T) {
+		admin := upsert(t, q, 16, "same")
+		if _, err := q.SetUserRole(ctx, store.SetUserRoleParams{ID: admin.ID, Role: "admin"}); err != nil {
+			t.Fatal(err)
+		}
+		other, err := q.UpsertGitLabUser(ctx, store.UpsertGitLabUserParams{
+			GitlabIssuer: text("https://gitlab.other.example"),
+			GitlabUserID: pgtype.Int8{Int64: 16, Valid: true}, Username: "same", Name: "Impostor", Email: "x@example.com",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if other.ID == admin.ID || other.Role != "viewer" || other.GitlabIssuer.String != "https://gitlab.other.example" {
+			t.Errorf("a user of another GitLab instance matched the existing row: %+v", other)
+		}
+		if again := upsert(t, q, 16, "same"); again.ID != admin.ID || again.Role != "admin" {
+			t.Errorf("the original user changed: %+v", again)
+		}
+		byName, err := q.ListGitLabUsersByUsername(ctx, "same")
+		if err != nil || len(byName) != 2 {
+			t.Errorf("by name: %d users, %v", len(byName), err)
+		}
+		byID, err := q.ListGitLabUsersByGitLabID(ctx, pgtype.Int8{Int64: 16, Valid: true})
+		if err != nil || len(byID) != 2 || byID[0].ID != admin.ID {
+			t.Errorf("by GitLab id: %+v, %v", byID, err)
 		}
 	})
 	t.Run("demoted admin stays viewer", func(t *testing.T) {
