@@ -231,11 +231,13 @@ export function registerDashboardFlows(session: Session): void {
     const payCard = page.getByRole('listitem').filter({ hasText: 'platform/payments-api' });
     await expect(payCard.getByRole('img', { name: `payments-api: ${explainRisk(current.counts)}` })).toBeVisible();
     await expect(payCard).toContainText(summary(current.counts));
+    await expect(payCard).toContainText(`${current.fixable} fixable`);
     await expect(payCard).toContainText('main');
     await expect(payCard).toContainText('No SonarQube analysis yet');
     const billCard = page.getByRole('listitem').filter({ hasText: 'platform/billing-worker' });
     await expect(billCard.getByRole('img', { name: `billing-worker: ${explainRisk(imageFull.counts)}` })).toBeVisible();
     await expect(billCard).toContainText(summary(imageFull.counts));
+    await expect(billCard).toContainText(`${imageFull.fixable} fixable`);
 
     // A signal is a filter: choosing it narrows the cards, again clears it.
     await critical.click();
@@ -692,7 +694,11 @@ export function registerDashboardFlows(session: Session): void {
     await tile().getByRole('link', { name: 'payments-api' }).click();
     await expect(page.getByTestId('ref-source')).toHaveText('Showing feature/login, the dashboard branch');
     await expect(m).toContainText('Current state of feature/login, latest scan per artifact');
-    await expect(m).toContainText(summary(imageFull.counts));
+    await expect(m.getByRole('img', { name: `payments-api: ${explainRisk(imageFull.counts)}` })).toBeVisible();
+    // The feature branch has one scan: its findings are the start, not news.
+    await expect(page.getByTestId('verdict')).toHaveText(
+      `${imageFull.counts.critical} critical; first scan on this branch.`,
+    );
     await expect(select(page, 'Branch')).toHaveText('feature/login');
     await page.getByRole('link', { name: 'Explore findings' }).click();
     await expect(m.getByText(`${sum(imageFull.counts)} vulnerabilities, ${imageFull.fixable} fixable`)).toBeVisible();
@@ -720,7 +726,7 @@ export function registerDashboardFlows(session: Session): void {
       'Showing main, the latest scanned branch; no dashboard branch is chosen',
     );
     await expect(m).toContainText('Current state of main, latest scan per artifact');
-    await expect(m).toContainText(summary(current.counts));
+    await expect(m.getByRole('img', { name: `payments-api: ${explainRisk(current.counts)}` })).toBeVisible();
 
     // Every change is in the audit log with the old and the new branch.
     await page.goto('/admin/audit');
