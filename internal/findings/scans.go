@@ -23,6 +23,12 @@ const (
 	maxTrendDays     = 365
 )
 
+// maxTrendScans is the most scans a trends response lists: the newest of the
+// window, over every ref asked for. A timeline shows no more pipelines than
+// this, and it bounds the findings compared for the new and fixed counts. A
+// variable so tests can lower it.
+var maxTrendScans = 300
+
 type scanPageJSON struct {
 	Items      []scanSummaryJSON `json:"items"`
 	NextBefore *int64            `json:"next_before"`
@@ -350,6 +356,10 @@ type trendsJSON struct {
 	Ref       *string          `json:"ref"`
 	RefSource string           `json:"ref_source"`
 	Points    []trendPointJSON `json:"points"`
+	// Total counts the scans in the window; Truncated is true when the
+	// oldest of them were left out of Points.
+	Total     int  `json:"total"`
+	Truncated bool `json:"truncated"`
 }
 
 // trends returns one point per scan within the window, oldest first: of the
@@ -391,6 +401,7 @@ func (f *Findings) trends(w http.ResponseWriter, r *http.Request) {
 	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	rows, err := f.q.FindingsTrends(r.Context(), store.FindingsTrendsParams{
 		ServiceID: svc.ID, Ref: ref, AllRefs: allRefs, Since: timestamptz(since),
+		MaxScans: int32(maxTrendScans), //nolint:gosec // a small constant
 	})
 	if err != nil {
 		f.internalError(w, r, "cannot load trends", err)
@@ -416,6 +427,8 @@ func (f *Findings) trends(w http.ResponseWriter, r *http.Request) {
 			p.PreviousScanID = &id
 		}
 		out.Points = append(out.Points, p)
+		out.Total = int(row.WindowTotal)
 	}
+	out.Truncated = out.Total > len(out.Points)
 	httpapi.WriteJSON(w, http.StatusOK, out)
 }

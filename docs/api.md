@@ -764,7 +764,7 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
-| `all_refs` | query | no | boolean (default false) | Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. |
+| `all_refs` | query | no | boolean (default false) | Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. The 300 scans listed at most are counted over every ref together. |
 | `days` | query | no | integer (minimum 1, maximum 365, default 90) |  |
 | `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 
@@ -772,7 +772,7 @@ Responses:
 
 | Status | Description | Body |
 |---|---|---|
-| 200 | Trend points, oldest first. | `application/json` [Trends](#trends) |
+| 200 | Trend points, oldest first: the newest 300 scans of the window at most. | `application/json` [Trends](#trends) |
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
@@ -1599,9 +1599,11 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `points` | array of [TrendPoint](#trendpoint) | yes |  |
+| `points` | array of [TrendPoint](#trendpoint) | yes | The newest 300 scans of the window at most, by scan time over every ref listed, oldest first. |
 | `ref` | string or null | yes |  |
 | `ref_source` | [RefSource](#refsource) | yes |  |
+| `total` | integer | yes | Number of scans in the window, including any left out of points. |
+| `truncated` | boolean | yes | True when the oldest scans of the window were left out because more than 300 fall in it. |
 
 ### TrivyIntegration
 

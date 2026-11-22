@@ -1080,7 +1080,12 @@ export interface components {
         Trends: {
             ref: string | null;
             ref_source: components["schemas"]["RefSource"];
+            /** @description The newest 300 scans of the window at most, by scan time over every ref listed, oldest first. */
             points: components["schemas"]["TrendPoint"][];
+            /** @description Number of scans in the window, including any left out of points. */
+            total: number;
+            /** @description True when the oldest scans of the window were left out because more than 300 fall in it. */
+            truncated: boolean;
         };
         /**
          * @description null when SonarQube did not report the metric.
@@ -3053,7 +3058,7 @@ export interface operations {
                 /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
                 days?: number;
-                /** @description Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. */
+                /** @description Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. The 300 scans listed at most are counted over every ref together. */
                 all_refs?: boolean;
             };
             header?: never;
@@ -3064,7 +3069,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Trend points, oldest first. */
+            /** @description Trend points, oldest first: the newest 300 scans of the window at most. */
             200: {
                 headers: {
                     [name: string]: unknown;

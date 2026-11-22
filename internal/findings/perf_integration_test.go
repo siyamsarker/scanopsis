@@ -144,8 +144,9 @@ func TestReadPerformance(t *testing.T) {
 	}
 
 	// The measured calls return what they should. The trends of the
-	// background service list every scan of main in 90 days, each with the
-	// new and fixed counts of its scan diff (checked for a sample).
+	// background service list the newest 300 of the 900 or more scans of
+	// main in 90 days, say how many there are, and carry the new and fixed
+	// counts of each scan's diff (checked for a sample).
 	var tr trendsJSON
 	getJSON(t, mux, "/api/v1/services/7/trends?days=90", &tr)
 	var inWindow int
@@ -153,11 +154,12 @@ func TestReadPerformance(t *testing.T) {
 		AND scanned_at >= now() - interval '90 days'`).Scan(&inWindow); err != nil {
 		t.Fatal(err)
 	}
-	if len(tr.Points) != inWindow || inWindow < 900 {
-		t.Errorf("trends: %d points, want %d (900 or more)", len(tr.Points), inWindow)
+	if len(tr.Points) != maxTrendScans || tr.Total != inWindow || !tr.Truncated || inWindow < 900 {
+		t.Errorf("trends: %d points of %d, truncated %v; want %d of %d (900 or more), truncated",
+			len(tr.Points), tr.Total, tr.Truncated, maxTrendScans, inWindow)
 	}
 	changed := 0
-	for i := 0; i < len(tr.Points); i += 37 {
+	for i := 0; i < len(tr.Points); i += 7 {
 		p := tr.Points[i]
 		var d scanDiffJSON
 		getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff", p.ScanID), &d)

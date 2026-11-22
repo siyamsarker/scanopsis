@@ -778,7 +778,7 @@ func TestTrends(t *testing.T) {
 	eq(t, "feature outside the window", []any{ref, idsOf(ps)}, []any{"feature", []int64{}})
 
 	_, body := get(t, mux, fmt.Sprintf("/api/v1/services/%d/trends", f.empty))
-	if strings.TrimSpace(string(body)) != `{"ref":null,"ref_source":"latest","points":[]}` {
+	if strings.TrimSpace(string(body)) != `{"ref":null,"ref_source":"latest","points":[],"total":0,"truncated":false}` {
 		t.Errorf("empty = %s", body)
 	}
 	for _, q := range []string{"days=0", "days=366", "days=x"} {
@@ -857,7 +857,7 @@ func TestTrendChanges(t *testing.T) {
 	eq(t, "one ref", []any{ref, got}, []any{"feature", []change{{f.f1, 0, "feature", countsJSON{Critical: 1}, 0}}})
 	wantError(t, mux, base+"?all_refs=yes", 400, "invalid_parameter")
 	_, body := get(t, mux, fmt.Sprintf("/api/v1/services/%d/trends?all_refs=true", f.empty))
-	if strings.TrimSpace(string(body)) != `{"ref":null,"ref_source":"latest","points":[]}` {
+	if strings.TrimSpace(string(body)) != `{"ref":null,"ref_source":"latest","points":[],"total":0,"truncated":false}` {
 		t.Errorf("empty, all refs = %s", body)
 	}
 
@@ -876,6 +876,83 @@ func TestTrendChanges(t *testing.T) {
 	if len(tr.Points) != 2 || tr.Points[0].New != (countsJSON{High: 1}) || tr.Points[1].New != (countsJSON{}) ||
 		tr.Points[1].Fixed != 0 {
 		t.Errorf("duplicate keys = %+v", tr.Points)
+	}
+}
+
+// The trends list the newest scans of the window up to the cap, over every
+// ref together, and say how many the window holds.
+func TestTrendsCap(t *testing.T) {
+	f := seed(t)
+	mux := newMux(f.pool, "")
+	base := fmt.Sprintf("/api/v1/services/%d/trends", f.alpha)
+	read := func(query string) trendsJSON {
+		t.Helper()
+		var tr trendsJSON
+		getJSON(t, mux, base+query, &tr)
+		return tr
+	}
+	type point struct {
+		scan, prev int64
+		new        countsJSON
+		fixed      int
+	}
+	points := func(tr trendsJSON) []point {
+		out := []point{}
+		for _, p := range tr.Points {
+			pt := point{scan: p.ScanID, new: p.New, fixed: p.Fixed}
+			if p.PreviousScanID != nil {
+				pt.prev = *p.PreviousScanID
+			}
+			out = append(out, pt)
+		}
+		return out
+	}
+
+	full := read("")
+	eq(t, "below the cap", []any{len(full.Points), full.Total, full.Truncated}, []any{7, 7, false})
+
+	defer func(n int) { maxTrendScans = n }(maxTrendScans)
+	maxTrendScans = 4
+	// The newest four of main; w1 and s3 still compare with scans left out.
+	cut := read("")
+	eq(t, "cut", []any{points(cut), cut.Total, cut.Truncated}, []any{[]point{
+		{f.r0, 0, countsJSON{}, 0},
+		{f.w1, f.w0, countsJSON{Critical: 1, Medium: 1, Unknown: 1}, 0},
+		{f.s3, f.s2, countsJSON{Low: 1}, 1},
+		{f.r1, f.r0, countsJSON{}, 0},
+	}, 7, true})
+	// Every ref: the feature scan is the oldest, so the same four are listed
+	// out of eight.
+	all := read("?all_refs=true")
+	eq(t, "cut, every ref", []any{points(all), all.Total, all.Truncated}, []any{points(cut), 8, true})
+	// Exactly at the cap nothing is left out.
+	maxTrendScans = 7
+	at := read("")
+	eq(t, "at the cap", []any{len(at.Points), at.Total, at.Truncated}, []any{7, 7, false})
+}
+
+// With the real cap: 305 scans in the window list the newest 300.
+func TestTrendsCapDefault(t *testing.T) {
+	f := seed(t)
+	svc := newService(t, f.pool, "busy", "grp/busy", false)
+	_, err := f.pool.Exec(context.Background(), `
+		INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref,
+		                   ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+		SELECT $1, 'image', 'img', 5000 + g, 900000 + g, 'main', true, 'c', 2,
+		       now() - (306 - g) * interval '1 hour', '\x00'
+		FROM generate_series(1, 305) g`, svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tr trendsJSON
+	getJSON(t, newMux(f.pool, ""), fmt.Sprintf("/api/v1/services/%d/trends?days=30", svc), &tr)
+	if len(tr.Points) != 300 || tr.Total != 305 || !tr.Truncated {
+		t.Fatalf("%d points of %d, truncated %v; want 300 of 305, truncated", len(tr.Points), tr.Total, tr.Truncated)
+	}
+	first, last := tr.Points[0], tr.Points[299]
+	if first.GitlabPipelineID != 5006 || last.GitlabPipelineID != 5305 || first.PreviousScanID == nil {
+		t.Errorf("first %d (previous %v), last %d; want 5006 with a previous scan, 5305",
+			first.GitlabPipelineID, first.PreviousScanID, last.GitlabPipelineID)
 	}
 }
 

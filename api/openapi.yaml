@@ -742,9 +742,9 @@ paths:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
         - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
         - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 90 } }
-        - { name: all_refs, in: query, description: "Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show.", schema: { type: boolean, default: false } }
+        - { name: all_refs, in: query, description: "Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. The 300 scans listed at most are counted over every ref together.", schema: { type: boolean, default: false } }
       responses:
-        "200": { description: "Trend points, oldest first.", content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
+        "200": { description: "Trend points, oldest first: the newest 300 scans of the window at most.", content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1132,11 +1132,13 @@ components:
         fixed: { type: integer, description: "Findings of the previous scan that this scan no longer has, as fixed_total of the scan diff counts them." }
     Trends:
       type: object
-      required: [ref, ref_source, points]
+      required: [ref, ref_source, points, total, truncated]
       properties:
         ref: { type: [string, "null"] }
         ref_source: { $ref: "#/components/schemas/RefSource" }
-        points: { type: array, items: { $ref: "#/components/schemas/TrendPoint" } }
+        points: { type: array, maxItems: 300, description: "The newest 300 scans of the window at most, by scan time over every ref listed, oldest first.", items: { $ref: "#/components/schemas/TrendPoint" } }
+        total: { type: integer, description: "Number of scans in the window, including any left out of points." }
+        truncated: { type: boolean, description: "True when the oldest scans of the window were left out because more than 300 fall in it." }
     Rating:
       type: [string, "null"]
       enum: [A, B, C, D, E, null]

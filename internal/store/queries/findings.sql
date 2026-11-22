@@ -214,19 +214,30 @@ ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM'
 -- key reported with several severities counts at its most severe. A first
 -- scan has every finding new; secret scans change nothing here.
 --
+-- Only the newest @max_scans scans of the window are returned, by
+-- (scanned_at, id) over every ref asked for; window_total on every row is
+-- the number of scans in the window before that cut, so the caller can say
+-- that older ones were left out.
+--
 -- One statement serves the whole window. The previous scan comes from lag()
 -- inside the window, and from an index probe only for the first scan of each
 -- (ref, artifact, kind). The keys of every scan involved are read once, by
 -- scan_id, and new and fixed are hash anti-joins over them, so the cost
--- follows the number of findings in the window, not the number of pairs
--- times a per-pair lookup.
+-- follows the number of findings of at most @max_scans scans and their
+-- predecessors, not the number of pairs times a per-pair lookup.
 -- name: FindingsTrends :many
-WITH win AS MATERIALIZED (
+WITH capped AS MATERIALIZED (
     SELECT s.id, s.service_id, s.kind, s.ref, s.scanned_at, s.gitlab_pipeline_id, s.commit_sha, s.artifact_name,
            s.count_critical, s.count_high, s.count_medium, s.count_low, s.count_unknown, s.count_fixable,
-           lag(s.id) OVER (PARTITION BY s.ref, s.artifact_name, s.kind ORDER BY s.scanned_at, s.id) AS prev_in_window
+           count(*) OVER () AS window_total
     FROM scans s
     WHERE s.service_id = @service_id AND (@all_refs::boolean OR s.ref = @ref) AND s.scanned_at >= @since
+    ORDER BY s.scanned_at DESC, s.id DESC
+    LIMIT @max_scans
+), win AS MATERIALIZED (
+    SELECT c.*,
+           lag(c.id) OVER (PARTITION BY c.ref, c.artifact_name, c.kind ORDER BY c.scanned_at, c.id) AS prev_in_window
+    FROM capped c
 ), pairs AS MATERIALIZED (
     SELECT w.id, w.kind, COALESCE(w.prev_in_window, (
                SELECT p.id FROM scans p
@@ -270,7 +281,8 @@ SELECT w.id, w.kind, w.ref, w.scanned_at, w.gitlab_pipeline_id, w.commit_sha, w.
        prev.id AS previous_scan_id,
        coalesce(a.critical, 0)::bigint AS new_critical, coalesce(a.high, 0)::bigint AS new_high,
        coalesce(a.medium, 0)::bigint AS new_medium, coalesce(a.low, 0)::bigint AS new_low,
-       coalesce(a.unknown, 0)::bigint AS new_unknown, coalesce(r.fixed, 0)::bigint AS fixed
+       coalesce(a.unknown, 0)::bigint AS new_unknown, coalesce(r.fixed, 0)::bigint AS fixed,
+       w.window_total::bigint AS window_total
 FROM win w
 JOIN pairs pr ON pr.id = w.id
 LEFT JOIN scans prev ON prev.id = pr.prev_id

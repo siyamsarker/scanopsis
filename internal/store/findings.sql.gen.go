@@ -888,12 +888,18 @@ func (q *Queries) FindingsSecrets(ctx context.Context, scanIds []int64) ([]Findi
 }
 
 const findingsTrends = `-- name: FindingsTrends :many
-WITH win AS MATERIALIZED (
+WITH capped AS MATERIALIZED (
     SELECT s.id, s.service_id, s.kind, s.ref, s.scanned_at, s.gitlab_pipeline_id, s.commit_sha, s.artifact_name,
            s.count_critical, s.count_high, s.count_medium, s.count_low, s.count_unknown, s.count_fixable,
-           lag(s.id) OVER (PARTITION BY s.ref, s.artifact_name, s.kind ORDER BY s.scanned_at, s.id) AS prev_in_window
+           count(*) OVER () AS window_total
     FROM scans s
     WHERE s.service_id = $1 AND ($2::boolean OR s.ref = $3) AND s.scanned_at >= $4
+    ORDER BY s.scanned_at DESC, s.id DESC
+    LIMIT $5
+), win AS MATERIALIZED (
+    SELECT c.id, c.service_id, c.kind, c.ref, c.scanned_at, c.gitlab_pipeline_id, c.commit_sha, c.artifact_name, c.count_critical, c.count_high, c.count_medium, c.count_low, c.count_unknown, c.count_fixable, c.window_total,
+           lag(c.id) OVER (PARTITION BY c.ref, c.artifact_name, c.kind ORDER BY c.scanned_at, c.id) AS prev_in_window
+    FROM capped c
 ), pairs AS MATERIALIZED (
     SELECT w.id, w.kind, COALESCE(w.prev_in_window, (
                SELECT p.id FROM scans p
@@ -937,7 +943,8 @@ SELECT w.id, w.kind, w.ref, w.scanned_at, w.gitlab_pipeline_id, w.commit_sha, w.
        prev.id AS previous_scan_id,
        coalesce(a.critical, 0)::bigint AS new_critical, coalesce(a.high, 0)::bigint AS new_high,
        coalesce(a.medium, 0)::bigint AS new_medium, coalesce(a.low, 0)::bigint AS new_low,
-       coalesce(a.unknown, 0)::bigint AS new_unknown, coalesce(r.fixed, 0)::bigint AS fixed
+       coalesce(a.unknown, 0)::bigint AS new_unknown, coalesce(r.fixed, 0)::bigint AS fixed,
+       w.window_total::bigint AS window_total
 FROM win w
 JOIN pairs pr ON pr.id = w.id
 LEFT JOIN scans prev ON prev.id = pr.prev_id
@@ -951,6 +958,7 @@ type FindingsTrendsParams struct {
 	AllRefs   bool
 	Ref       string
 	Since     pgtype.Timestamptz
+	MaxScans  int32
 }
 
 type FindingsTrendsRow struct {
@@ -974,6 +982,7 @@ type FindingsTrendsRow struct {
 	NewLow           int64
 	NewUnknown       int64
 	Fixed            int64
+	WindowTotal      int64
 }
 
 // FindingsTrends returns the scans of a service since a time, oldest first,
@@ -985,18 +994,24 @@ type FindingsTrendsRow struct {
 // key reported with several severities counts at its most severe. A first
 // scan has every finding new; secret scans change nothing here.
 //
+// Only the newest @max_scans scans of the window are returned, by
+// (scanned_at, id) over every ref asked for; window_total on every row is
+// the number of scans in the window before that cut, so the caller can say
+// that older ones were left out.
+//
 // One statement serves the whole window. The previous scan comes from lag()
 // inside the window, and from an index probe only for the first scan of each
 // (ref, artifact, kind). The keys of every scan involved are read once, by
 // scan_id, and new and fixed are hash anti-joins over them, so the cost
-// follows the number of findings in the window, not the number of pairs
-// times a per-pair lookup.
+// follows the number of findings of at most @max_scans scans and their
+// predecessors, not the number of pairs times a per-pair lookup.
 func (q *Queries) FindingsTrends(ctx context.Context, arg FindingsTrendsParams) ([]FindingsTrendsRow, error) {
 	rows, err := q.db.Query(ctx, findingsTrends,
 		arg.ServiceID,
 		arg.AllRefs,
 		arg.Ref,
 		arg.Since,
+		arg.MaxScans,
 	)
 	if err != nil {
 		return nil, err
@@ -1026,6 +1041,7 @@ func (q *Queries) FindingsTrends(ctx context.Context, arg FindingsTrendsParams) 
 			&i.NewLow,
 			&i.NewUnknown,
 			&i.Fixed,
+			&i.WindowTotal,
 		); err != nil {
 			return nil, err
 		}
