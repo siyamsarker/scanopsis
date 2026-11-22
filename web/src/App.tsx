@@ -48,11 +48,15 @@ const AccountPage = lazy(() =>
   import('./routes/AccountPage').then((m) => ({ default: m.AccountPage })),
 );
 
+// The design system showcase, in the development server only.
+const Showcase = import.meta.env.DEV ? lazy(() => import('./components/Showcase')) : null;
+
 export function App() {
   return (
     <MotionRoot>
       <Suspense fallback={<PageLoader fullScreen />}>
         <Routes>
+          {Showcase ? <Route path="/_showcase" element={<Showcase />} /> : null}
           <Route element={<SetupGate />}>
             <Route path="/setup" element={<SetupPage />} />
             <Route path="/login" element={<LoginPage />} />

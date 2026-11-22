@@ -11,7 +11,14 @@ describe('Showcase', () => {
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(400);
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
     render(<Showcase />);
-    for (const name of ['Atoms in both themes', 'States', 'Controls', 'Charts', 'Tables']) {
+    for (const name of [
+      'Atoms in both themes',
+      'Overlays and feedback',
+      'Controls',
+      'States',
+      'Charts',
+      'Tables',
+    ]) {
       expect(screen.getByRole('region', { name })).toBeInTheDocument();
     }
     expect(document.querySelectorAll('[data-theme-scope]')).toHaveLength(2);

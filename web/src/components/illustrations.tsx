@@ -225,31 +225,35 @@ const arts: Record<EmptyArt, () => ReactNode> = {
   // An empty time axis with placeholder columns: no scans over time yet.
   timeline: () => (
     <Frame label="timeline">
-      <path d="M16 78h128" stroke="currentColor" strokeWidth="1.5" className={faint} />
-      {[28, 46, 64, 82, 100].map((x, i) => (
-        <rect
-          key={x}
-          x={x}
-          y={78 - (14 + ((i * 7) % 20))}
-          width="10"
-          height={14 + ((i * 7) % 20)}
-          rx="3"
-          stroke="currentColor"
-          strokeDasharray="3 3"
-          className={quiet}
-        />
-      ))}
+      <path d="M12 84h136" stroke="currentColor" strokeWidth="1.5" className={faint} />
+      {[18, 38, 58, 78, 98].map((x, i) => {
+        const h = [22, 34, 18, 40, 28][i];
+        return (
+          <rect
+            key={x}
+            x={x}
+            y={84 - h}
+            width="12"
+            height={h}
+            rx="3"
+            fill="var(--wash)"
+            stroke="currentColor"
+            strokeDasharray="3 3"
+            className={faint}
+          />
+        );
+      })}
       <circle
-        cx="128"
-        cy="44"
-        r="16"
+        cx="132"
+        cy="40"
+        r="19"
         fill="var(--surface)"
         stroke="currentColor"
-        className={quiet}
+        className={faint}
       />
-      <LensArcs cx={128} cy={44} r={10} strokeWidth={2.25} />
+      <LensArcs cx={132} cy={40} r={12} strokeWidth={2.5} />
       <path
-        d="M128 60v18"
+        d="M132 59v25"
         stroke="currentColor"
         strokeWidth="1.5"
         strokeDasharray="2 3"

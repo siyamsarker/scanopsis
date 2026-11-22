@@ -53,7 +53,7 @@ export function EmptyState({
     <div
       className={`flex flex-col items-center text-center ${compact ? 'px-4 py-8' : 'px-6 py-12 sm:py-16'} ${className}`}
     >
-      <div className={`empty-art ${compact ? 'w-28' : 'w-40'}`}>
+      <div className={compact ? 'w-32' : 'w-44'}>
         <StateArt art={shown} />
       </div>
       <Heading
