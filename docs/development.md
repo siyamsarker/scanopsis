@@ -36,7 +36,7 @@ nvm use
 | `cmd/scanopsis/` | Server entry point |
 | `web/` | Web interface (React, TypeScript, Vite, Tailwind CSS) |
 | `web/embed.go` | Embeds the built web interface into the Go binary |
-| `scripts/` | Helper scripts for the checks and releases |
+| `scripts/` | Helper scripts for the checks |
 | `.github/` | Code owners, issue and pull request templates |
 | `docs/` | Documentation for operators and developers |
 | `api/openapi.yaml` | The HTTP API contract |
@@ -310,18 +310,6 @@ read API p95: /api/v1/services/1/vulnerabilities              44.2 ms     < 150 
 20 MB ingest: full-detail gzip                               546.3 ms    < 3000 ms  ok
 20 MB ingest: dense plain                                    905.2 ms    < 3000 ms  ok
 performance tests (go test)                                    ok         pass  ok
-```
-
-## Release notes
-
-`scripts/release-notes.sh <version>` prints the body of the `## [<version>]`
-section of `CHANGELOG.md`, without the heading and without the link references
-at the end of the file. It fails when the section is missing or empty. The
-release script uses it, and `make test-scripts` tests it. See
-[releasing](releasing.md).
-
-```sh
-scripts/release-notes.sh 1.2.0 CHANGELOG.md
 ```
 
 ## Generated code
