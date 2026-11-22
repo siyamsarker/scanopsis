@@ -247,7 +247,15 @@ function Enroll({
   }
 
   return (
-    <AuthShell title={titles[step]} lead={leads[step]} wide>
+    <AuthShell
+      title={titles[step]}
+      lead={leads[step]}
+      wide
+      steps={{
+        labels: ['Scan the code', 'Enter a code', 'Save recovery codes'],
+        current: ['scan', 'code', 'recovery'].indexOf(step),
+      }}
+    >
       {body}
       <p className="text-text-muted">
         <SignOutButton />
