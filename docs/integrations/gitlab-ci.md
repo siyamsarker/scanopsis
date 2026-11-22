@@ -1,68 +1,69 @@
 # Upload Trivy reports from GitLab CI
 
-This guide makes your GitLab CI jobs send their Trivy reports to Scanopsis, so
-that the dashboard shows every finding of every image and repository, traced to
-the pipeline, job and commit that produced it.
+Make your GitLab CI jobs send their Trivy reports to Scanopsis. The dashboard
+then shows every finding of every image and repository, traced to the pipeline,
+job and commit that found it.
 
-A job uploads its report with an HTTP request that carries a GitLab CI/CD ID
-token. GitLab creates the token for the job and signs it. Scanopsis checks the
-signature against the public keys of your GitLab instance. There is no shared
-secret to create, store, rotate or leak, and the token proves which project,
-pipeline, job, branch and commit the report belongs to. A token is only valid
-for the timeout of the job that received it.
+**Audience:** Operators · **Back to:** [README](../../README.md) · [All guides](../../README.md#documentation)
 
-The upload never changes the result of the job. A pipeline that passed keeps
-passing when Scanopsis is down, and the dashboard shows exactly what Trivy
-reported.
+---
 
-Command output in this guide was captured from a test instance of Scanopsis
-and a test GitLab. The host names were replaced by `scanopsis.example.com` and
-`gitlab.example.com`, and long tables are shortened where marked.
+## How it works
+
+Each job proves who it is with a GitLab CI/CD **ID token**. GitLab creates this
+short-lived token for the job and signs it. Scanopsis checks the signature
+against the public keys of your GitLab. So there is no shared upload secret to
+create, store or leak, and the token tells Scanopsis the project, pipeline, job,
+branch and commit. A token is valid only for the timeout of its job.
+
+The upload never changes the result of a job. If Scanopsis is down, a pipeline
+that passed still passes.
+
+The examples below use `scanopsis.example.com` and `gitlab.example.com`. Replace
+them with your own addresses.
 
 ## Before you start
 
 You need:
 
 - A running Scanopsis. See the [getting started guide](../getting-started.md).
-- GitLab 15.7 or later. Earlier versions do not have the `id_tokens` keyword.
-- Trivy 0.50 or later on the runner. Older versions have no `--show-suppressed`.
+- GitLab 15.7 or later. Older versions do not have the `id_tokens` keyword.
+- Trivy 0.50 or later on the runner. Older versions do not have
+  `--show-suppressed`.
 - `curl`, `jq` and `gzip` on the runner.
-- Network access from the runner to Scanopsis, and from Scanopsis to your
-  GitLab instance (Scanopsis downloads the signing keys from it).
+- A network path from the runner to Scanopsis, and from Scanopsis to GitLab.
+  Scanopsis downloads the signing keys from GitLab.
 
-Check the tools on the runner:
+To check the tools, run this on the runner:
 
-```console
-$ trivy --version | head -1
-Version: 0.76.2
-$ jq --version
-jq-1.7.1-apple
-$ curl --version | head -1
-curl 8.7.1 (x86_64-apple-darwin26.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.69.0
-$ gzip --version | head -1
-Apple gzip 487.40.2
+```sh
+trivy --version | head -1
+jq --version
+curl --version | head -1
+gzip --version | head -1
 ```
 
-## Step 1: Tell Scanopsis where your GitLab is
+Each command prints a version. If one says `command not found`, install that
+tool in the job image.
 
-Scanopsis needs the base URL of your GitLab instance to verify tokens. Set it
-in **Settings** in Scanopsis, or start Scanopsis with the environment variable:
+## Step 1. Tell Scanopsis where your GitLab is
 
-```text
-SCANOPSIS_GITLAB_URL=https://gitlab.example.com
-```
+Scanopsis needs the base URL of your GitLab to check the tokens. As an
+administrator, open **Settings**, find the group **GitLab** and set
+`gitlab.url`, for example `https://gitlab.example.com`. You can also seed it at
+the first start with the environment variable `SCANOPSIS_GITLAB_URL`.
 
-Without it every upload is answered with `503 ingest_not_configured`.
+Until it is set, every upload gets `503 ingest_not_configured`.
 
-The tokens must also carry the public URL of Scanopsis as their audience
-(`aud`). This is `SCANOPSIS_PUBLIC_URL`, for example
-`https://scanopsis.example.com`. Step 3 sets it.
+The token must also name Scanopsis as its audience (`aud`). The audience is the
+public URL of Scanopsis, `SCANOPSIS_PUBLIC_URL`, for example
+`https://scanopsis.example.com`. You set it in the job in step 3.
 
-## Step 2: Add the scan script to your repository
+## Step 2. Add the scan script to your repository
 
-Save this as `ci/scan.sh`. It scans each image once, with every severity and
-with unfixed findings included, uploads that full report, and then decides
-whether the job fails from the same report.
+Save this file as `ci/scan.sh` in your repository. It scans each image once,
+with every severity and with unfixed findings. It uploads that full report, then
+decides from the same report whether the job fails.
 
 ```sh
 #!/bin/sh
@@ -125,53 +126,58 @@ trivy convert --format table --exit-code 1 "$out/secrets.json" || status=1
 exit "$status"
 ```
 
-What the script does, in order:
+### What the script does
 
 1. `trivy image ... --format json --show-suppressed` writes one complete report
-   per image. It lists all severities, fixed and unfixed findings, and also the
-   findings your ignore file (`.trivyignore`) or VEX documents suppressed, so
-   that Scanopsis can show them as suppressed.
-2. `upload` sends the report, gzip-compressed, and prints the HTTP status and
-   the answer. It retries a temporary failure (see
-   [Retries and limits](#retries-and-limits)). It always returns 0, so a failed
-   upload cannot fail the job.
-3. `jq` removes the vulnerabilities whose `Status` is not `fixed`, and
-   `trivy convert` prints the table of HIGH and CRITICAL findings from what is
-   left and returns exit code 1 if there are any. This is the gate you had
-   before, built from the report that was uploaded.
-4. The secret scan is a separate run, because secrets have no fix status and
-   must not be filtered by severity. It uploads with `kind=secret-fs`.
-5. `exit "$status"` is the last line, so the job result is decided by the
-   gates and the scans only.
+   per image: all severities, fixed and unfixed findings, and the findings that
+   your ignore file (`.trivyignore`) or VEX documents suppressed. Scanopsis
+   shows those as suppressed.
+2. `upload` compresses the report, sends it, and prints the HTTP status and the
+   answer. It retries a temporary failure, see [Retries and
+   limits](#retries-and-limits). It always returns 0, so a failed upload never
+   fails the job.
+3. `jq` removes every vulnerability whose `Status` is not `fixed`. `trivy
+   convert` then prints the HIGH and CRITICAL findings that are left, and exits
+   with 1 if there are any. This is your security gate, built from the report
+   you uploaded.
+4. The secret scan runs on its own, because secrets have no fix status and must
+   not be filtered by severity. It uploads with `kind=secret-fs`.
+5. The last line, `exit "$status"`, makes the gates and the scans decide the job
+   result, never the upload.
 
 `trivy convert` prints `No enabled scanners found. Summary table will not be
-displayed.` on stderr. This is expected; the findings table follows it.
+displayed.` before the table. That is expected.
 
-### Why the gate gives the same result as `--ignore-unfixed`
+### Check the gate before you replace yours
 
-Trivy implements `--ignore-unfixed` as "hide every vulnerability whose status
-is not `fixed`". The `jq` step does exactly that on the JSON. This was checked
-by running the old gate and the new pipeline on real images:
+Trivy's `--ignore-unfixed` hides every vulnerability whose status is not
+`fixed`. The `jq` step does the same on the JSON, so the new gate fails exactly
+when the old one did:
 
 ```text
 old: trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 IMAGE
-new: trivy image --format json --show-suppressed IMAGE, jq (Status == "fixed"),
-     trivy convert --format table --severity HIGH,CRITICAL --exit-code 1
+new: trivy image --format json --show-suppressed IMAGE, then jq (Status == "fixed"),
+     then trivy convert --format table --severity HIGH,CRITICAL --exit-code 1
 ```
 
-| Image | Exit code old / new | HIGH / CRITICAL old | HIGH / CRITICAL new |
+Both were run on real images with Trivy 0.76.2:
+
+| Image | Exit code, old / new | HIGH / CRITICAL, old | HIGH / CRITICAL, new |
 | --- | --- | --- | --- |
 | `python:3.9-slim-buster` | 1 / 1 | 18 / 0 | 18 / 0 |
 | `python:3.9-slim-buster` with an ignore file of 3 CVEs | 1 / 1 | 17 / 0 | 17 / 0 |
 | `alpine:3.17.0` | 1 / 1 | 26 / 0 | 26 / 0 |
 | `node:16-alpine` | 1 / 1 | 40 / 1 | 40 / 1 |
 | `alpine:3.20` | 1 / 1 | 2 / 0 | 2 / 0 |
-| `busybox:1.36` (clean: Trivy writes no `Results`) | 0 / 0 | 0 / 0 | 0 / 0 |
+| `busybox:1.36` (clean, so Trivy writes no `Results`) | 0 / 0 | 0 / 0 | 0 / 0 |
 | `gcr.io/distroless/static-debian12` | 0 / 0 | 0 / 0 | 0 / 0 |
 
-Check it on one of your own images before you replace your gate.
+The numbers change as the vulnerability database grows. Run both gates on one of
+your own images before you switch.
 
-## Step 3: Call the script from `.gitlab-ci.yml`
+## Step 3. Call the script from `.gitlab-ci.yml`
+
+Add a job like this one (example):
 
 ```yaml
 trivy-scan:
@@ -187,211 +193,210 @@ trivy-scan:
     - sh ci/scan.sh
 ```
 
-- `id_tokens` asks GitLab for a token in the variable `SCANOPSIS_ID_TOKEN`.
-  `aud` must be the public URL of Scanopsis, written exactly as Scanopsis has it
-  in `SCANOPSIS_PUBLIC_URL`.
-- `IMAGES` is a space-separated list. Each image gets its own report, and each
-  image name is one artifact in the dashboard.
-- The scan job must run after the image is built and pushed, and must be allowed
-  to pull it.
+- `id_tokens` asks GitLab for a token in the variable `SCANOPSIS_ID_TOKEN`. Its
+  `aud` must be the public URL of Scanopsis, written exactly as in
+  `SCANOPSIS_PUBLIC_URL`: same scheme, no trailing slash.
+- `IMAGES` is a space-separated list. Each image gets its own report and becomes
+  one artifact on the dashboard.
+- Run the job after the image is built and pushed, with access to pull it.
 
-## Step 4: Run a pipeline and read the log
+## Step 4. Run a pipeline and read the log
 
-The first successful upload creates the service for your project in Scanopsis
-(named after the last part of the project path) and records it in the audit log
-as `service.created`, with the actor `ci:<project path>`. The log of the job
-shows:
+The first successful upload creates the service for your project. The service is
+named after the last part of the project path, and the audit log records it as
+`service.created` by the actor `ci:<project path>`.
+
+The job log looks like this (the table is shortened):
 
 ```console
 $ sh ci/scan.sh
 scanopsis: upload of scanopsis-out/alpine_3.17.0.json returned HTTP 201
 {"scan_id":1,"service_id":1,"service_created":true,"replaced":false,"counts":{"critical":0,"high":26,"medium":40,"low":26,"unknown":0},"fixable":92,"secrets":0,"suppressed":0}
-2026-11-19T12:22:49+06:00	WARN	[report] No enabled scanners found. Summary table will not be displayed.
+2026-11-22T17:14:37+06:00  WARN  [report] No enabled scanners found. Summary table will not be displayed.
 
 alpine:3.17.0 (alpine 3.17.0)
 =============================
 Total: 26 (HIGH: 26, CRITICAL: 0)
-
-┌────────────┬────────────────┬──────────┬────────┬───────────────────┬───────────────┬──────────────────────────────────────────────────────────────┐
-│  Library   │ Vulnerability  │ Severity │ Status │ Installed Version │ Fixed Version │                            Title                             │
-├────────────┼────────────────┼──────────┼────────┼───────────────────┼───────────────┼──────────────────────────────────────────────────────────────┤
-│ libcrypto3 │ CVE-2022-3996  │ HIGH     │ fixed  │ 3.0.7-r0          │ 3.0.7-r2      │ openssl: double locking leads to denial of service           │
-...  (table shortened)
+...
 scanopsis: upload of scanopsis-out/secrets.json returned HTTP 201
 {"scan_id":2,"service_id":1,"service_created":false,"replaced":false,"counts":{"critical":0,"high":0,"medium":0,"low":0,"unknown":0},"fixable":0,"secrets":2,"suppressed":0}
-2026-11-19T12:22:49+06:00	WARN	[report] No enabled scanners found. Summary table will not be displayed.
+2026-11-22T17:14:38+06:00  WARN  [report] No enabled scanners found. Summary table will not be displayed.
 
 config.env (secrets)
 ====================
 Total: 2 (UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 2)
-
-CRITICAL: AWS (aws-access-key-id)
-...  (shortened)
-job exit code: 1
+...
 ```
 
-(`job exit code: 1` is printed by the test harness. In GitLab the job simply
-fails because of the gate. This example image does have fixed HIGH findings.)
+This job fails, because the image has fixed HIGH findings and the repository has
+secrets. Both uploads still worked.
 
-The `201` answer says how many findings of each severity were stored.
-`fixable` counts findings that have a fixed version, `suppressed` the findings
-your ignore file hid, and `replaced: true` means an earlier upload of the same
-job, image and kind was replaced. Retrying a job therefore never duplicates
-data.
+How to read the `201` answer:
 
-The match text of a secret is never stored. Scanopsis keeps the rule and the
-file and line only. (The raw report is kept compressed for audit, exactly as
-Trivy wrote it, and Trivy masks the secret in it.)
+| Field | Meaning |
+| --- | --- |
+| `counts` | The stored findings per severity, without the suppressed ones. |
+| `fixable` | Findings that have a fixed version. |
+| `secrets` | Secret findings. |
+| `suppressed` | Findings your ignore file or VEX documents hid. |
+| `service_created` | `true` when this upload created the service. |
+| `replaced` | `true` when an earlier upload of the same job, artifact and kind was replaced. Retrying a job never duplicates data. |
 
-## Retries and limits
+## Step 5. Choose the dashboard branch
 
-A problem on the Scanopsis side is usually temporary: a restart, a database that
-is not reachable yet, a burst of uploads. The script retries for about four
-minutes, so a short outage does not lose a scan. curl decides what to retry:
+Scanopsis keeps the scans of every branch that uploads, but a dashboard shows
+one branch. Until an administrator chooses that branch, the dashboard follows
+the most recent scan, so a scan of a feature branch changes what everyone sees.
 
-| Answer | Cause | Retried |
-| --- | --- | --- |
-| `408` `request_timeout` | The body did not arrive within 5 minutes. | yes |
-| `429` | Too many uploads from the address (`too_many_requests`) or from the project (`project_rate_limited`), or the job is over its artifact limit (`job_artifact_limit`). | yes, after the `Retry-After` seconds; not for a job over its limit, whose `Retry-After` is an hour, so curl gives up |
-| `500`, `502`, `504` | An error in Scanopsis, or a proxy that could not reach it. | yes |
-| `503` | Scanopsis is busy (`busy`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`); each carries `Retry-After` except the GitLab one. | yes |
-| Connection refused, timeout | Scanopsis is down or restarting. | yes (`--retry-connrefused`) |
-| `400`, `401`, `403`, `409`, `413`, `415`, `422` | The request itself is wrong. The same request gets the same answer. | no |
-
-The script uses `--retry` and not `--retry-all-errors`, which would also repeat
-the last row and delay the job. Retrying is safe: a repeated upload of the same
-job, image and kind replaces the earlier one. curl 7.66 or later honours
-`Retry-After`; 8 retries with curl's doubling wait (1 s, 2 s, 4 s, up to 128 s)
-and `--retry-max-time 300` give the four minutes.
-
-Two limits protect the database from one project. They apply to projects
-that passed the namespace and protected-branch checks, and both are answered `429` with `Retry-After` and
-recorded in the audit log like other rejections (at most 10 per client address at
-once, then one more per minute):
-
-- **Uploads per project.** A project may upload 100 reports at once and then
-  one more every 10 seconds (360 an hour). The limit is per GitLab project, not
-  per address, so it does not matter how many runners the project has. It is
-  sized for 3,000 pipelines a day over 500 services, which is six pipelines a
-  day for the average service: a monorepo that scans 30 images uploads 31 reports
-  per pipeline, so three such pipelines can finish together, and 11 an hour can
-  go on all day. A project above that gets `project_rate_limited`, and the
-  retries of the script spread the rest out. Other projects are not affected.
-- **Artifacts per job.** One job may store at most 50 different artifacts
-  (the artifact name and the kind, on the job's branch or tag). Uploading again
-  an artifact the job already has replaces it and does not count. The 51st gets
-  `job_artifact_limit`. Scans of different artifacts are never replaced by
-  later ones, so without this limit one job could create them without end. Split
-  a job that scans more than 50 images into several jobs.
-
-Scanopsis reads an upload for at most 5 minutes after it accepted it. The limit
-is its own, longer than the 30 seconds of the rest of the server, so a large
-report can cross a slow link. A body that is not complete by then is answered with
-`408`. Uploads are admitted by the memory they need, which follows their size,
-not by a fixed number: many small reports are processed at once, and a few
-large ones. An upload that fits the free memory is admitted at once, even when a
-larger one is waiting, until the oldest waiting upload has waited 5 seconds;
-newer uploads then queue behind it, so large uploads are not starved. Reports
-of up to 4 MiB, which most are, always pass when they fit. An upload
-that finds no free memory waits up to 30 seconds and is then answered with `503`
-`busy`. At most a quarter of the database connections store uploads at the same
-time; an upload that cannot get a place within 30 seconds is answered `busy` too. See [sizing](../deployment.md#sizing).
+Right after the first upload, an administrator opens **Services**, finds the new
+service and chooses its dashboard branch, usually your default branch.
+[Operations](../operations.md) describes the Services page.
 
 ## Restrict who may upload
 
-> **Set the allowed namespaces on a shared or public GitLab instance.** With the
-> list empty, every project of the GitLab instance can upload: a token is valid
-> for Scanopsis whenever the instance that signed it is the configured one. On
-> a shared or public instance (gitlab.com, for example) that means any project
-> of any user on it. Scanopsis logs a warning ("ingest accepts uploads from
-> every project of the GitLab instance; set ingest.allowed_namespaces to
-> restrict it") at start-up, and whenever the settings change into that state.
+> **On a shared or public GitLab, such as gitlab.com, set the allowed
+> namespaces.** With an empty list, any project on that GitLab can upload,
+> because every token it signs is valid for Scanopsis. Scanopsis logs this
+> warning at start-up and whenever the settings change into that state: `ingest
+> accepts uploads from every project of the GitLab instance; set
+> ingest.allowed_namespaces to restrict it`.
 
-Anyone who can run a job on your GitLab instance can get a token, and the token
-is valid for Scanopsis, because it is signed by your GitLab. Two settings limit
-which jobs are accepted. Set them in **Settings**, or with environment variables.
+Two settings, in the **Scan uploads** group on the Settings page, limit which
+jobs are accepted:
 
-| Setting | Variable | Effect |
+| Setting | Environment variable | Effect |
 | --- | --- | --- |
-| Allowed namespaces | `SCANOPSIS_INGEST_ALLOWED_NAMESPACES` | Comma-separated full group paths, for example `platform,security/appsec`. Only projects in these groups or below them may upload. Empty accepts every project. |
-| Protected refs only | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | `true` accepts only pipelines on protected branches and tags, so a feature branch cannot add scans or replace results. |
+| `ingest.allowed_namespaces` | `SCANOPSIS_INGEST_ALLOWED_NAMESPACES` | Full group paths, one per line on the Settings page or comma-separated in the variable, for example `platform` and `security/appsec`. Only projects in these groups, or in groups below them, may upload. Case does not matter. Empty accepts every project. |
+| `ingest.protected_refs_only` | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | `true` accepts only pipelines on protected branches and tags, so a feature branch cannot add or replace results. |
 
-A rejected upload is answered with 403 and recorded in the audit log as
-`ingest.rejected`, with the reason and, when the token was valid, the project
-path. Anyone who can get an ID token from your GitLab can cause a rejected upload
-before the allowed namespaces and protected refs are checked (an invalid token,
-GitLab unreachable, a namespace not allowed, a ref not protected). The audit log
-records at most 10 of those rejections per client address at once and then one
-more per minute; the others are answered the same way but appear only in the
-server log at debug level. When allowed namespaces are set, every later
-rejection (media type, kind, report too large or invalid, archived service,
-service conflict, request timeout) comes from a project you chose to accept
-and is always recorded. Without allowed namespaces any project can get that far,
-so these rejections are bounded per client address in the same way. The
-rejections for the project limits (`project_rate_limited`, `job_artifact_limit`)
-and `busy` are always bounded per client address: they happen under load, and
-recording each one would add to it. `busy` has a bound of its own, so a busy
-period never hides rejected tokens from the same address. An upload whose
-client gave up while it waited is recorded like any other busy answer. A rate-limited
-request (`429`) is never recorded. The "Recorded rejections" number on the
-Integrations page counts what was recorded.
+A refused upload is written to the audit log as `ingest.rejected`, with the
+reason and, when the token was valid, the project path. Anyone who can run a job
+on your GitLab can cause a refusal, so Scanopsis keeps them from flooding the
+log:
+
+- Refusals before a project has passed all checks (bad token, GitLab
+  unreachable, namespace not allowed, ref not protected) are recorded at most 10
+  at once per client address, then one per minute. The rest are answered the
+  same way and appear only in the server log at `debug` level.
+- Once you set allowed namespaces, later refusals (wrong media type, wrong kind,
+  report too large or invalid, archived service, service conflict, timeout) come
+  from projects you chose to accept, and every one is recorded. Without allowed
+  namespaces they are limited per address like the first group.
+- `project_rate_limited`, `job_artifact_limit` and `busy` are always limited per
+  address, because they happen under load. `busy` has its own limit, so a busy
+  period never hides refused tokens.
+- `too_many_requests` is never recorded.
+
+The **Integrations** page counts what was recorded as "Recorded rejections, last
+24 hours".
+
+## Retries and limits
+
+Most problems on the Scanopsis side are short: a restart, a database that is not
+ready yet, a burst of uploads. The script retries for about four minutes, so a
+short outage does not lose a scan. curl decides what to retry:
+
+| Answer | Cause | Retried |
+| --- | --- | --- |
+| `408` `request_timeout` | The body did not arrive within 5 minutes. | Yes |
+| `429` | Too many uploads from one address (`too_many_requests`) or from one project (`project_rate_limited`), or the job is over its artifact limit (`job_artifact_limit`). | Yes, after `Retry-After`. For `job_artifact_limit`, `Retry-After` is an hour, so curl gives up. |
+| `500`, `502`, `504` | An error in Scanopsis, or a proxy that could not reach it. | Yes |
+| `503` | Scanopsis is busy (`busy`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`). All but the GitLab one carry `Retry-After`. | Yes |
+| Connection refused, timeout | Scanopsis is down or restarting. | Yes (`--retry-connrefused`) |
+| `400`, `401`, `403`, `409`, `413`, `415`, `422` | The request itself is wrong. The same request gets the same answer. | No |
+
+The script uses `--retry`, not `--retry-all-errors`, which would also repeat the
+last row and only slow the job down. A retry is safe: the same job, artifact and
+kind replaces the earlier upload. curl 7.66 or later honours `Retry-After`.
+Eight retries with curl's doubling wait (1 s, 2 s, 4 s, up to 128 s) and
+`--retry-max-time 300` give the four minutes.
+
+These limits protect Scanopsis and its database. You cannot change them:
+
+| Limit | Value | Answer when exceeded |
+| --- | --- | --- |
+| Uploads per client address | 60 at once, then 1 per second | `429` `too_many_requests` |
+| Uploads per GitLab project | 100 at once, then 1 every 10 seconds (360 an hour), however many runners the project uses | `429` `project_rate_limited` |
+| Artifacts per job | 50 different artifacts (artifact name and kind). Uploading an artifact again replaces it and does not count. | `429` `job_artifact_limit` |
+| Report size | 64 MiB after decompression | `413` `report_too_large` |
+| Findings per report | 200,000 vulnerabilities and secrets, suppressed ones included | `413` `report_too_large` |
+| Time to send the body | 5 minutes from the moment the upload is admitted | `408` `request_timeout` |
+| Wait for memory or a database slot | 30 seconds | `503` `busy` |
+
+The project limit fits a busy monorepo: a pipeline that scans 30 images uploads
+31 reports, so three such pipelines can finish at the same moment, and 11 an
+hour can run all day. It applies only to projects that passed the namespace and
+protected-ref checks.
+
+The artifact limit exists because scans of different artifacts never replace
+each other. Without it, one job could create scans without end. Split a job that
+scans more than 50 images into several jobs.
+
+Uploads are admitted by the memory they need, which grows with their size. Many
+small reports run at once, large ones fewer at a time. A report of up to 4 MiB,
+which is most of them, can always pass a large upload that is waiting. At most a
+quarter of the database connections store uploads at the same time. For sizing
+the server, see [deployment](../deployment.md).
 
 ## What the dashboard shows
 
 The dashboard shows exactly what Trivy reported. Nothing is added, merged or
-re-rated: the counts per severity are the unsuppressed findings of the report,
-a suppressed finding is shown as suppressed with the reason Trivy gave, and
-duplicates are kept as Trivy listed them (Trivy can report one CVE for several
-targets). Every report is traceable to the pipeline, job, branch and commit in
-the token, and the compressed original is kept.
+re-rated:
 
-Scanopsis keeps the scans of every branch that uploads. A dashboard shows one
-branch, and its numbers are the latest scan of each artifact on that branch.
-An administrator chooses the branch for each service on the Services page, see
-[choose the dashboard branch](../operations.md#choose-the-dashboard-branch-of-a-service).
-Until one is chosen, a dashboard shows the branch with the most recent scan,
-so a scan of a feature branch changes what is shown. Choose the branch right
-after the first upload, usually the default branch of the project.
+- The counts per severity are the unsuppressed findings of the report.
+- A suppressed finding is shown as suppressed, with the reason Trivy gave.
+- Duplicates stay as Trivy listed them. Trivy can report one CVE for several
+  targets.
+- The matched text of a secret is never stored. Scanopsis keeps the rule, the
+  file and the line numbers.
+- Every scan links to the pipeline, job, branch and commit from the token.
+
+Scanopsis also keeps the report as uploaded, compressed. Trivy masks secrets in
+it. An administrator can export it for 30 days after the scan, and for as long
+as the scan is current. [Operations](../operations.md) has the command.
 
 ## Troubleshooting
 
-The log line `scanopsis: upload of ... returned HTTP <code>` is followed by the
-answer of Scanopsis. HTTP `000` means curl got no answer at all (see the
-error line above it: wrong URL, DNS, TLS or firewall).
+Each upload prints `scanopsis: upload of ... returned HTTP <code>`, followed by
+the answer of Scanopsis. HTTP `000` means curl got no answer at all. The line
+above it says why: a wrong URL, DNS, TLS or a firewall.
 
-| Log shows | Cause | Fix |
+If the answer is `500` `internal_error`, the upload was not stored and the cause
+is in the Scanopsis log. The script retries it. If the retries fail too, run the
+job again.
+
+| Answer | Cause | Fix |
 | --- | --- | --- |
-| `503` `ingest_not_configured`: `Uploads are not enabled: the GitLab URL is not configured in Scanopsis.` | `SCANOPSIS_GITLAB_URL` is not set. | Set the GitLab URL in Settings (step 1). |
+| `503` `ingest_not_configured`: `Uploads are not enabled: the GitLab URL is not configured in Scanopsis.` | `gitlab.url` is not set. | Set it, see [step 1](#step-1-tell-scanopsis-where-your-gitlab-is). |
 | `401` `invalid_token`: `The Authorization header is missing. Send Authorization: Bearer <ID token>.` | The request had no `Authorization` header. | Send `Authorization: Bearer $SCANOPSIS_ID_TOKEN`. |
-| `401` `invalid_token`: `The Authorization header must be: Bearer <ID token>.` | The token variable is empty: the job has no `id_tokens` entry with this name. | Add `id_tokens: SCANOPSIS_ID_TOKEN:` to the job (step 3). |
-| `401` `invalid_token`: `The token is malformed: it is not a signed JWT (RS256).` | The variable holds something other than the ID token. | Use the variable named under `id_tokens`, not a personal or job token. |
-| `401` `invalid_token`: `The token audience (aud) does not contain https://scanopsis.example.com. ...` | `aud` is not the Scanopsis URL, or differs from `SCANOPSIS_PUBLIC_URL` in a character (`http` instead of `https`, a trailing slash). | Set `aud: "$SCANOPSIS_URL"` with the exact public URL. |
-| `401` `invalid_token`: `The token issuer (iss) is not the GitLab URL configured in Scanopsis.` | The job runs on another GitLab than the one in Scanopsis settings. | Correct the GitLab URL in Settings, or upload from the right GitLab. |
-| `401` `invalid_token`: `The token signature is not valid for the signing keys of the GitLab configured in Scanopsis.` | The token was changed, or comes from a different GitLab with the same URL setting. Scanopsis downloads the signing keys of GitLab with the first upload, and again at most every 10 seconds, and only for a token that names a key it does not have yet. After GitLab starts to sign with a new key, the first upload within 10 seconds of an earlier download of the keys can be refused for this reason. | Use the unmodified token of the current job. Run the job again if GitLab just rotated its keys. |
-| `503` `gitlab_unavailable`: `The signature could not be checked: Scanopsis could not fetch the signing keys from GitLab. Try again later.` | Scanopsis cannot reach GitLab, or does not trust its certificate, or GitLab did not answer within 10 seconds. Uploads that need the keys at the same time share one request and are all answered when it ends, and a failed request is not repeated for 10 seconds. The response never names the GitLab address; the server log has it, with the cause, in the `upload rejected` warning (`gitlab_url`, `cause`). | Allow the network path, and set `SCANOPSIS_CA_FILE` for an internal CA. See [outgoing TLS connections](../configuration.md#outgoing-tls-connections). |
-| `401` `invalid_token`: `The token has expired. ...` | The upload ran after the job timeout, or the runner clock is far off. | Upload from within the job; fix the clock. |
-| `401` `invalid_token`: `The token is not valid yet (nbf is in the future). ...` | The clock of the Scanopsis host is more than 10 seconds behind GitLab. | Synchronise the clocks (NTP). |
-| `401` `invalid_token`: `The token was issued in the future (iat is ahead of the clock). ...` | Same cause: the token's issue time is more than 10 seconds ahead of the clock of Scanopsis. | Synchronise the clocks (NTP). |
+| `401` `invalid_token`: `The Authorization header must be: Bearer <ID token>.` | The token variable is empty: the job has no `id_tokens` entry with that name. | Add `id_tokens: SCANOPSIS_ID_TOKEN:` to the job, see [step 3](#step-3-call-the-script-from-gitlab-ciyml). |
+| `401` `invalid_token`: `The token is malformed: it is not a signed JWT (RS256).` | The variable holds something other than an ID token. | Use the variable named under `id_tokens`, not a personal or job token. |
+| `401` `invalid_token`: `The token audience (aud) does not contain https://scanopsis.example.com. Set aud to the Scanopsis URL in id_tokens.` | `aud` differs from `SCANOPSIS_PUBLIC_URL`, even by one character: `http` instead of `https`, or a trailing slash. | Set `aud: "$SCANOPSIS_URL"` with the exact public URL. |
+| `401` `invalid_token`: `The token issuer (iss) is not the GitLab URL configured in Scanopsis.` | The job runs on a different GitLab than the one in the settings. | Correct `gitlab.url`, or upload from the right GitLab. |
+| `401` `invalid_token`: `The token signature is not valid for the signing keys of the GitLab configured in Scanopsis.` | The token was changed, or GitLab has just started to sign with a new key. Scanopsis fetches the keys again only for a key it does not know, and at most every 10 seconds. | Use the unchanged token of the current job. If GitLab just rotated its keys, run the job again. |
+| `503` `gitlab_unavailable`: `The signature could not be checked: Scanopsis could not fetch the signing keys from GitLab. Try again later.` | Scanopsis cannot reach GitLab, does not trust its certificate, or GitLab did not answer within 10 seconds. After a failure Scanopsis waits 10 seconds before it asks again. The answer never names the GitLab address. The server log does, in the `upload rejected` warning (`gitlab_url`, `cause`). | Open the network path. For an internal certificate authority, set `SCANOPSIS_CA_FILE`, see [configuration](../configuration.md). |
+| `401` `invalid_token`: `The token has expired. ID tokens are valid for the job's timeout; upload from within the job.` | The upload ran after the job timeout, or a clock is far off. | Upload from inside the job. Check the clocks. |
+| `401` `invalid_token`: `The token is not valid yet (nbf is in the future). ...` or `The token was issued in the future (iat is ahead of the clock). ...` | The clock of the Scanopsis host is more than 10 seconds behind GitLab. | Synchronise the clocks with NTP. |
 | `401` `invalid_token`: `The token has no job_id claim.` (or another claim) | The token is not a GitLab CI/CD ID token. | Use a token from `id_tokens`. |
-| `403` `namespace_not_allowed`: `The project namespace platform is not in the allowed namespaces of this Scanopsis.` | The project is outside the allowed groups. | Add the group to the allowed namespaces, or leave the list empty. |
-| `403` `ref_not_protected`: `Only protected branches and tags may upload, and feature/login is not protected.` | Protected refs only is on and the pipeline runs on an unprotected ref. | Protect the branch or tag, or turn the setting off. |
+| `403` `namespace_not_allowed`: `The project namespace platform is not in the allowed namespaces of this Scanopsis.` | The project is outside the allowed groups. | Add its group to `ingest.allowed_namespaces`, or leave the list empty. |
+| `403` `ref_not_protected`: `Only protected branches and tags may upload, and feature/login is not protected.` | `ingest.protected_refs_only` is on and the pipeline runs on an unprotected branch or tag. | Protect the branch or tag, or turn the setting off. |
 | `415` `unsupported_media_type`: `Content-Type must be application/json.` | The `Content-Type` header is missing or different. | Send `-H 'Content-Type: application/json'`. |
-| `415` `unsupported_media_type`: `Content-Encoding must be gzip or identity.` | Another compression was used. | Use gzip, or send the plain JSON without `Content-Encoding`. |
-| `400` `invalid_report`: `The body is not valid JSON: ...` | The file is cut off or is not JSON, for example Trivy failed and wrote nothing. | Check the Trivy step. The script stops on a failed scan. |
+| `415` `unsupported_media_type`: `Content-Encoding must be gzip or identity.` | Another compression was used. | Use gzip, or send plain JSON without `Content-Encoding`. |
+| `400` `invalid_report`: `The body is not valid JSON: ...` | The file is cut off or is not JSON, for example because Trivy failed and wrote nothing. | Check the Trivy step. The script skips an image that Trivy could not scan. |
 | `400` `invalid_report`: `The body is not a complete, valid gzip stream.` | `Content-Encoding: gzip` was sent with data that is not gzip, or the file was cut off. | Compress with `gzip -c`, or drop the header. |
 | `400` `invalid_parameter`: `kind must be image or secret-fs.` | The `kind` parameter has another value. | Use `kind=image` for `trivy image` and `kind=secret-fs` for the secret scan. |
-| `422` `not_a_trivy_report`: `... SchemaVersion is missing` or `SchemaVersion 1 is not supported, only 2 is` | The file is not a Trivy JSON report, or has an unsupported schema version. | Create it with `--format json` from Trivy 0.50 or later. |
-| `413` `report_too_large`: `The report is larger than the limit of ... bytes (decompressed).` | The decompressed report is above the limit (64 MiB by default). | Scan fewer targets per report, or ask the administrator to raise the limit. |
-| `413` `report_too_large`: `The report has too many findings: ...` | The report holds more than 200000 vulnerabilities and secrets. | Split the scan, for example one report per image. |
-| `503` `busy`: `The server is processing other uploads. Retry later.` and a `Retry-After` header | Uploads are admitted by the memory they need, and none was free within 30 seconds (or the request ended before). | The script retries. Otherwise run the upload again after the number of seconds in `Retry-After`, or spread the uploads of many jobs over time. |
-| `503` `unavailable`: `The database is not available, so the report was not stored. Retry later.` and a `Retry-After` header | Scanopsis cannot reach its PostgreSQL database, or the database cannot take the work now. The report was not stored. | The script retries. If it keeps happening, check the database and the log of Scanopsis (`cannot store scan: the database is not available`). |
+| `422` `not_a_trivy_report`: `This is not a Trivy JSON report (SchemaVersion 2): SchemaVersion is missing` (or `SchemaVersion 1 is not supported, only 2 is`) | The file is not a Trivy JSON report, or has an old schema. | Create it with `--format json` from Trivy 0.50 or later. |
+| `413` `report_too_large`: `The report is larger than the limit of 67108864 bytes (decompressed).` | The report is above 64 MiB after decompression. The limit is fixed. | Scan fewer targets per report, for example one report per image. |
+| `413` `report_too_large`: `The report has too many findings: at most 200000 vulnerabilities and secrets (suppressed ones included) are accepted.` | The report holds more than 200,000 findings. | Split the scan, for example one report per image. |
+| `503` `busy`: `The server is processing other uploads. Retry later.` | No memory or database slot was free within 30 seconds. | The script retries after `Retry-After`. If it keeps happening, spread the uploads of many jobs over time. |
+| `503` `unavailable`: `The database is not available, so the report was not stored. Retry later.` | Scanopsis cannot reach its database, or the database cannot take the work now. | The script retries. If it keeps happening, check the database and look for `cannot store scan: the database is not available` in the Scanopsis log. |
 | `408` `request_timeout`: `The body did not arrive in time. Upload it faster, or retry.` | The whole body did not arrive within 5 minutes. | The script retries. Check the link between the runner and Scanopsis, or the size of the report. |
-| `409` `service_archived`: `The service for this project is archived. ...` | An administrator archived the service of this project. Archived services receive no data. | Ask an administrator to unarchive it. |
-| `409` `service_conflict`: `A different service already uses the project path ...` | Another service has this project path, for example from a deleted project with the same path. | Archive or delete the old service in Scanopsis. |
-| `429` `too_many_requests`: `Too many uploads from this address. Retry later.` and a `Retry-After` header | More than the allowed number of uploads per second from one address. | Upload fewer reports at once, or wait the number of seconds in `Retry-After`. |
-| `429` `project_rate_limited`: `This project uploaded too often. Retry later.` and a `Retry-After` header | The project used its burst of 100 uploads and uploads faster than one every 10 seconds. | The script retries. Upload fewer reports, or wait the number of seconds in `Retry-After`. |
-| `429` `job_artifact_limit`: `This job already uploaded 50 different artifacts, ...` and `Retry-After: 3600` | One job tried to store more than 50 different artifacts (artifact name and kind). | Scan fewer images in one job, or split them over several jobs. Uploading an artifact again replaces it and does not count. |
+| `409` `service_archived`: `The service for this project is archived. Ask an administrator to unarchive it.` | An administrator archived the service. Archived services take no new data. | Ask an administrator to unarchive it on the Services page. |
+| `409` `service_conflict`: `A different service already uses the project path ... Archive or delete it in Scanopsis.` | Another service has this project path, for example one left from a deleted project with the same path. | Archive or delete the old service in Scanopsis. |
+| `429` `too_many_requests`: `Too many uploads from this address. Retry later.` | More than 60 uploads at once, then more than one per second, from one address. | Upload fewer reports at once. The script waits `Retry-After` and retries. |
+| `429` `project_rate_limited`: `This project uploaded too often. Retry later.` | The project used its 100 uploads and now uploads faster than one every 10 seconds. | The script retries. Upload fewer reports per pipeline. |
+| `429` `job_artifact_limit`: `This job already uploaded 50 different artifacts, which is the most one job may upload. ...` | One job tried to store more than 50 different artifacts. | Split the images over several jobs. |
 
-If the answer is `500` (`internal_error`), the upload was not stored and the
-cause is in the log of Scanopsis. The script retries it; if the retries fail too,
-run the job again.
+---
+
+[Back to the README](../../README.md) · [All guides](../../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
