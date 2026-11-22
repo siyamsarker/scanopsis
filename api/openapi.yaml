@@ -552,6 +552,16 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
 
         "503": { $ref: "#/components/responses/Busy" }
+  /api/v1/portfolio/history:
+    get:
+      tags: [services]
+      summary: Recent pipelines of every service and the portfolio over the last week.
+      description: "For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts."
+      operationId: getPortfolioHistory
+      responses:
+        "200": { description: Portfolio history., content: { application/json: { schema: { $ref: "#/components/schemas/PortfolioHistory" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services:
     get:
       tags: [services]
@@ -1200,6 +1210,42 @@ components:
             failing_quality_gates: { type: integer }
             services_with_critical: { type: integer }
             fixable: { type: integer }
+        generated_at: { type: string, format: date-time }
+    PortfolioHistory:
+      type: object
+      required: [services, days, generated_at]
+      properties:
+        services:
+          type: array
+          description: "Every non-archived service with at least one scan on its dashboard ref, by id."
+          items:
+            type: object
+            required: [service_id, ref, points]
+            properties:
+              service_id: { type: integer, format: int64 }
+              ref: { type: string, description: "The dashboard ref, chosen as in the portfolio." }
+              points:
+                type: array
+                maxItems: 20
+                description: "The latest pipelines of the ref, oldest first."
+                items:
+                  type: object
+                  required: [pipeline_id, at, counts]
+                  properties:
+                    pipeline_id: { type: integer, format: int64 }
+                    at: { type: string, format: date-time, description: "Scan time of the pipeline's last scan." }
+                    counts: { $ref: "#/components/schemas/SeverityCounts" }
+        days:
+          type: array
+          minItems: 7
+          maxItems: 7
+          description: "The state of the listed services together at 7, 6, ... and 1 times 24 hours before generated_at, oldest first."
+          items:
+            type: object
+            required: [at, counts]
+            properties:
+              at: { type: string, format: date-time }
+              counts: { $ref: "#/components/schemas/SeverityCounts" }
         generated_at: { type: string, format: date-time }
     VulnerabilitySearch:
       type: object

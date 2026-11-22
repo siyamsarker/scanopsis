@@ -487,6 +487,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/portfolio/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recent pipelines of every service and the portfolio over the last week.
+         * @description For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts.
+         */
+        get: operations["getPortfolioHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/services": {
         parameters: {
             query?: never;
@@ -1135,6 +1155,34 @@ export interface components {
                 services_with_critical: number;
                 fixable: number;
             };
+            /** Format: date-time */
+            generated_at: string;
+        };
+        PortfolioHistory: {
+            /** @description Every non-archived service with at least one scan on its dashboard ref, by id. */
+            services: {
+                /** Format: int64 */
+                service_id: number;
+                /** @description The dashboard ref, chosen as in the portfolio. */
+                ref: string;
+                /** @description The latest pipelines of the ref, oldest first. */
+                points: {
+                    /** Format: int64 */
+                    pipeline_id: number;
+                    /**
+                     * Format: date-time
+                     * @description Scan time of the pipeline's last scan.
+                     */
+                    at: string;
+                    counts: components["schemas"]["SeverityCounts"];
+                }[];
+            }[];
+            /** @description The state of the listed services together at 7, 6, ... and 1 times 24 hours before generated_at, oldest first. */
+            days: {
+                /** Format: date-time */
+                at: string;
+                counts: components["schemas"]["SeverityCounts"];
+            }[];
             /** Format: date-time */
             generated_at: string;
         };
@@ -2468,6 +2516,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Portfolio"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            503: components["responses"]["Busy"];
+        };
+    };
+    getPortfolioHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Portfolio history. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PortfolioHistory"];
                 };
             };
             401: components["responses"]["Unauthenticated"];

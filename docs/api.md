@@ -430,6 +430,23 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
+### `GET /api/v1/portfolio/history`
+
+Recent pipelines of every service and the portfolio over the last week.
+
+For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts.
+
+- Operation ID: `getPortfolioHistory`
+- Authentication: Session
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | Portfolio history. | `application/json` [PortfolioHistory](#portfoliohistory) |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+
 ### `GET /api/v1/scans/{id}`
 
 - Operation ID: `getScan`
@@ -1187,6 +1204,16 @@ Properties of `totals`:
 | `fixable` | integer | yes |  |
 | `services` | integer | yes |  |
 | `services_with_critical` | integer | yes |  |
+
+### PortfolioHistory
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `days` | array of object | yes | The state of the listed services together at 7, 6, ... and 1 times 24 hours before generated_at, oldest first. |
+| `generated_at` | string (date-time) | yes |  |
+| `services` | array of object | yes | Every non-archived service with at least one scan on its dashboard ref, by id. |
 
 ### PortfolioItem
 

@@ -162,6 +162,7 @@ func (s *server) routes() []route {
 		{"POST", "/api/v1/hooks/sonarqube", s.feature("sonarWebhook")},
 
 		{"GET", "/api/v1/portfolio", s.requireComplete(s.feature("getPortfolio"))},
+		{"GET", "/api/v1/portfolio/history", s.requireComplete(s.feature("getPortfolioHistory"))},
 		{"GET", "/api/v1/services", s.requireComplete(s.feature("listServices"))},
 		{"POST", "/api/v1/services", s.requireAdmin(s.feature("createService"))},
 		{"GET", "/api/v1/services/{id}", s.requireComplete(s.feature("getService"))},
