@@ -4,6 +4,8 @@ info:
   version: 1.2.3
   description: |
     A small API used to test the documentation generator.
+
+    A second paragraph stays a paragraph of its own.
 paths:
   /healthz:
     get:

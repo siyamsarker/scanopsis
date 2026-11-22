@@ -1,26 +1,37 @@
 # Example API reference
 
+Look up any endpoint of the HTTP API: what it takes, what it returns and how
+it is authenticated.
+
+**Audience:** Developers · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
+
+---
+
 <!-- Generated from api/openapi.yaml by `make generate`. Do not edit by hand. -->
 
-This page lists every endpoint of the HTTP API, generated from the OpenAPI
-document `api/openapi.yaml`. API version: 1.2.3.
+This page is generated from the OpenAPI document `api/openapi.yaml`, the
+contract of the API. To change it, change that file and run `make generate`.
+Version of the OpenAPI document: 1.2.3.
 
 A small API used to test the documentation generator.
 
+A second paragraph stays a paragraph of its own.
+
 ## Authentication
 
-Each endpoint names how it is authenticated.
+Each endpoint says how it is authenticated:
 
-| Label | Meaning |
+| Label | What you send |
 |---|---|
-| None | No credentials are needed. |
-| Session | A session cookie from a completed sign-in (password or GitLab, then two-factor code). |
-| Session, admin | A session whose user has the admin role. |
-| CI ID token | A GitLab CI/CD ID token in `Authorization: Bearer <token>`. |
+| None | Nothing. |
+| Session | The session cookie of a finished sign-in: password or GitLab, then the two-factor code. |
+| Session, admin | The same, for a user with the admin role. |
+| CI ID token | A GitLab CI/CD ID token, in `Authorization: Bearer <token>`. |
 | HMAC signature | The HMAC-SHA256 signature of the body, in a request header. |
 
-Endpoints that need a session answer `401` without one and `403` while the
-session still needs two-factor authentication or a password change.
+An endpoint that needs a session answers `401` without one. It answers `403`
+while the session still has to pass two-factor authentication or change its
+password, and when an admin endpoint is called without the admin role.
 
 ## Endpoints
 
@@ -167,3 +178,6 @@ Type: object
 |---|---|---|---|
 | `status` | string (one of `ok`, `ready`) | no |  |
 
+---
+
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)

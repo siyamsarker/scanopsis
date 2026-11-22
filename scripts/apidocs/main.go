@@ -100,31 +100,41 @@ func oneLine(s string) string {
 
 func (g *gen) render() {
 	info := obj(g.doc["info"])
+	// The header and footer are the ones every guide in docs/ uses.
 	g.p("# %s reference", str(info["title"]))
+	g.p("")
+	g.p("Look up any endpoint of the HTTP API: what it takes, what it returns and how")
+	g.p("it is authenticated.")
+	g.p("")
+	g.p("**Audience:** Developers · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)")
+	g.p("")
+	g.p("---")
 	g.p("")
 	g.p("<!-- Generated from api/openapi.yaml by `make generate`. Do not edit by hand. -->")
 	g.p("")
-	g.p("This page lists every endpoint of the HTTP API, generated from the OpenAPI")
-	g.p("document `api/openapi.yaml`. API version: %s.", str(info["version"]))
+	g.p("This page is generated from the OpenAPI document `api/openapi.yaml`, the")
+	g.p("contract of the API. To change it, change that file and run `make generate`.")
+	g.p("Version of the OpenAPI document: %s.", str(info["version"]))
 	g.p("")
-	if d := strings.TrimSpace(str(info["description"])); d != "" {
-		g.p("%s", strings.Join(strings.Fields(d), " "))
+	for _, para := range paragraphs(str(info["description"])) {
+		g.p("%s", para)
 		g.p("")
 	}
 	g.p("## Authentication")
 	g.p("")
-	g.p("Each endpoint names how it is authenticated.")
+	g.p("Each endpoint says how it is authenticated:")
 	g.p("")
-	g.p("| Label | Meaning |")
+	g.p("| Label | What you send |")
 	g.p("|---|---|")
-	g.p("| None | No credentials are needed. |")
-	g.p("| Session | A session cookie from a completed sign-in (password or GitLab, then two-factor code). |")
-	g.p("| Session, admin | A session whose user has the admin role. |")
-	g.p("| CI ID token | A GitLab CI/CD ID token in `Authorization: Bearer <token>`. |")
+	g.p("| None | Nothing. |")
+	g.p("| Session | The session cookie of a finished sign-in: password or GitLab, then the two-factor code. |")
+	g.p("| Session, admin | The same, for a user with the admin role. |")
+	g.p("| CI ID token | A GitLab CI/CD ID token, in `Authorization: Bearer <token>`. |")
 	g.p("| HMAC signature | The HMAC-SHA256 signature of the body, in a request header. |")
 	g.p("")
-	g.p("Endpoints that need a session answer `401` without one and `403` while the")
-	g.p("session still needs two-factor authentication or a password change.")
+	g.p("An endpoint that needs a session answers `401` without one. It answers `403`")
+	g.p("while the session still has to pass two-factor authentication or change its")
+	g.p("password, and when an admin endpoint is called without the admin role.")
 	g.p("")
 	g.p("## Endpoints")
 	g.p("")
@@ -132,6 +142,21 @@ func (g *gen) render() {
 	g.p("## Schemas")
 	g.p("")
 	g.schemas()
+	g.p("---")
+	g.p("")
+	g.p("[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)")
+}
+
+// paragraphs splits a YAML text block at blank lines and joins the lines of
+// each paragraph into one.
+func paragraphs(s string) []string {
+	var out []string
+	for _, block := range strings.Split(strings.TrimSpace(s), "\n\n") {
+		if p := strings.Join(strings.Fields(block), " "); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 var methodOrder = []string{"get", "post", "put", "patch", "delete"}

@@ -71,6 +71,26 @@ func TestAuthentication(t *testing.T) {
 	}
 }
 
+// TestHeaderAndFooter checks the parts every page in docs/ shares.
+func TestHeaderAndFooter(t *testing.T) {
+	out := string(render(t))
+	if !strings.HasPrefix(out, "# Example API reference\n\n") {
+		t.Errorf("the page must start with its title, got %q", out[:min(len(out), 40)])
+	}
+	for _, want := range []string{
+		"\n**Audience:** Developers · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)\n\n---\n",
+		"A small API used to test the documentation generator.\n\nA second paragraph stays a paragraph of its own.\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("want %q in the output", want)
+		}
+	}
+	footer := "\n---\n\n[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)\n"
+	if !strings.HasSuffix(out, footer) {
+		t.Errorf("the page must end with the shared footer, got %q", out[max(0, len(out)-200):])
+	}
+}
+
 func TestInvalidSpec(t *testing.T) {
 	if err := generate([]byte("paths: [unclosed"), &bytes.Buffer{}); err == nil {
 		t.Fatal("want an error for invalid YAML")

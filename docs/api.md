@@ -1,26 +1,37 @@
 # Scanopsis API reference
 
+Look up any endpoint of the HTTP API: what it takes, what it returns and how
+it is authenticated.
+
+**Audience:** Developers · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
+
+---
+
 <!-- Generated from api/openapi.yaml by `make generate`. Do not edit by hand. -->
 
-This page lists every endpoint of the HTTP API, generated from the OpenAPI
-document `api/openapi.yaml`. API version: 0.1.0.
+This page is generated from the OpenAPI document `api/openapi.yaml`, the
+contract of the API. To change it, change that file and run `make generate`.
+Version of the OpenAPI document: 0.1.0.
 
-JSON API of Scanopsis. Every endpoint under /api/v1 except the authentication endpoints requires a session cookie. State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers). The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. One client address may hold at most a quarter of the slots, so one client cannot use them all. The probes, the web interface and the Trivy upload are not counted.
+JSON API of Scanopsis. Every endpoint under /api/v1 except the authentication endpoints requires a session cookie. State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers).
+
+The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. One client address may hold at most a quarter of the slots, so one client cannot use them all. The probes, the web interface and the Trivy upload are not counted.
 
 ## Authentication
 
-Each endpoint names how it is authenticated.
+Each endpoint says how it is authenticated:
 
-| Label | Meaning |
+| Label | What you send |
 |---|---|
-| None | No credentials are needed. |
-| Session | A session cookie from a completed sign-in (password or GitLab, then two-factor code). |
-| Session, admin | A session whose user has the admin role. |
-| CI ID token | A GitLab CI/CD ID token in `Authorization: Bearer <token>`. |
+| None | Nothing. |
+| Session | The session cookie of a finished sign-in: password or GitLab, then the two-factor code. |
+| Session, admin | The same, for a user with the admin role. |
+| CI ID token | A GitLab CI/CD ID token, in `Authorization: Bearer <token>`. |
 | HMAC signature | The HMAC-SHA256 signature of the body, in a request header. |
 
-Endpoints that need a session answer `401` without one and `403` while the
-session still needs two-factor authentication or a password change.
+An endpoint that needs a session answers `401` without one. It answers `403`
+while the session still has to pass two-factor authentication or change its
+password, and when an admin endpoint is called without the admin role.
 
 ## Endpoints
 
@@ -1625,3 +1636,6 @@ Type: object
 | `truncated` | boolean | yes | True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name. |
 | `vuln_id` | string | yes |  |
 
+---
+
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
