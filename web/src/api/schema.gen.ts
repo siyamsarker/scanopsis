@@ -1009,7 +1009,7 @@ export interface components {
             new: components["schemas"]["Vulnerability"][];
             /** @description At most 500 findings, the most severe first. */
             fixed: components["schemas"]["Vulnerability"][];
-            /** @description At most 500 findings present in both scans, the most severe first, as reported in this scan. */
+            /** @description At most 100 findings present in both scans, the most severe first, as reported in this scan. */
             unchanged_items: components["schemas"]["Vulnerability"][];
             unchanged: number;
             /** @description Number of new findings, including any not listed in new. */

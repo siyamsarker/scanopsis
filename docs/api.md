@@ -1271,7 +1271,7 @@ Type: object
 | `truncated` | boolean | yes | True when new, fixed or unchanged_items lists fewer findings than new_total, fixed_total or unchanged. |
 | `unchanged` | integer | yes |  |
 | `unchanged_counts` | [SeverityCounts](#severitycounts) | yes | Every unchanged finding by its severity in this scan. |
-| `unchanged_items` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings present in both scans, the most severe first, as reported in this scan. |
+| `unchanged_items` | array of [Vulnerability](#vulnerability) | yes | At most 100 findings present in both scans, the most severe first, as reported in this scan. |
 
 ### ScanPage
 

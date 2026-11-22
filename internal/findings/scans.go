@@ -138,7 +138,7 @@ type scanDiffJSON struct {
 	UnchangedItems []vulnerabilityJSON `json:"unchanged_items"`
 	Unchanged      int                 `json:"unchanged"`
 	// NewTotal and FixedTotal count every new and fixed finding; New, Fixed
-	// and UnchangedItems list at most maxDiffItems each, the most severe
+	// list at most maxDiffItems each and UnchangedItems maxUnchangedItems, the most severe
 	// first, and Truncated is true when any of them was cut. The counts per
 	// severity cover every finding, listed or not.
 	NewTotal        int        `json:"new_total"`
@@ -169,9 +169,14 @@ func severityCounts(rows []store.FindingsDiffRowsRow) countsJSON {
 	return c
 }
 
-// maxDiffItems bounds each of the new, fixed and unchanged lists of a scan
-// diff, and so the number of findings whose first-seen time is looked up.
-const maxDiffItems = 500
+// maxDiffItems bounds each of the new and fixed lists of a scan diff, and
+// maxUnchangedItems the unchanged list, and so the number of findings whose
+// first-seen time is looked up. The unchanged findings are the current state,
+// which the findings explorer lists in full, so a short list does.
+const (
+	maxDiffItems      = 500
+	maxUnchangedItems = 100
+)
 
 const invalidBaseMsg = "The base parameter must be the id of an earlier scan of the same service, artifact and kind."
 
@@ -255,8 +260,8 @@ func (f *Findings) scanDiff(w http.ResponseWriter, r *http.Request) {
 	if len(removed) > maxDiffItems {
 		removed, out.Truncated = removed[:maxDiffItems], true
 	}
-	if len(kept) > maxDiffItems {
-		kept, out.Truncated = kept[:maxDiffItems], true
+	if len(kept) > maxUnchangedItems {
+		kept, out.Truncated = kept[:maxUnchangedItems], true
 	}
 
 	rowIDs := make([]int64, 0, len(added)+len(removed)+len(kept))

@@ -1089,7 +1089,7 @@ components:
         base: { oneOf: [ { $ref: "#/components/schemas/ScanSummary" }, { type: "null" } ], description: "The scan compared with, as in previous_scan_id." }
         new: { type: array, description: "At most 500 findings, the most severe first.", items: { $ref: "#/components/schemas/Vulnerability" } }
         fixed: { type: array, description: "At most 500 findings, the most severe first.", items: { $ref: "#/components/schemas/Vulnerability" } }
-        unchanged_items: { type: array, description: "At most 500 findings present in both scans, the most severe first, as reported in this scan.", items: { $ref: "#/components/schemas/Vulnerability" } }
+        unchanged_items: { type: array, description: "At most 100 findings present in both scans, the most severe first, as reported in this scan.", items: { $ref: "#/components/schemas/Vulnerability" } }
         unchanged: { type: integer }
         new_total: { type: integer, description: "Number of new findings, including any not listed in new."  }
         fixed_total: { type: integer, description: "Number of fixed findings, including any not listed in fixed."  }

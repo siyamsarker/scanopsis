@@ -151,8 +151,8 @@ func TestScanDiffIsBounded(t *testing.T) {
 	if len(d.New) != maxDiffItems || d.NewTotal != 597 || len(d.Fixed) != 3 || d.FixedTotal != 3 || !d.Truncated {
 		t.Errorf("diff: %d new listed of %d, %d fixed listed of %d, truncated %v", len(d.New), d.NewTotal, len(d.Fixed), d.FixedTotal, d.Truncated)
 	}
-	if d.Unchanged != 100 || len(d.UnchangedItems) != 100 {
-		t.Errorf("unchanged = %d, %d listed; want 100", d.Unchanged, len(d.UnchangedItems))
+	if d.Unchanged != 100 || len(d.UnchangedItems) != maxUnchangedItems {
+		t.Errorf("unchanged = %d, %d listed; want 100, %d listed", d.Unchanged, len(d.UnchangedItems), maxUnchangedItems)
 	}
 	// The counts per severity cover the new findings that are not listed.
 	if c := d.NewCounts; c.Critical+c.High+c.Medium+c.Low+c.Unknown != 597 {

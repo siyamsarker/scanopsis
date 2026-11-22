@@ -285,17 +285,24 @@ func (q *Queries) FindingsEarlierScans(ctx context.Context, arg FindingsEarlierS
 }
 
 const findingsFirstSeen = `-- name: FindingsFirstSeen :many
-SELECT v.id, min(s2.scanned_at)::timestamptz AS first_seen_at
+SELECT v.id, f.scanned_at::timestamptz AS first_seen_at
 FROM vulnerabilities v
 JOIN scans s ON s.id = v.scan_id
-JOIN scans s2 ON s2.service_id = s.service_id AND s2.ref = s.ref
-             AND s2.artifact_name = s.artifact_name AND s2.kind = s.kind
-JOIN vulnerabilities v2 ON v2.scan_id = s2.id
-                       AND md5(v2.vuln_id || chr(1) || v2.pkg_name || chr(1) || v2.target)
-                         = md5(v.vuln_id || chr(1) || v.pkg_name || chr(1) || v.target)
-                       AND v2.vuln_id = v.vuln_id AND v2.pkg_name = v.pkg_name AND v2.target = v.target
+CROSS JOIN LATERAL (
+    SELECT s2.scanned_at
+    FROM scans s2
+    WHERE s2.service_id = s.service_id AND s2.ref = s.ref
+      AND s2.artifact_name = s.artifact_name AND s2.kind = s.kind
+      AND EXISTS (
+          SELECT 1 FROM vulnerabilities v2
+          WHERE v2.scan_id = s2.id
+            AND md5(v2.vuln_id || chr(1) || v2.pkg_name || chr(1) || v2.target)
+              = md5(v.vuln_id || chr(1) || v.pkg_name || chr(1) || v.target)
+            AND v2.vuln_id = v.vuln_id AND v2.pkg_name = v.pkg_name AND v2.target = v.target)
+    ORDER BY s2.scanned_at, s2.id
+    LIMIT 1
+) f
 WHERE v.id = ANY($1::bigint[])
-GROUP BY v.id
 `
 
 type FindingsFirstSeenRow struct {
@@ -305,9 +312,12 @@ type FindingsFirstSeenRow struct {
 
 // FindingsFirstSeen returns, for each given vulnerability row, the scan time of
 // the earliest scan of the same service, ref, artifact and kind that contains
-// the same (vuln_id, pkg_name, target), suppressed or not. The md5 condition
-// is the expression of vulnerabilities_scan_key_idx, which makes the lookup
-// an index probe; the column comparisons rule out hash collisions.
+// the same (vuln_id, pkg_name, target), suppressed or not. The scans are
+// walked oldest first (scans_current_cover_idx backwards) and the walk stops at
+// the first scan that has the finding, so a finding that has been there all
+// along costs one probe instead of one per scan. The md5 condition is the
+// expression of vulnerabilities_scan_key_idx, which makes each probe an index
+// lookup; the column comparisons rule out hash collisions.
 func (q *Queries) FindingsFirstSeen(ctx context.Context, ids []int64) ([]FindingsFirstSeenRow, error) {
 	rows, err := q.db.Query(ctx, findingsFirstSeen, ids)
 	if err != nil {
