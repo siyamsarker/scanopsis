@@ -786,6 +786,99 @@ func TestTrends(t *testing.T) {
 	}
 }
 
+func TestTrendChanges(t *testing.T) {
+	f := seed(t)
+	mux := newMux(f.pool, "")
+	base := fmt.Sprintf("/api/v1/services/%d/trends", f.alpha)
+	type change struct {
+		scan, prev int64
+		ref        string
+		new        countsJSON
+		fixed      int
+	}
+	changes := func(query string) (string, []change) {
+		t.Helper()
+		var tr trendsJSON
+		getJSON(t, mux, base+query, &tr)
+		out := []change{}
+		for _, p := range tr.Points {
+			c := change{scan: p.ScanID, ref: p.Ref, new: p.New, fixed: p.Fixed}
+			if p.PreviousScanID != nil {
+				c.prev = *p.PreviousScanID
+			}
+			out = append(out, c)
+		}
+		ref := "<nil>"
+		if tr.Ref != nil {
+			ref = *tr.Ref
+		}
+		return ref, out
+	}
+
+	// See the fixture: s3 has curl twice under one key and a suppressed
+	// busybox, neither of which counts twice or at all; it drops zlib.
+	_, got := changes("")
+	want := []change{
+		{f.s1, 0, "main", countsJSON{Critical: 1, High: 1}, 0},
+		{f.s2, f.s1, "main", countsJSON{High: 1}, 0},
+		{f.w0, 0, "main", countsJSON{High: 1}, 0},
+		{f.r0, 0, "main", countsJSON{}, 0},
+		{f.w1, f.w0, "main", countsJSON{Critical: 1, Medium: 1, Unknown: 1}, 0},
+		{f.s3, f.s2, "main", countsJSON{Low: 1}, 1},
+		{f.r1, f.r0, "main", countsJSON{}, 0},
+	}
+	eq(t, "changes", got, want)
+
+	// The previous scan may lie before the window.
+	_, got = changes("?days=6")
+	eq(t, "6 days", got, want[1:])
+
+	// Every point agrees with the scan diff.
+	for _, c := range want {
+		var d scanDiffJSON
+		getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff", c.scan), &d)
+		total := c.new.Critical + c.new.High + c.new.Medium + c.new.Low + c.new.Unknown
+		if d.NewTotal != total || d.FixedTotal != c.fixed {
+			t.Errorf("scan %d: trend new %d fixed %d, diff new %d fixed %d", c.scan, total, c.fixed, d.NewTotal, d.FixedTotal)
+		}
+		prev := int64(0)
+		if d.PreviousScanID != nil {
+			prev = *d.PreviousScanID
+		}
+		if prev != c.prev {
+			t.Errorf("scan %d: trend previous %d, diff previous %d", c.scan, c.prev, prev)
+		}
+	}
+
+	// Every ref: the feature branch scan joins, the dashboard ref is still named.
+	ref, got := changes("?all_refs=true")
+	eq(t, "all refs", []any{ref, got}, []any{"main", append([]change{{f.f1, 0, "feature", countsJSON{Critical: 1}, 0}}, want...)})
+	ref, got = changes("?ref=feature&all_refs=false")
+	eq(t, "one ref", []any{ref, got}, []any{"feature", []change{{f.f1, 0, "feature", countsJSON{Critical: 1}, 0}}})
+	wantError(t, mux, base+"?all_refs=yes", 400, "invalid_parameter")
+	_, body := get(t, mux, fmt.Sprintf("/api/v1/services/%d/trends?all_refs=true", f.empty))
+	if strings.TrimSpace(string(body)) != `{"ref":null,"ref_source":"latest","points":[]}` {
+		t.Errorf("empty, all refs = %s", body)
+	}
+
+	// A key reported twice with different severities is one finding, at its
+	// most severe; a severity change alone is neither new nor fixed.
+	svc := newService(t, f.pool, "dup", "grp/dup", false)
+	low := vuln{id: "CVE-77", pkg: "p", version: "1", target: "t", class: "os-pkgs", severity: "LOW"}
+	high := low
+	high.severity = "HIGH"
+	d1 := newScan(t, f.pool, svc, "image", "img", "main", at(f.base, 2*day))
+	addVulns(t, f.pool, d1, low, high)
+	d2 := newScan(t, f.pool, svc, "image", "img", "main", at(f.base, day))
+	addVulns(t, f.pool, d2, high)
+	var tr trendsJSON
+	getJSON(t, mux, fmt.Sprintf("/api/v1/services/%d/trends", svc), &tr)
+	if len(tr.Points) != 2 || tr.Points[0].New != (countsJSON{High: 1}) || tr.Points[1].New != (countsJSON{}) ||
+		tr.Points[1].Fixed != 0 {
+		t.Errorf("duplicate keys = %+v", tr.Points)
+	}
+}
+
 func TestSearch(t *testing.T) {
 	f := seed(t)
 	mux := newMux(f.pool, "")

@@ -888,15 +888,67 @@ func (q *Queries) FindingsSecrets(ctx context.Context, scanIds []int64) ([]Findi
 }
 
 const findingsTrends = `-- name: FindingsTrends :many
-SELECT id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name,
-       count_critical, count_high, count_medium, count_low, count_unknown, count_fixable
-FROM scans
-WHERE service_id = $1 AND ref = $2 AND scanned_at >= $3
-ORDER BY scanned_at, id
+WITH win AS MATERIALIZED (
+    SELECT s.id, s.service_id, s.kind, s.ref, s.scanned_at, s.gitlab_pipeline_id, s.commit_sha, s.artifact_name,
+           s.count_critical, s.count_high, s.count_medium, s.count_low, s.count_unknown, s.count_fixable,
+           lag(s.id) OVER (PARTITION BY s.ref, s.artifact_name, s.kind ORDER BY s.scanned_at, s.id) AS prev_in_window
+    FROM scans s
+    WHERE s.service_id = $1 AND ($2::boolean OR s.ref = $3) AND s.scanned_at >= $4
+), pairs AS MATERIALIZED (
+    SELECT w.id, w.kind, COALESCE(w.prev_in_window, (
+               SELECT p.id FROM scans p
+               WHERE p.service_id = w.service_id AND p.ref = w.ref
+                 AND p.artifact_name = w.artifact_name AND p.kind = w.kind
+                 AND (p.scanned_at, p.id) < (w.scanned_at, w.id)
+               ORDER BY p.scanned_at DESC, p.id DESC
+               LIMIT 1)) AS prev_id
+    FROM win w
+), keys AS MATERIALIZED (
+    SELECT v.scan_id, v.vuln_id, v.pkg_name, v.target,
+           min(CASE v.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2
+                               WHEN 'LOW' THEN 3 ELSE 4 END) AS rank
+    FROM vulnerabilities v
+    WHERE v.scan_id = ANY(ARRAY(SELECT x.id FROM pairs x WHERE x.kind = 'image'
+                                UNION SELECT y.prev_id FROM pairs y WHERE y.kind = 'image' AND y.prev_id IS NOT NULL))
+      AND NOT v.suppressed
+    GROUP BY v.scan_id, v.vuln_id, v.pkg_name, v.target
+), added AS (
+    SELECT p.id,
+           count(*) FILTER (WHERE c.rank = 0) AS critical, count(*) FILTER (WHERE c.rank = 1) AS high,
+           count(*) FILTER (WHERE c.rank = 2) AS medium, count(*) FILTER (WHERE c.rank = 3) AS low,
+           count(*) FILTER (WHERE c.rank = 4) AS unknown
+    FROM pairs p
+    JOIN keys c ON c.scan_id = p.id
+    LEFT JOIN keys o ON o.scan_id = p.prev_id
+                    AND o.vuln_id = c.vuln_id AND o.pkg_name = c.pkg_name AND o.target = c.target
+    WHERE o.scan_id IS NULL
+    GROUP BY p.id
+), removed AS (
+    SELECT p.id, count(*) AS fixed
+    FROM pairs p
+    JOIN keys o ON o.scan_id = p.prev_id
+    LEFT JOIN keys c ON c.scan_id = p.id
+                    AND c.vuln_id = o.vuln_id AND c.pkg_name = o.pkg_name AND c.target = o.target
+    WHERE c.scan_id IS NULL
+    GROUP BY p.id
+)
+SELECT w.id, w.kind, w.ref, w.scanned_at, w.gitlab_pipeline_id, w.commit_sha, w.artifact_name,
+       w.count_critical, w.count_high, w.count_medium, w.count_low, w.count_unknown, w.count_fixable,
+       prev.id AS previous_scan_id,
+       coalesce(a.critical, 0)::bigint AS new_critical, coalesce(a.high, 0)::bigint AS new_high,
+       coalesce(a.medium, 0)::bigint AS new_medium, coalesce(a.low, 0)::bigint AS new_low,
+       coalesce(a.unknown, 0)::bigint AS new_unknown, coalesce(r.fixed, 0)::bigint AS fixed
+FROM win w
+JOIN pairs pr ON pr.id = w.id
+LEFT JOIN scans prev ON prev.id = pr.prev_id
+LEFT JOIN added a ON a.id = w.id
+LEFT JOIN removed r ON r.id = w.id
+ORDER BY w.scanned_at, w.id
 `
 
 type FindingsTrendsParams struct {
 	ServiceID int64
+	AllRefs   bool
 	Ref       string
 	Since     pgtype.Timestamptz
 }
@@ -904,6 +956,7 @@ type FindingsTrendsParams struct {
 type FindingsTrendsRow struct {
 	ID               int64
 	Kind             string
+	Ref              string
 	ScannedAt        pgtype.Timestamptz
 	GitlabPipelineID int64
 	CommitSha        string
@@ -914,10 +967,37 @@ type FindingsTrendsRow struct {
 	CountLow         int32
 	CountUnknown     int32
 	CountFixable     int32
+	PreviousScanID   pgtype.Int8
+	NewCritical      int64
+	NewHigh          int64
+	NewMedium        int64
+	NewLow           int64
+	NewUnknown       int64
+	Fixed            int64
 }
 
+// FindingsTrends returns the scans of a service since a time, oldest first,
+// of one ref or, with @all_refs, of every ref. Each scan carries what it
+// changed against the previous scan of the same ref, artifact and kind (which
+// may lie before the window): the findings it introduced, by severity, and
+// the number it fixed. The keys compared are (vuln_id, pkg_name, target) of
+// unsuppressed vulnerabilities, each counted once, as in the scan diff; a
+// key reported with several severities counts at its most severe. A first
+// scan has every finding new; secret scans change nothing here.
+//
+// One statement serves the whole window. The previous scan comes from lag()
+// inside the window, and from an index probe only for the first scan of each
+// (ref, artifact, kind). The keys of every scan involved are read once, by
+// scan_id, and new and fixed are hash anti-joins over them, so the cost
+// follows the number of findings in the window, not the number of pairs
+// times a per-pair lookup.
 func (q *Queries) FindingsTrends(ctx context.Context, arg FindingsTrendsParams) ([]FindingsTrendsRow, error) {
-	rows, err := q.db.Query(ctx, findingsTrends, arg.ServiceID, arg.Ref, arg.Since)
+	rows, err := q.db.Query(ctx, findingsTrends,
+		arg.ServiceID,
+		arg.AllRefs,
+		arg.Ref,
+		arg.Since,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -928,6 +1008,7 @@ func (q *Queries) FindingsTrends(ctx context.Context, arg FindingsTrendsParams) 
 		if err := rows.Scan(
 			&i.ID,
 			&i.Kind,
+			&i.Ref,
 			&i.ScannedAt,
 			&i.GitlabPipelineID,
 			&i.CommitSha,
@@ -938,6 +1019,13 @@ func (q *Queries) FindingsTrends(ctx context.Context, arg FindingsTrendsParams) 
 			&i.CountLow,
 			&i.CountUnknown,
 			&i.CountFixable,
+			&i.PreviousScanID,
+			&i.NewCritical,
+			&i.NewHigh,
+			&i.NewMedium,
+			&i.NewLow,
+			&i.NewUnknown,
+			&i.Fixed,
 		); err != nil {
 			return nil, err
 		}

@@ -647,7 +647,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Severity counts per scan over time for one ref. */
+        /** Severity counts per scan over time, with what each scan changed. */
         get: operations["getServiceTrends"];
         put?: never;
         post?: never;
@@ -1038,6 +1038,7 @@ export interface components {
             scan_id: number;
             /** @enum {string} */
             kind: "image" | "secret-fs";
+            ref: string;
             /** Format: date-time */
             scanned_at: string;
             /** Format: int64 */
@@ -1046,6 +1047,15 @@ export interface components {
             artifact_name: string;
             counts: components["schemas"]["SeverityCounts"];
             fixable: number;
+            /**
+             * Format: int64
+             * @description The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan.
+             */
+            previous_scan_id: number | null;
+            /** @description Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none. */
+            new: components["schemas"]["SeverityCounts"];
+            /** @description Findings of the previous scan that this scan no longer has, as fixed_total of the scan diff counts them. */
+            fixed: number;
         };
         Trends: {
             ref: string | null;
@@ -2973,6 +2983,8 @@ export interface operations {
                 /** @description Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. */
                 ref?: string;
                 days?: number;
+                /** @description Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. */
+                all_refs?: boolean;
             };
             header?: never;
             path: {

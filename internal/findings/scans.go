@@ -334,12 +334,16 @@ func (f *Findings) listEarlierScans(w http.ResponseWriter, r *http.Request) {
 type trendPointJSON struct {
 	ScanID           int64      `json:"scan_id"`
 	Kind             string     `json:"kind"`
+	Ref              string     `json:"ref"`
 	ScannedAt        time.Time  `json:"scanned_at"`
 	GitlabPipelineID int64      `json:"gitlab_pipeline_id"`
 	CommitSha        string     `json:"commit_sha"`
 	ArtifactName     string     `json:"artifact_name"`
 	Counts           countsJSON `json:"counts"`
 	Fixable          int        `json:"fixable"`
+	PreviousScanID   *int64     `json:"previous_scan_id"`
+	New              countsJSON `json:"new"`
+	Fixed            int        `json:"fixed"`
 }
 
 type trendsJSON struct {
@@ -348,7 +352,10 @@ type trendsJSON struct {
 	Points    []trendPointJSON `json:"points"`
 }
 
-// trends returns one point per scan of a ref within the window, oldest first.
+// trends returns one point per scan within the window, oldest first: of the
+// dashboard ref (or the requested one), or of every ref with all_refs=true.
+// Each point says what the scan changed against the previous scan of its
+// ref, artifact and kind.
 func (f *Findings) trends(w http.ResponseWriter, r *http.Request) {
 	svc, ok := f.service(w, r)
 	if !ok {
@@ -363,35 +370,52 @@ func (f *Findings) trends(w http.ResponseWriter, r *http.Request) {
 		invalid(w, err.Error())
 		return
 	}
+	allRefs, _, err := boolParam(r, "all_refs")
+	if err != nil {
+		invalid(w, err.Error())
+		return
+	}
 	ref, source, err := f.resolveRef(r.Context(), svc, requested)
 	if err != nil {
 		f.internalError(w, r, "cannot pick a ref", err)
 		return
 	}
 	out := trendsJSON{Points: []trendPointJSON{}, RefSource: source}
-	if ref == "" {
+	if ref != "" {
+		out.Ref = &ref
+	}
+	if ref == "" && !allRefs {
 		httpapi.WriteJSON(w, http.StatusOK, out)
 		return
 	}
-	out.Ref = &ref
 	since := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
 	rows, err := f.q.FindingsTrends(r.Context(), store.FindingsTrendsParams{
-		ServiceID: svc.ID, Ref: ref, Since: timestamptz(since),
+		ServiceID: svc.ID, Ref: ref, AllRefs: allRefs, Since: timestamptz(since),
 	})
 	if err != nil {
 		f.internalError(w, r, "cannot load trends", err)
 		return
 	}
 	for _, row := range rows {
-		out.Points = append(out.Points, trendPointJSON{
-			ScanID: row.ID, Kind: row.Kind, ScannedAt: row.ScannedAt.Time, GitlabPipelineID: row.GitlabPipelineID,
-			CommitSha: row.CommitSha, ArtifactName: row.ArtifactName,
+		p := trendPointJSON{
+			ScanID: row.ID, Kind: row.Kind, Ref: row.Ref, ScannedAt: row.ScannedAt.Time,
+			GitlabPipelineID: row.GitlabPipelineID, CommitSha: row.CommitSha, ArtifactName: row.ArtifactName,
 			Counts: countsJSON{
 				Critical: int(row.CountCritical), High: int(row.CountHigh), Medium: int(row.CountMedium),
 				Low: int(row.CountLow), Unknown: int(row.CountUnknown),
 			},
 			Fixable: int(row.CountFixable),
-		})
+			New: countsJSON{
+				Critical: int(row.NewCritical), High: int(row.NewHigh), Medium: int(row.NewMedium),
+				Low: int(row.NewLow), Unknown: int(row.NewUnknown),
+			},
+			Fixed: int(row.Fixed),
+		}
+		if row.PreviousScanID.Valid {
+			id := row.PreviousScanID.Int64
+			p.PreviousScanID = &id
+		}
+		out.Points = append(out.Points, p)
 	}
 	httpapi.WriteJSON(w, http.StatusOK, out)
 }

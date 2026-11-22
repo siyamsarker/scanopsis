@@ -726,12 +726,13 @@ paths:
   /api/v1/services/{id}/trends:
     get:
       tags: [services]
-      summary: Severity counts per scan over time for one ref.
+      summary: Severity counts per scan over time, with what each scan changed.
       operationId: getServiceTrends
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
         - { name: ref, in: query, description: "Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan.", schema: { type: string } }
         - { name: days, in: query, schema: { type: integer, minimum: 1, maximum: 365, default: 90 } }
+        - { name: all_refs, in: query, description: "Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show.", schema: { type: boolean, default: false } }
       responses:
         "200": { description: "Trend points, oldest first.", content: { application/json: { schema: { $ref: "#/components/schemas/Trends" } } } }
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1103,16 +1104,22 @@ components:
         unchanged_counts: { $ref: "#/components/schemas/SeverityCounts", description: "Every unchanged finding by its severity in this scan." }
     TrendPoint:
       type: object
-      required: [scan_id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable]
+      required: [scan_id, kind, ref, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable, previous_scan_id, new, fixed]
       properties:
         scan_id: { type: integer, format: int64 }
         kind: { type: string, enum: [image, secret-fs] }
+        ref: { type: string }
         scanned_at: { type: string, format: date-time }
         gitlab_pipeline_id: { type: integer, format: int64 }
         commit_sha: { type: string }
         artifact_name: { type: string }
         counts: { $ref: "#/components/schemas/SeverityCounts" }
         fixable: { type: integer }
+        previous_scan_id: { type: [integer, "null"], format: int64, description: "The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan." }
+        new:
+          $ref: "#/components/schemas/SeverityCounts"
+          description: "Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none."
+        fixed: { type: integer, description: "Findings of the previous scan that this scan no longer has, as fixed_total of the scan diff counts them." }
     Trends:
       type: object
       required: [ref, ref_source, points]

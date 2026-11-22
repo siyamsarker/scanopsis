@@ -737,7 +737,7 @@ Responses:
 
 ### `GET /api/v1/services/{id}/trends`
 
-Severity counts per scan over time for one ref.
+Severity counts per scan over time, with what each scan changed.
 
 - Operation ID: `getServiceTrends`
 - Authentication: Session
@@ -747,6 +747,7 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
+| `all_refs` | query | no | boolean (default false) | Return the scans of every ref in the window, not only those of ref. ref and ref_source in the response still name the ref the dashboards show. |
 | `days` | query | no | integer (minimum 1, maximum 365, default 90) |  |
 | `ref` | query | no | string | Git ref. Defaults to the dashboard branch an administrator chose for the service, else the ref with the most recent scan. |
 
@@ -1556,8 +1557,12 @@ Type: object
 | `commit_sha` | string | yes |  |
 | `counts` | [SeverityCounts](#severitycounts) | yes |  |
 | `fixable` | integer | yes |  |
+| `fixed` | integer | yes | Findings of the previous scan that this scan no longer has, as fixed_total of the scan diff counts them. |
 | `gitlab_pipeline_id` | integer (int64) | yes |  |
 | `kind` | string (one of `image`, `secret-fs`) | yes |  |
+| `new` | [SeverityCounts](#severitycounts) | yes | Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none. |
+| `previous_scan_id` | integer or null (int64) | yes | The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan. |
+| `ref` | string | yes |  |
 | `scan_id` | integer (int64) | yes |  |
 | `scanned_at` | string (date-time) | yes |  |
 
