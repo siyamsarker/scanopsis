@@ -296,6 +296,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
   scrollbar-color: var(--line-strong) transparent;
+  /* Visually hidden tables (chart summaries) can be wider than a phone; never scroll sideways. */
+  overflow-x: clip;
 }
 
 ::selection {

@@ -215,7 +215,7 @@ describe('Menu', () => {
     );
     fireEvent.keyDown(screen.getByRole('button', { name: 'Actions' }), { key: 'Enter' });
     const menu = await screen.findByRole('menu');
-    expect(within(menu).getByRole('menuitem', { name: 'Delete' })).toHaveClass('text-fail');
+    expect(within(menu).getByRole('menuitem', { name: 'Delete' })).toHaveClass('tone-fail');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Archive' }));
     expect(onSelect).toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByRole('menu')).not.toBeInTheDocument());

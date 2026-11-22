@@ -41,10 +41,12 @@ export function MenuContent({
   );
 }
 
-const itemClass =
-  'relative flex min-h-9 cursor-default items-center gap-2.5 rounded-[7px] px-2.5 text-body-s text-text outline-none select-none ' +
+const itemBase =
+  'relative flex min-h-9 cursor-default items-center gap-2.5 rounded-[7px] px-2.5 text-body-s outline-none select-none ' +
   'data-highlighted:bg-wash data-disabled:pointer-events-none data-disabled:opacity-50 ' +
-  'pointer-coarse:min-h-11 [&_svg]:shrink-0 [&_svg]:text-text-muted';
+  'pointer-coarse:min-h-11 [&_svg]:shrink-0';
+const itemClass = `${itemBase} text-text [&_svg]:text-text-muted`;
+const dangerItemClass = `${itemBase} tone-fail tone-ink [&_svg]:text-fail`;
 
 export function MenuItem({
   children,
@@ -63,7 +65,7 @@ export function MenuItem({
 }) {
   return (
     <RadixMenu.Item
-      className={`${itemClass} ${tone === 'danger' ? 'text-fail [&_svg]:text-fail' : ''} ${className}`}
+      className={`${tone === 'danger' ? dangerItemClass : itemClass} ${className}`}
       {...rest}
     >
       {icon}

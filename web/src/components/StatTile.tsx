@@ -24,9 +24,9 @@ function DeltaText({ delta }: { delta: StatDelta }) {
   const good = value !== 0 && value < 0 === (better === 'down');
   const tone = value === 0 ? 'tone-neutral' : good ? 'tone-ok' : 'tone-fail';
   return (
-    <span className="inline-flex items-center gap-1 whitespace-nowrap text-body-s text-text-muted">
+    <span className="inline-flex flex-wrap items-center gap-x-1 text-body-s text-text-muted">
       <span
-        className={`${tone} tone-ink inline-flex items-center gap-0.5 font-semibold tabular-nums`}
+        className={`${tone} tone-ink inline-flex items-center gap-0.5 font-semibold whitespace-nowrap tabular-nums`}
       >
         <Icon size={14} strokeWidth={2} aria-hidden="true" />
         {value > 0 ? '+' : value < 0 ? '−' : ''}
