@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import type { Scan, ScanDiff, Vulnerability } from '../../api/scan';
+import type { Scan, ScanDiff, ScanSummary, Vulnerability } from '../../api/scan';
 import { apiError, json, makeUser, mockFetch, renderApp, type Handler } from '../../test-utils';
 
 const scan: Scan = {
@@ -28,6 +28,29 @@ const scan: Scan = {
   commit_url: 'https://gitlab.example.com/pay/api/-/commit/abcdef0123456789',
 };
 
+/** An earlier scan of the same artifact. */
+function earlier(id: number, over: Partial<ScanSummary> = {}): ScanSummary {
+  return {
+    id,
+    service_id: 3,
+    kind: 'image',
+    artifact_name: scan.artifact_name,
+    gitlab_pipeline_id: 990 + id,
+    gitlab_job_id: 4000 + id,
+    ref: 'release/1.x',
+    ref_protected: true,
+    commit_sha: 'aaaa',
+    trivy_version: '0.58.1',
+    scanned_at: `2026-11-${String(10 + id).padStart(2, '0')}T10:00:00Z`,
+    received_at: '2026-11-10T10:01:00Z',
+    counts: { critical: 1, high: 5, medium: 0, low: 1, unknown: 0 },
+    fixable: 4,
+    secrets: 0,
+    suppressed: 0,
+    ...over,
+  };
+}
+
 function vuln(id: number, over: Partial<Vulnerability> = {}): Vulnerability {
   return {
     id,
@@ -43,7 +66,7 @@ function vuln(id: number, over: Partial<Vulnerability> = {}): Vulnerability {
     vuln_id: `CVE-2026-${id}`,
     severity: 'HIGH',
     status: 'fixed',
-    title: 't',
+    title: `Title ${id}`,
     primary_url: `https://avd.example.com/CVE-2026-${id}`,
     suppressed: false,
     suppression: '',
@@ -55,40 +78,57 @@ function vuln(id: number, over: Partial<Vulnerability> = {}): Vulnerability {
 const diff: ScanDiff = {
   scan_id: 7,
   previous_scan_id: 6,
+  base: earlier(6),
   new: [
-    vuln(1, { severity: 'LOW' }),
-    vuln(2, { severity: 'CRITICAL', fixed_version: '', primary_url: 'javascript:alert(1)' }),
+    vuln(2, { severity: 'CRITICAL', fixed_version: '' }),
     vuln(3),
+    vuln(1, { severity: 'LOW' }),
   ],
-  fixed: [vuln(4)],
+  fixed: [vuln(4, { scan_id: 6 })],
+  unchanged_items: [vuln(5, { severity: 'CRITICAL' })],
   unchanged: 12,
   new_total: 3,
   fixed_total: 1,
   truncated: false,
+  new_counts: { critical: 1, high: 1, medium: 0, low: 1, unknown: 0 },
+  fixed_counts: { critical: 0, high: 1, medium: 0, low: 0, unknown: 0 },
+  unchanged_counts: { critical: 1, high: 11, medium: 0, low: 0, unknown: 0 },
 };
 
 function api(
-  over: { scan?: Partial<Scan>; diff?: Handler; scans?: Handler; service?: Handler } = {},
+  over: {
+    scan?: Partial<Scan>;
+    diff?: Handler;
+    scans?: Handler;
+    earlier?: Handler;
+  } = {},
 ) {
   const handler: Handler = async (call) => {
     if (call.path === '/api/v1/me') return json(200, makeUser({ role: 'viewer' }));
     if (call.path === '/api/v1/scans/7') return json(200, { ...scan, ...over.scan });
-    if (call.path === '/api/v1/scans/7/diff') return (await over.diff?.(call)) ?? json(200, diff);
-    if (call.path === '/api/v1/services/3') {
+    if (call.path.startsWith('/api/v1/scans/7/diff'))
+      return (await over.diff?.(call)) ?? json(200, diff);
+    if (call.path.startsWith('/api/v1/scans/7/earlier')) {
       return (
-        (await over.service?.(call)) ??
+        (await over.earlier?.(call)) ??
         json(200, {
-          id: 3,
-          name: 'Payments API',
-          gitlab_project_id: 1,
-          gitlab_project_path: 'pay/api',
-          sonar_project_key: null,
-          created_via: 'ingest',
-          archived: false,
-          created_at: '2026-01-01T00:00:00Z',
-          default_ref: null,
+          items: [earlier(6), earlier(5, { ref: 'feature/x', ref_protected: false }), earlier(4)],
+          next_before: null,
         })
       );
+    }
+    if (call.path === '/api/v1/services/3') {
+      return json(200, {
+        id: 3,
+        name: 'Payments API',
+        gitlab_project_id: 1,
+        gitlab_project_path: 'pay/api',
+        sonar_project_key: null,
+        created_via: 'ingest',
+        archived: false,
+        created_at: '2026-01-01T00:00:00Z',
+        default_ref: null,
+      });
     }
     if (call.path.startsWith('/api/v1/services/3/scans')) {
       return (await over.scans?.(call)) ?? json(200, { items: [{ ...scan }], next_before: null });
@@ -98,42 +138,29 @@ function api(
   return mockFetch(handler);
 }
 
+const diffCalls = (calls: { path: string }[]) =>
+  calls.filter((c) => c.path.startsWith('/api/v1/scans/7/diff')).map((c) => c.path);
+
 describe('scan detail', () => {
   it('shows header facts with exact links and the protected tag', async () => {
     const { calls } = api();
     renderApp('/scans/7');
     expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(scan.artifact_name);
-    expect(screen.getByText('Image')).toBeInTheDocument();
+    expect(screen.getByText(/Image scanned/)).toBeInTheDocument();
     const crumbs = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(within(crumbs).getByRole('link', { name: 'Portfolio' })).toHaveAttribute('href', '/');
     expect(await within(crumbs).findByRole('link', { name: 'Payments API' })).toHaveAttribute(
       'href',
       '/services/3',
     );
-    expect(screen.getByRole('link', { name: 'Pipeline #1001' })).toHaveAttribute(
-      'href',
-      scan.pipeline_url,
-    );
-    expect(screen.getByRole('link', { name: 'Job #5001' })).toHaveAttribute('href', scan.job_url);
-    const commit = screen.getByRole('link', { name: 'abcdef01' });
-    expect(commit).toHaveAttribute('href', scan.commit_url);
-    expect(screen.getByText('release/1.x')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /#1001/ })).toHaveAttribute('href', scan.pipeline_url);
+    expect(screen.getByRole('link', { name: /#5001/ })).toHaveAttribute('href', scan.job_url);
+    expect(screen.getByRole('link', { name: /abcdef01/ })).toHaveAttribute('href', scan.commit_url);
+    expect(screen.getByRole('button', { name: 'Copy commit' })).toBeInTheDocument();
+    expect(screen.getAllByText('release/1.x').length).toBeGreaterThan(0);
     expect(screen.getByText('protected')).toBeInTheDocument();
     expect(screen.getByText('0.58.1')).toBeInTheDocument();
-    expect(screen.getByText('Scanned at')).toBeInTheDocument();
-    expect(screen.getByText('Received at')).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/api/v1/scans/7/diff')).toBe(true);
-  });
-
-  it('says so when the lists of changes were cut, and counts every change', async () => {
-    api({
-      diff: async () => json(200, { ...diff, new_total: 1200, fixed_total: 3, truncated: true }),
-    });
-    renderApp('/scans/7');
-    expect(
-      await screen.findByText(/Showing the 500 most severe findings of each list/),
-    ).toBeInTheDocument();
-    expect(screen.getAllByText('1,200').length).toBeGreaterThan(0);
   });
 
   it('shows no link for null or unsafe URLs, no protected tag, and the secret scan label', async () => {
@@ -145,49 +172,50 @@ describe('scan detail', () => {
         ref_protected: false,
         kind: 'secret-fs',
         artifact_name: '.',
+        secrets: 2,
       },
     });
     renderApp('/scans/7');
-    expect(await screen.findByText('Secret scan of the source tree')).toBeInTheDocument();
+    expect(await screen.findByText(/Secret scan of the source tree/)).toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Source tree');
-    expect(screen.getByText('Source tree')).toHaveAttribute('title', '.');
-    expect(screen.getByText('Pipeline #1001')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Pipeline #1001' })).toBeNull();
-    expect(screen.getByText('Job #5001')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Job #5001' })).toBeNull();
+    expect(screen.getByText('#1001')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /#1001/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /#5001/ })).toBeNull();
     expect(screen.getByText('abcdef01')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'abcdef01' })).toBeNull();
+    expect(screen.queryByRole('link', { name: /abcdef01/ })).toBeNull();
     expect(screen.queryByText('protected')).toBeNull();
+    expect(document.querySelector('a[href^="javascript"]')).toBeNull();
+    // A secret scan states its secrets, not a risk number, and has no picker.
+    expect(screen.getByText('secrets found in the source tree')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Compare with/ })).toBeNull();
   });
 
   it('links every posture number to the findings explorer with the exact query', async () => {
     api();
     renderApp('/scans/7');
-    await screen.findByText('Posture');
+    const posture = await screen.findByRole('region', { name: 'Posture' });
     const base = '/services/3/findings?ref=release%2F1.x';
-    const posture = screen.getByRole('region', { name: 'Posture' });
-    const list = within(posture).getByRole('list', { name: /Findings by severity/ });
-    expect(within(list).getByRole('link', { name: /Critical/ })).toHaveAttribute(
-      'href',
-      `${base}&severity=CRITICAL`,
-    );
-    expect(within(list).getByRole('link', { name: /Unknown/ })).toHaveAttribute(
-      'href',
-      `${base}&severity=UNKNOWN`,
-    );
-    expect(within(posture).getByRole('link', { name: /Fixable/ })).toHaveAttribute(
+    expect(within(posture).getByText(/8 open findings/)).toBeInTheDocument();
+    // 2 critical × 10 + 5 high × 5 + 1 low = 46.
+    expect(within(posture).getByText(/^Risk 46: 2 critical × 10 = 20/)).toBeInTheDocument();
+    const hrefs = within(posture)
+      .getAllByRole('link')
+      .map((l) => l.getAttribute('href'));
+    expect(hrefs).toContain(`${base}&severity=CRITICAL`);
+    expect(hrefs).toContain(`${base}&severity=LOW`);
+    expect(within(posture).getByRole('link', { name: /fixable/ })).toHaveAttribute(
       'href',
       `${base}&fixable=true`,
     );
-    expect(within(posture).getByRole('link', { name: /Secrets/ })).toHaveAttribute(
+    expect(within(posture).getByRole('link', { name: /fixable/ })).toHaveTextContent('4');
+    expect(within(posture).getByRole('link', { name: /secret/ })).toHaveAttribute(
       'href',
       `${base}&tab=secrets`,
     );
-    expect(within(posture).getByRole('link', { name: /Suppressed/ })).toHaveAttribute(
+    expect(within(posture).getByRole('link', { name: /suppressed/ })).toHaveAttribute(
       'href',
       `${base}&suppressed=true`,
     );
-    expect(within(posture).getByRole('link', { name: /Fixable/ })).toHaveTextContent('4');
   });
 
   it('shows the newer-scan notice only when a newer scan of the same artifact exists', async () => {
@@ -212,82 +240,152 @@ describe('scan detail', () => {
   it('omits the notice for the latest scan and when the lookup fails', async () => {
     api();
     const first = renderApp('/scans/7');
-    await screen.findByText('Posture');
+    await screen.findByRole('region', { name: 'Posture' });
     await waitFor(() => expect(screen.queryByText(/newer scan/)).toBeNull());
     first.unmount();
 
     api({ scans: () => apiError(500, 'internal', 'boom') });
     renderApp('/scans/7');
-    await screen.findByText('Posture');
+    await screen.findByRole('region', { name: 'Posture' });
     expect(screen.queryByText(/A newer scan/)).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('shows summary tiles and diff tabs whose counts equal the API', async () => {
+  it('compares with the previous scan: counts, net risk and tabs equal the API', async () => {
     api();
     renderApp('/scans/7');
-    await screen.findByRole('tablist', { name: 'Changes' });
-    const tiles = screen.getByRole('region', { name: 'Changes since the previous scan' });
-    expect(within(tiles).getByRole('link', { name: /New\s*3/ })).toHaveAttribute(
-      'href',
-      '/scans/6',
-    );
-    expect(within(tiles).getByRole('link', { name: /Fixed\s*1/ })).toHaveAttribute(
-      'href',
-      '/scans/6',
-    );
-    expect(within(tiles).getByRole('link', { name: /Unchanged\s*12/ })).toHaveAttribute(
-      'href',
-      '/scans/6',
-    );
+    const changes = await screen.findByRole('region', { name: 'What changed' });
+    expect(
+      within(changes).getByRole('link', { name: /pipeline #996 on release\/1.x/ }),
+    ).toHaveAttribute('href', '/scans/6');
+    // Before: 1 critical, 5 high, 1 low = 36 points; after: 46.
+    expect(within(changes).getByText('36 → 46 points')).toBeInTheDocument();
+    expect(within(changes).getByText(/up 10 risk points/)).toBeInTheDocument();
+    const chart = within(changes).getByRole('table', {
+      name: 'New and fixed findings by severity',
+    });
+    expect(within(chart).getByRole('row', { name: /Critical 0 1/ })).toBeInTheDocument();
+    expect(within(chart).getByRole('row', { name: /High 1 1/ })).toBeInTheDocument();
+
     expect(screen.getByRole('tab', { name: /New\s*3/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /Fixed\s*1/ })).toBeInTheDocument();
-
-    const table = screen.getByRole('table', { name: 'New findings' });
-    const rows = within(table).getAllByRole('row').slice(1);
-    // Default sort puts the most severe first.
-    expect(rows[0]).toHaveTextContent('CVE-2026-2');
-    expect(rows[0]).toHaveTextContent('no fix');
-    expect(within(rows[0]).queryByRole('link')).toBeNull();
-    expect(within(rows[1]).getByRole('link', { name: 'CVE-2026-3' })).toHaveAttribute(
-      'href',
-      'https://avd.example.com/CVE-2026-3',
+    expect(screen.getByRole('tab', { name: /Unchanged\s*12/ })).toBeInTheDocument();
+    const rows = within(screen.getByRole('list', { name: 'New findings' })).getAllByRole(
+      'listitem',
     );
-    expect(rows[1]).toHaveTextContent('1.0.0 → 1.0.1');
-    expect(rows[1]).toHaveTextContent('alpine 3.19');
+    expect(rows[0]).toHaveTextContent('CVE-2026-2');
+    expect(rows[0]).toHaveTextContent('no fix yet');
+    expect(rows[1]).toHaveTextContent('pkg3@1.0.0→ fixed in 1.0.1');
 
-    fireEvent.click(within(table).getByRole('button', { name: /Vulnerability/ }));
-    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('CVE-2026-1');
-
-    fireEvent.click(screen.getByRole('tab', { name: /Fixed/ }));
-    const fixed = screen.getByRole('table', { name: 'Fixed findings' });
-    expect(within(fixed).getAllByRole('row')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('tab', { name: /Unchanged/ }));
+    expect(
+      within(screen.getByRole('list', { name: 'Unchanged findings' })).getAllByRole('listitem'),
+    ).toHaveLength(1);
+    expect(screen.getByText('Showing the 1 most severe of 12 findings.')).toBeInTheDocument();
   });
 
-  it('shows the empty states for each tab', async () => {
-    api({ diff: () => json(200, { ...diff, new: [], fixed: [] }) });
+  it('opens a finding of the comparison in the details sheet', async () => {
+    api();
     renderApp('/scans/7');
-    expect(await screen.findByText('Nothing new since the previous scan')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('tab', { name: /Fixed/ }));
-    expect(screen.getByText('Nothing was fixed since the previous scan')).toBeInTheDocument();
+    const list = await screen.findByRole('list', { name: 'New findings' });
+    fireEvent.click(within(list).getByRole('button', { name: /CVE-2026-3/ }));
+    const dialog = await screen.findByRole('dialog', { name: /CVE-2026-3/ });
+    expect(within(dialog).getByText('apk add --upgrade pkg3=1.0.1')).toBeInTheDocument();
+  });
+
+  it('opens on the first list with findings', async () => {
+    api({ diff: () => json(200, { ...diff, new: [], new_total: 0 }) });
+    renderApp('/scans/7');
+    expect(await screen.findByRole('tab', { name: /Fixed\s*1/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /New/ }));
+    expect(screen.getByText('Nothing new in this scan')).toBeInTheDocument();
+  });
+
+  it('compares with any earlier scan chosen in the picker, through the URL', async () => {
+    const { calls } = api({
+      diff: (call) =>
+        call.path.includes('base=5')
+          ? json(200, {
+              ...diff,
+              previous_scan_id: 5,
+              base: earlier(5, { ref: 'feature/x', ref_protected: false }),
+            })
+          : undefined,
+    });
+    renderApp('/scans/7');
+    fireEvent.click(await screen.findByRole('button', { name: /Compare with pipeline #996/ }));
+    const options = await screen.findByRole('listbox', { name: 'Earlier scans' });
+    const items = within(options).getAllByRole('option');
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveAttribute('aria-selected', 'true');
+    expect(items[0]).toHaveTextContent('Previous');
+    expect(items[1]).toHaveTextContent('feature/x');
+
+    fireEvent.click(items[1]);
+    expect(
+      await screen.findByRole('link', { name: /pipeline #995 on feature\/x/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/scans/7?base=5');
+    expect(diffCalls(calls)).toContain('/api/v1/scans/7/diff?base=5');
+
+    // Only this ref.
+    fireEvent.click(screen.getByRole('button', { name: /Compare with pipeline #995/ }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Only/ }));
+    expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
+    // Back to the previous scan: the parameter leaves the URL.
+    fireEvent.click(within(screen.getByRole('listbox')).getAllByRole('option')[0]);
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/scans\/7$/));
+  });
+
+  it('explains a base that cannot be compared and goes back to the previous scan', async () => {
+    api({
+      diff: (call) =>
+        call.path.includes('base=')
+          ? apiError(400, 'invalid_parameter', 'The base parameter must be …')
+          : undefined,
+    });
+    renderApp('/scans/7?base=99');
+    expect(await screen.findByText('That scan cannot be compared')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Compare with the previous scan' }));
+    expect(await screen.findByRole('tab', { name: /New\s*3/ })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/scans\/7$/);
+  });
+
+  it('says so when the lists of changes were cut, and counts every change', async () => {
+    api({
+      diff: async () => json(200, { ...diff, new_total: 1200, fixed_total: 3, truncated: true }),
+    });
+    renderApp('/scans/7');
+    expect(
+      await screen.findByText('Showing the 3 most severe of 1,200 findings.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /New\s*1,200/ })).toBeInTheDocument();
   });
 
   it('describes the first scan of an artifact and lists its findings', async () => {
-    api({ diff: () => json(200, { ...diff, previous_scan_id: null, fixed: [], unchanged: 0 }) });
+    api({
+      diff: () =>
+        json(200, {
+          ...diff,
+          previous_scan_id: null,
+          base: null,
+          fixed: [],
+          fixed_total: 0,
+          unchanged_items: [],
+          unchanged: 0,
+        }),
+    });
     renderApp('/scans/7');
     expect(
-      await screen.findByText('First scan of this artifact on this ref: all 3 findings are new.'),
+      await screen.findByText('First scan of this artifact on this ref: every finding is new.'),
     ).toBeInTheDocument();
-    expect(screen.queryByRole('tablist')).toBeNull();
-    expect(screen.getByRole('table', { name: 'New findings' })).toBeInTheDocument();
-  });
-
-  it('switches to the virtual table above 500 rows', async () => {
-    const many = Array.from({ length: 501 }, (_, i) => vuln(i + 100));
-    api({ diff: () => json(200, { ...diff, new: many }) });
-    renderApp('/scans/7');
-    const grid = await screen.findByRole('table', { name: 'New findings' });
-    expect(grid.tagName).not.toBe('TABLE');
+    expect(screen.getByRole('list', { name: 'New findings' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Choose a scan to compare with' }),
+    ).toBeInTheDocument();
   });
 
   it('shows Scan not found with a link to the portfolio on 404', async () => {
@@ -308,15 +406,14 @@ describe('scan detail', () => {
     api({ diff: () => (fail ? apiError(500, 'internal', 'Diff failed.') : undefined) });
     renderApp('/scans/7');
     expect(await screen.findByText('Diff failed.')).toBeInTheDocument();
-    expect(screen.getByText('Posture')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Pipeline #1001' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Posture' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /#1001/ })).toBeInTheDocument();
     fail = false;
     fireEvent.click(screen.getByRole('button', { name: /try again|retry/i }));
     expect(await screen.findByRole('tablist', { name: 'Changes' })).toBeInTheDocument();
   });
 
   it('shows a retryable error when the scan itself fails', async () => {
-    api({});
     mockFetch(async (call) => {
       if (call.path === '/api/v1/me') return json(200, makeUser());
       return apiError(500, 'internal', 'Scan failed.');
