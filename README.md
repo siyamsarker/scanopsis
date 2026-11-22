@@ -205,7 +205,7 @@ takes about 15 minutes. Then connect your pipelines with the
 | Guide | What you find there | For whom |
 | --- | --- | --- |
 | [Getting started](docs/getting-started.md) | Build, start and set up Scanopsis step by step. | Operators |
-| [Versions and upgrades](docs/versions.md) | Which version to deploy, how to upgrade and roll back, and the version history. | Everyone |
+| [Versions and upgrades](docs/versions.md) | Which version to deploy, and how to upgrade and roll back. | Everyone |
 | [Configuration reference](docs/configuration.md) | Every setting and variable, defaults, validation, the secret key, rate limits. | Operators |
 | [Deployment](docs/deployment.md) | Reverse proxy and TLS, existing PostgreSQL, other ways to run, sizing, upgrades. | Operators |
 | [Operations](docs/operations.md) | Health checks, logs, administration commands, backup and restore, data retention. | Operators |
@@ -228,8 +228,8 @@ Each version is a branch `release/X.Y.Z` with a tag `vX.Y.Z`, and never
 changes once published. `main` is development code. To upgrade, back up,
 build the new version's image and point `SCANOPSIS_IMAGE` at it. The new
 version updates the database when it starts. The
-[versions guide](docs/versions.md) has the steps, how to roll back, and what
-changed in each version.
+[versions guide](docs/versions.md) has the steps, what to check before you
+upgrade, and how to roll back.
 
 ## Security
 
