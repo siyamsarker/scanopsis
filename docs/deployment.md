@@ -1302,7 +1302,11 @@ seconds on a loaded database, and nothing told the client or the proxy that
 the server was overloaded.
 
 A request with a body is read in full before it takes a slot, so a slow client
-holds no slot while it sends. One client address may hold at most a quarter of
+holds no slot while it sends. The bodies waiting for or holding a slot may take
+32 MiB together (each counts by its `Content-Length`, at most 1 MiB, the limit
+of every API body); a request that finds no room within 3 seconds gets `503
+busy`, and a body over 1 MiB is answered `413` with the code
+`payload_too_large`. The upload under `/api/v1/ingest/` has its own limits. One client address may hold at most a quarter of
 the slots (4 of 16; an IPv4 address whole, an IPv6 address by its `/64`), so
 one client cannot take them all; its further requests wait the same 3 seconds
 and then get `503 busy`. Behind a proxy that is not listed in

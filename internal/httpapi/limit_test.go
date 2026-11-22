@@ -5,7 +5,6 @@ package httpapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -263,22 +262,107 @@ func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
 	}
 }
 
-// A body that is too large still reaches the handler as an error it can
-// answer, as without the limiter.
-func TestConcurrencyLimitKeepsBodyErrors(t *testing.T) {
-	var gotErr error
-	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, gotErr = io.ReadAll(r.Body)
+// The limiter enforces the body limit itself: a body over it, announced by
+// its Content-Length or not, is answered 413 and never reaches the handler.
+func TestConcurrencyLimitRejectsLargeBodies(t *testing.T) {
+	var called atomic.Int32
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called.Add(1)
 		WriteJSON(w, http.StatusOK, statusBody{Status: "ok"})
 	})
 	e := newEnv(t, func(d *Deps) {
 		d.MaxConcurrent = 4
 		d.Features = map[string]http.Handler{"createService": h}
 	})
-	e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody+10))
-	var tooBig *http.MaxBytesError
-	if !errors.As(gotErr, &tooBig) {
-		t.Errorf("handler read error = %v, want a MaxBytesError", gotErr)
+	assertError(t, e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody+10)), 413, "payload_too_large")
+
+	// No Content-Length: the limit applies while reading.
+	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/v1/services", io.NopCloser(strings.NewReader(strings.Repeat("x", maxAPIBody+10))))
+	req.Header.Set(roleHeader, "admin")
+	rec := httptest.NewRecorder()
+	e.h.ServeHTTP(rec, req)
+	assertError(t, rec, 413, "payload_too_large")
+	if called.Load() != 0 {
+		t.Error("an oversized body reached the handler")
+	}
+	if rec := e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody)); rec.Code != 200 {
+		t.Errorf("a body of exactly the limit = %d, want 200", rec.Code)
+	}
+}
+
+// countingBody counts the bytes read from it.
+type countingBody struct {
+	left int64
+	read atomic.Int64
+}
+
+func (c *countingBody) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		return 0, io.EOF
+	}
+	n := min(int64(len(p)), c.left)
+	c.left -= n
+	c.read.Add(n)
+	return int(n), nil
+}
+
+// Paths under the upload prefix are outside both generic limits, the same
+// test in both places: a huge body sent to one that is no route is not read
+// into memory by the limiter.
+func TestConcurrencyLimitDoesNotBufferIngestPaths(t *testing.T) {
+	e := newEnv(t, func(d *Deps) { d.MaxConcurrent = 4 })
+	for _, path := range []string{"/api/v1/ingest/anything", "/api/v1/ingest/trivy", "/api/v1/ingest/"} {
+		body := &countingBody{left: 64 << 20}
+		req := httptest.NewRequestWithContext(context.Background(), "POST", path, io.NopCloser(body))
+		rec := httptest.NewRecorder()
+		e.h.ServeHTTP(rec, req)
+		if n := body.read.Load(); n != 0 {
+			t.Errorf("POST %s: %d bytes of the body were read by the server stack, want 0 (rejected without reading: %d)", path, n, rec.Code)
+		}
+	}
+	if limitedAPIPath("/api/v1/ingest/anything") || limitedAPIPath(uploadPath) || !limitedAPIPath("/api/v1/services") || limitedAPIPath("/healthz") {
+		t.Error("limitedAPIPath disagrees with the documented exemptions")
+	}
+}
+
+// The bodies that wait for or hold a slot may take 32 MiB together: of many
+// concurrent bodies of 1 MiB, 32 are admitted and the others are answered 503
+// busy, although there are slots for all of them.
+func TestConcurrencyLimitBoundsBodyMemory(t *testing.T) {
+	const bodies = 64
+	g := newGate()
+	e := newEnv(t, func(d *Deps) {
+		limited(g, 100, 100*time.Millisecond)(d)
+		d.Features = map[string]http.Handler{"createService": g}
+	})
+	recs := make([]*httptest.ResponseRecorder, bodies)
+	var wg sync.WaitGroup
+	for i := range bodies {
+		wg.Go(func() {
+			recs[i] = e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody), ipHeader, ip(i+1))
+		})
+	}
+	for range bodyBudget / maxAPIBody {
+		<-g.entered
+	}
+	time.Sleep(400 * time.Millisecond)
+	close(g.release)
+	wg.Wait()
+	ok, busy := 0, 0
+	for _, rec := range recs {
+		switch rec.Code {
+		case 200:
+			ok++
+		case 503:
+			busy++
+			assertError(t, rec, 503, "busy")
+			if rec.Header().Get("Retry-After") == "" {
+				t.Error("503 without Retry-After")
+			}
+		}
+	}
+	if want := bodyBudget / maxAPIBody; ok != want || busy != bodies-want || g.peak != want {
+		t.Errorf("%d served, %d busy, peak %d; want %d, %d, %d", ok, busy, g.peak, want, bodies-want, want)
 	}
 }
 
@@ -384,3 +468,41 @@ func TestReadyzChecksOncePerSecond(t *testing.T) {
 		t.Errorf("%d checks after the cache expired, want 2", n)
 	}
 }
+
+// A check that panics is answered as a failure, publishes its result and
+// releases its waiters; the next check runs normally after the cache expires.
+func TestReadyzSurvivesAPanickingCheck(t *testing.T) {
+	var calls atomic.Int32
+	e := newEnv(t, func(d *Deps) {
+		d.DB = pingFunc(func(context.Context) error {
+			if calls.Add(1) == 1 {
+				panic("boom")
+			}
+			return nil
+		})
+	})
+	const callers = 20
+	codes := make([]int, callers)
+	var wg sync.WaitGroup
+	start := time.Now()
+	for i := range callers {
+		wg.Go(func() { codes[i] = e.do("GET", "/readyz", "", "").Code })
+	}
+	wg.Wait()
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("callers waited %v for a check that panicked", d)
+	}
+	for i, c := range codes {
+		if c != 503 {
+			t.Errorf("caller %d got %d, want 503", i, c)
+		}
+	}
+	time.Sleep(readyCacheTTL + 100*time.Millisecond)
+	if rec := e.do("GET", "/readyz", "", ""); rec.Code != 200 {
+		t.Errorf("readyz after the panic = %d, want 200", rec.Code)
+	}
+}
+
+type pingFunc func(context.Context) error
+
+func (f pingFunc) Ping(ctx context.Context) error { return f(ctx) }

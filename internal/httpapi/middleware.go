@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"github.com/siyamsarker/scanopsis/internal/auth"
@@ -110,7 +109,7 @@ func (s *server) securityHeaders(next http.Handler) http.Handler {
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Scan reports are larger; the ingest handler applies its own limit.
-		if strings.HasPrefix(r.URL.Path, "/api/") && !strings.HasPrefix(r.URL.Path, "/api/v1/ingest/") && r.Body != nil {
+		if limitedAPIPath(r.URL.Path) && r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
 		}
 		next.ServeHTTP(w, r)

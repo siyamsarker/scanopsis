@@ -5,6 +5,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -37,15 +38,23 @@ func (c *readyCache) check(ctx context.Context, run func(context.Context) error)
 		flight := make(chan struct{})
 		c.flight = flight
 		go func() {
+			var err error
+			// However the check ends, even by a panic, its result is
+			// published and flight is closed, so no caller waits for ever.
+			defer func() {
+				if v := recover(); v != nil {
+					err = fmt.Errorf("readiness check panicked: %v", v)
+				}
+				c.mu.Lock()
+				c.at, c.err, c.flight = time.Now(), err, nil
+				c.mu.Unlock()
+				close(flight)
+			}()
 			// The check has its own deadline: it must end even when every
 			// caller has gone.
 			checkCtx, cancel := context.WithTimeout(context.Background(), readyTimeout)
-			err := run(checkCtx)
-			cancel()
-			c.mu.Lock()
-			c.at, c.err, c.flight = time.Now(), err, nil
-			c.mu.Unlock()
-			close(flight)
+			defer cancel()
+			err = run(checkCtx)
 		}()
 	}
 	flight := c.flight
