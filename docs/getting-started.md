@@ -26,7 +26,7 @@ if you use it, your SonarQube.
 
 Scanopsis publishes no container image, so you build one from a version
 branch. Always deploy a version branch, never `main`: `main` is development
-code. Replace `X.Y.Z` with the newest version, for example `0.2.0` (see
+code. Replace `X.Y.Z` with the newest version, for example `0.3.0` (see
 [find the newest version](versions.md#find-the-newest-version)).
 
 1. Clone the version branch:

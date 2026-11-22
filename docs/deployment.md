@@ -844,7 +844,7 @@ docker run -d --name scanopsis --network scanopsis-net \
   -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
   -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
   -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
-  scanopsis:v0.2.0
+  scanopsis:v0.3.0
 ```
 
 The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`. Wait
@@ -944,7 +944,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: scanopsis
-          image: registry.example.com/platform/scanopsis:v0.2.0
+          image: registry.example.com/platform/scanopsis:v0.3.0
           ports:
             - name: http
               containerPort: 8080

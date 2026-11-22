@@ -281,9 +281,10 @@ Read the same numbers in three places and compare each with A and B:
 2. **The service dashboard.** The **Open findings** panel: the severity bar
    (hover a segment for its count), the **fixable** and **secrets** counts,
    and the artifacts of the current state with their own counts.
-3. **The findings explorer.** Pick the branch, filter by severity and count
-   the rows, or open the **Secrets** tab. The rows of one severity must add up
-   to that severity's count.
+3. **The findings explorer.** Pick the branch under **Ref** and select one
+   severity. The summary above the table counts the findings in focus, and
+   the rows must add up to that severity's count. The **Secrets** tab shows
+   the secret findings.
 
 To read them without a browser, sign in with curl. Use your own password and
 a fresh two-factor code (each works once):

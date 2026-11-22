@@ -11,7 +11,7 @@ it is authenticated.
 
 This page is generated from the OpenAPI document `api/openapi.yaml`, the
 contract of the API. To change it, change that file and run `make generate`.
-Version of the OpenAPI document: 0.2.0.
+Version of the OpenAPI document: 0.3.0.
 
 JSON API of Scanopsis. Most endpoints require a signed-in session (a session cookie); each endpoint states how it is authenticated: a session, an administrator session, a GitLab CI/CD ID token (the Trivy upload), a signed webhook (SonarQube) or none (setup, version, health). State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers).
 

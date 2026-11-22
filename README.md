@@ -7,7 +7,7 @@
 **Code quality and container security for every service, in one view.**<br>
 SonarQube and Trivy results from your GitLab CI/CD pipelines, side by side.
 
-[![Version](https://img.shields.io/badge/version-0.2.0-4f46e5?style=flat-square)](docs/versions.md)
+[![Version](https://img.shields.io/badge/version-0.3.0-4f46e5?style=flat-square)](docs/versions.md)
 [![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](web/package.json)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?style=flat-square&logo=postgresql&logoColor=white)](docs/deployment.md)
@@ -29,8 +29,8 @@ instead of clicking through job logs and SonarQube projects.
 
 ![The service dashboard in the dark theme: Trivy findings by severity next to the SonarQube quality gate, ratings and coverage](docs/images/service-dark.png)
 
-> **Status:** the newest version is **0.2.0** (branch `release/0.2.0`, tag
-> `v0.2.0`). It is an early version: every feature below works and is tested
+> **Status:** the newest version is **0.3.0** (branch `release/0.3.0`, tag
+> `v0.3.0`). It is an early version: every feature below works and is tested
 > end to end, but the accuracy check against real pipeline data is still
 > open. Deploy a version branch, never `main`, which is development code.
 
@@ -116,15 +116,15 @@ flowchart LR
 | :--- | :--- |
 | **Portfolio** | All services ranked by risk, as cards or a compact list: the risk of the whole portfolio and its last week, what needs attention, and per service the open findings, quality gate, coverage, how fresh the data is and how the last pipelines moved it. |
 | **Service dashboard** | One sentence on where the service stands, then what every pipeline added and fixed, with its quality gate and coverage, on one branch or all of them. A "fix first" list of the upgrades that clear the most risk and the exact version to move to, where the findings are, the quality gate with new code and overall code told apart, and the recent scans. |
-| **Findings explorer** | Every vulnerability and secret finding of a service, with filters. |
-| **Scan comparison** | What is new and what was fixed since the previous scan. |
-| **CVE search across services** | By default on the dashboard branches and the protected branches and tags, or on every branch. |
+| **Findings explorer** | Every vulnerability and secret finding of a service. Filter by severity, fix, package kind or text and see the risk of what is left; group by package, vulnerability or image; open a finding for its fix, a copyable upgrade command and the other services it affects. An upgrade plan lists the package upgrades that clear the most risk. |
+| **Scan comparison** | What is new, fixed and unchanged in a scan, by severity, compared with the previous scan or any earlier scan of the same image. |
+| **CVE search across services** | One summary of a vulnerability and every service and image that has it, by default on the dashboard branches and the protected branches and tags, or on every branch. |
 | **Uploads without shared secrets** | GitLab CI/CD ID tokens authenticate each upload. You can limit uploads to certain GitLab groups and to protected branches and tags. |
 | **SonarQube** | Quality gate, ratings, coverage and duplication, through signed webhooks and the Web API, in MQR and Standard mode. |
 | **Sign-in** | GitLab (OpenID Connect) or local accounts, with mandatory two-factor authentication (an authenticator app plus recovery codes) for everyone. Two roles: admin and viewer. |
 | **Administration** | A Settings page, secrets encrypted in the database, an audit log, user and session management, configurable data retention, and command-line tools to recover access. |
 | **Small and fast** | A container image of about 27 MB. It starts in well under a second and uses less than 10 MiB of memory when idle. |
-| **Pleasant to use** | Dark and light themes with a switch, and it works on phones. |
+| **Pleasant to use** | Dark and light themes with a switch, a command palette (Ctrl+K or Cmd+K) to jump to any service or page, keyboard shortcuts, and it works on phones. |
 
 ## Screenshots
 
@@ -175,12 +175,12 @@ Node.js 26 as well.
 
 Scanopsis publishes no container image. You build it from a **version
 branch** (`release/X.Y.Z`), never from `main`. Here with the newest version,
-0.2.0:
+0.3.0:
 
 ```sh
-git clone --branch release/0.2.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
+git clone --branch release/0.3.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
 cd scanopsis
-make image IMAGE=scanopsis:v0.2.0
+make image IMAGE=scanopsis:v0.3.0
 cd deploy/compose
 ```
 
@@ -189,7 +189,7 @@ Then:
 1. Create the secret files in `secrets/` (database URL, database password,
    encryption key).
 2. Copy `.env.example` to `.env` and set `SCANOPSIS_PUBLIC_URL` and
-   `SCANOPSIS_IMAGE=scanopsis:v0.2.0`.
+   `SCANOPSIS_IMAGE=scanopsis:v0.3.0`.
 3. Run `docker compose up -d`.
 4. Read the one-time setup token from the log and create the first
    administrator in the browser.

@@ -9,15 +9,15 @@ Which version to run, and how to install, upgrade or roll back a version.
 ## The short version
 
 Scanopsis publishes no container image. You build it yourself from a
-**version branch**. The newest version is **0.2.0**, on the branch
-`release/0.2.0`.
+**version branch**. The newest version is **0.3.0**, on the branch
+`release/0.3.0`.
 
 | Do | Do not |
 | --- | --- |
 | Deploy from a version branch, `release/X.Y.Z`. | Deploy from `main`. It is development code and can be broken at any time. |
 | Run the newest version. Only it receives fixes. | Stay on an old version for long. |
 | Back up the database and the secret key before every upgrade. | Upgrade without a backup. A newer version changes the database, and that cannot be undone. |
-| Tag your image with the version, for example `scanopsis:v0.2.0`. | Reuse one image name for different versions; you lose the way back. |
+| Tag your image with the version, for example `scanopsis:v0.3.0`. | Reuse one image name for different versions; you lose the way back. |
 
 A version branch never changes once it is published. Fixes go into the next
 version.
@@ -63,6 +63,8 @@ Do this for a new installation. Replace `X.Y.Z` with the version.
 
 ## Check the running version
 
+It prints the version the image was built from, for example:
+
 ```sh
 curl -s http://127.0.0.1:8080/api/v1/version
 ```
@@ -77,7 +79,7 @@ Build the image again from the version branch.
 ## Upgrade to a newer version
 
 **When:** a newer version is published. **Takes:** about 10 minutes, plus
-the backup. Replace `NEW` with the new version, for example `0.2.0`.
+the backup. Replace `NEW` with the new version, for example `0.3.0`.
 
 1. Read [before you upgrade](#before-you-upgrade) below.
 
@@ -112,7 +114,17 @@ the backup. Replace `NEW` with the new version, for example `0.2.0`.
 
 ### Before you upgrade
 
-For **0.1.0 to 0.2.0**, plan for these:
+For **0.2.0 to 0.3.0**:
+
+- The database does not change. If you need to go back, 0.2.0 runs on the
+  same database, without restoring the backup.
+- The web interface is new. Ask users to reload pages that are open during the
+  upgrade.
+- Scripts that read `GET /api/v1/services/{id}/trends` receive at most the
+  newest 300 scans of the chosen period. The answer says `truncated: true`
+  when it left older scans out.
+
+For **0.1.0 to 0.2.0**, and so also from 0.1.0 straight to 0.3.0:
 
 - If a reverse proxy runs in front of Scanopsis, set
   `SCANOPSIS_TRUSTED_PROXIES` to its address. Without it, all users count as
@@ -127,8 +139,10 @@ For **0.1.0 to 0.2.0**, plan for these:
 
 ## Roll back to the previous version
 
-**When:** the new version does not work for you. You need the backup from
-before the upgrade, because the old version cannot read the updated database.
+**When:** the new version does not work for you. If the new version changed
+the database ([before you upgrade](#before-you-upgrade) says so), you need the
+backup from before the upgrade, because the old version cannot read the
+updated database. Otherwise skip the restore in step 3.
 
 1. Build the old version again:
 
@@ -140,10 +154,11 @@ before the upgrade, because the old version cannot read the updated database.
 2. Set `SCANOPSIS_IMAGE=scanopsis:vOLD` in `deploy/compose/.env`.
 
 3. Restore the backup and start the old version, as the
-   [deployment guide](deployment.md) describes under "Roll back".
+   [deployment guide](deployment.md) describes under "Roll back". Without a
+   database change, only run `docker compose up -d` in `deploy/compose`.
 
-Everything that changed after the backup is lost, including scans uploaded in
-the meantime.
+A restore loses everything that changed after the backup, including scans
+uploaded in the meantime.
 
 ## Maintainers: publish a version
 
