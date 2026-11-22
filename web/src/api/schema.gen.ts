@@ -907,9 +907,17 @@ export interface components {
             scan_id: number;
             /** Format: int64 */
             previous_scan_id: number | null;
+            /** @description At most 500 findings, the most severe first. */
             new: components["schemas"]["Vulnerability"][];
+            /** @description At most 500 findings, the most severe first. */
             fixed: components["schemas"]["Vulnerability"][];
             unchanged: number;
+            /** @description Number of new findings, including any not listed in new. */
+            new_total: number;
+            /** @description Number of fixed findings, including any not listed in fixed. */
+            fixed_total: number;
+            /** @description True when new or fixed lists fewer findings than new_total or fixed_total. */
+            truncated: boolean;
         };
         TrendPoint: {
             /** Format: int64 */
@@ -1008,6 +1016,8 @@ export interface components {
         };
         VulnerabilitySearch: {
             vuln_id: string;
+            /** @description True when more than 1000 findings match and only the first 1000 (by service name) are listed. */
+            truncated: boolean;
             items: {
                 service: components["schemas"]["Service"];
                 ref: string;

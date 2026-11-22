@@ -39,14 +39,15 @@ type SettingsSource interface{ Current() settings.Snapshot }
 
 // Findings holds the handlers of the read API.
 type Findings struct {
-	q   *store.Queries
-	cfg SettingsSource
-	log *slog.Logger
+	pool *pgxpool.Pool
+	q    *store.Queries
+	cfg  SettingsSource
+	log  *slog.Logger
 }
 
 // New returns the read API backed by pool.
 func New(pool *pgxpool.Pool, cfg SettingsSource, log *slog.Logger) *Findings {
-	return &Findings{q: store.New(pool), cfg: cfg, log: log}
+	return &Findings{pool: pool, q: store.New(pool), cfg: cfg, log: log}
 }
 
 // Handlers returns the handlers keyed by OpenAPI operation ID. The router

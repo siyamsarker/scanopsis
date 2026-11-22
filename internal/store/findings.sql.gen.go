@@ -454,24 +454,33 @@ func (q *Queries) FindingsScansPage(ctx context.Context, arg FindingsScansPagePa
 }
 
 const findingsSearch = `-- name: FindingsSearch :many
-WITH cur AS (
-    SELECT DISTINCT ON (s.service_id, s.ref, s.artifact_name, s.kind)
-           s.id AS scan_id, s.service_id, s.ref, s.artifact_name, s.scanned_at
-    FROM scans s
-    JOIN services sv ON sv.id = s.service_id
-    WHERE NOT sv.archived
-    ORDER BY s.service_id, s.ref, s.artifact_name, s.kind, s.scanned_at DESC, s.id DESC
+WITH hits AS MATERIALIZED (
+    SELECT v.id, v.scan_id, v.pkg_name, v.installed_version, v.fixed_version, v.severity
+    FROM vulnerabilities v
+    WHERE lower(v.vuln_id) = lower($2) AND NOT v.suppressed
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,
        sv.created_via, sv.archived, sv.created_at, sv.default_ref,
-       cur.ref, cur.artifact_name, cur.scan_id, cur.scanned_at,
-       v.pkg_name, v.installed_version, v.fixed_version, v.severity
-FROM cur
+       cur.ref, cur.artifact_name, cur.id AS scan_id, cur.scanned_at,
+       h.pkg_name, h.installed_version, h.fixed_version, h.severity
+FROM hits h
+JOIN scans cur ON cur.id = h.scan_id
 JOIN services sv ON sv.id = cur.service_id
-JOIN vulnerabilities v ON v.scan_id = cur.scan_id
-WHERE lower(v.vuln_id) = lower($1) AND NOT v.suppressed
-ORDER BY sv.name, sv.id, cur.ref, cur.artifact_name, cur.scan_id, v.pkg_name, v.installed_version, v.id
+WHERE NOT sv.archived
+  AND NOT EXISTS (
+      SELECT 1 FROM scans n
+      WHERE n.service_id = cur.service_id AND n.ref = cur.ref
+        AND n.artifact_name = cur.artifact_name AND n.kind = cur.kind
+        AND (n.scanned_at, n.id) > (cur.scanned_at, cur.id)
+  )
+ORDER BY sv.name, sv.id, cur.ref, cur.artifact_name, cur.id, h.pkg_name, h.installed_version, h.id
+LIMIT $1
 `
+
+type FindingsSearchParams struct {
+	MaxRows int32
+	VulnID  string
+}
 
 type FindingsSearchRow struct {
 	ID                int64
@@ -495,9 +504,15 @@ type FindingsSearchRow struct {
 
 // FindingsSearch lists the unsuppressed findings of a vulnerability ID in the
 // current state (latest scan per ref, artifact and kind) of every
-// non-archived service. The ID matches case-insensitively and exactly.
-func (q *Queries) FindingsSearch(ctx context.Context, vulnID string) ([]FindingsSearchRow, error) {
-	rows, err := q.db.Query(ctx, findingsSearch, vulnID)
+// non-archived service. The ID matches case-insensitively and exactly. It
+// starts from the lower(vuln_id) index and keeps a finding when no newer scan
+// of the same service, ref, artifact and kind exists, so its cost follows the
+// number of findings with that ID, not the number of scans. The CTE is
+// materialized so that the planner cannot instead walk every scan of every
+// service. At most @max_rows rows are returned; the caller asks for one more
+// than it shows to know whether the list was cut.
+func (q *Queries) FindingsSearch(ctx context.Context, arg FindingsSearchParams) ([]FindingsSearchRow, error) {
+	rows, err := q.db.Query(ctx, findingsSearch, arg.MaxRows, arg.VulnID)
 	if err != nil {
 		return nil, err
 	}

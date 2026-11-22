@@ -924,13 +924,16 @@ components:
         data_at: { type: [string, "null"], format: date-time, description: Scan time of the newest scan in this overview. }
     ScanDiff:
       type: object
-      required: [scan_id, previous_scan_id, new, fixed, unchanged]
+      required: [scan_id, previous_scan_id, new, fixed, unchanged, new_total, fixed_total, truncated]
       properties:
         scan_id: { type: integer, format: int64 }
         previous_scan_id: { type: [integer, "null"], format: int64 }
-        new: { type: array, items: { $ref: "#/components/schemas/Vulnerability" } }
-        fixed: { type: array, items: { $ref: "#/components/schemas/Vulnerability" } }
+        new: { type: array, description: "At most 500 findings, the most severe first.", items: { $ref: "#/components/schemas/Vulnerability" } }
+        fixed: { type: array, description: "At most 500 findings, the most severe first.", items: { $ref: "#/components/schemas/Vulnerability" } }
         unchanged: { type: integer }
+        new_total: { type: integer, description: "Number of new findings, including any not listed in new."  }
+        fixed_total: { type: integer, description: "Number of fixed findings, including any not listed in fixed."  }
+        truncated: { type: boolean, description: "True when new or fixed lists fewer findings than new_total or fixed_total."  }
     TrendPoint:
       type: object
       required: [scan_id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable]
@@ -1026,9 +1029,10 @@ components:
         generated_at: { type: string, format: date-time }
     VulnerabilitySearch:
       type: object
-      required: [vuln_id, items]
+      required: [vuln_id, items, truncated]
       properties:
         vuln_id: { type: string }
+        truncated: { type: boolean, description: "True when more than 1000 findings match and only the first 1000 (by service name) are listed." }
         items:
           type: array
           items:

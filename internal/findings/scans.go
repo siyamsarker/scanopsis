@@ -133,7 +133,17 @@ type scanDiffJSON struct {
 	New            []vulnerabilityJSON `json:"new"`
 	Fixed          []vulnerabilityJSON `json:"fixed"`
 	Unchanged      int                 `json:"unchanged"`
+	// NewTotal and FixedTotal count every new and fixed finding; New and
+	// Fixed list at most maxDiffItems each, the most severe first, and
+	// Truncated is true when either list was cut.
+	NewTotal   int  `json:"new_total"`
+	FixedTotal int  `json:"fixed_total"`
+	Truncated  bool `json:"truncated"`
 }
+
+// maxDiffItems bounds each of the new and fixed lists of a scan diff, and so
+// the number of findings whose first-seen time is looked up.
+const maxDiffItems = 500
 
 // scanDiff compares the unsuppressed findings of a scan with those of the
 // previous scan of the same service, ref, artifact and kind.
@@ -171,6 +181,13 @@ func (f *Findings) scanDiff(w http.ResponseWriter, r *http.Request) {
 		return domain.Key{VulnID: v.VulnID, PkgName: v.PkgName, Target: v.Target}
 	})
 	out.Unchanged = unchanged
+	out.NewTotal, out.FixedTotal = len(added), len(removed)
+	if len(added) > maxDiffItems {
+		added, out.Truncated = added[:maxDiffItems], true
+	}
+	if len(removed) > maxDiffItems {
+		removed, out.Truncated = removed[:maxDiffItems], true
+	}
 
 	rowIDs := make([]int64, 0, len(added)+len(removed))
 	for _, v := range added {

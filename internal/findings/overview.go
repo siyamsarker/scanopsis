@@ -4,8 +4,11 @@
 package findings
 
 import (
+	"context"
 	"net/http"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/siyamsarker/scanopsis/internal/domain"
 	"github.com/siyamsarker/scanopsis/internal/httpapi"
@@ -39,7 +42,25 @@ type overviewJSON struct {
 	DataAt             *time.Time            `json:"data_at"`
 }
 
+// overview reads everything from one read-only REPEATABLE READ transaction,
+// so the artifacts, the counts per class, the package groups and the changes
+// come from the same snapshot even when a scan is ingested meanwhile.
 func (f *Findings) overview(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	tx, err := f.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		f.internalError(w, r, "cannot begin read transaction", err)
+		return
+	}
+	// A read-only transaction has nothing to commit; rolling back releases it.
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	snap := *f
+	snap.q = f.q.WithTx(tx)
+	snap.overviewIn(w, r)
+}
+
+// overviewIn builds the overview with f.q bound to one snapshot.
+func (f *Findings) overviewIn(w http.ResponseWriter, r *http.Request) {
 	svc, ok := f.service(w, r)
 	if !ok {
 		return

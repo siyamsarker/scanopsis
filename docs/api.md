@@ -1090,10 +1090,13 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `fixed` | array of [Vulnerability](#vulnerability) | yes |  |
-| `new` | array of [Vulnerability](#vulnerability) | yes |  |
+| `fixed` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings, the most severe first. |
+| `fixed_total` | integer | yes | Number of fixed findings, including any not listed in fixed. |
+| `new` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings, the most severe first. |
+| `new_total` | integer | yes | Number of new findings, including any not listed in new. |
 | `previous_scan_id` | integer or null (int64) | yes |  |
 | `scan_id` | integer (int64) | yes |  |
+| `truncated` | boolean | yes | True when new or fixed lists fewer findings than new_total or fixed_total. |
 | `unchanged` | integer | yes |  |
 
 ### ScanPage
@@ -1453,5 +1456,6 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `items` | array of object | yes |  |
+| `truncated` | boolean | yes | True when more than 1000 findings match and only the first 1000 (by service name) are listed. |
 | `vuln_id` | string | yes |  |
 

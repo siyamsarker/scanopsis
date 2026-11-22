@@ -105,6 +105,15 @@ export function VulnTable({
   );
 }
 
+function TruncatedNotice({ diff }: { diff: ScanDiff }) {
+  if (!diff.truncated) return null;
+  return (
+    <p role="status" className="mb-4 text-sm text-text-muted">
+      Showing the 500 most severe findings of each list. The counts include all findings.
+    </p>
+  );
+}
+
 export function Changes({ diff }: { diff: ScanDiff }) {
   const [tab, setTab] = useState('new');
 
@@ -112,9 +121,10 @@ export function Changes({ diff }: { diff: ScanDiff }) {
     return (
       <Section title="Changes since the previous scan">
         <p className="mb-4 text-text">
-          First scan of this artifact on this ref: all {diff.new.length.toLocaleString('en-US')}{' '}
+          First scan of this artifact on this ref: all {diff.new_total.toLocaleString('en-US')}{' '}
           findings are new.
         </p>
+        <TruncatedNotice diff={diff} />
         <VulnTable
           rows={diff.new}
           caption="New findings"
@@ -143,14 +153,14 @@ export function Changes({ diff }: { diff: ScanDiff }) {
       <Grid cols={3} className="mb-6">
         <StatTile
           label="New"
-          value={diff.new.length}
+          value={diff.new_total}
           tone="high"
           to={`/scans/${diff.previous_scan_id}`}
           hint="not in the previous scan"
         />
         <StatTile
           label="Fixed"
-          value={diff.fixed.length}
+          value={diff.fixed_total}
           tone="pass"
           to={`/scans/${diff.previous_scan_id}`}
           hint="no longer reported"
@@ -162,6 +172,7 @@ export function Changes({ diff }: { diff: ScanDiff }) {
           hint={countOf(diff.unchanged, 'finding') + ' in both'}
         />
       </Grid>
+      <TruncatedNotice diff={diff} />
       <Card padded={false} className="px-6 pb-6">
         <Tabs
           idBase="scan-diff"
@@ -169,8 +180,8 @@ export function Changes({ diff }: { diff: ScanDiff }) {
           value={tab}
           onChange={setTab}
           tabs={[
-            { id: 'new', label: 'New', count: diff.new.length },
-            { id: 'fixed', label: 'Fixed', count: diff.fixed.length },
+            { id: 'new', label: 'New', count: diff.new_total },
+            { id: 'fixed', label: 'Fixed', count: diff.fixed_total },
           ]}
         />
         <TabPanel idBase="scan-diff" tab="new" value={tab}>

@@ -36,7 +36,7 @@ function searchApi(items: object[], extra?: Handler): Handler {
     if (call.path === '/api/v1/me') return json(200, makeUser());
     if (call.path.startsWith('/api/v1/search/vulnerabilities')) {
       const id = new URL(call.path, 'http://x').searchParams.get('id');
-      return json(200, { vuln_id: id, items });
+      return json(200, { vuln_id: id, items, truncated: false });
     }
     return undefined;
   };
@@ -86,6 +86,19 @@ describe('vulnerability search', () => {
     const auth = screen.getByRole('region', { name: 'auth' });
     expect(within(auth).getByText('release')).toBeInTheDocument();
     expect(within(auth).getByText('High')).toBeInTheDocument();
+  });
+
+  it('says so when the matches were cut', async () => {
+    mockFetch(async (call) => {
+      if (call.path === '/api/v1/me') return json(200, makeUser());
+      if (call.path.startsWith('/api/v1/search/vulnerabilities')) {
+        return json(200, { vuln_id: 'CVE-2024-3094', items: [ITEMS[0]], truncated: true });
+      }
+      return undefined;
+    });
+    renderApp('/search?id=CVE-2024-3094');
+    expect(await screen.findByText(/affects at least 1 service in 1 artifact/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing the first 1.000/)).toBeInTheDocument();
   });
 
   it('runs the search from the id URL param', async () => {

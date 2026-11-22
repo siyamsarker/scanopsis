@@ -22,6 +22,9 @@ const (
 	maxQueryLen      = 200
 	minSearchIDLen   = 3
 	maxSearchIDLen   = 100
+	// maxSearchResults bounds the findings one search lists; truncated tells
+	// the caller that more exist.
+	maxSearchResults = 1000
 )
 
 var validSeverities = map[string]bool{"CRITICAL": true, "HIGH": true, "MEDIUM": true, "LOW": true, "UNKNOWN": true}
@@ -256,15 +259,20 @@ func (f *Findings) search(w http.ResponseWriter, r *http.Request) {
 		invalid(w, "The id parameter must be 3 to 100 characters: letters, digits, '-', '_', ':' and '.'.")
 		return
 	}
-	rows, err := f.q.FindingsSearch(r.Context(), id)
+	rows, err := f.q.FindingsSearch(r.Context(), store.FindingsSearchParams{VulnID: id, MaxRows: maxSearchResults + 1})
 	if err != nil {
 		f.internalError(w, r, "cannot search vulnerabilities", err)
 		return
 	}
+	truncated := len(rows) > maxSearchResults
+	if truncated {
+		rows = rows[:maxSearchResults]
+	}
 	out := struct {
-		VulnID string           `json:"vuln_id"`
-		Items  []searchItemJSON `json:"items"`
-	}{VulnID: id, Items: make([]searchItemJSON, 0, len(rows))}
+		VulnID    string           `json:"vuln_id"`
+		Items     []searchItemJSON `json:"items"`
+		Truncated bool             `json:"truncated"`
+	}{VulnID: id, Items: make([]searchItemJSON, 0, len(rows)), Truncated: truncated}
 	for _, s := range rows {
 		out.Items = append(out.Items, searchItemJSON{
 			Service: newServiceJSON(s.ID, s.Name, s.GitlabProjectID, s.GitlabProjectPath,

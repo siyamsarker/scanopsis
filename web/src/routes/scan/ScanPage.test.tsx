@@ -62,6 +62,9 @@ const diff: ScanDiff = {
   ],
   fixed: [vuln(4)],
   unchanged: 12,
+  new_total: 3,
+  fixed_total: 1,
+  truncated: false,
 };
 
 function api(
@@ -120,6 +123,17 @@ describe('scan detail', () => {
     expect(screen.getByText('Scanned at')).toBeInTheDocument();
     expect(screen.getByText('Received at')).toBeInTheDocument();
     expect(calls.some((c) => c.path === '/api/v1/scans/7/diff')).toBe(true);
+  });
+
+  it('says so when the lists of changes were cut, and counts every change', async () => {
+    api({
+      diff: async () => json(200, { ...diff, new_total: 1200, fixed_total: 3, truncated: true }),
+    });
+    renderApp('/scans/7');
+    expect(
+      await screen.findByText(/Showing the 500 most severe findings of each list/),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('1,200').length).toBeGreaterThan(0);
   });
 
   it('shows no link for null or unsafe URLs, no protected tag, and the secret scan label', async () => {
