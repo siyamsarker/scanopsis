@@ -208,7 +208,7 @@ its sessions end. At the next sign-in, the user passes the first step
 sign-in**, scans a new QR code and gets 10 new recovery codes.
 
 An administrator who can still sign in can do the same with **Reset
-two-factor** next to the user on the **Users** page.
+two-factor** in the user's actions menu (**⋯**) on the **Users** page.
 
 ### Disable, enable or delete a user
 
@@ -225,8 +225,8 @@ leaves. Delete an account you no longer want on the **Users** page.
 To keep a GitLab user out for good, disable the account, or remove the user
 from the allowed GitLab groups.
 
-On the **Users** page, select **Disable** (or **Enable**) or **Delete** next
-to the user and confirm. You cannot disable or delete yourself, and the last
+On the **Users** page, open the user's actions menu (**⋯**), select **Disable
+user** (or **Enable user**) or **Delete user**, and confirm. You cannot disable or delete yourself, and the last
 enabled administrator can be neither disabled, deleted nor demoted. The same
 from the command line:
 
@@ -261,10 +261,10 @@ Find your situation:
 | Situation | What to do |
 |---|---|
 | A user lost the phone but has a recovery code | On **Enter your code**, select **Use a recovery code** and enter one. Each code works once. Nothing needs resetting. |
-| A user lost the phone and has no recovery code | An administrator selects **Reset two-factor** on the **Users** page. If no administrator can sign in, run [`reset-2fa`](#reset-two-factor-authentication). |
+| A user lost the phone and has no recovery code | An administrator selects **Reset two-factor** in the user's actions menu on the **Users** page. If no administrator can sign in, run [`reset-2fa`](#reset-two-factor-authentication). |
 | A local user forgot the password | Run [`reset-password`](#reset-a-password). If the phone is gone too, also run `reset-2fa`. |
 | The only administrator lost both password and phone | Run `reset-password root` and `reset-2fa local:root` (with the real name). Sign in with the temporary password, enrol again, set a new password. |
-| A user sees "Your account is disabled" | Select **Enable** on the **Users** page, or run `enable-user`. |
+| A user sees "Your account is disabled" | Select **Enable user** in the user's actions menu on the **Users** page, or run `enable-user`. |
 | A GitLab user cannot sign in | See [troubleshooting](troubleshooting.md#gitlab-sign-in). Local accounts can still sign in while GitLab is down. |
 | Local sign-in is off and GitLab sign-in does not work | [Turn local sign-in on again](#turn-local-sign-in-on-again). |
 | The server does not start and the log mentions `SCANOPSIS_SECRET_KEY` | See [the secret key](configuration.md#the-secret-key). |
@@ -336,11 +336,12 @@ with the most recent scan, so one developer's feature branch can replace what
 everyone sees. Choose it for every service after its first upload.
 
 1. Sign in as an administrator and open **Services**.
-2. Find the service. **Dashboard branch** shows the chosen branch, or "Not
-   chosen — showing the latest scanned branch".
-3. Select **Choose** (or **Change**), type a branch name or pick one of the
-   scanned branches, and select **Save**.
-4. To go back to the latest scanned branch, select **Change**, then **Clear**.
+2. Find the service. Its **Dashboard branch** tag shows the chosen branch, or
+   "Latest" and the latest scanned branch when none is chosen.
+3. Select the tag (or **Choose dashboard branch** in the actions menu), type a
+   branch name or pick one of the scanned branches, and select **Save branch**.
+4. To go back to the latest scanned branch, open the same editor and select
+   **Use latest scanned**.
 
 The service dashboard, the findings explorer and the portfolio card now show
 that branch. Which branch a dashboard shows, in order:

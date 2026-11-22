@@ -1,7 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import {
   apiError,
   json,
@@ -52,6 +52,36 @@ describe('two-factor code page', () => {
     });
   });
 
+  it('verifies as soon as the sixth digit is typed', async () => {
+    const { calls } = mockFetch(verifyApi(() => noContent()));
+    renderApp('/2fa');
+    const input = await screen.findByLabelText('6-digit code');
+    fireEvent.change(input, { target: { value: '123' } });
+    expect(calls.some((c) => c.path === '/api/v1/auth/mfa/verify')).toBe(false);
+    // Letters are dropped as they are typed; spaces are allowed.
+    fireEvent.change(input, { target: { value: '123 45x' } });
+    expect(input).toHaveValue('123 45');
+    expect(calls.some((c) => c.path === '/api/v1/auth/mfa/verify')).toBe(false);
+    fireEvent.change(input, { target: { value: '123 456' } });
+    expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
+    const sent = calls.filter((c) => c.path === '/api/v1/auth/mfa/verify');
+    expect(sent).toHaveLength(1);
+    expect(sent[0].body).toEqual({ code: '123456' });
+  });
+
+  it('selects a wrong code so the next one replaces it', async () => {
+    mockFetch(verifyApi(() => apiError(401, 'invalid_code', 'Wrong code.')));
+    renderApp('/2fa');
+    const input = (await screen.findByLabelText('6-digit code')) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '000000' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('That code is not correct');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    await waitFor(() => expect(input.selectionEnd! - input.selectionStart!).toBe(6));
+    // Typing clears the message.
+    fireEvent.change(input, { target: { value: '1' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('switches to a recovery code and sends it', async () => {
     const { calls } = mockFetch(verifyApi(() => noContent()));
     renderApp('/2fa');
@@ -65,6 +95,23 @@ describe('two-factor code page', () => {
     expect(calls.find((c) => c.path === '/api/v1/auth/mfa/verify')?.body).toEqual({
       code: 'abcde-fghij',
     });
+  });
+
+  it('says a wrong recovery code may have been used, and switches back', async () => {
+    mockFetch(verifyApi(() => apiError(401, 'invalid_code', 'Wrong code.')));
+    renderApp('/2fa');
+    fireEvent.click(await screen.findByRole('button', { name: 'Use a recovery code' }));
+    fireEvent.change(screen.getByLabelText('Recovery code'), {
+      target: { value: 'abcde-fghij-klmno-pqrst' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Verify' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'That recovery code is not correct, or it was already used.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Use an authenticator code' }));
+    expect(screen.getByRole('heading', { name: 'Enter your code' })).toBeInTheDocument();
+    expect(screen.getByLabelText('6-digit code')).toHaveValue('');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('shows an error for a wrong code', async () => {

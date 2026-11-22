@@ -148,7 +148,7 @@ export function AuthShell({
 
   return (
     <div className="grid min-h-dvh lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-      <aside className="relative hidden overflow-hidden border-r border-line bg-surface lg:flex lg:flex-col lg:justify-between lg:p-12">
+      <aside className="relative hidden overflow-hidden border-r border-line bg-surface lg:flex lg:flex-col lg:justify-between lg:p-12 print:hidden">
         <Wordmark size={28} className="text-xl" />
         <div className="flex flex-col items-center gap-10">
           <LensPlate />
@@ -164,7 +164,7 @@ export function AuthShell({
         </div>
       </aside>
       <main className="flex min-w-0 flex-col px-5 py-6 sm:px-10 sm:py-10">
-        <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center justify-between gap-4 print:hidden">
           <span className="lg:invisible">
             <Wordmark size={24} className="text-lg" />
           </span>
@@ -174,7 +174,7 @@ export function AuthShell({
           <section
             className={`anim-rise mx-auto flex w-full ${wide ? 'max-w-xl' : 'max-w-md'} flex-col gap-6`}
           >
-            {steps ? <StepIndicator steps={steps} /> : null}
+            {steps ? <StepIndicator steps={steps} className="print:hidden" /> : null}
             <div>
               <h1
                 ref={heading}
@@ -188,7 +188,7 @@ export function AuthShell({
             {children}
           </section>
         </div>
-        <p className="text-caption text-text-faint lg:hidden">
+        <p className="text-caption text-text-faint lg:hidden print:hidden">
           SonarQube and Trivy results from your GitLab pipelines, per service and across all of
           them.
         </p>

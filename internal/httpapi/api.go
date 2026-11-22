@@ -50,11 +50,12 @@ type userJSON struct {
 	CreatedAt   time.Time  `json:"created_at"`
 	LastLoginAt *time.Time `json:"last_login_at"`
 	DisabledAt  *time.Time `json:"disabled_at"`
+	// MFAEnrolled reports a confirmed TOTP enrolment.
+	MFAEnrolled bool `json:"mfa_enrolled"`
 }
 
 type meJSON struct {
 	userJSON
-	MFAEnrolled        bool `json:"mfa_enrolled"`
 	MFAVerified        bool `json:"mfa_verified"`
 	MustChangePassword bool `json:"must_change_password"`
 }
@@ -67,7 +68,7 @@ type userPage struct {
 func toUser(u store.User) userJSON {
 	out := userJSON{
 		ID: u.ID, Source: u.Source, Username: u.Username, Name: u.Name, Email: u.Email,
-		Role: u.Role, CreatedAt: u.CreatedAt.Time,
+		Role: u.Role, CreatedAt: u.CreatedAt.Time, MFAEnrolled: u.TotpEnabledAt.Valid,
 	}
 	if u.LastLoginAt.Valid {
 		t := u.LastLoginAt.Time
@@ -186,9 +187,11 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		s.internalError(w, r, "cannot load user", err)
 	default:
+		user := toUser(u)
+		// The session's view of the enrolment decides the next step, as everywhere else.
+		user.MFAEnrolled = p.MFAEnrolled
 		writeJSON(w, http.StatusOK, meJSON{
-			userJSON: toUser(u), MFAEnrolled: p.MFAEnrolled, MFAVerified: p.MFAVerified,
-			MustChangePassword: p.MustChangePassword,
+			userJSON: user, MFAVerified: p.MFAVerified, MustChangePassword: p.MustChangePassword,
 		})
 	}
 }

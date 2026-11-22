@@ -332,6 +332,16 @@ func TestListUsersPaging(t *testing.T) {
 	}
 }
 
+func TestListUsersReportsTwoFactor(t *testing.T) {
+	e := newEnv(t, nil)
+	e.users.users[0].TotpEnabledAt = pgtype.Timestamptz{Time: testTime, Valid: true}
+	e.users.users[1].TotpEnabledAt = pgtype.Timestamptz{}
+	p := decode[userPage](t, e.do("GET", "/api/v1/users", "admin", ""))
+	if len(p.Items) < 2 || !p.Items[0].MFAEnrolled || p.Items[1].MFAEnrolled {
+		t.Fatalf("mfa_enrolled = %+v", p.Items)
+	}
+}
+
 func TestListUsersValidation(t *testing.T) {
 	e := newEnv(t, nil)
 	for _, q := range []string{"after=-1", "after=x", "limit=0", "limit=201", "limit=-5", "limit=abc", "limit=1.5"} {

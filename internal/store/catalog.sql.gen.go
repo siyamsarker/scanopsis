@@ -132,17 +132,23 @@ func (q *Queries) ListServices(ctx context.Context, arg ListServicesParams) ([]S
 }
 
 const recentIngestRejections = `-- name: RecentIngestRejections :many
-SELECT at, detail FROM audit_log
-WHERE action = 'ingest.rejected'
-ORDER BY at DESC, id DESC
+SELECT a.at, a.detail, s.id AS service_id, s.name AS service_name
+FROM audit_log a
+LEFT JOIN services s ON lower(s.gitlab_project_path) = lower(a.detail->>'project_path')
+WHERE a.action = 'ingest.rejected'
+ORDER BY a.at DESC, a.id DESC
 LIMIT 20
 `
 
 type RecentIngestRejectionsRow struct {
-	At     pgtype.Timestamptz
-	Detail []byte
+	At          pgtype.Timestamptz
+	Detail      []byte
+	ServiceID   pgtype.Int8
+	ServiceName pgtype.Text
 }
 
+// RecentIngestRejections lists the newest rejected uploads with the service
+// registered for the project path, when there is one.
 func (q *Queries) RecentIngestRejections(ctx context.Context) ([]RecentIngestRejectionsRow, error) {
 	rows, err := q.db.Query(ctx, recentIngestRejections)
 	if err != nil {
@@ -152,7 +158,69 @@ func (q *Queries) RecentIngestRejections(ctx context.Context) ([]RecentIngestRej
 	items := []RecentIngestRejectionsRow{}
 	for rows.Next() {
 		var i RecentIngestRejectionsRow
-		if err := rows.Scan(&i.At, &i.Detail); err != nil {
+		if err := rows.Scan(
+			&i.At,
+			&i.Detail,
+			&i.ServiceID,
+			&i.ServiceName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const trivyDailyActivity = `-- name: TrivyDailyActivity :many
+WITH bounds AS (
+    SELECT ((now() AT TIME ZONE 'UTC')::date - 29) AS first_day
+), days AS (
+    SELECT (bounds.first_day + n)::date AS day
+    FROM bounds, generate_series(0, 29) AS n
+), uploads AS (
+    SELECT (sc.received_at AT TIME ZONE 'UTC')::date AS day, count(*) AS n
+    FROM scans sc, bounds
+    WHERE sc.received_at >= (bounds.first_day::timestamp AT TIME ZONE 'UTC')
+    GROUP BY 1
+), rejections AS (
+    SELECT (al.at AT TIME ZONE 'UTC')::date AS day, count(*) AS n
+    FROM audit_log al, bounds
+    WHERE al.action = 'ingest.rejected'
+      AND al.at >= (bounds.first_day::timestamp AT TIME ZONE 'UTC')
+    GROUP BY 1
+)
+SELECT days.day::date AS day,
+       coalesce(uploads.n, 0)::bigint AS uploads,
+       coalesce(rejections.n, 0)::bigint AS rejections
+FROM days
+LEFT JOIN uploads ON uploads.day = days.day
+LEFT JOIN rejections ON rejections.day = days.day
+ORDER BY days.day
+`
+
+type TrivyDailyActivityRow struct {
+	Day        pgtype.Date
+	Uploads    int64
+	Rejections int64
+}
+
+// TrivyDailyActivity counts uploads and recorded rejections per UTC day over
+// the last 30 days, oldest first. Days without either are included with
+// zeros. Both counts read only their day range through the received_at and
+// (action, at) indexes.
+func (q *Queries) TrivyDailyActivity(ctx context.Context) ([]TrivyDailyActivityRow, error) {
+	rows, err := q.db.Query(ctx, trivyDailyActivity)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []TrivyDailyActivityRow{}
+	for rows.Next() {
+		var i TrivyDailyActivityRow
+		if err := rows.Scan(&i.Day, &i.Uploads, &i.Rejections); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

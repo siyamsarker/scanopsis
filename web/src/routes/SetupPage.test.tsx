@@ -1,7 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   apiError,
   json,
@@ -39,17 +39,61 @@ function fill(token = 'tok-123', password = 'correct horse battery', confirm = p
 }
 
 describe('setup page', () => {
-  it('explains where to find the token and the password rules', async () => {
+  it('explains where to find the token and checks the password rules as you type', async () => {
     mockFetch(setupApi(() => noContent()));
     renderApp('/');
     const heading = await screen.findByRole('heading', { name: 'Set up Scanopsis' });
     // Focus moves to the heading after the page renders.
     await waitFor(() => expect(heading).toHaveFocus());
-    expect(screen.getByText(/Find the setup token in the server log/)).toHaveTextContent(
-      'docker logs <container>',
+    const token = screen.getByLabelText('Setup token');
+    expect(token).toHaveClass('font-mono');
+    expect(token).toHaveAccessibleDescription(
+      'Printed in the server log at start-up, for example by docker logs scanopsis.',
     );
-    expect(screen.getByText('At least 12 characters, and not your username.')).toBeVisible();
-    expect(screen.getByLabelText('Setup token')).toHaveClass('font-mono');
+
+    const rules = () =>
+      ['At least 12 characters', 'Not your username', 'Not one character repeated'].map(
+        (rule) => screen.getByText(rule).textContent,
+      );
+    expect(rules()).toEqual([
+      'At least 12 characters: not yet',
+      'Not your username: not yet',
+      'Not one character repeated: not yet',
+    ]);
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'root' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'ROOT' } });
+    expect(rules()).toEqual([
+      'At least 12 characters: not yet',
+      'Not your username: not yet',
+      'Not one character repeated: met',
+    ]);
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'aaaaaaaaaaaa' } });
+    expect(rules()).toEqual([
+      'At least 12 characters: met',
+      'Not your username: met',
+      'Not one character repeated: not yet',
+    ]);
+    fireEvent.change(screen.getByLabelText('Password'), {
+      target: { value: 'correct horse battery' },
+    });
+    expect(rules().every((text) => text?.endsWith(': met'))).toBe(true);
+  });
+
+  it('shows where setup is in the steps to the first sign-in', async () => {
+    mockFetch(setupApi(() => noContent()));
+    renderApp('/setup');
+    await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    const progress = screen.getByRole('navigation', { name: 'Progress' });
+    expect(progress).toHaveTextContent('Step 1 of 3');
+    expect(
+      within(progress)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Administrator', 'Two-factor', 'Recovery codes']);
+    expect(within(progress).getByText('Administrator').closest('li')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
   });
 
   it('creates the administrator and continues to two-factor enrolment', async () => {
@@ -62,11 +106,19 @@ describe('setup page', () => {
     );
     renderApp('/setup');
     await screen.findByRole('heading', { name: 'Set up Scanopsis' });
-    fill();
+    // The token is sent without surrounding spaces.
+    fill('  tok-123 ');
     expect(
       await screen.findByRole('heading', { name: 'Set up two-factor sign-in' }),
     ).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/2fa\/setup$/);
+    // Enrolment continues the setup steps.
+    const progress = screen.getByRole('navigation', { name: 'Progress' });
+    expect(progress).toHaveTextContent('Step 2 of 3');
+    expect(within(progress).getByText('Two-factor').closest('li')).toHaveAttribute(
+      'aria-current',
+      'step',
+    );
     expect(calls.find((c) => c.method === 'POST' && c.path === '/api/v1/setup')?.body).toEqual({
       token: 'tok-123',
       username: 'root',
@@ -80,7 +132,13 @@ describe('setup page', () => {
     await screen.findByRole('heading', { name: 'Set up Scanopsis' });
     fill('t', 'correct horse battery', 'something else entirely');
     expect(await screen.findByText('The passwords do not match.')).toBeVisible();
+    expect(screen.getByLabelText('Confirm password')).toHaveAttribute('aria-invalid', 'true');
     expect(calls.some((c) => c.method === 'POST')).toBe(false);
+    // Typing again clears the message.
+    fireEvent.change(screen.getByLabelText('Confirm password'), {
+      target: { value: 'correct horse battery' },
+    });
+    expect(screen.queryByText('The passwords do not match.')).not.toBeInTheDocument();
   });
 
   it.each([

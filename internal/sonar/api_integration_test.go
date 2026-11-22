@@ -84,7 +84,7 @@ func TestWebhookToReadEndpoint(t *testing.T) {
 	}
 	sameJSON(t, body, `{"configured":true,"server_version":null,"last_webhook_at":"2026-11-19T10:05:00Z","last_sync_at":null,"last_sync_error":null,
 	 "recent_deliveries":[{"task_id":"task-1","project_key":"platform:payments-api","received_at":"2026-11-19T10:05:00Z","outcome":"linked","service_id":`+
-		strconv.FormatInt(sid, 10)+`,"detail":""}]}`)
+		strconv.FormatInt(sid, 10)+`,"service_name":"platform/payments-api","detail":""}]}`)
 }
 
 func TestServiceSonarUnreportedAndEmpty(t *testing.T) {

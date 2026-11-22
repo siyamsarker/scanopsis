@@ -49,8 +49,8 @@ tool in the job image.
 ## Step 1. Tell Scanopsis where your GitLab is
 
 Scanopsis needs the base URL of your GitLab to check the tokens. As an
-administrator, open **Settings**, find the group **GitLab** and set
-`gitlab.url`, for example `https://gitlab.example.com`. You can also seed it at
+administrator, open **Settings**, find the section **GitLab** and set
+**GitLab URL** (`gitlab.url`), for example `https://gitlab.example.com`. You can also seed it at
 the first start with the environment variable `SCANOPSIS_GITLAB_URL`.
 
 Until it is set, every upload gets `503 ingest_not_configured`.
@@ -249,7 +249,8 @@ one branch. Until an administrator chooses that branch, the dashboard follows
 the most recent scan, so a scan of a feature branch changes what everyone sees.
 
 Right after the first upload, an administrator opens **Services**, finds the new
-service and chooses its dashboard branch, usually your default branch.
+service and selects its branch tag to choose the dashboard branch, usually your
+default branch.
 [Operations](../operations.md) describes the Services page.
 
 ## Restrict who may upload
@@ -287,8 +288,9 @@ log:
   period never hides refused tokens.
 - `too_many_requests` is never recorded.
 
-The **Integrations** page counts what was recorded as "Recorded rejections, last
-24 hours".
+The **Integrations** page counts what was recorded as "Refused, 24 h", charts
+refused uploads per day, and lists the 20 most recent with the service, if one
+is registered for the project path, and the reason.
 
 ## Retries and limits
 

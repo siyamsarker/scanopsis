@@ -144,12 +144,12 @@ export function registerDashboardFlows(session: Session): void {
     // The GitLab URL is what the server verifies tokens against.
     const page = root();
     await page.goto('/settings');
-    const url = page.getByLabel('Base URL of the GitLab instance');
+    const url = page.getByLabel('GitLab URL', { exact: true });
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
     if ((await url.inputValue()) !== gitlabUrl) {
       await url.fill(gitlabUrl);
       await page.getByRole('button', { name: 'Save changes' }).click();
-      await expect(page.getByText('Settings saved. Changes apply now.')).toBeVisible();
+      await expect(page.getByText('Settings saved', { exact: true })).toBeVisible();
     }
 
     const first = await expectUploaded(
@@ -501,38 +501,45 @@ export function registerDashboardFlows(session: Session): void {
 
     await page.goto('/admin/integrations');
     await expect(m.getByRole('heading', { name: 'Integrations' })).toBeVisible();
-    await expect(m).toContainText('Ready');
-    const uploads = /Uploads, last 24 hours\s*(\d+)/.exec(await flat(m));
+    await expect(m.getByRole('region', { name: 'Scan uploads from GitLab CI' })).toContainText(
+      'Scan uploads are arriving',
+    );
+    const uploads = /Accepted, 24 h\s*(\d+)/.exec(await flat(m));
     expect(Number(uploads?.[1])).toBeGreaterThanOrEqual(4);
-    await expect(m).toContainText(/Recorded rejections, last 24 hours\s*0/);
+    await expect(m).toContainText(/Refused, 24 h\s*0/);
+    // The 30-day chart counts today's uploads.
+    await expect(m.getByRole('img', { name: /Accepted uploads per day/ })).toBeVisible();
 
     // A token for another audience is refused, and the page says why.
     const wrong = await upload(request, imageFull, { ...jobs.billing, pipelineId: 2002, jobId: 6002, audience: 'https://elsewhere.example.com' });
     expect(wrong.status()).toBe(401);
     expect(((await wrong.json()) as { error: { code: string } }).error.code).toBe('invalid_token');
     await page.reload();
-    await expect(m).toContainText(/Recorded rejections, last 24 hours\s*1/);
-    await expect(m.getByText('invalid_token', { exact: true })).toBeVisible();
+    await expect(m).toContainText(/Refused, 24 h\s*1/);
+    await expect(m).toContainText('Some uploads were refused');
+    const refusedTable = m.getByRole('table', { name: 'Recently refused uploads' });
+    await expect(refusedTable).toContainText('Invalid ID token');
+    // A token that fails verification names no project.
+    await expect(refusedTable).toContainText('Not known');
 
     // The audit log keeps it.
     await page.goto('/admin/audit');
-    await chooseOption(page, 'Action', /\(ingest\.rejected\)$/);
-    const audit = m.getByRole('table', { name: 'Audit log' });
-    await expect(audit.getByRole('row')).toHaveCount(2);
-    await expect(audit).toContainText('ingest.rejected');
-    await expect(audit).toContainText('Upload rejected');
-    await expect(audit).toContainText('invalid_token');
+    await chooseOption(page, 'Action', 'Upload rejected');
+    await expect(page).toHaveURL(/action=ingest\.rejected/);
+    await expect(m.getByRole('listitem')).toHaveCount(1);
+    await expect(m).toContainText('refused: invalid id token');
 
     // Archiving hides a service and refuses its uploads; unarchiving undoes both.
     await page.goto('/admin/services');
     const table = m.getByRole('table', { name: 'Active services' });
     await expect(table).toContainText('payments-api');
     await expect(table).toContainText('billing-worker');
-    await page.getByRole('button', { name: 'Archive billing-worker' }).click();
+    await page.getByRole('button', { name: 'Actions for billing-worker' }).click();
+    await page.getByRole('menuitem', { name: 'Archive' }).click();
     const dialog = page.getByRole('alertdialog');
     await expect(dialog.getByText('Archive billing-worker?')).toBeVisible();
-    await dialog.getByRole('button', { name: 'Archive', exact: true }).click();
-    await expect(page.getByText('Archived billing-worker.')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Archive service' }).click();
+    await expect(page.getByText('Service archived', { exact: true })).toBeVisible();
     await expect(table).not.toContainText('billing-worker');
 
     await page.goto('/');
@@ -544,10 +551,11 @@ export function registerDashboardFlows(session: Session): void {
     expect(((await refused.json()) as { error: { code: string } }).error.code).toBe('service_archived');
 
     await page.goto('/admin/services');
-    await page.getByRole('radio', { name: 'Archived' }).click();
+    await page.getByRole('tab', { name: 'Archived' }).click();
     await expect(m.getByRole('table', { name: 'Archived services' })).toContainText('billing-worker');
-    await page.getByRole('button', { name: 'Unarchive billing-worker' }).click();
-    await expect(page.getByText('Unarchived billing-worker.')).toBeVisible();
+    await page.getByRole('button', { name: 'Actions for billing-worker' }).click();
+    await page.getByRole('menuitem', { name: 'Unarchive' }).click();
+    await expect(page.getByText('Service unarchived', { exact: true })).toBeVisible();
 
     await page.goto('/');
     await expect(page.getByRole('heading', { level: 3 })).toHaveText(['billing-worker', 'payments-api']);
@@ -562,7 +570,7 @@ export function registerDashboardFlows(session: Session): void {
     // The account was promoted in flow 6; make it a viewer again.
     await admin.goto('/admin/users');
     await chooseOption(admin, 'Role for alice', 'Viewer');
-    await expect(admin.getByText('Role changed to Viewer.')).toBeVisible();
+    await expect(admin.getByText('Alice Example is now a viewer.', { exact: true })).toBeVisible();
 
     await viewer.goto('/');
     await expect(account(viewer).getByText('Viewer')).toBeVisible();
@@ -600,23 +608,28 @@ export function registerDashboardFlows(session: Session): void {
         .getByRole('table', { name: 'Active services' })
         .getByRole('row')
         .filter({ hasText: 'platform/payments-api' });
+    // The branch tag opens the editor in a popover.
+    const editor = () => page.getByRole('dialog', { name: 'Dashboard branch of payments-api' });
+    async function openEditor() {
+      await row().getByRole('button', { name: /^Dashboard branch of payments-api/ }).click();
+      await expect(editor()).toBeVisible();
+    }
     async function choose(branch: string) {
       await page.goto('/admin/services');
-      await row()
-        .getByRole('button', { name: /^(Choose|Change) dashboard branch of payments-api$/ })
-        .click();
-      await row().getByLabel('Dashboard branch of payments-api', { exact: true }).fill(branch);
-      await row().getByRole('button', { name: 'Save dashboard branch of payments-api' }).click();
-      await expect(page.getByText(`The dashboards of payments-api now show ${branch}.`)).toBeVisible();
+      await openEditor();
+      await editor().getByRole('combobox', { name: 'Branch name' }).fill(branch);
+      await editor().getByRole('button', { name: 'Save branch' }).click();
+      await expect(page.getByText(`payments-api shows ${branch}.`, { exact: true })).toBeVisible();
     }
 
-    // Nothing is chosen yet: the latest scanned branch is shown, and the page says so.
+    // Nothing is chosen yet: the tag says the latest scanned branch is shown.
     await page.goto('/admin/services');
-    await expect(row()).toContainText('Not chosen — showing the latest scanned branch (main)');
-    await row().getByRole('button', { name: 'Choose dashboard branch of payments-api' }).click();
-    // The editor suggests the branches that have scans.
-    await expect(row().locator('datalist option')).toHaveCount(2);
-    await row().getByRole('button', { name: 'Cancel editing the dashboard branch of payments-api' }).click();
+    await expect(row()).toContainText(/Latest\s*main/);
+    await openEditor();
+    // The editor offers the branches that have scans.
+    await expect(editor().getByRole('option')).toHaveCount(2);
+    await page.keyboard.press('Escape');
+    await expect(editor()).toHaveCount(0);
     await page.goto('/');
     await expect(tile()).toContainText('main');
     await expect(tile()).toContainText(summary(current.counts));
@@ -624,7 +637,7 @@ export function registerDashboardFlows(session: Session): void {
     // Choose the feature branch: the portfolio card and the dashboard follow it.
     await choose('feature/login');
     await expect(row()).toContainText('feature/login');
-    await expect(row()).not.toContainText('Not chosen');
+    await expect(row()).not.toContainText('Latest');
     await page.goto('/');
     await expect(tile()).toContainText('feature/login');
     await expect(tile()).toContainText(summary(imageFull.counts));
@@ -648,10 +661,10 @@ export function registerDashboardFlows(session: Session): void {
 
     // Clearing the choice brings back the latest scanned branch.
     await page.goto('/admin/services');
-    await row().getByRole('button', { name: 'Change dashboard branch of payments-api' }).click();
-    await row().getByRole('button', { name: 'Clear dashboard branch of payments-api' }).click();
-    await expect(page.getByText(/Cleared the dashboard branch of payments-api/)).toBeVisible();
-    await expect(row()).toContainText('Not chosen — showing the latest scanned branch (main)');
+    await openEditor();
+    await editor().getByRole('button', { name: 'Use latest scanned' }).click();
+    await expect(page.getByText('payments-api shows the latest scanned branch.', { exact: true })).toBeVisible();
+    await expect(row()).toContainText(/Latest\s*main/);
     await page.goto('/');
     await expect(tile()).toContainText('main');
     await expect(tile()).toContainText(summary(current.counts));
@@ -664,12 +677,12 @@ export function registerDashboardFlows(session: Session): void {
 
     // Every change is in the audit log with the old and the new branch.
     await page.goto('/admin/audit');
-    await chooseOption(page, 'Action', /\(service\.updated\)$/);
-    const audit = m.getByRole('table', { name: 'Audit log' });
-    // The details are stored as JSON, which lists the shorter key first.
-    await expect(audit).toContainText('{"to":"feature/login","from":null}');
-    await expect(audit).toContainText('{"to":"release/9","from":"feature/login"}');
-    await expect(audit).toContainText('{"to":null,"from":"release/9"}');
+    await chooseOption(page, 'Action', 'Service updated');
+    // Each change shows the branch before and after.
+    const changes = m.getByRole('definition');
+    await expect(changes.filter({ hasText: 'from Latest scanned to feature/login' })).toHaveCount(1);
+    await expect(changes.filter({ hasText: 'from feature/login to release/9' })).toHaveCount(1);
+    await expect(changes.filter({ hasText: 'from release/9 to Latest scanned' })).toHaveCount(1);
   });
 
   test('21a. the search covers dashboard branches and protected refs unless all branches are asked for', async ({ request }) => {

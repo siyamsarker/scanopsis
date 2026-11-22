@@ -119,7 +119,7 @@ After a failure, the browser opens `/login?error=<code>`.
 | "That code is not correct. Wait for a new one in the app and try again." (`invalid_code`, 401) | The code expired, was mistyped or already used, or a clock is wrong. A code is valid 30 seconds before and after the current time, once. | Wait for the next code. Check the time on the server and the phone. |
 | "That recovery code is not correct, or it was already used." | Wrong or used code. Each works once. | Use another one. If none is left, ask an administrator to reset your two-factor authentication. |
 | `too_many_attempts`, 429, on the code page | More than 5 code attempts at once for this user; after that, one every 30 seconds. | Wait. |
-| `mfa_locked`, 423: "Too many wrong codes. Ask an administrator to reset two-factor authentication." | Ten wrong codes in a row. The second factor is locked and the user's sessions ended. The audit log has `mfa.locked`. | An administrator selects **Reset two-factor** on the **Users** page or runs [`reset-2fa`](operations.md#reset-two-factor-authentication). A password reset from the command line also lifts the lock. |
+| `mfa_locked`, 423: "Too many wrong codes. Ask an administrator to reset two-factor authentication." | Ten wrong codes in a row. The second factor is locked and the user's sessions ended. The audit log has `mfa.locked`. | An administrator selects **Reset two-factor** in the user's actions menu on the **Users** page or runs [`reset-2fa`](operations.md#reset-two-factor-authentication). A password reset from the command line also lifts the lock. |
 | Every code fails and the log says `cannot decrypt TOTP secret; check SCANOPSIS_SECRET_KEY` | The key is not the one that encrypted the secrets, for example after a restore. | Put the original key back, see [the secret key](configuration.md#the-secret-key). |
 | `password_change_required`, 403: "Change your password to continue." | An administrator reset the password from the command line. | Change it on the page that opens. |
 | "The current password is not correct. Use the temporary password you were given." | Wrong current password. | Use the temporary password from `reset-password`. |
@@ -158,22 +158,23 @@ Scanopsis that give no Scanopsis message, or a surprising one.
 | `HTTP 429`, `too_many_requests`, for many jobs at once | Runners behind one NAT address share a limit: 60 at once, then one a second. | Spread the uploads. The script retries. |
 | The upload hangs, then `408` (`request_timeout`) | The report did not arrive within 5 minutes. | Upload from a faster network, or send it compressed (the CI script does). |
 | `HTTP 201`, but nothing new on the dashboard | The dashboard shows another branch, or the portfolio is filtered. | See [web interface](#web-interface). |
-| Rejected uploads you cannot see in the job log | The job ignores the answer on purpose. | The **Integrations** page lists recent rejections with the reason; the audit log has `ingest.rejected`. Rejections before the allowed-namespaces check are recorded at most 10 at once per address, then one a minute. The server log has `upload rejected` for every one. |
+| Rejected uploads you cannot see in the job log | The job ignores the answer on purpose. | The **Integrations** page lists recently refused uploads with the service and the reason; the audit log has `ingest.rejected`. Rejections before the allowed-namespaces check are recorded at most 10 at once per address, then one a minute. The server log has `upload rejected` for every one. |
 
 ## SonarQube
 
-Open the **Integrations** page as an administrator. The **SonarQube** card
-shows the state, and each recent delivery shows an outcome and a detail. The
+Open the **Integrations** page as an administrator. The **SonarQube** band
+says whether analyses arrive and, if not, why. Each recent delivery shows the
+service, an outcome and a detail. The
 [SonarQube guide](integrations/sonarqube.md) explains the setup.
 
-### The card
+### The status band
 
 | What you see | Cause | Fix |
 |---|---|---|
-| "Not configured — see Settings" | URL or token missing. | Set them on the Settings page. |
-| "Server version unknown" or "Last sync never" | No sync has finished yet. The first runs shortly after start. | Wait a minute. If it stays, read the last sync error. |
-| "Last webhook never" | No delivery arrived. | Check the webhook in SonarQube. |
-| "The last sync failed" with `payments:api: SonarQube answered 401 on api/measures/component` | The text names the project and SonarQube's answer. 401: wrong token. 403 or 404: no Browse permission, or the project key does not exist. 5xx: SonarQube failed. | Fix the token or the permission. The next sync clears the message. |
+| "SonarQube needs attention" | URL, token or webhook secret missing. | Set them on the Settings page. |
+| "Server Unknown" or "Last sync Never" | No sync has finished yet. The first runs shortly after start. | Wait a minute. If it stays, read the last sync error. |
+| "Ready, waiting for the first webhook" or "Last webhook Never" | No delivery arrived. | Check the webhook in SonarQube. |
+| "The last sync with SonarQube failed" with `payments:api: SonarQube answered 401 on api/measures/component` | The text names the project and SonarQube's answer. 401: wrong token. 403 or 404: no Browse permission, or the project key does not exist. 5xx: SonarQube failed. | Fix the token or the permission. The next sync clears the message. |
 | The same, ending in "the request failed or the answer was unreadable; see the server log" | SonarQube could not be reached: DNS, firewall, certificate, a 10-second timeout, or a redirect to another host or scheme. | Read the warning `SonarQube sync finished with failures`. Configure the final address, not one that redirects. |
 | "Listing the services failed." | A database error. | Read the log. |
 | Log: `the SonarQube token is sent without TLS; use an https:// SonarQube URL` | The URL starts with `http://`. | Use `https` unless the network is fully trusted. |

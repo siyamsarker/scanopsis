@@ -1,13 +1,14 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, screen } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import {
   apiError,
   json,
   makeUser,
   mockFetch,
   noContent,
+  openMenu,
   renderApp,
   type Handler,
 } from '../test-utils';
@@ -34,35 +35,46 @@ function api(extra?: Handler): Handler {
   };
 }
 
+/** Opens the row menu and asks for a two-factor reset. */
+async function askReset(username: string) {
+  const menu = await openMenu(`Actions for ${username}`);
+  fireEvent.click(within(menu).getByRole('menuitem', { name: 'Reset two-factor' }));
+  return screen.findByRole('alertdialog');
+}
+
 describe('reset two-factor', () => {
   it('asks for confirmation, then resets and says so', async () => {
     const { calls } = mockFetch(
       api((call) => (call.method === 'DELETE' ? noContent() : undefined)),
     );
     renderApp('/admin/users');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reset two-factor for grace' }));
-    const dialog = screen.getByRole('alertdialog', { name: 'Reset two-factor for grace?' });
-    expect(dialog).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus();
+    const dialog = await askReset('grace');
+    expect(dialog).toHaveAccessibleName('Reset two-factor for Grace?');
+    expect(within(dialog).getByText(/signs them out everywhere/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/you will be signed out now/)).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus();
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Reset two-factor' })[0]);
-    expect(
-      await screen.findByText('Two-factor reset. grace sets it up again at the next sign-in.'),
-    ).toBeInTheDocument();
+    const confirm = within(dialog).getByRole('button', { name: 'Reset two-factor' });
+    expect(confirm.className).toMatch(/bg-fail/);
+    fireEvent.click(confirm);
+    expect(await screen.findByText('Two-factor reset')).toBeInTheDocument();
+    expect(screen.getByText('Grace sets it up again at the next sign-in.')).toBeInTheDocument();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     expect(calls.find((c) => c.method === 'DELETE')?.path).toBe('/api/v1/users/2/mfa');
-    expect(screen.getByRole('button', { name: 'Reset two-factor for grace' })).toHaveFocus();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Actions for grace' })).toHaveFocus(),
+    );
   });
 
   it('cancels with the button and with Escape without sending anything', async () => {
     const { calls } = mockFetch(api());
     renderApp('/admin/users');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reset two-factor for grace' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Reset two-factor for grace' }));
-    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' });
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    let dialog = await askReset('grace');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    dialog = await askReset('grace');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
 
@@ -73,9 +85,10 @@ describe('reset two-factor', () => {
       ),
     );
     renderApp('/admin/users');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reset two-factor for grace' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Reset two-factor' })[0]);
-    expect(await screen.findByText('No such user.')).toBeInTheDocument();
+    const dialog = await askReset('grace');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reset two-factor' }));
+    expect(await screen.findByText('Two-factor could not be reset')).toBeInTheDocument();
+    expect(screen.getByText('No such user.')).toBeInTheDocument();
   });
 
   it('signs the admin out after resetting their own two-factor', async () => {
@@ -92,9 +105,9 @@ describe('reset two-factor', () => {
       }),
     );
     renderApp('/admin/users');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reset two-factor for ada' }));
-    expect(screen.getByText(/you will be signed out now/)).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Reset two-factor' })[0]);
+    const dialog = await askReset('ada');
+    expect(within(dialog).getByText(/you will be signed out now/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Reset two-factor' }));
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/login$/);
   });

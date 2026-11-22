@@ -2,10 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useQueryClient } from '@tanstack/react-query';
-import { CircleAlert } from 'lucide-react';
-import { useRef, useState } from 'react';
+import {
+  KeyRound,
+  MoreHorizontal,
+  ShieldCheck,
+  ShieldMinus,
+  Trash2,
+  UserCheck,
+  UserX,
+} from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import type { Role, User } from '../api/client';
+import { describeError } from '../api/errors';
 import {
   useDeleteUser,
   useMe,
@@ -15,10 +24,24 @@ import {
   useUsers,
 } from '../api/hooks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { FilterChips } from '../components/FilterChips';
+import {
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuLabel,
+  MenuSeparator,
+  MenuTrigger,
+} from '../components/Menu';
+import { Pagination } from '../components/Pagination';
+import { StatusPill, Tag } from '../components/badges';
 import { Select } from '../components/inputs';
 import { PageHeader } from '../components/layout';
-import { ForbiddenState } from '../components/states';
-import { cardClass, secondaryButtonClass } from '../ui';
+import { EmptyState, ErrorState, ForbiddenState, SkeletonTable } from '../components/states';
+import { toast } from '../components/Toast';
+import { countOf } from '../format';
+import { iconButtonClass } from '../ui';
+import { FlatTable, InitialsAvatar, When, td, th } from './admin/kit';
 
 const units: [Intl.RelativeTimeFormatUnit, number][] = [
   ['year', 365 * 24 * 3600],
@@ -38,326 +61,399 @@ export function formatRelative(iso: string, now: number = Date.now()): string {
   return Math.abs(seconds) < 10 ? 'just now' : formatter.format(seconds, 'second');
 }
 
-const cell = 'px-4 py-3 text-left align-middle';
-const headCell = `${cell} text-xs font-medium uppercase tracking-wider`;
+const roleOptions = [
+  { value: 'admin', label: 'Admin' },
+  { value: 'viewer', label: 'Viewer' },
+];
 
-function ResetMfa({ user, isSelf }: { user: User; isSelf: boolean }) {
+const nameOf = (user: User) => user.name || user.username;
+
+type Confirm = 'disable' | 'delete' | 'mfa' | null;
+
+const iconProps = { size: 16, strokeWidth: 1.75, 'aria-hidden': true } as const;
+
+function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const reset = useResetUserMfa();
-  const [open, setOpen] = useState(false);
+  const role = useUpdateUserRole();
+  const setDisabled = useSetUserDisabled();
+  const remove = useDeleteUser();
+  const resetMfa = useResetUserMfa();
+  const [confirm, setConfirm] = useState<Confirm>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const disabled = user.disabled_at !== null;
+  const name = nameOf(user);
+  // While a change is in flight, show the requested role; on failure the
+  // server data is unchanged, so the control falls back to the saved role.
+  const shownRole = role.isPending ? role.variables.role : user.role;
 
-  function confirm() {
-    reset.mutate(user.id, {
+  function changeRole(next: Role) {
+    if (next === user.role) return;
+    role.mutate(
+      { id: user.id, role: next },
+      {
+        onSuccess: (updated) =>
+          toast.success('Role changed', {
+            description: `${name} is now ${updated.role === 'admin' ? 'an admin' : 'a viewer'}.`,
+          }),
+        onError: (error) =>
+          toast.error('The role could not be changed', { description: describeError(error) }),
+      },
+    );
+  }
+
+  function enable() {
+    setDisabled.mutate(
+      { id: user.id, disabled: false },
+      {
+        onSuccess: () =>
+          toast.success('User enabled', { description: `${name} can sign in again.` }),
+        onError: (error) =>
+          toast.error(`${name} could not be enabled`, { description: describeError(error) }),
+      },
+    );
+  }
+
+  function disable() {
+    setDisabled.mutate(
+      { id: user.id, disabled: true },
+      {
+        onSuccess: () => {
+          setConfirm(null);
+          toast.success('User disabled', {
+            description: `${name} was signed out everywhere and cannot sign in.`,
+          });
+        },
+        onError: (error) => {
+          setConfirm(null);
+          toast.error(`${name} could not be disabled`, { description: describeError(error) });
+        },
+      },
+    );
+  }
+
+  function deleteUser() {
+    remove.mutate(user.id, {
       onSuccess: () => {
-        setOpen(false);
+        setConfirm(null);
+        toast.success('User deleted', { description: `${name} was removed.` });
+      },
+      onError: (error) => {
+        setConfirm(null);
+        toast.error(`${name} could not be deleted`, { description: describeError(error) });
+      },
+    });
+  }
+
+  function reset() {
+    resetMfa.mutate(user.id, {
+      onSuccess: () => {
+        setConfirm(null);
         if (isSelf) {
           // The server ended every session of this user, this one included.
           queryClient.clear();
           void navigate('/login', { replace: true });
+          return;
         }
+        toast.success('Two-factor reset', {
+          description: `${name} sets it up again at the next sign-in.`,
+        });
+        void queryClient.invalidateQueries({ queryKey: ['users'] });
       },
-      onError: () => setOpen(false),
+      onError: (error) => {
+        setConfirm(null);
+        toast.error('Two-factor could not be reset', { description: describeError(error) });
+      },
     });
   }
 
   return (
-    <>
-      <button
-        ref={trigger}
-        type="button"
-        className={secondaryButtonClass}
-        onClick={() => setOpen(true)}
-      >
-        Reset two-factor <span className="sr-only">for {user.username}</span>
-      </button>
-      <div aria-live="polite" className="mt-1 min-h-5 text-text-muted">
-        {reset.isError ? (
-          <span className="flex items-start gap-2 text-text">
-            <CircleAlert
-              size={16}
-              strokeWidth={1.5}
-              aria-hidden="true"
-              className="mt-0.5 shrink-0 text-fail"
-            />
-            <span>{reset.error.message}</span>
-          </span>
-        ) : reset.isSuccess ? (
-          `Two-factor reset. ${user.username} sets it up again at the next sign-in.`
-        ) : (
-          ''
-        )}
-      </div>
-      {open && (
-        <ConfirmDialog
-          title={`Reset two-factor for ${user.username}?`}
-          confirmLabel="Reset two-factor"
-          pending={reset.isPending}
-          onConfirm={confirm}
-          onCancel={() => setOpen(false)}
-          returnFocusTo={trigger}
-        >
-          <p>
-            This removes the authenticator and recovery codes of {user.username} and signs them out
-            everywhere. They set up two-factor again at the next sign-in.
-            {isSelf && ' This is your own account, so you will be signed out now.'}
-          </p>
-        </ConfirmDialog>
-      )}
-    </>
-  );
-}
-
-function Problem({ message }: { message: string }) {
-  return (
-    <span className="flex items-start gap-2 text-text">
-      <CircleAlert
-        size={16}
-        strokeWidth={1.5}
-        aria-hidden="true"
-        className="mt-0.5 shrink-0 text-fail"
-      />
-      <span>{message}</span>
-    </span>
-  );
-}
-
-/** Disable or enable, and delete, a user. Both are refused for your own account. */
-function Access({ user, isSelf }: { user: User; isSelf: boolean }) {
-  const setDisabled = useSetUserDisabled();
-  const remove = useDeleteUser();
-  const [confirm, setConfirm] = useState<'disable' | 'delete' | null>(null);
-  const disableButton = useRef<HTMLButtonElement>(null);
-  const deleteButton = useRef<HTMLButtonElement>(null);
-  const disabled = user.disabled_at !== null;
-  const pending = setDisabled.isPending || remove.isPending;
-
-  if (isSelf) return <span className="text-text-muted">Your account</span>;
-
-  const error = setDisabled.error ?? remove.error;
-  let status = '';
-  if (setDisabled.isSuccess) {
-    status = setDisabled.data.disabled_at
-      ? `${user.username} is disabled and was signed out.`
-      : `${user.username} can sign in again.`;
-  }
-
-  function toggle() {
-    if (disabled) {
-      setDisabled.mutate({ id: user.id, disabled: false });
-    } else {
-      setConfirm('disable');
-    }
-  }
-
-  return (
-    <>
-      <div className="flex flex-wrap gap-2">
-        <button
-          ref={disableButton}
-          type="button"
-          className={secondaryButtonClass}
-          disabled={pending}
-          onClick={toggle}
-        >
-          {disabled ? 'Enable' : 'Disable'} <span className="sr-only">{user.username}</span>
-        </button>
-        <button
-          ref={deleteButton}
-          type="button"
-          className={secondaryButtonClass}
-          disabled={pending}
-          onClick={() => setConfirm('delete')}
-        >
-          Delete <span className="sr-only">{user.username}</span>
-        </button>
-      </div>
-      <div aria-live="polite" className="mt-1 min-h-5 text-text-muted">
-        {error ? <Problem message={error.message} /> : status}
-      </div>
-      {confirm === 'disable' && (
-        <ConfirmDialog
-          title={`Disable ${user.username}?`}
-          confirmLabel="Disable"
-          tone="danger"
-          pending={setDisabled.isPending}
-          onConfirm={() =>
-            setDisabled.mutate(
-              { id: user.id, disabled: true },
-              { onSettled: () => setConfirm(null) },
-            )
-          }
-          onCancel={() => setConfirm(null)}
-          returnFocusTo={disableButton}
-        >
-          <p>
-            {user.username} is signed out everywhere and cannot sign in, with a password or with
-            GitLab, until an administrator enables the account again.
-          </p>
-        </ConfirmDialog>
-      )}
-      {confirm === 'delete' && (
-        <ConfirmDialog
-          title={`Delete ${user.username}?`}
-          confirmLabel="Delete user"
-          tone="danger"
-          pending={remove.isPending}
-          onConfirm={() => remove.mutate(user.id, { onSettled: () => setConfirm(null) })}
-          onCancel={() => setConfirm(null)}
-          returnFocusTo={deleteButton}
-        >
-          <p>
-            This removes {user.username} with their sessions and two-factor setup. The audit log
-            keeps its entries.
-            {user.source === 'gitlab' &&
-              ' A GitLab user who signs in again comes back as a new viewer; disable the account instead to keep them out.'}
-          </p>
-        </ConfirmDialog>
-      )}
-    </>
-  );
-}
-
-function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
-  const update = useUpdateUserRole();
-  // While a change is in flight, show the requested role; on failure the
-  // server data is unchanged, so the control falls back to the saved role.
-  const shown = update.isPending ? update.variables.role : user.role;
-
-  let status = '';
-  if (update.isPending) status = 'Saving…';
-  else if (update.isSuccess)
-    status = `Role changed to ${update.data.role === 'admin' ? 'Admin' : 'Viewer'}.`;
-
-  return (
-    <tr className="border-t border-border transition-colors duration-150 ease-out hover:bg-surface-raised">
-      <td className={cell}>
-        <span className="font-mono text-[13px]">{user.username}</span>{' '}
-        {user.disabled_at && (
-          <span
-            className="ml-1 rounded-control border border-fail px-1.5 py-0.5 text-xs whitespace-nowrap text-text"
-            title={`Disabled ${new Date(user.disabled_at).toLocaleString()}`}
-          >
-            Disabled
-          </span>
-        )}
+    <tr
+      className={`hover-tint ${disabled ? '[&>td]:bg-[color-mix(in_srgb,var(--sunken)_55%,transparent)]' : ''}`}
+    >
+      <td className={`${td} max-w-0 sm:w-[36%] sm:min-w-56`}>
+        <div className="flex min-w-0 items-center gap-3">
+          <InitialsAvatar name={name} ring={user.role === 'admin'} muted={disabled} />
+          <div className="min-w-0">
+            <p className="flex min-w-0 items-center gap-2">
+              <span
+                className={`truncate font-medium ${disabled ? 'text-text-muted' : 'text-text'}`}
+              >
+                {name}
+              </span>
+              {isSelf ? <span className="shrink-0 text-caption text-text-faint">you</span> : null}
+              <span className="shrink-0 text-caption text-text-muted sm:hidden">
+                {user.role === 'admin' ? 'Admin' : 'Viewer'}
+              </span>
+              {disabled ? (
+                <StatusPill
+                  status="fail"
+                  className="shrink-0"
+                  title={`Disabled ${new Date(user.disabled_at!).toLocaleString()}`}
+                >
+                  Disabled
+                </StatusPill>
+              ) : null}
+            </p>
+            <p className="truncate text-small text-text-muted">
+              {user.name ? <span className="font-mono">{user.username}</span> : null}
+              {user.name && user.email ? ' ' : null}
+              {user.email ? <span>{user.email}</span> : null}
+              {!user.name && !user.email ? 'No e-mail on record' : null}
+            </p>
+          </div>
+        </div>
       </td>
-      <td className={cell}>{user.name}</td>
-      <td className={cell}>{user.email}</td>
-      <td className={cell}>{user.source === 'gitlab' ? 'GitLab' : 'Local'}</td>
-      <td className={cell}>
+      <td className={`${td} hidden md:table-cell`}>
+        <Tag>{user.source === 'gitlab' ? 'GitLab' : 'Local'}</Tag>
+      </td>
+      <td className={`${td} hidden w-36 sm:table-cell`}>
         <Select
           label={`Role for ${user.username}`}
           hideLabel
           size="sm"
-          className="w-32"
-          value={shown}
-          disabled={update.isPending}
-          onChange={(role) => update.mutate({ id: user.id, role: role as Role })}
-          options={[
-            { value: 'admin', label: 'Admin' },
-            { value: 'viewer', label: 'Viewer' },
-          ]}
+          className="w-28"
+          triggerClassName="min-h-8! pointer-coarse:min-h-11!"
+          value={shownRole}
+          disabled={role.isPending}
+          onChange={(next) => changeRole(next as Role)}
+          options={roleOptions}
         />
-        <div aria-live="polite" className="mt-1 min-h-5 text-text-muted">
-          {update.isError ? <Problem message={update.error.message} /> : status}
-        </div>
       </td>
-      <td className={cell}>
-        {user.last_login_at ? (
-          <time dateTime={user.last_login_at} title={new Date(user.last_login_at).toLocaleString()}>
-            {formatRelative(user.last_login_at)}
-          </time>
+      <td className={`${td} hidden whitespace-nowrap md:table-cell`}>
+        {user.mfa_enrolled ? (
+          <StatusPill status="ok">On</StatusPill>
         ) : (
-          'Never'
+          <StatusPill status="warn" title="Set up at the next sign-in">
+            Not set up
+          </StatusPill>
         )}
       </td>
-      <td className={cell}>
-        <ResetMfa user={user} isSelf={isSelf} />
+      <td className={`${td} hidden whitespace-nowrap text-text-muted lg:table-cell`}>
+        {user.last_login_at ? <When at={user.last_login_at} /> : 'Never'}
       </td>
-      <td className={cell}>
-        <Access user={user} isSelf={isSelf} />
+      <td className={`${td} w-12 pr-2 text-right`}>
+        <Menu>
+          <MenuTrigger
+            ref={trigger}
+            className={iconButtonClass('ghost', 'sm')}
+            aria-label={`Actions for ${user.username}`}
+          >
+            <MoreHorizontal size={18} strokeWidth={1.75} aria-hidden="true" />
+          </MenuTrigger>
+          <MenuContent className="min-w-56">
+            {user.role === 'admin' ? (
+              <MenuItem icon={<ShieldMinus {...iconProps} />} onSelect={() => changeRole('viewer')}>
+                Make viewer
+              </MenuItem>
+            ) : (
+              <MenuItem icon={<ShieldCheck {...iconProps} />} onSelect={() => changeRole('admin')}>
+                Make admin
+              </MenuItem>
+            )}
+            <MenuItem icon={<KeyRound {...iconProps} />} onSelect={() => setConfirm('mfa')}>
+              Reset two-factor
+            </MenuItem>
+            <MenuSeparator />
+            {isSelf ? <MenuLabel>You cannot disable or delete your own account.</MenuLabel> : null}
+            {disabled ? (
+              <MenuItem icon={<UserCheck {...iconProps} />} disabled={isSelf} onSelect={enable}>
+                Enable user
+              </MenuItem>
+            ) : (
+              <MenuItem
+                icon={<UserX {...iconProps} />}
+                tone="danger"
+                disabled={isSelf}
+                onSelect={() => setConfirm('disable')}
+              >
+                Disable user
+              </MenuItem>
+            )}
+            <MenuItem
+              icon={<Trash2 {...iconProps} />}
+              tone="danger"
+              disabled={isSelf}
+              onSelect={() => setConfirm('delete')}
+            >
+              Delete user
+            </MenuItem>
+          </MenuContent>
+        </Menu>
+
+        {confirm === 'mfa' ? (
+          <ConfirmDialog
+            title={`Reset two-factor for ${name}?`}
+            confirmLabel="Reset two-factor"
+            tone="danger"
+            pending={resetMfa.isPending}
+            onConfirm={reset}
+            onCancel={() => setConfirm(null)}
+            returnFocusTo={trigger}
+          >
+            <p>
+              This removes the authenticator and recovery codes of {name} and signs them out
+              everywhere. They set up two-factor again at the next sign-in.
+            </p>
+            {isSelf ? <p>This is your own account, so you will be signed out now.</p> : null}
+          </ConfirmDialog>
+        ) : null}
+        {confirm === 'disable' ? (
+          <ConfirmDialog
+            title={`Disable ${name}?`}
+            confirmLabel="Disable user"
+            tone="danger"
+            pending={setDisabled.isPending}
+            onConfirm={disable}
+            onCancel={() => setConfirm(null)}
+            returnFocusTo={trigger}
+          >
+            <p>
+              {name} is signed out everywhere and cannot sign in, with a password or with GitLab,
+              until an administrator enables the account again.
+            </p>
+          </ConfirmDialog>
+        ) : null}
+        {confirm === 'delete' ? (
+          <ConfirmDialog
+            title={`Delete ${name}?`}
+            confirmLabel="Delete user"
+            tone="danger"
+            pending={remove.isPending}
+            onConfirm={deleteUser}
+            onCancel={() => setConfirm(null)}
+            returnFocusTo={trigger}
+          >
+            <p>
+              This removes {name} with their sessions and two-factor setup. The audit log keeps
+              their entries.
+            </p>
+            {user.source === 'gitlab' ? (
+              <p>
+                A GitLab user who signs in again comes back as a new viewer. Disable the account
+                instead to keep them out.
+              </p>
+            ) : null}
+          </ConfirmDialog>
+        ) : null}
       </td>
     </tr>
   );
 }
 
+type Facet = 'admin' | 'no-mfa' | 'disabled';
+
+const facetTest: Record<Facet, (user: User) => boolean> = {
+  admin: (u) => u.role === 'admin',
+  'no-mfa': (u) => !u.mfa_enrolled,
+  disabled: (u) => u.disabled_at !== null,
+};
+
 function UsersTable() {
   const users = useUsers();
   const me = useMe();
+  const [facets, setFacets] = useState<string[]>([]);
+  const items = useMemo(() => users.data?.pages.flatMap((page) => page.items) ?? [], [users.data]);
 
   if (users.isPending) {
     return (
-      <p role="status" className="mt-4 text-text-muted">
-        Loading users…
-      </p>
+      <div className="panel overflow-hidden">
+        <SkeletonTable rows={4} columns={5} />
+      </div>
     );
   }
   if (users.isError) {
     return (
-      <p role="alert" className="mt-4 text-text">
-        {users.error.message} Reload the page to try again.
-      </p>
+      <ErrorState
+        title="Users could not be loaded"
+        message={describeError(users.error)}
+        onRetry={() => void users.refetch()}
+        retrying={users.isFetching}
+      />
     );
   }
 
-  const items = users.data.pages.flatMap((page) => page.items);
+  const count = (facet: Facet) => items.filter(facetTest[facet]).length;
+  const shown = items.filter((u) => facets.every((f) => facetTest[f as Facet](u)));
+
   return (
-    <>
-      <div
-        role="region"
-        aria-label="Users table"
-        tabIndex={0}
-        className={`${cardClass} mt-6 overflow-x-auto`}
-      >
-        <table className="w-full min-w-[68rem] border-collapse">
-          <thead>
-            <tr className="bg-bg/40 text-text-muted">
-              <th scope="col" className={headCell}>
-                Username
-              </th>
-              <th scope="col" className={headCell}>
-                Name
-              </th>
-              <th scope="col" className={headCell}>
-                E-mail
-              </th>
-              <th scope="col" className={headCell}>
-                Sign-in
-              </th>
-              <th scope="col" className={headCell}>
-                Role
-              </th>
-              <th scope="col" className={headCell}>
-                Last sign-in
-              </th>
-              <th scope="col" className={headCell}>
-                Two-factor
-              </th>
-              <th scope="col" className={headCell}>
-                Access
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((user) => (
+    <div className="panel overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
+        <FilterChips
+          label="Filter users"
+          selected={facets}
+          onChange={setFacets}
+          options={[
+            { value: 'admin', label: 'Admins', count: count('admin') },
+            { value: 'no-mfa', label: 'Without two-factor', count: count('no-mfa') },
+            { value: 'disabled', label: 'Disabled', count: count('disabled') },
+          ]}
+        />
+        <p className="text-small text-text-muted tabular-nums">
+          {countOf(items.length, 'person', 'people')}
+        </p>
+      </div>
+      <div className="border-t border-line">
+        {shown.length === 0 ? (
+          <EmptyState
+            compact
+            art="search"
+            title="Nobody matches these filters"
+            body="Clear a filter to see more people."
+            action={
+              <button
+                type="button"
+                className="text-body-s text-brand underline underline-offset-[3px]"
+                onClick={() => setFacets([])}
+              >
+                Clear filters
+              </button>
+            }
+          />
+        ) : (
+          <FlatTable
+            caption="Users"
+            head={
+              <>
+                <th scope="col" className={th}>
+                  Person
+                </th>
+                <th scope="col" className={`${th} hidden md:table-cell`}>
+                  Sign-in
+                </th>
+                <th scope="col" className={`${th} hidden sm:table-cell`}>
+                  Role
+                </th>
+                <th scope="col" className={`${th} hidden md:table-cell`}>
+                  Two-factor
+                </th>
+                <th scope="col" className={`${th} hidden lg:table-cell`}>
+                  Last sign-in
+                </th>
+                <th scope="col" className={`${th} text-right`}>
+                  <span className="sr-only">Actions</span>
+                </th>
+              </>
+            }
+          >
+            {shown.map((user) => (
               <UserRow key={user.id} user={user} isSelf={me.data?.id === user.id} />
             ))}
-          </tbody>
-        </table>
+          </FlatTable>
+        )}
       </div>
-      {users.hasNextPage && (
-        <button
-          type="button"
-          className={`${secondaryButtonClass} mt-4`}
-          disabled={users.isFetchingNextPage}
-          onClick={() => void users.fetchNextPage()}
-        >
-          Load more
-        </button>
-      )}
-    </>
+      {users.hasNextPage ? (
+        <Pagination
+          className="border-t border-line px-4 py-3"
+          shown={items.length}
+          hasMore={users.hasNextPage}
+          loading={users.isFetchingNextPage}
+          onLoadMore={() => void users.fetchNextPage()}
+          noun="person"
+          nounPlural="people"
+        />
+      ) : null}
+    </div>
   );
 }
 

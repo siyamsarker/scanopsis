@@ -43,8 +43,42 @@ SELECT (SELECT max(received_at) FROM scans)::timestamptz AS last_upload_at,
        (SELECT count(*) FROM audit_log WHERE action = 'ingest.rejected'
                                          AND at > now() - interval '24 hours')::bigint AS rejections_24h;
 
+-- RecentIngestRejections lists the newest rejected uploads with the service
+-- registered for the project path, when there is one.
 -- name: RecentIngestRejections :many
-SELECT at, detail FROM audit_log
-WHERE action = 'ingest.rejected'
-ORDER BY at DESC, id DESC
+SELECT a.at, a.detail, s.id AS service_id, s.name AS service_name
+FROM audit_log a
+LEFT JOIN services s ON lower(s.gitlab_project_path) = lower(a.detail->>'project_path')
+WHERE a.action = 'ingest.rejected'
+ORDER BY a.at DESC, a.id DESC
 LIMIT 20;
+
+-- TrivyDailyActivity counts uploads and recorded rejections per UTC day over
+-- the last 30 days, oldest first. Days without either are included with
+-- zeros. Both counts read only their day range through the received_at and
+-- (action, at) indexes.
+-- name: TrivyDailyActivity :many
+WITH bounds AS (
+    SELECT ((now() AT TIME ZONE 'UTC')::date - 29) AS first_day
+), days AS (
+    SELECT (bounds.first_day + n)::date AS day
+    FROM bounds, generate_series(0, 29) AS n
+), uploads AS (
+    SELECT (sc.received_at AT TIME ZONE 'UTC')::date AS day, count(*) AS n
+    FROM scans sc, bounds
+    WHERE sc.received_at >= (bounds.first_day::timestamp AT TIME ZONE 'UTC')
+    GROUP BY 1
+), rejections AS (
+    SELECT (al.at AT TIME ZONE 'UTC')::date AS day, count(*) AS n
+    FROM audit_log al, bounds
+    WHERE al.action = 'ingest.rejected'
+      AND al.at >= (bounds.first_day::timestamp AT TIME ZONE 'UTC')
+    GROUP BY 1
+)
+SELECT days.day::date AS day,
+       coalesce(uploads.n, 0)::bigint AS uploads,
+       coalesce(rejections.n, 0)::bigint AS rejections
+FROM days
+LEFT JOIN uploads ON uploads.day = days.day
+LEFT JOIN rejections ON rejections.day = days.day
+ORDER BY days.day;

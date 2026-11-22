@@ -65,32 +65,87 @@ describe('describeAgent', () => {
   });
 });
 
+function sessionsList() {
+  return screen.findByRole('list', { name: 'Sessions' });
+}
+
 describe('account page', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-theme');
+    localStorage.removeItem('scanopsis.theme');
+  });
+
   it('is linked from the account menu', async () => {
     mockFetch(api([current]));
     renderApp('/');
     const menu = await openMenu('Account: Ada Lovelace, Admin');
     fireEvent.click(within(menu).getByRole('menuitem', { name: 'Your account' }));
-    expect(await screen.findByRole('list', { name: 'Sessions' })).toBeInTheDocument();
+    expect(await sessionsList()).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('/account');
+  });
+
+  it('shows the profile: name, username, sign-in method, role and two-factor', async () => {
+    mockFetch(api([current]));
+    renderApp('/account');
+    const profile = await screen.findByRole('region', { name: 'Profile' });
+    expect(within(profile).getByText('Ada Lovelace')).toBeInTheDocument();
+    expect(within(profile).getByText('ada')).toBeInTheDocument();
+    expect(within(profile).getByText('ada@example.com')).toBeInTheDocument();
+    expect(within(profile).getByText('AL')).toHaveAttribute('aria-hidden', 'true');
+    const fact = (label: string) =>
+      within(profile).getByText(label).closest('div')!.querySelector('dd')!;
+    expect(fact('Signs in with')).toHaveTextContent('GitLab');
+    expect(fact('Role')).toHaveTextContent('Admin');
+    expect(fact('Two-factor')).toHaveTextContent('On');
+    expect(fact('Member since').querySelector('time')).toHaveAttribute(
+      'datetime',
+      '2026-01-01T00:00:00Z',
+    );
+    expect(screen.getByRole('heading', { name: 'Account' })).toBeInTheDocument();
+  });
+
+  it('describes a local viewer without a name or e-mail', async () => {
+    mockFetch(
+      api([current], (call) =>
+        call.path === '/api/v1/me'
+          ? json(
+              200,
+              makeUser({
+                username: 'ops',
+                name: '',
+                email: '',
+                role: 'viewer',
+                source: 'local',
+              }),
+            )
+          : undefined,
+      ),
+    );
+    renderApp('/account');
+    const profile = await screen.findByRole('region', { name: 'Profile' });
+    expect(within(profile).getByText('ops')).toBeInTheDocument();
+    expect(within(profile).getByText('Local account')).toBeInTheDocument();
+    expect(within(profile).getByText('Local password')).toBeInTheDocument();
+    expect(within(profile).getByText('Viewer')).toBeInTheDocument();
   });
 
   it('lists the sessions and marks this browser', async () => {
     mockFetch(api([current, phone, pending]));
     renderApp('/account');
-    const list = await screen.findByRole('list', { name: 'Sessions' });
+    const list = await sessionsList();
     const rows = within(list).getAllByRole('listitem');
     expect(rows).toHaveLength(3);
     expect(within(rows[0]).getByText('This browser')).toBeInTheDocument();
     expect(within(rows[0]).getByText('2001:db8::1')).toBeInTheDocument();
     expect(within(rows[0]).queryByRole('button')).not.toBeInTheDocument();
     expect(within(rows[1]).getByText('Safari on iOS')).toBeInTheDocument();
+    expect(within(rows[1]).getByText(/^Signed in/)).toBeInTheDocument();
+    expect(within(rows[1]).getByText(/^Last active/)).toBeInTheDocument();
     expect(within(rows[2]).getByText('Second factor not completed')).toBeInTheDocument();
     expect(within(rows[2]).getByText('Address not recorded')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Account' })).toBeInTheDocument();
   });
 
-  it('ends one session', async () => {
+  it('ends one session after confirmation', async () => {
     let items = [current, phone];
     const { calls } = mockFetch(
       api([], (call) => {
@@ -105,8 +160,16 @@ describe('account page', () => {
     );
     renderApp('/account');
     fireEvent.click(
-      await screen.findByRole('button', { name: 'End session Safari on iOS, 198.51.100.4' }),
+      await screen.findByRole('button', { name: /^End session ?Safari on iOS, 198\.51\.100\.4$/ }),
     );
+    const dialog = screen.getByRole('alertdialog', { name: 'End this session?' });
+    expect(within(dialog).getByText(/Safari on iOS at 198\.51\.100\.4/)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    const confirm = within(dialog).getByRole('button', { name: 'End session' });
+    expect(confirm.className).toMatch(/bg-fail/);
+    fireEvent.click(confirm);
+    expect(await screen.findByText('Session ended')).toBeInTheDocument();
+    expect(screen.getByText('Safari on iOS is signed out.')).toBeInTheDocument();
     await waitFor(() =>
       expect(
         within(screen.getByRole('list', { name: 'Sessions' })).getAllByRole('listitem'),
@@ -114,6 +177,37 @@ describe('account page', () => {
     );
     expect(screen.getByText('2001:db8::1')).toBeInTheDocument();
     expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1);
+  });
+
+  it('keeps the session when the confirmation is cancelled', async () => {
+    const { calls } = mockFetch(api([current, phone]));
+    renderApp('/account');
+    fireEvent.click(
+      await screen.findByRole('button', { name: /^End session ?Safari on iOS, 198\.51\.100\.4$/ }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('reports a session that could not be ended', async () => {
+    mockFetch(
+      api([current, phone], (call) =>
+        call.method === 'DELETE'
+          ? apiError(404, 'not_found', 'No such session. It may have ended already.')
+          : undefined,
+      ),
+    );
+    renderApp('/account');
+    fireEvent.click(
+      await screen.findByRole('button', { name: /^End session ?Safari on iOS, 198\.51\.100\.4$/ }),
+    );
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'End session' }),
+    );
+    expect(await screen.findByText('The session could not be ended')).toBeInTheDocument();
+    expect(screen.getByText('No such session. It may have ended already.')).toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 
   it('ends all other sessions after confirmation and reports how many', async () => {
@@ -125,19 +219,24 @@ describe('account page', () => {
       ),
     );
     renderApp('/account');
-    await screen.findByRole('list', { name: 'Sessions' });
+    await sessionsList();
     fireEvent.click(screen.getByRole('button', { name: 'End all other sessions' }));
     const dialog = screen.getByRole('alertdialog', { name: 'End all other sessions?' });
+    expect(within(dialog).getByText(/\(2 sessions\)/)).toBeInTheDocument();
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
     fireEvent.click(within(dialog).getByRole('button', { name: 'End other sessions' }));
-    expect(await screen.findByText('Ended 2 other sessions.')).toBeInTheDocument();
+    expect(await screen.findByText('Other sessions ended')).toBeInTheDocument();
+    expect(
+      screen.getByText('2 sessions signed out. This browser stays signed in.'),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'DELETE')?.path).toBe('/api/v1/me/sessions');
   });
 
   it('cannot end others when this is the only session', async () => {
     mockFetch(api([current]));
     renderApp('/account');
-    await screen.findByRole('list', { name: 'Sessions' });
+    await sessionsList();
     expect(await screen.findByRole('button', { name: 'End all other sessions' })).toBeDisabled();
   });
 
@@ -150,5 +249,27 @@ describe('account page', () => {
     renderApp('/account');
     expect(await screen.findByText('Your sessions could not be loaded')).toBeInTheDocument();
     expect(screen.getByText('Boom.')).toBeInTheDocument();
+  });
+
+  it('chooses the theme from the appearance cards and keeps it', async () => {
+    mockFetch(api([current]));
+    renderApp('/account');
+    const group = await screen.findByRole('group', { name: 'Theme' });
+    const radio = (name: RegExp) => within(group).getByRole('radio', { name });
+    expect(within(group).getAllByRole('radio')).toHaveLength(3);
+    expect(radio(/^System/)).toBeChecked();
+
+    fireEvent.click(radio(/^Light/));
+    expect(radio(/^Light/)).toBeChecked();
+    expect(radio(/^System/)).not.toBeChecked();
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light');
+    expect(localStorage.getItem('scanopsis.theme')).toBe('light');
+
+    fireEvent.click(radio(/^Dark/));
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
+
+    fireEvent.click(radio(/^System/));
+    expect(document.documentElement).not.toHaveAttribute('data-theme');
+    expect(localStorage.getItem('scanopsis.theme')).toBeNull();
   });
 });
