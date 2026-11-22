@@ -90,22 +90,24 @@ func TestPortfolioPerformance(t *testing.T) {
 
 	checkHistory(t, c, pool, byName)
 
-	limit := func(what string, got time.Duration, plan func() string) {
+	limit := func(what string, got, ceiling time.Duration, plan func() string) {
 		t.Helper()
-		if got >= 150*time.Millisecond {
-			t.Errorf("%s: p95 %v >= 150ms\n%s", what, got, plan())
+		if got >= ceiling {
+			t.Errorf("%s: p95 %v >= %v\n%s", what, got, ceiling, plan())
 		}
 	}
+	const target = 150 * time.Millisecond
 	get := timed(t, c, "getPortfolio")
 	s95, c95 := p95(repeat(50, get)), p95(together(20, 5, nil, get))
 	t.Logf("portfolio, 500 services x 3 artifacts x 360 scans: one reader p95 %v; twenty readers p95 %v", s95, c95)
-	limit("portfolio, one reader", s95, func() string { return explainPortfolio(t, pool) })
-	limit("portfolio, twenty readers", c95, func() string { return explainPortfolio(t, pool) })
+	limit("portfolio, one reader", s95, target, func() string { return explainPortfolio(t, pool) })
+	limit("portfolio, twenty readers", c95, target, func() string { return explainPortfolio(t, pool) })
 
 	// The history as it is after every upload: the cache is emptied before
 	// each call by one reader, and before each round of twenty readers, who
 	// then share one computation. Served from the cache, and computed by
-	// twenty readers at once without sharing, it is reported only.
+	// twenty readers at once without sharing, it is reported only. The
+	// race detector slows its Go work, so the limit is scaled under it.
 	history := timed(t, c, "getPortfolioHistory")
 	forget := func() { c.history = &historyCache{} }
 	none := func() string { return "" }
@@ -121,8 +123,8 @@ func TestPortfolioPerformance(t *testing.T) {
 	}))
 	t.Logf("history, after an upload: one reader p95 %v; twenty readers p95 %v", cold, shared)
 	t.Logf("history, reported only: from the cache p95 %v; twenty readers computing each their own p95 %v", cached, alone)
-	limit("history after an upload, one reader", cold, none)
-	limit("history after an upload, twenty readers", shared, none)
+	limit("history after an upload, one reader", cold, target*raceSlowdown, none)
+	limit("history after an upload, twenty readers", shared, target*raceSlowdown, none)
 }
 
 // timed returns a function that calls an operation once and returns how
