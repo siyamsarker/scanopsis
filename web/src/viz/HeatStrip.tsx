@@ -51,6 +51,8 @@ export interface HeatStripProps {
   renderName?: (row: HeatRow) => ReactNode;
   /** Shown when there are no rows. */
   emptyMessage?: ReactNode;
+  /** "risk" ranks the rows (the default); "given" keeps the order they come in. */
+  order?: 'risk' | 'given';
   className?: string;
 }
 
@@ -115,16 +117,23 @@ export function HeatStrip({
   caption = 'Services ranked by risk',
   renderName,
   emptyMessage = 'No services yet. Add a service to see it here.',
+  order = 'risk',
   className = '',
 }: HeatStripProps) {
-  const ranked = useMemo(() => rankRows(rows), [rows]);
+  const ranked = useMemo(
+    () =>
+      order === 'risk'
+        ? rankRows(rows)
+        : rows.map((row) => ({ row, risk: row.counts == null ? 0 : riskPoints(row.counts) })),
+    [rows, order],
+  );
   const columnMax = useMemo(() => {
     const out = {} as Record<Severity, number>;
     for (const s of SEVERITIES)
       out[s] = Math.max(0, ...ranked.map((r) => countOf(r.row.counts, s)));
     return out;
   }, [ranked]);
-  const maxRisk = ranked[0]?.risk ?? 0;
+  const maxRisk = Math.max(0, ...ranked.map((r) => r.risk));
   const [mountedAt] = useState(() => Date.now());
   const reference = now != null ? toTime(now) : mountedAt;
   const staleMs = staleAfterDays * 86_400_000;

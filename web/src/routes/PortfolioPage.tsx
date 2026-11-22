@@ -3,9 +3,11 @@
 
 import { usePortfolio } from '../api/portfolio';
 import { PageHeader } from '../components/layout';
-import { ErrorState, Skeleton, SkeletonStat } from '../components/states';
+import { ErrorState, Skeleton } from '../components/states';
 import { PortfolioView } from './portfolio/PortfolioView';
-import { SkeletonTile } from './portfolio/ServiceTile';
+import { SkeletonCard } from './portfolio/ServiceCard';
+
+const TITLE = 'Portfolio';
 
 export function PortfolioPage({ now }: { now?: Date } = {}) {
   const query = usePortfolio();
@@ -13,23 +15,28 @@ export function PortfolioPage({ now }: { now?: Date } = {}) {
   if (query.isPending) {
     return (
       <>
-        <PageHeader
-          title="Portfolio"
-          subtitle="Every service with its open vulnerabilities, quality gate and freshness."
-        />
-        <div className="mb-8 grid grid-cols-2 gap-4 xl:grid-cols-4">
-          {[0, 1, 2, 3].map((i) => (
-            <SkeletonStat key={i} />
-          ))}
+        <PageHeader title={TITLE} subtitle="Every service ranked by risk." />
+        <div className="panel mb-8 grid gap-6 p-6 lg:grid-cols-[5fr_7fr]" aria-hidden="true">
+          <div className="space-y-4">
+            <Skeleton className="h-4 w-28" />
+            <Skeleton className="h-12 w-48" />
+            <Skeleton className="h-11 w-full" />
+            <Skeleton className="h-2.5 w-full rounded-full" />
+          </div>
+          <div className="space-y-3">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
         </div>
         <Skeleton className="mb-6 h-10 w-full sm:w-80" />
         <ul
           role="status"
           aria-label="Loading services"
-          className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4"
+          className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
         >
           {[0, 1, 2, 3, 4, 5].map((i) => (
-            <SkeletonTile key={i} />
+            <SkeletonCard key={i} />
           ))}
         </ul>
       </>
@@ -38,7 +45,7 @@ export function PortfolioPage({ now }: { now?: Date } = {}) {
   if (query.isError) {
     return (
       <>
-        <PageHeader title="Portfolio" />
+        <PageHeader title={TITLE} />
         <ErrorState
           title="The portfolio could not be loaded"
           message="Scanopsis could not reach the server. Your data is unchanged."

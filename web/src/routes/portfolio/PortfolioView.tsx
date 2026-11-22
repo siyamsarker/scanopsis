@@ -1,27 +1,32 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { LayoutGrid, Rows3 } from 'lucide-react';
+import { AnimatePresence } from 'motion/react';
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
-import type { Portfolio } from '../../api/portfolio';
-import { Chart } from '../../charts/Chart';
-import { treemap, type TreemapItem } from '../../charts/options';
+import { usePortfolioHistory, type Portfolio } from '../../api/portfolio';
 import { FilterChips } from '../../components/FilterChips';
 import { Select, SearchInput } from '../../components/inputs';
-import { Card, CardHeader, Grid, PageHeader } from '../../components/layout';
+import { PageHeader } from '../../components/layout';
 import { Segmented } from '../../components/Segmented';
-import { StatTile } from '../../components/StatTile';
-import { worstSeverity } from '../../components/severityModel';
 import { EmptyState } from '../../components/states';
-import { TargetLink } from '../../components/Freshness';
+import { formatInt, plural } from '../../format';
+import { HeatStrip, type HeatRow } from '../../viz';
+import { useFirstView } from '../firstView';
 import { secondaryButtonClass } from '../../ui';
-import { plural } from '../../format';
 import {
+  effectiveView,
   FILTERS,
-  SORTS,
   filterCounts,
-  openVulnerabilities,
+  gateOf,
+  historyFor,
+  indexHistory,
   readParams,
+  rememberedView,
+  rememberView,
+  SORTS,
+  STALE_AFTER_DAYS,
   visibleItems,
   writeParams,
   type FilterKey,
@@ -29,68 +34,39 @@ import {
   type SortKey,
   type ViewKey,
 } from './model';
-import { CI_GUIDE_URL, ServiceTile } from './ServiceTile';
+import { ServiceCard } from './ServiceCard';
+import { SetupSteps } from './SetupSteps';
+import { SummaryBand } from './SummaryBand';
 
-const SONARQUBE_GUIDE_URL =
-  'https://github.com/siyamsarker/scanopsis/blob/main/docs/integrations/sonarqube.md';
+/** Cards drawn at first; the rest wait for "Show all", so 500 services stay quick. */
+const FIRST_CARDS = 48;
 
-const linkClass = 'text-text underline underline-offset-2';
-
-export function ConnectEmpty() {
-  return (
-    <Card padded={false}>
-      <EmptyState
-        variant="connect"
-        title="No services yet"
-        body="Services appear here after the first pipeline uploads a scan."
-        steps={[
-          {
-            title: 'Add the GitLab URL',
-            body: (
-              <>
-                Set it in{' '}
-                <Link to="/settings" className={linkClass}>
-                  GitLab settings
-                </Link>{' '}
-                so pipelines can be verified.
-              </>
-            ),
-          },
-          {
-            title: 'Add the upload step to the pipeline',
-            body: (
-              <TargetLink
-                target={{ label: 'Read the GitLab CI guide', href: CI_GUIDE_URL }}
-                className={linkClass}
-              />
-            ),
-          },
-          {
-            title: 'Connect SonarQube',
-            body: (
-              <TargetLink
-                target={{ label: 'Read the SonarQube guide', href: SONARQUBE_GUIDE_URL }}
-                className={linkClass}
-              />
-            ),
-          },
-        ]}
-      />
-    </Card>
-  );
-}
-
-/** Summary, controls and the grid or treemap for a loaded portfolio. `now` fixes the clock for tests. */
+/**
+ * The portfolio once loaded: a summary band, the controls, and the services
+ * as cards or as a ranked list. `now` fixes the clock for tests.
+ */
 export function PortfolioView({ data, now }: { data: Portfolio; now?: Date }) {
   const [search, setSearch] = useSearchParams();
   const navigate = useNavigate();
   const [mounted] = useState(() => new Date());
   const clock = now ?? mounted;
   const params = readParams(search);
-  const { totals } = data;
+  const [stored, setStored] = useState(rememberedView);
+  const view = effectiveView(params.view, stored, data.items.length);
+  const [showAll, setShowAll] = useState(false);
+  const first = useFirstView('portfolio');
+
+  const history = usePortfolioHistory(data.items.length > 0);
+  const index = useMemo(() => indexHistory(history.data), [history.data]);
 
   function update(patch: Partial<PortfolioParams>) {
     setSearch(writeParams({ ...params, ...patch }), { replace: true });
+  }
+
+  function chooseView(next: ViewKey) {
+    rememberView(next);
+    setStored(next);
+    update({ view: next });
   }
 
   const items = useMemo(
@@ -98,65 +74,53 @@ export function PortfolioView({ data, now }: { data: Portfolio; now?: Date }) {
     [data.items, search, clock],
   );
   const counts = useMemo(() => filterCounts(data.items, clock), [data.items, clock]);
-  const treemapOption = useMemo(() => {
-    const tiles: TreemapItem[] = items.map((item) => {
-      const open = openVulnerabilities(item);
-      return {
-        id: String(item.service.id),
+  const cards = showAll ? items : items.slice(0, FIRST_CARDS);
+  const narrowed = params.filter !== 'all' || params.q.trim() !== '';
+
+  const rows: HeatRow[] = useMemo(
+    () =>
+      items.map((item) => ({
+        id: item.service.id,
         name: item.service.name,
-        // Zero is drawn as a sliver: echarts drops tiles of size 0, and formatInt shows 0.
-        value: open === 0 ? 0.2 : open,
-        severity: worstSeverity(item.counts),
-        detail: item.service.gitlab_project_path,
-      };
-    });
-    return treemap(tiles, { valueLabel: 'open vulnerabilities' });
-  }, [items]);
+        path: item.service.gitlab_project_path,
+        counts: item.last_scan_at ? item.counts : null,
+        gate: gateOf(item),
+        scannedAt: item.last_scan_at,
+        href: `/services/${item.service.id}`,
+      })),
+    [items],
+  );
 
   return (
     <>
       <PageHeader
         title="Portfolio"
-        subtitle="Every service with its open vulnerabilities, quality gate and freshness."
+        subtitle="Every service ranked by risk, with its quality gate and how its last pipelines moved."
         freshness={{ at: data.generated_at, now }}
       />
 
-      <section aria-label="Summary" className="mb-8">
-        <Grid cols={4}>
-          <StatTile label="Services" value={totals.services} to="/" />
-          <StatTile
-            label="Failing quality gates"
-            value={totals.failing_quality_gates}
-            to="/?filter=gate-failed"
-            tone={totals.failing_quality_gates > 0 ? 'fail' : undefined}
-          />
-          <StatTile
-            label="Services with critical vulnerabilities"
-            value={totals.services_with_critical}
-            to="/?filter=critical"
-            tone={totals.services_with_critical > 0 ? 'critical' : undefined}
-          />
-          <StatTile
-            label="Fixable vulnerabilities"
-            value={totals.fixable}
-            to="/?filter=fixable"
-            hint="A fixed version exists"
-          />
-        </Grid>
-      </section>
-
       {data.items.length === 0 ? (
-        <ConnectEmpty />
+        <SetupSteps />
       ) : (
         <>
-          <div className="mb-6 flex flex-col gap-4">
-            <div className="flex flex-wrap items-end gap-3">
+          <SummaryBand
+            items={data.items}
+            history={history.data}
+            index={index}
+            counts={counts}
+            filter={params.filter}
+            onFilter={(filter) => update({ filter })}
+          />
+
+          <div className="mb-4 flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <SearchInput
+                primary
                 label="Search services"
                 placeholder="Search by name or path"
                 value={params.q}
                 onChange={(q) => update({ q })}
-                className="w-full sm:w-80"
+                className="w-full sm:w-72"
               />
               <Select
                 label="Sort by"
@@ -170,11 +134,27 @@ export function PortfolioView({ data, now }: { data: Portfolio; now?: Date }) {
               />
               <Segmented<ViewKey>
                 label="View"
-                value={params.view}
-                onChange={(view) => update({ view })}
+                value={view}
+                onChange={chooseView}
                 options={[
-                  { value: 'grid', label: 'Grid' },
-                  { value: 'treemap', label: 'Treemap' },
+                  {
+                    value: 'cards',
+                    label: (
+                      <span className="inline-flex items-center gap-1.5">
+                        <LayoutGrid size={15} strokeWidth={1.75} aria-hidden="true" />
+                        Cards
+                      </span>
+                    ),
+                  },
+                  {
+                    value: 'list',
+                    label: (
+                      <span className="inline-flex items-center gap-1.5">
+                        <Rows3 size={15} strokeWidth={1.75} aria-hidden="true" />
+                        List
+                      </span>
+                    ),
+                  },
                 ]}
                 className="sm:ml-auto"
               />
@@ -188,14 +168,26 @@ export function PortfolioView({ data, now }: { data: Portfolio; now?: Date }) {
             />
           </div>
 
-          <p role="status" className="mb-4 text-sm text-text-muted">
-            Showing {items.length} of {data.items.length} {plural(data.items.length, 'service')}
+          <p role="status" className="mb-4 text-body-s text-text-muted tabular-nums">
+            {narrowed ? (
+              <>
+                Showing <span className="font-medium text-text">{formatInt(items.length)}</span> of{' '}
+                {formatInt(data.items.length)} {plural(data.items.length, 'service')}
+              </>
+            ) : (
+              <>
+                Showing {formatInt(items.length)} of {formatInt(data.items.length)}{' '}
+                {plural(data.items.length, 'service')}
+              </>
+            )}
+            {params.filter === 'stale' ? `, no scan in ${STALE_AFTER_DAYS} days` : ''}
           </p>
 
           {items.length === 0 ? (
-            <Card padded={false}>
+            <div className="panel">
               <EmptyState
                 compact
+                art="search"
                 title="No services match"
                 body="Change the search or the filter to see more services."
                 action={
@@ -208,34 +200,65 @@ export function PortfolioView({ data, now }: { data: Portfolio; now?: Date }) {
                   </button>
                 }
               />
-            </Card>
-          ) : params.view === 'treemap' ? (
-            <Card padded={false}>
-              <CardHeader
-                padded
-                title="Which services carry the most open vulnerabilities?"
-                description="Tile size is the number of open vulnerabilities; colour is the worst severity. Click a tile to open the service."
+            </div>
+          ) : view === 'list' ? (
+            <div className="panel overflow-hidden p-2 sm:p-3">
+              <HeatStrip
+                rows={rows}
+                order={params.sort === 'risk' ? 'risk' : 'given'}
+                now={clock}
+                staleAfterDays={STALE_AFTER_DAYS}
+                caption={
+                  params.sort === 'risk'
+                    ? 'Services ranked by risk'
+                    : `Services sorted by ${params.sort}`
+                }
+                onSelect={(row) => void navigate(`/services/${row.id}`)}
+                renderName={(row) => (
+                  <Link to={`/services/${row.id}`} tabIndex={-1} className="hover:underline">
+                    {row.name}
+                  </Link>
+                )}
               />
-              <Chart
-                option={treemapOption}
-                ariaLabel="Open vulnerabilities per service, sized by count and coloured by worst severity"
-                heightClass="h-[28rem]"
-                className="px-4"
-                onItemClick={({ data: tile }) => {
-                  const id = (tile as { id?: string } | undefined)?.id;
-                  if (id) void navigate(`/services/${id}`);
-                }}
-              />
-              <p className="px-6 py-4 text-sm text-text-muted">
-                Treemap tiles are also listed in the grid view.
-              </p>
-            </Card>
+            </div>
           ) : (
-            <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
-              {items.map((item) => (
-                <ServiceTile key={item.service.id} item={item} now={now} />
-              ))}
-            </ul>
+            <>
+              <ul
+                aria-label="Services"
+                className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3"
+              >
+                <AnimatePresence initial={false} mode="popLayout">
+                  {cards.map((item) => (
+                    <ServiceCard
+                      key={item.service.id}
+                      item={item}
+                      history={historyFor(item, index)}
+                      historyLoading={history.isPending}
+                      now={clock}
+                      animate={first}
+                    />
+                  ))}
+                </AnimatePresence>
+              </ul>
+              {cards.length < items.length ? (
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    className={secondaryButtonClass}
+                    onClick={() => setShowAll(true)}
+                  >
+                    Show all {formatInt(items.length)} services
+                  </button>
+                  <button
+                    type="button"
+                    className={secondaryButtonClass}
+                    onClick={() => chooseView('list')}
+                  >
+                    Switch to the list
+                  </button>
+                </div>
+              ) : null}
+            </>
           )}
         </>
       )}
