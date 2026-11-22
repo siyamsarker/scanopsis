@@ -183,6 +183,10 @@ type Ingest struct {
 	// auditLimit bounds the audit records per client address, so requests
 	// that need no credentials cannot fill the audit log.
 	auditLimit *auth.RateLimiter
+	// busyAuditLimit bounds the audit records of busy answers per client
+	// address. It is separate from auditLimit, so that load cannot use up the
+	// budget that records rejected credentials from the same address.
+	busyAuditLimit *auth.RateLimiter
 	// budget admits uploads by their estimated memory.
 	budget *memBudget
 	// dbSlots limits the uploads that hold a database connection to store
@@ -235,12 +239,13 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, opts 
 	}
 	i := &Ingest{
 		cfg: cfg, audit: audit, opts: opts, log: opts.Logger,
-		ver:        &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
-		store:      &pgSaver{pool: pool, log: opts.Logger},
-		auditLimit: opts.AuditLimiter,
-		budget:     newMemBudget(opts.MemoryBudget),
-		dbSlots:    make(chan struct{}, opts.DBSlots),
-		freeMemory: debug.FreeOSMemory,
+		ver:            &verifier{audience: opts.Audience, client: opts.HTTPClient, now: opts.Now},
+		store:          &pgSaver{pool: pool, log: opts.Logger},
+		auditLimit:     opts.AuditLimiter,
+		busyAuditLimit: auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, opts.Now),
+		budget:         newMemBudget(opts.MemoryBudget),
+		dbSlots:        make(chan struct{}, opts.DBSlots),
+		freeMemory:     debug.FreeOSMemory,
 	}
 	i.checkOpen(cfg.Current())
 	// The settings service calls back after every change; a source without
@@ -293,17 +298,20 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		i.reject(ctx, w, ip, claims, !admitted, status, code, message, extra...)
 	}
 	// busy answers an upload that waited for memory or a database slot in
-	// vain. It happens under load, so it is audited only within the
-	// per-address bound, and not at all when the client has already gone:
-	// then nobody reads the answer, and an audit write would only add load.
+	// vain, also when the client has already gone (the answer then costs
+	// nothing). Busy answers happen under load, so they are recorded within a
+	// per-address bound of their own, which leaves the bound for rejected
+	// credentials untouched.
 	busy := func(attr string, value any) {
-		if ctx.Err() != nil {
-			i.log.DebugContext(ctx, "upload abandoned by the client while waiting", "ip", ipString(ip), attr, value)
+		const msg = "The server is processing other uploads. Retry later."
+		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
+		extra := []any{attr, value, "client_gone", ctx.Err() != nil}
+		if ok, _ := i.busyAuditLimit.Allow(limitKey(ip)); ok {
+			i.reject(ctx, w, ip, claims, false, http.StatusServiceUnavailable, codeBusy, msg, extra...)
 			return
 		}
-		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
-		i.reject(ctx, w, ip, claims, true, http.StatusServiceUnavailable, codeBusy,
-			"The server is processing other uploads. Retry later.", attr, value)
+		httpapi.WriteError(w, http.StatusServiceUnavailable, codeBusy, msg)
+		i.log.DebugContext(ctx, "upload busy; not recorded: too many from this address", append([]any{"ip", ipString(ip)}, extra...)...)
 	}
 
 	if l := i.opts.Limiter; l != nil {

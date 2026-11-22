@@ -329,8 +329,9 @@ and is always recorded. Without allowed namespaces any project can get that far,
 so these rejections are bounded per client address in the same way. The
 rejections for the project limits (`project_rate_limited`, `job_artifact_limit`)
 and `busy` are always bounded per client address: they happen under load, and
-recording each one would add to it. An upload whose client gave up while it
-waited gets no answer and is not recorded. A rate-limited
+recording each one would add to it. `busy` has a bound of its own, so a busy
+period never hides rejected tokens from the same address. An upload whose
+client gave up while it waited is recorded like any other busy answer. A rate-limited
 request (`429`) is never recorded. The "Recorded rejections" number on the
 Integrations page counts what was recorded.
 

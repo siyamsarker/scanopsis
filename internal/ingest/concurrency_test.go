@@ -72,21 +72,21 @@ func TestIngestAdmitsUploadsByMemory(t *testing.T) {
 		t.Fatal("a third upload finished while the others hold the memory")
 	case <-time.After(100 * time.Millisecond):
 	}
-	// A waiter whose client goes away gets no answer and is not recorded:
-	// nobody reads the answer, and an audit write would only add load.
+	// A waiter whose client goes away is still answered 503 busy and
+	// recorded, marked as gone in the server log.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelled := uploadAsync(ctx, e, body)
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	w := <-cancelled
-	if w.Body.Len() != 0 || w.Header().Get("Retry-After") != "" {
-		t.Fatalf("answered a client that went away: %d %q %s", w.Code, w.Header().Get("Retry-After"), w.Body)
+	if w.Code != http.StatusServiceUnavailable || errCode(t, w) != "busy" || w.Header().Get("Retry-After") == "" {
+		t.Fatalf("%d %q %s", w.Code, w.Header().Get("Retry-After"), w.Body)
 	}
-	if ev := e.audit.list(); len(ev) != 0 {
+	if ev := e.audit.list(); len(ev) != 1 || ev[0].detail["reason"] != "busy" || ev[0].detail["project_path"] != "platform/payments-api" {
 		t.Errorf("audit = %+v", ev)
 	}
-	if !strings.Contains(e.logs.String(), "upload abandoned by the client while waiting") {
-		t.Errorf("no debug line for the abandoned upload:\n%s", e.logs.String())
+	if !strings.Contains(e.logs.String(), "client_gone=true") {
+		t.Errorf("the log does not mark the client as gone:\n%s", e.logs.String())
 	}
 	// Freed memory lets the waiter proceed.
 	bs.release <- struct{}{}
@@ -363,5 +363,14 @@ func TestIngestBusyIsAuditedWithinTheBound(t *testing.T) {
 	}
 	if busy != DefaultAuditBurst {
 		t.Errorf("%d busy rejections recorded for %d answers, want %d", busy, n, DefaultAuditBurst)
+	}
+	// Busy answers have their own bound: a rejected token from the same
+	// address is still recorded.
+	before := len(e.audit.list())
+	if w := e.do(req{noAuth: true}); w.Code != http.StatusUnauthorized {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if got := len(e.audit.list()); got != before+1 {
+		t.Errorf("a rejected token after the busy answers was not recorded (%d → %d)", before, got)
 	}
 }
