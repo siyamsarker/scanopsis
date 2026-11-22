@@ -4,10 +4,8 @@
 import { render, screen } from '@testing-library/react';
 import Showcase from './Showcase';
 
-vi.mock('../charts/ChartCore', () => ({ default: () => <div data-testid="core" /> }));
-
 describe('Showcase', () => {
-  it('renders every section with sample data, in both themes', async () => {
+  it('renders every section with sample data, in both themes', () => {
     vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(400);
     vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(800);
     render(<Showcase />);
@@ -22,7 +20,7 @@ describe('Showcase', () => {
       expect(screen.getByRole('region', { name })).toBeInTheDocument();
     }
     expect(document.querySelectorAll('[data-theme-scope]')).toHaveLength(2);
-    expect(await screen.findAllByTestId('core')).toHaveLength(3);
+    expect(screen.getByRole('table', { name: /^Sample services/ })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Services' })).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Findings' })).toBeInTheDocument();
     vi.restoreAllMocks();

@@ -231,12 +231,11 @@ Docker must be running, because the Go part includes the integration tests.
   `internal/store/storetest` and `internal/testutil` are not counted. To see the
   lines that are not covered, run `go tool cover -html=coverage/go.out`.
 - **Web:** `npm run coverage` in `web/` measures the logic modules only:
-  formatting, charts, `model.ts` and `links.ts` files, service conditions,
-  sign-in, theme and the API client. The `include` patterns in
+  formatting, the visual kit (`src/viz`), `model.ts` and `links.ts` files,
+  service conditions, sign-in, theme and the API client. The `include` patterns in
   `web/vite.config.ts` select them, so a new module that matches is measured
   without a change. It requires 75% of lines, functions, branches and
-  statements. The ECharts wrapper `src/charts/ChartCore.tsx` is left out,
-  because jsdom cannot draw it.
+  statements.
 
 ## Measure performance
 
