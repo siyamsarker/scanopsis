@@ -1,143 +1,162 @@
-# Deployment
+# Deploy to production
 
-This page takes the Compose deployment from the [getting started guide](getting-started.md)
-to production: host settings, a reverse proxy with TLS, an internal
-certificate authority, an existing PostgreSQL server, other platforms, sizing,
-upgrades and rollback.
+This guide takes the Compose stack from the getting started guide to a server
+that real users and pipelines rely on: HTTPS, host settings, your own
+PostgreSQL, other platforms, sizing and upgrades.
 
-Run every `docker compose` command in `deploy/compose`. Examples marked
-"example" need systems that this page cannot provide, such as public DNS.
-Adapt them. Everything else was run, and the output is shown, shortened where
-marked. The output was captured on Docker Desktop. Container names in your
-output differ with the project name. Client addresses in your output differ
-with your network.
+**Audience:** Operators · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
 
-Host names are placeholders: `scanopsis.example.com`, `gitlab.example.com`.
+---
 
-## What you deploy
+## Before you start
+
+You need:
+
+- a running stack from the [getting started guide](getting-started.md), and
+- the DNS name your users will open, for example `scanopsis.example.com`.
+
+Run every `docker compose` command in `deploy/compose`. The host names in this
+guide (`scanopsis.example.com`, `gitlab.example.com`, `db.example.com`) are
+placeholders. Commands marked **example** need systems outside your machine,
+such as public DNS or a cluster, and were not run for this guide. Everything
+else was run on Docker Desktop with Docker 29.9.3 and Compose 5.7.0. Names,
+times and addresses in your output will differ.
+
+This is what you build:
 
 ```text
-Internet or intranet -> reverse proxy (TLS, port 443) -> Scanopsis (HTTP, port 8080) -> PostgreSQL
+users and CI jobs -> reverse proxy (HTTPS, port 443) -> Scanopsis (HTTP, port 8080) -> PostgreSQL
 ```
 
-The Compose file runs Scanopsis and PostgreSQL. It publishes Scanopsis on
-`127.0.0.1:8080` only. You add the reverse proxy, either in the same Compose
-project, as shown below, or on the host.
+## What the Compose files give you
 
-Before you continue, you need a working stack from the getting started guide
-(steps 1 to 5) and the DNS name that users will open.
+`deploy/compose` holds three files:
+
+| File | What it is |
+|---|---|
+| `compose.yaml` | The `db` (PostgreSQL 18) and `scanopsis` services. |
+| `.env.example` | Settings to copy into `.env`. |
+| `compose.external-db.yaml` | An add-on that removes the `db` service, for [an existing PostgreSQL server](#use-an-existing-postgresql). |
+
+Scanopsis publishes no container image. You build it from a version branch
+with `make image` in the repository root, see
+[deploy a version](versions.md#deploy-a-version).
+
+`compose.yaml` comes with safe defaults:
+
+| Setting | Default | How to change it |
+|---|---|---|
+| Published address and port | `127.0.0.1:8080` | `SCANOPSIS_BIND` and `SCANOPSIS_PORT` in `.env`. The container always listens on 8080. |
+| Restart | `unless-stopped` for both services | `restart:` in `compose.yaml`. |
+| Container logs | `json-file`, 5 files of 10 MB per service | The `x-logging` block at the top. |
+| Memory | 512 MB for `scanopsis`, with `GOMEMLIMIT=400MiB` | `mem_limit` and `GOMEMLIMIT`. |
+| Process limit | 100 for `scanopsis`, 200 for `db` | `pids_limit`. |
+| Stop grace period | 20 seconds | Scanopsis finishes running requests within 15 seconds. |
+| Root file system | Read-only for both services | The database writes only to its volume and two `tmpfs` mounts. |
+
+Both services also drop all Linux capabilities (the database keeps the five
+its start script needs) and set `no-new-privileges`. The database sits on the
+`backend` network, which has no route out. Only `scanopsis` is also on
+`frontend`, which reaches the published port and GitLab.
 
 ## Host settings
 
-These settings belong to the host and to `compose.yaml`, not to Scanopsis.
-Go through them once.
+Go through these once. They are about the host and `compose.yaml`, not about
+Scanopsis settings.
 
-### Outbound access
+### Open only the connections Scanopsis needs
 
-Scanopsis needs no outbound access except to your GitLab instance (sign-in and
-the keys that check CI tokens) and, if you use it, to your SonarQube. It does
-not check for updates, does not send telemetry and downloads nothing while it
-runs. The database, which is PostgreSQL, is the only other connection. You
-need internet access only on the machine where you build the image. Firewall
-rules can therefore deny everything else.
+Scanopsis connects to PostgreSQL, to your GitLab (sign-in and the keys that
+check CI tokens) and, if you use it, to your SonarQube. Nothing else. It does
+not check for updates, send telemetry or download anything while it runs.
+Only the machine that builds the image needs the internet. Your firewall can
+deny everything else.
 
-### Start after a reboot
+### Start Scanopsis after a reboot
 
-Both services have `restart: unless-stopped`. Docker starts them again after a
-reboot when the Docker daemon starts at boot. On a Linux host with systemd,
-this is the default after you install Docker Engine from Docker's packages.
-Check it, and turn it on if it is off (example, needs `sudo`):
+Both services restart on their own (`restart: unless-stopped`) as long as the
+Docker daemon starts at boot. On Linux with systemd, check that it does
+(example, needs `sudo`):
 
 ```sh
 systemctl is-enabled docker
 sudo systemctl enable docker
 ```
 
-Check the restart policy that Compose set:
+Check the policy that Compose set:
 
 ```sh
-docker inspect scanopsis-scanopsis-1 --format '{{.HostConfig.RestartPolicy.Name}}'
+docker inspect "$(docker compose ps -q scanopsis)" --format '{{.HostConfig.RestartPolicy.Name}}'
 ```
 
 ```text
 unless-stopped
 ```
 
-A container that you stopped yourself (`docker compose stop`) stays stopped
-after a reboot. The reboot itself was not tested for this page, because it
-needs a machine you can restart.
+A container you stopped yourself with `docker compose stop` stays stopped
+after a reboot.
 
-### Publish address and port
+### Change the published address or port
 
-The Compose file publishes Scanopsis on `127.0.0.1:8080`, so only programs on
-the host can reach it. Change the host side with `SCANOPSIS_BIND` and
-`SCANOPSIS_PORT` in `.env`. The container always listens on 8080. For example,
-with `SCANOPSIS_PORT=28581`:
+Set `SCANOPSIS_BIND` and `SCANOPSIS_PORT` in `.env`, then run
+`docker compose up -d`. For example, with `SCANOPSIS_PORT=28691`:
 
 ```sh
-docker compose up -d
 docker compose ps --format 'table {{.Service}}\t{{.Ports}}'
 ```
 
 ```text
 SERVICE     PORTS
 db          5432/tcp
-scanopsis   127.0.0.1:28581->8080/tcp
+scanopsis   127.0.0.1:28691->8080/tcp
 ```
 
-Set `SCANOPSIS_BIND` to another address only when the proxy runs on another
-machine, and then to the private address of the host, not to `0.0.0.0`:
-Scanopsis speaks plain HTTP, and everyone who can reach the port can bypass
-the proxy and its limits. Set `SCANOPSIS_PUBLIC_URL` to the address of the
-proxy, not to this port.
+Keep the loopback address when the proxy runs on the same host. If the proxy
+runs on another machine, set `SCANOPSIS_BIND` to the host's private address,
+never to `0.0.0.0`. Scanopsis speaks plain HTTP, and anyone who can reach the
+port can skip the proxy and its limits.
 
-### Logs and rotation
+### Keep logs from filling the disk
 
-Both services write their logs to Docker's `json-file` driver. `compose.yaml`
-rotates them: five files of 10 MB for each service, so logs cannot fill the
-disk. Check the setting:
+`compose.yaml` already rotates the logs of both services. Check it:
 
 ```sh
-docker inspect scanopsis-scanopsis-1 --format '{{.HostConfig.LogConfig}}'
+docker inspect "$(docker compose ps -q scanopsis)" --format '{{.HostConfig.LogConfig}}'
 ```
 
 ```text
 {json-file map[max-file:5 max-size:10m]}
 ```
 
-To keep more, change `max-size` and `max-file` in the `x-logging` block at the
-top of `compose.yaml` and run `docker compose up -d`. Compose recreates the
-containers, and the old log files go with the old containers. Copy the logs to
-your log system before that, if you need them. With `docker run`, use
-`--log-opt max-size=10m --log-opt max-file=5`.
+To keep more, change `max-size` and `max-file` in the `x-logging` block and
+run `docker compose up -d`. Compose recreates the containers and their old
+log files go with them, so ship the logs to your log system first if you need
+them.
 
-### Time zone
+### Show local time in the log
 
-The container runs in UTC. The timestamps in the log use its time zone.
-Set `TZ` in `.env` to use another one, then run `docker compose up -d`:
+The container runs in UTC. To log in another time zone, add `TZ` to `.env`
+and run `docker compose up -d`:
 
 ```text
 TZ=Europe/Berlin
 ```
 
 ```text
-{"time":"2026-11-22T06:31:26.853177503+01:00","level":"INFO","msg":"scanopsis listening","addr":"[::]:8080"}
+{"time":"2026-11-22T12:14:46.852206508+01:00","level":"INFO","msg":"scanopsis listening","addr":"[::]:8080"}
 ```
 
-Only the log changes. The database stores times as points in time, so its
-data is the same in any time zone. Set `TZ` only if your log system expects
-local time.
+Only the log changes. The database stores points in time, so the data is the
+same in every time zone.
 
-### Memory and process limits
+### Check the memory and process limits
 
-`compose.yaml` limits Scanopsis to 512 MB of memory (`mem_limit`) and tells
-the Go runtime to collect garbage before that, with `GOMEMLIMIT=400MiB`, which
-is 20% below the limit. It limits the processes of Scanopsis to 100 and of the
-database to 200 (`pids_limit`), so that a runaway process cannot exhaust the
-host. Check the limits:
+`compose.yaml` gives Scanopsis 512 MB of memory and tells Go to clean up
+before it gets there (`GOMEMLIMIT=400MiB`, about 20% below). It also caps the
+number of processes, so a runaway process cannot exhaust the host:
 
 ```sh
-docker inspect scanopsis-scanopsis-1 --format 'memory={{.HostConfig.Memory}} pids={{.HostConfig.PidsLimit}}'
+docker inspect "$(docker compose ps -q scanopsis)" --format 'memory={{.HostConfig.Memory}} pids={{.HostConfig.PidsLimit}}'
 ```
 
 ```text
@@ -145,37 +164,35 @@ memory=536870912 pids=100
 ```
 
 If Docker kills the container for lack of memory,
-`docker inspect scanopsis-scanopsis-1 --format '{{.State.OOMKilled}}'` prints
-`true`. Raise `mem_limit` and keep `GOMEMLIMIT` about 20% below it. The
-[sizing](#sizing) section has the memory that Scanopsis used in tests.
+`docker inspect "$(docker compose ps -q scanopsis)" --format '{{.State.OOMKilled}}'`
+prints `true`. Raise `mem_limit` and keep `GOMEMLIMIT` about 20% below it.
+[Sizing](#sizing) has the measured figures.
 
 ## Reverse proxy and TLS
 
-Scanopsis speaks plain HTTP. Put a proxy in front of it that terminates TLS,
-and set `SCANOPSIS_PUBLIC_URL` to the HTTPS address of the proxy. Then:
+Scanopsis speaks plain HTTP. A reverse proxy in front of it handles TLS
+(HTTPS). Set `SCANOPSIS_PUBLIC_URL` to the HTTPS address of the proxy. Then:
 
 - the session cookie gets the `Secure` attribute and the `__Host-` prefix,
-- the server sends `Strict-Transport-Security`,
-- GitLab and the CI jobs use the same address (the redirect URI and the token
-  audience are built from it).
+- the server sends `Strict-Transport-Security` (HSTS), and
+- GitLab and the CI jobs use the same address, because the sign-in redirect
+  and the token audience are built from it.
 
-The proxy must pass the `Host` header, the path and the query unchanged, and
-it must set `X-Forwarded-For` to the address of the client.
+Every proxy must:
 
-Serve Scanopsis at the root of its own host name, for example
-`https://scanopsis.example.com/`. A port is allowed
-(`https://scanopsis.example.com:8443/`). A sub-path such as
-`https://example.com/scanopsis/` is not supported: the web interface loads its
-files from absolute paths (`/assets/...`) and the public URL cannot contain a
-path. Give Scanopsis its own host name instead.
+- pass the `Host` header, the path and the query unchanged,
+- set `X-Forwarded-For` to the client's address, and
+- serve Scanopsis at the root of its own host name, such as
+  `https://scanopsis.example.com/`. A port is fine. A sub-path such as
+  `https://example.com/scanopsis/` does not work: the web interface loads its
+  files from `/assets/...`, and the public URL cannot contain a path.
 
-Both examples below were run with a self-signed certificate on a local
-machine. In production, use a certificate from your certificate authority.
+Pick Caddy or nginx below. Both were run on a local machine with a test
+certificate. In production, use a certificate from your certificate authority.
 
-### Create a test certificate
+### Make a test certificate
 
-Skip this step in production. Create a self-signed certificate for the name
-that users open:
+Skip this in production. In `deploy/compose`:
 
 ```sh
 mkdir tls
@@ -183,25 +200,17 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 30 \
   -keyout tls/key.pem -out tls/cert.pem \
   -subj "/CN=scanopsis.example.com" \
   -addext "subjectAltName=DNS:scanopsis.example.com"
-ls -l tls
 ```
 
-Expected result:
+Only you can read `tls/key.pem`. The proxy containers run as root, so they can
+read it too.
 
-```text
--rw-r--r--  1 siyam  wheel  1176 Nov 19 16:41 cert.pem
--rw-------  1 siyam  wheel  1704 Nov 19 16:41 key.pem
-```
+### Use Caddy
 
-The key is readable only by you. The proxy containers run as root and can
-read it.
-
-### Option 1: Caddy
-
-Caddy is the shortest way to get TLS. The image is pinned by digest, so that
-the proxy you tested is the proxy you run. At the time of writing, `caddy:2`
-was version 2.11.9. Look up the current digest with
-`docker pull caddy:2` and `docker image inspect caddy:2 --format '{{index .RepoDigests 0}}'`.
+Caddy is the shortest way to HTTPS. Pin the image by digest so you run the
+proxy you tested. The digest below is `caddy:2` version 2.11.9. To look up the
+current one, run `docker pull caddy:2` and
+`docker image inspect caddy:2 --format '{{index .RepoDigests 0}}'`.
 
 1. Create `Caddyfile` next to `compose.yaml`:
 
@@ -213,18 +222,16 @@ was version 2.11.9. Look up the current digest with
    }
    ```
 
-   `encode zstd gzip` compresses the web interface and the JSON answers.
-   Scanopsis does not compress them itself.
+   `encode` compresses the web interface and the JSON answers, which
+   Scanopsis does not do itself. Caddy replaces any `X-Forwarded-For` a client
+   sends, so nobody can fake an address through it.
 
-   Caddy replaces any `X-Forwarded-For` header that the client sends with the
-   address it sees, so a client cannot forge its address through Caddy.
+   With public DNS, delete the `tls` line and Caddy gets and renews a
+   certificate on its own. That needs ports 80 and 443 reachable from the
+   internet (example).
 
-   Example for production with public DNS: delete the `tls` line. Caddy then
-   obtains and renews a certificate by itself. This needs ports 80 and 443 to
-   be reachable from the internet. It was not run for this page.
-
-2. Create `compose.override.yaml` next to `compose.yaml`. Compose reads it
-   automatically:
+2. Create `compose.override.yaml` next to `compose.yaml`. Compose reads it on
+   its own:
 
    ```yaml
    services:
@@ -249,45 +256,40 @@ was version 2.11.9. Look up the current digest with
      caddy-data:
    ```
 
-   This gives the `frontend` network a fixed address range and Caddy a fixed
-   address in it, so that you can tell Scanopsis which proxy to trust. Choose a
-   range that does not overlap with your own networks. To serve users on the
-   network, publish `"443:443"` instead of the loopback address.
+   The fixed address lets you tell Scanopsis which proxy to trust. Pick a
+   range that does not overlap your own networks. Port 8443 on the loopback
+   address is for testing; publish `"443:443"` to serve users.
 
-3. In `.env`, set the public URL and the proxy address:
+3. In `.env`, set the public URL and the proxy's address:
 
    ```text
    SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com
    SCANOPSIS_TRUSTED_PROXIES=172.30.0.10
    ```
 
-4. Start everything:
+4. Start everything with `docker compose up -d`, then check:
 
    ```sh
-   docker compose up -d
    docker compose ps --format 'table {{.Service}}\t{{.Status}}'
    ```
 
-   Expected result:
-
    ```text
    SERVICE     STATUS
-   caddy       Up About a minute
-   db          Up 3 minutes (healthy)
-   scanopsis   Up About a minute (healthy)
+   caddy       Up 13 seconds
+   db          Up 13 seconds (healthy)
+   scanopsis   Up 8 seconds (healthy)
    ```
 
-If Compose reports that the address pool overlaps with another network, the
-range collides with an existing Docker network. Choose another range in the
-`ipam` section and in the proxy's `ipv4_address`.
+If Compose says the address pool overlaps another network, pick another
+`subnet` and a matching `ipv4_address`.
 
-### Option 2: nginx
+### Use nginx
 
-nginx needs three settings that Caddy does not: the upload size, a name
-look-up that follows container restarts, and the forwarded address. It also
-needs `gzip` to compress responses.
+nginx needs a few lines that Caddy does not: a larger upload size, a name
+lookup that survives container restarts, the forwarded address and
+compression.
 
-1. Create `nginx.conf`:
+1. Create `nginx.conf` next to `compose.yaml`:
 
    ```nginx
    server {
@@ -305,12 +307,11 @@ needs `gzip` to compress responses.
        # Trivy reports can be tens of megabytes. nginx refuses more than 1m by default.
        client_max_body_size 100m;
 
-       # Compress the web interface and the JSON answers. HTML is always
-       # included. Scanopsis does not compress them itself.
+       # Compress the web interface and the JSON answers (HTML is always included).
        gzip on;
        gzip_types text/css text/javascript application/javascript application/json image/svg+xml;
 
-       # These apply to every location, as long as a location sets none of its own.
+       # These apply to every location below that sets none of its own.
        proxy_set_header Host $host;
        proxy_set_header X-Forwarded-For $remote_addr;
        proxy_read_timeout 90s;
@@ -321,11 +322,11 @@ needs `gzip` to compress responses.
    }
    ```
 
-   `X-Forwarded-For $remote_addr` replaces what the client sent. Do not use
-   `$proxy_add_x_forwarded_for` unless you also list the proxies in front of
+   `X-Forwarded-For $remote_addr` replaces whatever the client sent. Use
+   `$proxy_add_x_forwarded_for` only if you also list the proxies in front of
    nginx in `SCANOPSIS_TRUSTED_PROXIES`.
 
-2. Use this `compose.override.yaml` instead of the one for Caddy:
+2. Use this `compose.override.yaml` instead of the Caddy one:
 
    ```yaml
    services:
@@ -347,30 +348,131 @@ needs `gzip` to compress responses.
            - subnet: 172.30.0.0/24
    ```
 
-3. Set `SCANOPSIS_TRUSTED_PROXIES=172.30.0.11` and run `docker compose up -d`.
+3. Set `SCANOPSIS_TRUSTED_PROXIES=172.30.0.11` in `.env` and run
+   `docker compose up -d`. Check the configuration:
 
-When you edit `nginx.conf`, restart the container with
-`docker compose restart nginx`. A reload (`nginx -s reload`) can miss the
-change when your editor replaces the file instead of changing it in place.
+   ```sh
+   docker compose exec -T nginx nginx -t
+   ```
 
-### Limit rates and restrict the webhook (optional)
+   ```text
+   nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+   nginx: configuration file /etc/nginx/nginx.conf test is successful
+   ```
 
-Scanopsis limits the rate of sign-in, setup and upload requests for each client
-address. A limit at the proxy adds a second layer in front of it and keeps
-floods away from the application. The examples below are for nginx. They were
-checked with `nginx -t` and run against the stack, as shown below. Replace `203.0.113.20` with the address from which SonarQube calls
-Scanopsis. Runners that share one NAT address share one limit, so keep the
-upload limit high.
+After you edit `nginx.conf`, run `docker compose restart nginx`. A reload
+(`nginx -s reload`) can miss the change when your editor replaces the file
+instead of changing it in place.
 
-Add this to the top of `nginx.conf`, outside the `server` block:
+### Check the proxy
+
+The commands use the Caddy port 8443; for nginx use 9443. `--resolve` sends
+the request for `scanopsis.example.com` to your machine without a DNS entry,
+and `--cacert` trusts the test certificate.
+
+1. **HTTPS works:**
+
+   ```sh
+   curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
+     https://scanopsis.example.com:8443/readyz
+   ```
+
+   ```text
+   {"status":"ready"}
+   ```
+
+   Without `--cacert`, curl refuses the certificate with
+   `curl: (60) SSL certificate problem: self signed certificate`. That proves
+   the connection is checked.
+
+2. **The security headers are there:**
+
+   ```sh
+   curl -sSI --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
+     https://scanopsis.example.com:8443/healthz | grep -i -E '^(HTTP|strict|x-frame)'
+   ```
+
+   ```text
+   HTTP/2 200
+   strict-transport-security: max-age=63072000; includeSubDomains
+   x-frame-options: DENY
+   ```
+
+   No `strict-transport-security`? Then `SCANOPSIS_PUBLIC_URL` does not start
+   with `https://`.
+
+3. **Scanopsis sees the real client address.** It believes `X-Forwarded-For`
+   only from a proxy listed in `SCANOPSIS_TRUSTED_PROXIES`. Send a request
+   with a fake address and read what Scanopsis logged:
+
+   ```sh
+   curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
+     -H 'X-Forwarded-For: 203.0.113.9' https://scanopsis.example.com:8443/healthz
+   docker compose logs scanopsis | grep '"client_ip"' | grep -v '"127.0.0.1"' | tail -1
+   ```
+
+   With `SCANOPSIS_TRUSTED_PROXIES` empty, the log shows the proxy's address
+   for every user, and all users share one rate limit:
+
+   ```text
+   {"time":"2026-11-22T11:13:35.975316503Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.10"}
+   ```
+
+   With the proxy listed, the start-up line shows `"trusted_proxies":1`, and
+   `client_ip` is the address the proxy saw: `172.30.0.1` (the network gateway)
+   on Docker Desktop, the real client on a Linux server. The fake
+   `203.0.113.9` is never used.
+
+4. **Large uploads pass.** Without `client_max_body_size`, nginx answers a
+   3 MB upload itself with `413` and an HTML page, not JSON from Scanopsis:
+
+   ```text
+   <html>
+   <head><title>413 Request Entity Too Large</title></head>
+   ...
+   HTTP 413
+   ```
+
+   With `client_max_body_size 100m;` the upload reaches Scanopsis. Scanopsis
+   accepts reports of up to 64 MiB after decompression, so keep the proxy limit
+   above your largest compressed report.
+
+5. **Answers are compressed.** Ask for the main script of the web interface
+   (its name changes with each build, so read it from the page):
+
+   ```sh
+   ASSET=$(curl -s http://127.0.0.1:8080/ | grep -o '/assets/index-[^"]*\.js' | head -1)
+   curl -sI -H 'Accept-Encoding: gzip' --resolve scanopsis.example.com:8443:127.0.0.1 \
+     --cacert tls/cert.pem https://scanopsis.example.com:8443$ASSET | grep -i content-encoding
+   ```
+
+   ```text
+   content-encoding: gzip
+   ```
+
+   The script shrank from 278,866 bytes to 89,238 through Caddy and about
+   100,900 through nginx. Small JSON answers such as `/readyz` stay
+   uncompressed, which is normal.
+
+If a check fails, see [reverse proxy problems](troubleshooting.md#reverse-proxy-and-tls).
+
+### Add rate limits and lock down the webhook (optional)
+
+Scanopsis already limits sign-in, setup and upload requests per client
+address. A limit at the proxy adds a second layer and keeps floods away from
+the application. These nginx lines were checked with `nginx -t` and run
+against the stack. Replace `203.0.113.20` with the address SonarQube calls
+from.
+
+Add this at the top of `nginx.conf`, outside the `server` block:
 
 ```nginx
 limit_req_zone $binary_remote_addr zone=scanopsis_auth:10m rate=10r/m;
 limit_req_zone $binary_remote_addr zone=scanopsis_upload:10m rate=2r/s;
 ```
 
-Inside the `server` block, next to `proxy_read_timeout`, add the status that
-a refused request gets, and put the new locations above `location /`:
+Inside the `server` block, after `proxy_read_timeout`, add these lines above
+`location /`:
 
 ```nginx
     limit_req_status 429;
@@ -395,47 +497,24 @@ a refused request gets, and put the new locations above `location /`:
     }
 ```
 
-The webhook is also protected by its HMAC signature. The address restriction
-keeps everyone else from even trying. If a proxy stands in front of nginx, the
-address that nginx sees is that proxy: use the `realip` module or restrict at
-the outer proxy instead.
-
-Run the syntax check, restart nginx and test:
-
-```sh
-docker compose exec -T nginx nginx -t
-docker compose restart nginx
-```
-
-```text
-nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
-nginx: configuration file /etc/nginx/nginx.conf test is successful
-```
-
-A request to the webhook from an address that is not listed is refused. The
-test sent it from the machine, which is not `203.0.113.20`:
-
-```sh
-curl -s -o /dev/null -w "%{http_code}\n" -X POST \
-  --resolve scanopsis.example.com:9443:127.0.0.1 --cacert tls/cert.pem \
-  https://scanopsis.example.com:9443/api/v1/hooks/sonarqube
-```
-
-```text
-403
-```
-
-Thirteen sign-in requests in a row, with wrong credentials. The first ten
-reach Scanopsis (`401`), then the proxy answers `429` (the exact number
-depends on timing, because the proxy refills the allowance while you test):
+Runners behind one NAT address share one upload limit, so keep it generous.
+After `docker compose restart nginx`, a webhook call from any other address
+gets `403`, and 13 wrong sign-ins in a row from one address look like this:
 
 ```text
 401 401 401 401 401 401 401 401 401 401 429 429 429
 ```
 
-The same restriction in Caddy, for the webhook only (the standard Caddy build
-has no rate limit module, so use nginx or a firewall for the limits). Put it
-above `reverse_proxy` in the site block:
+The first ten reach Scanopsis (`401`), then nginx answers `429`. The exact
+count depends on timing, because the allowance refills while you test.
+
+The webhook is also protected by its HMAC signature; the address rule stops
+everyone else from even trying. If another proxy stands in front of nginx,
+nginx sees that proxy's address: use the `realip` module, or restrict at the
+outer proxy.
+
+Caddy's standard build has no rate limit module. It can still restrict the
+webhook. Put this above `reverse_proxy` in the site block:
 
 ```text
 	@sonarqube_webhook_denied {
@@ -445,191 +524,35 @@ above `reverse_proxy` in the site block:
 	respond @sonarqube_webhook_denied 403
 ```
 
-`GET /api/v1/version` needs no sign-in and tells everyone the version that you
-run. If you do not want that, restrict it in the same way (nginx):
+`GET /api/v1/version` needs no sign-in and tells anyone which version you run.
+To hide it, restrict it the same way, for example with
+`allow 10.0.0.0/8; deny all;` in a `location = /api/v1/version` block.
 
-```nginx
-    location = /api/v1/version {
-        allow 10.0.0.0/8;
-        deny all;
-        proxy_pass $upstream;
-    }
-```
+### Set proxy timeouts
 
-The version check in [versions and branches](versions.md#check-the-running-version)
-then works from those addresses, or directly on `127.0.0.1:8080`. From
-another address, such as the test machine, the proxy answers `403`.
+Scanopsis reads a request within 30 seconds and writes the answer within 60.
+A Trivy upload gets longer: up to 30 seconds to wait for memory, then 5
+minutes to send its body, then 60 seconds for the answer. A late body gets
+`408`. A 20 MB report crosses a local network in well under a second, so only
+slow links come near these limits.
 
-### Verify the proxy
+- **nginx** reads the whole body before it passes the request on, so a slow
+  client never holds Scanopsis. Keep `proxy_read_timeout` above the time an
+  upload takes to store, such as the 90 seconds above.
+- **Caddy** streams the body and has no timeout of its own by default, so the
+  limits of Scanopsis apply.
 
-The examples use port 8443 (Caddy). For nginx in this page, the port is 9443.
-`--resolve` makes curl send the request for `scanopsis.example.com` to your
-machine without a DNS entry. `--cacert` trusts the test certificate.
+## Trust an internal certificate authority
 
-1. HTTPS works:
+If GitLab or SonarQube uses a certificate from your own certificate authority
+(CA), Scanopsis cannot check it, and GitLab sign-in and every upload fail.
+Scanopsis never turns certificate checks off. Give it your CA instead.
 
-   ```sh
-   curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
-     https://scanopsis.example.com:8443/readyz
-   ```
-
-   Expected result:
-
-   ```text
-   {"status":"ready"}
-   ```
-
-   Without `--cacert`, curl refuses the self-signed certificate, which proves
-   that the connection is verified:
-
-   ```text
-   curl: (60) SSL certificate problem: self signed certificate
-   ```
-
-2. HSTS and the other security headers are present, because the public URL
-   uses `https`:
-
-   ```sh
-   curl -sSI --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
-     https://scanopsis.example.com:8443/healthz | grep -i -E '^(HTTP|strict|content-security|x-frame)'
-   ```
-
-   Expected result (the Content-Security-Policy line is shortened):
-
-   ```text
-   HTTP/2 200
-   content-security-policy: default-src 'self'; script-src 'self'; style-src 'self'; ...
-   strict-transport-security: max-age=63072000; includeSubDomains
-   x-frame-options: DENY
-   ```
-
-   If `strict-transport-security` is missing, `SCANOPSIS_PUBLIC_URL` does not
-   start with `https://`.
-
-3. `X-Forwarded-For` is believed only from a trusted proxy. The test sends the
-   request through the proxy and reads the client address that Scanopsis logs.
-
-   First, with `SCANOPSIS_TRUSTED_PROXIES` empty, restart and send a request:
-
-   ```sh
-   curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
-     -H 'X-Forwarded-For: 203.0.113.9' https://scanopsis.example.com:8443/healthz
-   docker compose logs scanopsis | grep '"client_ip"' | grep -v '"127.0.0.1"' | tail -1
-   ```
-
-   ```text
-   scanopsis-1  | {"time":"2026-11-19T10:42:39.552154966Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.10"}
-   ```
-
-   Scanopsis logs the address of the proxy (`172.30.0.10`) for every user. All
-   users share one rate limit. The header is ignored.
-
-   Then set `SCANOPSIS_TRUSTED_PROXIES=172.30.0.10`, run `docker compose up -d`
-   and repeat the request. The startup line now shows `"trusted_proxies":1`:
-
-   ```text
-   scanopsis-1  | {"time":"2026-11-19T10:42:55.736077168Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.1"}
-   ```
-
-   The logged address is now the one that Caddy saw (`172.30.0.1` is the
-   gateway of the Docker network, which is how Docker Desktop presents your
-   machine; on a Linux server you see the real client address). The forged
-   `203.0.113.9` was replaced by Caddy and is not used.
-
-   A request that reaches Scanopsis directly from an address that is not a
-   trusted proxy cannot choose its address:
-
-   ```sh
-   curl -s -H 'X-Forwarded-For: 203.0.113.9' http://127.0.0.1:8080/healthz
-   docker compose logs scanopsis | grep '"client_ip"' | grep -v '"127.0.0.1"' | tail -1
-   ```
-
-   ```text
-   scanopsis-1  | {"time":"2026-11-19T10:42:55.845838793Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.1"}
-   ```
-
-   The logged address is the real peer, not `203.0.113.9`.
-
-4. Uploads of realistic size pass the proxy. Upload a report through a real
-   pipeline (see the [GitLab CI guide](integrations/gitlab-ci.md)) and read the
-   status. With nginx and without `client_max_body_size`, the status is `413`
-   and the body is an HTML page from nginx, not JSON from Scanopsis:
-
-   ```text
-   <html>
-   <head><title>413 Request Entity Too Large</title></head>
-   <body>
-   <center><h1>413 Request Entity Too Large</h1></center>
-   <hr><center>nginx/1.30.7</center>
-   </body>
-   </html>
-   HTTP 413
-   ```
-
-   With `client_max_body_size 100m;` the same 2.4 MiB upload returns `201`.
-   Scanopsis accepts 64 MiB after decompression. Keep the proxy limit above
-   the largest compressed report you send.
-
-5. Responses are compressed. Ask for the largest file of the web interface
-   (its name changes with each build; read it from the page) with and without
-   `Accept-Encoding`:
-
-   ```sh
-   ASSET=$(curl -s http://127.0.0.1:8080/ | grep -o '/assets/index-[^"]*\.js' | head -1)
-   curl -s -o /dev/null -w "direct: %{size_download} bytes\n" http://127.0.0.1:8080$ASSET
-   curl -s -o /dev/null -H 'Accept-Encoding: gzip' -w "gzip: %{size_download} bytes\n" \
-     --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
-     https://scanopsis.example.com:8443$ASSET
-   curl -sI -H 'Accept-Encoding: gzip' \
-     --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
-     https://scanopsis.example.com:8443$ASSET | grep -i content-encoding
-   ```
-
-   Expected result, through Caddy (nginx on port 9443 gives about 99,600 bytes
-   and `Content-Encoding: gzip`; the sizes change with each build):
-
-   ```text
-   direct: 274441 bytes
-   gzip: 88211 bytes
-   content-encoding: gzip
-   ```
-
-   With `Accept-Encoding: zstd, gzip`, Caddy answers with `content-encoding: zstd`.
-   A JSON answer such as `/readyz` is too small to be compressed, which is
-   normal.
-
-If a step fails, see [troubleshooting](troubleshooting.md#reverse-proxy-and-tls).
-
-### Timeouts
-
-Scanopsis reads a request within 30 seconds and writes a response within 60
-seconds. A Trivy upload is the exception: it may take 5 minutes to arrive, may
-wait up to 30 seconds for memory, and is answered `408` when the body is late.
-A 20 MB report uploads in well under a second on a local network, so only slow
-links come near these limits.
-
-- nginx reads the whole request body before it passes the request on
-  (`proxy_request_buffering on`, the default), so a slow client never holds
-  Scanopsis. Keep `client_body_timeout` (60 seconds between two reads by
-  default) and set `proxy_read_timeout` above the time an upload is stored,
-  90 seconds as in the example.
-- Caddy passes the body on while it arrives and sets no timeout of its own by
-  default, so the 5 minutes in Scanopsis apply.
-
-## Internal certificate authority
-
-If GitLab (or SonarQube) uses a certificate from your own certificate
-authority, Scanopsis cannot verify it, and every upload and GitLab sign-in
-fails. Scanopsis never turns certificate checks off. Give it the CA instead.
-
-1. Put the certificate of the CA (the root, and any intermediate certificate
-   that the server does not send), in PEM format, in one file, for example
-   `ca.pem` next to `compose.yaml`.
-2. Mount it into the container. In `compose.override.yaml`, add to the
-   `scanopsis` service:
+1. Put the CA certificate (the root, plus any intermediate the server does not
+   send) in PEM format in one file, `ca.pem`, next to `compose.yaml`.
+2. Mount it. In `compose.override.yaml`, add under `services:`:
 
    ```yaml
-   services:
      scanopsis:
        volumes:
          - ./ca.pem:/etc/scanopsis/ca.pem:ro
@@ -637,100 +560,68 @@ fails. Scanopsis never turns certificate checks off. Give it the CA instead.
 
 3. In `.env`, set `SCANOPSIS_CA_FILE=/etc/scanopsis/ca.pem` and run
    `docker compose up -d`.
-4. Verify that the file was read: the startup line shows `"custom_ca":true`.
+4. Check that it was read. The start-up line shows `"custom_ca":true`:
 
    ```sh
    docker compose logs scanopsis | grep 'scanopsis starting' | tail -1
    ```
 
    ```text
-   ...,"config":{"listen_addr":":8080","public_url":"https://scanopsis.example.com","seeded_settings":1,"trusted_proxies":1,"custom_ca":true}}
+   ...,"config":{"listen_addr":":8080","public_url":"https://scanopsis.example.com","seeded_settings":3,"trusted_proxies":1,"custom_ca":true}}
    ```
 
-The test used a fake GitLab behind Caddy, with a certificate that the
-container did not trust. Before the CA was set, an upload was refused:
+The CA applies to GitLab and SonarQube, not to the database (see
+[step 2](#step-2-write-the-database-url) below for that).
+
+**How to spot the problem.** Without the CA, the log says
+`certificate signed by unknown authority`. For GitLab sign-in it looks like
+this:
 
 ```text
-{"error":{"code":"gitlab_unavailable","message":"The signature could not be checked: Scanopsis could not fetch the signing keys from GitLab. Try again later."}}
-HTTP 503
+{"time":"2026-11-22T11:14:22.743969677Z","level":"WARN","msg":"GitLab discovery failed","error":"Get \"https://gitlab.example.com/.well-known/openid-configuration\": tls: failed to verify certificate: x509: certificate signed by unknown authority"}
 ```
 
-The answer does not name the cause, on purpose. The Scanopsis log does:
+For an upload, the CI job gets `503` with the code `gitlab_unavailable`, and
+the log line `upload rejected` has the same TLS error in its `cause` field.
+
+To test the connection yourself, run a throwaway container on the same
+network (`<project>_frontend`). The `caddy` image is used only because its
+`wget` prints TLS errors; without the CA it fails with
+`certificate verify failed`:
 
 ```sh
-docker compose logs scanopsis | grep 'upload rejected' | tail -1
+docker run --rm --network scanopsis_frontend caddy:2 wget -q -O- https://gitlab.example.com/
 ```
 
-```text
-scanopsis-1  | {"time":"2026-11-19T13:18:55.621785344Z","level":"WARN","msg":"upload rejected","status":503,"reason":"gitlab_unavailable","ip":"172.30.0.1","gitlab_url":"https://gitlab.example.com","cause":"failed to verify signature: fetching keys oidc: get keys failed Get \"https://gitlab.example.com/oauth/discovery/keys\": tls: failed to verify certificate: x509: certificate signed by unknown authority (https://gitlab.example.com/oauth/discovery/keys)"}
-```
-
-`x509: certificate signed by unknown authority` means that the container does
-not trust the certificate. You can also test the connection yourself from a
-throwaway container on the same network. This uses the `caddy` image only
-because it has a `wget` that prints TLS errors. Replace the network name
-(`<project>_frontend`) and the address:
-
-```sh
-docker run --rm --network scanopsis_frontend caddy:2 wget -q -O- https://gitlab.example.com/oauth/discovery/keys
-```
-
-```text
-28EDF092FFFF0000:error:0A000086:SSL routines:tls_post_process_server_certificate:certificate verify failed:ssl/statem/statem_clnt.c:2124:
-ssl_client: SSL_connect
-wget: error getting response: Connection reset by peer
-```
-
-After setting `SCANOPSIS_CA_FILE` to the certificate, the same upload returned
-`201` and the signing keys were fetched.
-
-If the file is missing, or holds no certificate, the server does not start:
+If the file is missing or holds no certificate, the server does not start:
 
 ```text
 "error":"read SCANOPSIS_CA_FILE: open /etc/none.pem: no such file or directory"
-"error":"SCANOPSIS_CA_FILE /ca.pem contains no PEM certificates"
+"error":"SCANOPSIS_CA_FILE /etc/scanopsis/ca.pem contains no PEM certificates"
 ```
-
-The CA file applies to GitLab and to SonarQube.
 
 ## Use an existing PostgreSQL
 
-Use this when your organization runs PostgreSQL for you (a managed service or
-a shared server) and you do not want the `db` container. Scanopsis was tested
-with PostgreSQL 18. It needs no extension and no superuser rights. The steps
-below were run against a separate PostgreSQL 18 server with TLS and a
-certificate from a self-signed certificate authority. Host names and the
-password are examples.
+Use this when a managed service or a shared server runs PostgreSQL for you and
+you do not want the `db` container. Scanopsis was tested with PostgreSQL 18. It
+needs no extension and no superuser. The steps below were run against a
+separate PostgreSQL 18 server with TLS and a certificate from a private CA.
+The host name and the password are examples.
 
 ### Step 1. Create the role and the database
 
-Create a role that can log in and a database that it owns. Run this as an
-administrator of the server (`psql` example):
+As an administrator of the server, create a role that can log in and a
+database it owns:
 
 ```sql
 CREATE ROLE scanopsis LOGIN PASSWORD 'p@ss/w:rd#1?x%';
 CREATE DATABASE scanopsis OWNER scanopsis;
 ```
 
-Expected result:
-
-```text
-CREATE ROLE
-CREATE DATABASE
-```
-
-Scanopsis creates its tables and indexes when it starts, and changes them in
-later versions. The role needs these rights in the schema it uses (`public`,
-unless your URL sets another `search_path`):
-
-- `CREATE` on the schema. The migrations run `CREATE TABLE`, `CREATE INDEX` and
-  `ALTER TABLE`, and the migration tool creates its table `goose_db_version`.
-- `SELECT`, `INSERT`, `UPDATE` and `DELETE` on the tables, which the role has
-  as their owner.
-
-Nothing more is needed: the migrations create no extension, role or function.
-The simplest way to get these rights is to make the role the owner of the
-database, as above. In PostgreSQL 15 and later, the owner of a database can
+Scanopsis creates and changes its own tables when it starts. In the schema it
+uses (`public` unless your URL sets another `search_path`) the role needs
+`CREATE`, and it owns the tables it creates. Owning the database is the
+easiest way to get this: since PostgreSQL 15, the owner of a database may
 create objects in its `public` schema. Check it as the new role:
 
 ```sql
@@ -741,52 +632,46 @@ SELECT current_user, has_schema_privilege('public', 'CREATE') AS can_create_in_p
  current_user | can_create_in_public
 --------------+----------------------
  scanopsis    | t
-(1 row)
 ```
 
-If the database belongs to someone else and the role cannot create tables,
-Scanopsis stops at start with this error:
+If the role cannot create tables, Scanopsis stops at start:
 
 ```text
-"error":"apply migrations: failed to initialize: create version table: failed to create version table \"goose_db_version\": ERROR: permission denied for schema public (SQLSTATE 42501)"
+"error":"read migration status: failed to initialize: create version table: failed to create version table \"goose_db_version\": ERROR: permission denied for schema public (SQLSTATE 42501)"
 ```
 
-Fix it as an administrator, in that database. Scanopsis starts at its next
-restart:
+Fix it as an administrator in that database, then start Scanopsis again:
 
 ```sql
 GRANT CREATE ON SCHEMA public TO scanopsis;
 ```
 
-Connect to PostgreSQL directly, or through a pooler in session mode.
-Scanopsis takes session-level advisory locks while it migrates and in its
-background jobs. A pooler in transaction mode, such as PgBouncer with
-`pool_mode = transaction`, does not keep them. This follows from the code and
-was not tested.
+Connect directly, or through a pooler in session mode. Scanopsis holds
+session-level advisory locks while it migrates and in background jobs. A
+pooler in transaction mode, such as PgBouncer with `pool_mode = transaction`,
+does not keep them. This follows from the code and was not tested.
 
 ### Step 2. Write the database URL
 
-The URL goes in `secrets/database_url`, as in the
-[getting started guide](getting-started.md#step-2-create-the-secrets). You do
-not need `secrets/postgres_password`.
+The URL goes in `secrets/database_url`, like in
+[step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets).
+You do not need `secrets/postgres_password`.
 
-Encrypt the connection. `sslmode` decides how:
+Always encrypt the connection. `sslmode` decides how:
 
 | `sslmode` | What it does |
 |---|---|
 | `disable` | No TLS. Only for the bundled database on the private Compose network. |
-| `require` | Encrypts the connection and does not check who answers. It protects against listening in, not against a server that pretends to be yours. |
-| `verify-full` | Encrypts, checks the certificate chain, and checks that the host name in the URL is in the certificate. Use this in production. |
+| `require` | Encrypts, but does not check who answers. Stops eavesdropping, not a server that pretends to be yours. |
+| `verify-full` | Encrypts, checks the certificate chain and checks that the host name is in the certificate. Use this in production. |
 
-For `verify-full` with a certificate from your own certificate authority, add
-`sslrootcert=` with the path of the CA file inside the container. Managed
-services publish their CA certificate. Save it as `db-ca.pem` next to
-`compose.yaml`. A certificate from a public authority is checked against the
-system roots of the image and needs no `sslrootcert`.
+With `verify-full` and a certificate from your own CA, add `sslrootcert=` with
+the path of the CA file inside the container. Managed services publish their
+CA certificate. Save it as `db-ca.pem` next to `compose.yaml`. A certificate
+from a public CA needs no `sslrootcert`.
 
-Special characters in the password break the URL. The characters `@`, `/`,
-`:`, `?`, `#` and `%` must be percent-encoded. Encode the password with one of
-these commands (the second needs `jq`):
+The characters `@`, `/`, `:`, `?`, `#` and `%` in the password break the URL,
+so percent-encode the password. Either command works (the second needs `jq`):
 
 ```sh
 python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' 'p@ss/w:rd#1?x%'
@@ -798,8 +683,7 @@ p%40ss%2Fw%3Ard%231%3Fx%25
 p%40ss%2Fw%3Ard%231%3Fx%25
 ```
 
-Then write the URL. The host name must be one that is in the certificate of
-the server:
+Write the URL. The host name must be one that is in the server's certificate:
 
 ```sh
 printf 'postgres://scanopsis:%s@db.example.com:5432/scanopsis?sslmode=verify-full&sslrootcert=/etc/scanopsis/db-ca.pem' \
@@ -807,42 +691,39 @@ printf 'postgres://scanopsis:%s@db.example.com:5432/scanopsis?sslmode=verify-ful
 chmod 644 secrets/database_url
 ```
 
-If you skip the encoding, Scanopsis stops at start:
+Two mistakes stop the server at start. A password that is not encoded:
 
 ```text
 "error":"parse database URL: cannot parse `postgres://scanopsis:xxxxx@ss/w:xxxxxx@db.example.com:5432/scanopsis?sslmode=require`: failed to parse as URL (invalid percent-encoded token: \"x%@db.example.com:5432/scanopsis?sslmode\")"
 ```
 
-`SCANOPSIS_CA_FILE` does not apply to the database. It adds authorities for
-GitLab and SonarQube only. The database CA goes in `sslrootcert`. Without it,
-`verify-full` fails for a certificate from your own authority:
+And `verify-full` with a private CA but no `sslrootcert` (`SCANOPSIS_CA_FILE`
+does not help here):
 
 ```text
-"error":"connect to database: failed to connect to `user=scanopsis database=scanopsis`: 172.20.0.2:5432 (db.example.com): failed to write startup message: write failed: tls: failed to verify certificate: x509: certificate signed by unknown authority"
+"error":"connect to database: failed to connect to `user=scanopsis database=scanopsis`: 172.30.0.3:5432 (db.example.com): failed to write startup message: write failed: tls: failed to verify certificate: x509: certificate signed by unknown authority"
 ```
 
-### Step 3. Remove the `db` service
+### Step 3. Remove the bundled database
 
-The file `deploy/compose/compose.external-db.yaml` is an override. It removes
-the `db` service, its password secret and its volume, and puts Scanopsis on
-the `frontend` network only, which has a route to your server. It needs
-Docker Compose 2.24 or later, for the `!reset` and `!override` tags.
+`compose.external-db.yaml` removes the `db` service, its password secret and
+its volume, and puts Scanopsis on the `frontend` network only, which can reach
+your server. It needs Docker Compose 2.24 or later.
 
-1. Open `compose.external-db.yaml`. If you use `sslrootcert`, uncomment the
-   `volumes` lines in it, so that Compose mounts `db-ca.pem` at
-   `/etc/scanopsis/db-ca.pem`. The server must be reachable from the Docker
-   host at the host name in the URL.
-2. Tell Compose to use both files. Add this line to `.env`, so that every
-   `docker compose` command uses them:
+1. If you use `sslrootcert`, open `compose.external-db.yaml` and uncomment the
+   two `volumes` lines, so Compose mounts `db-ca.pem` at
+   `/etc/scanopsis/db-ca.pem`.
+2. Tell Compose to use both files, so every `docker compose` command picks them
+   up. Add this line to `.env`:
 
    ```text
    COMPOSE_FILE=compose.yaml:compose.external-db.yaml
    ```
 
-   If you use a `compose.override.yaml` for a proxy as well, add it to the
-   list. Compose reads `compose.override.yaml` on its own only when you name
-   no file.
-3. Check the result. The list has no `db` service:
+   Compose reads `compose.override.yaml` on its own only when you name no
+   files, so add it to the list if you have one:
+   `COMPOSE_FILE=compose.yaml:compose.override.yaml:compose.external-db.yaml`.
+3. Check that `db` is gone from the list of services:
 
    ```sh
    docker compose config --services
@@ -852,21 +733,12 @@ Docker Compose 2.24 or later, for the `!reset` and `!override` tags.
    scanopsis
    ```
 
-4. Start Scanopsis. If you ran the bundled database before, add
-   `--remove-orphans`, so that Compose removes the old `db` container:
+4. Start Scanopsis. `--remove-orphans` removes the old `db` container (not its
+   volume); without it, Compose only warns about `orphan containers`:
 
    ```sh
    docker compose up -d --remove-orphans
    ```
-
-   Without the option, Compose only warns:
-
-   ```text
-   level=warning msg="Found orphan containers (scanopsis-db-1) for this project. If you removed or renamed this service in your compose file, you can run this command with the --remove-orphans flag to clean it up."
-   ```
-
-   Expected result with the option (Compose removes the `db` container, not
-   its volume):
 
    ```text
     Container scanopsis-scanopsis-1 Running
@@ -876,21 +748,17 @@ Docker Compose 2.24 or later, for the `!reset` and `!override` tags.
     Container scanopsis-db-1 Removed
    ```
 
-5. Check that Scanopsis is healthy:
+5. Check that it is ready:
 
    ```sh
-   docker compose ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}'
    curl -s http://127.0.0.1:8080/readyz
    ```
 
    ```text
-   SERVICE     STATUS                    PORTS
-   scanopsis   Up 12 seconds (healthy)   127.0.0.1:8080->8080/tcp
    {"status":"ready"}
    ```
 
-6. Check that the connection is encrypted. Ask the server, as an
-   administrator:
+6. Check that the connection is encrypted. As an administrator of the server:
 
    ```sql
    SELECT usename, ssl, version FROM pg_stat_ssl s JOIN pg_stat_activity a USING (pid) WHERE usename = 'scanopsis' LIMIT 1;
@@ -903,22 +771,22 @@ Docker Compose 2.24 or later, for the `!reset` and `!override` tags.
    ```
 
 The old volume with the bundled data stays on the host. Remove it with
-`docker volume rm <project>_db-data` only when you are sure that you have
-moved everything you need.
+`docker volume rm <project>_db-data` only once you are sure you moved
+everything you need.
 
-### Move the data of the bundled database
+### Move your data from the bundled database
 
-To keep the users, settings and scans of a running installation, take a backup
-before you remove the bundled database, and restore it into the new one. The
-backup commands are in [backup and restore](operations.md#backup-and-restore).
-The restore needs a PostgreSQL client of the same major version or newer. This
-example runs it from the PostgreSQL image, on a Docker network that can reach
-the server. Run it before step 4 above, or while Scanopsis is stopped:
+To keep users, settings and scans, [back up](operations.md#back-up-the-database)
+the bundled database first, then restore the file into the new server before
+step 4 above (or while Scanopsis is stopped). The restore needs a PostgreSQL
+client of the same major version or newer. This runs it from the PostgreSQL
+image, on a Docker network that can reach the server:
 
 ```sh
-docker run --rm -i -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=require \
+docker run --rm -i --network scanopsis_frontend \
+  -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=require \
   postgres:18.7-alpine pg_restore -h db.example.com -U scanopsis -d scanopsis \
-  --no-owner --exit-on-error < scanopsis-2026-11-19.dump
+  --no-owner --exit-on-error < scanopsis-2026-11-22.dump
 echo "restore exit=$?"
 ```
 
@@ -926,36 +794,33 @@ echo "restore exit=$?"
 restore exit=0
 ```
 
-Use the same `secrets/secret_key` as before. When Scanopsis then starts on the
-new database, its log has no `setup_token` line, because the restored database
-already has an administrator.
+Keep the same `secrets/secret_key`. When Scanopsis starts on the new database,
+its log has no `setup_token` line, because the restored database already has
+an administrator.
 
-## Other platforms
+## Run without Compose
 
-Compose is the way that this documentation supports. The container does not
-depend on it: it needs a database URL, a secret key and a public URL. The
-rules are the same everywhere:
+Compose is the supported way, but the container does not depend on it. It
+needs a database URL, a secret key and a public URL. The rules are the same
+everywhere:
 
-- Run one instance. Scanopsis keeps its state in PostgreSQL, but it keeps its
-  rate limits in memory for each instance, and an upgrade must not run two
-  versions on one database while the new one migrates it.
-- Give it the database URL and the key as files (`SCANOPSIS_DATABASE_URL_FILE`
-  and `SCANOPSIS_SECRET_KEY_FILE`), not as environment variables. The
-  [configuration reference](configuration.md#file-variants-and-docker-secrets)
-  lists every `_FILE` variant.
-- Run it as user 65532 (the image does), with a read-only root file system and
-  no capabilities. It writes nothing to disk.
-- It applies its migrations before it listens. There is no separate migration
-  step.
+- **Run one instance.** Scanopsis keeps rate limits and the setup token in
+  memory, and two versions must never run on one database while the new one
+  migrates it.
+- **Pass the database URL and the key as files** (`SCANOPSIS_DATABASE_URL_FILE`
+  and `SCANOPSIS_SECRET_KEY_FILE`), not as environment variables, which anyone
+  with `docker inspect` can read. Setting both forms of one variable stops the
+  server: `SCANOPSIS_SECRET_KEY and SCANOPSIS_SECRET_KEY_FILE are both set; set only one`.
+- **Keep it locked down.** The image runs as user 65532. Add a read-only root
+  file system and drop all capabilities; Scanopsis writes nothing to disk.
+- **No migration step.** Scanopsis applies schema changes before it listens.
 
-### Plain `docker run`
+### Use plain `docker run`
 
-These commands were run with Docker 29.9.3. They start a database and Scanopsis
-on one network, with the same settings as the Compose file. Create the secret
-files first, as in
-[step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets),
-but with the host name `scanopsis-db` and not `db` in `secrets/database_url`.
-The network, volume and container names are examples.
+These commands start a database and Scanopsis on one network, with the same
+limits as the Compose file. Create the three secret files first, like in
+[step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets), but use the host name `scanopsis-db` instead of `db`
+in `secrets/database_url`. The names are examples.
 
 ```sh
 docker network create scanopsis-net
@@ -966,24 +831,24 @@ docker run -d --name scanopsis-db --network scanopsis-net \
   -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
   -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro" \
   -v scanopsis-db-data:/var/lib/postgresql \
-  postgres:18.7-alpine
+  postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
 
 docker run -d --name scanopsis --network scanopsis-net \
   --restart unless-stopped \
   --read-only --cap-drop ALL --security-opt no-new-privileges:true \
   --pids-limit 100 --memory 512m --stop-timeout 20 \
+  --log-opt max-size=10m --log-opt max-file=5 \
   -p 127.0.0.1:8080:8080 \
   -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
   -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
   -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
-  -e GOMEMLIMIT=400MiB \
   -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
   -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
-  scanopsis:v0.1.0
+  scanopsis:v0.2.0
 ```
 
-Pin the database image by digest, as `compose.yaml` does. Wait about 30
-seconds, then check:
+The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`. Wait
+about 30 seconds, then check:
 
 ```sh
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
@@ -992,8 +857,8 @@ curl -s http://127.0.0.1:8080/readyz
 
 ```text
 NAMES          STATUS                    PORTS
-scanopsis      Up 25 seconds (healthy)   127.0.0.1:8080->8080/tcp
-scanopsis-db   Up 35 seconds             5432/tcp
+scanopsis      Up 29 seconds (healthy)   127.0.0.1:8080->8080/tcp
+scanopsis-db   Up 30 seconds             5432/tcp
 {"status":"ready"}
 ```
 
@@ -1001,57 +866,33 @@ Unlike Compose, `docker run` does not wait for the database. If Scanopsis
 starts first, it exits, and `--restart unless-stopped` starts it again until
 the database answers.
 
-Environment variables work as well, for example
-`-e SCANOPSIS_DATABASE_URL=... -e SCANOPSIS_SECRET_KEY=...`. Do not use them
-in production. Everyone who can run `docker inspect` then reads the values.
-With files, `docker inspect` shows only
-`SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key`. Set only one form of a
-variable: the server refuses to start when both `SCANOPSIS_SECRET_KEY` and
-`SCANOPSIS_SECRET_KEY_FILE` are set.
-
 The container has no shell. Run the
 [administration commands](operations.md#administration-commands) with
 `docker exec scanopsis /scanopsis admin ...`.
 
-### Podman
+### Use Podman
 
-Podman runs the same image. This part was not tested, because no Podman was
-available. Treat it as a starting point:
+Podman runs the same image and accepts the same `run` options. This was not
+tested, so treat these notes as a starting point:
 
-- `podman run` accepts the options above (`--read-only`, `--cap-drop`,
-  `--pids-limit`, `--memory`, `-p`, `-e`, `-v`).
-- Podman secrets replace the secret files. Create one secret for each file and
-  mount it at the path that the `_FILE` variable names:
+- Instead of bind-mounted files you can use Podman secrets, for example
+  `podman secret create scanopsis_secret_key secrets/secret_key` and
+  `--secret scanopsis_secret_key,target=/run/secrets/secret_key,mode=0444`.
+  User 65532 must be able to read them.
+- Rootless Podman maps container users to your sub-user IDs, so bind-mounted
+  files need the `U` option (`:ro,U`).
+- To start at boot, use a Quadlet unit (systemd) instead of `--restart`.
 
-  ```sh
-  podman secret create scanopsis_database_url secrets/database_url
-  podman secret create scanopsis_secret_key secrets/secret_key
-  podman run -d --name scanopsis \
-    --secret scanopsis_database_url,target=/run/secrets/database_url \
-    --secret scanopsis_secret_key,target=/run/secrets/secret_key \
-    -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
-    -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
-    ...
-  ```
+### Use Kubernetes
 
-  User 65532 must be able to read the files. If the server reports that it
-  cannot read one, add `,mode=0444` to the `--secret` option.
-- Rootless Podman maps the users of a container to your sub-user ids. Files
-  that you bind-mount need the `U` option (`:ro,U`), or use a Podman secret as
-  above.
-- To start the container at boot, use Quadlet (a systemd unit that Podman
-  generates) and not `--restart`.
+Scanopsis needs no operator and no custom resources. Run it as one pod:
 
-### Kubernetes
-
-Scanopsis needs no operator and no custom resources. The model is one pod:
-
-- A `Deployment` with `replicas: 1` and `strategy: Recreate`. `Recreate` stops
-  the old pod before it starts the new one. With a rolling update, two
-  versions run on one database while the new one migrates it.
-- A `Secret` with the keys `database_url` and `secret_key`, mounted as files.
-  `SCANOPSIS_DATABASE_URL_FILE` and `SCANOPSIS_SECRET_KEY_FILE` point at them.
-  Create it from the same files as for Compose:
+- A `Deployment` with `replicas: 1` and `strategy: Recreate`, which stops the
+  old pod before the new one starts. A rolling update would run two versions
+  on one database while the new one migrates it.
+- A `Secret` with `database_url` and `secret_key`, mounted as files. Create it
+  from the same files as for Compose (example). Do not commit its YAML: the
+  values are only base64 encoded.
 
   ```sh
   kubectl create secret generic scanopsis \
@@ -1059,36 +900,22 @@ Scanopsis needs no operator and no custom resources. The model is one pod:
     --from-file=secret_key=secrets/secret_key
   ```
 
-  With `--dry-run=client -o yaml`, the command prints a `Secret` with
-  `data.database_url` and `data.secret_key`, both base64 encoded. Do not
-  commit that output.
-- Probes: `/healthz` for liveness (the process is alive, no dependencies) and
-  `/readyz` for readiness (the database answers). A startup probe on `/healthz`
-  gives the start, with its migrations, time.
-- A security context: `runAsNonRoot`, user and group 65532, `fsGroup` 65532 so
-  that the secret files are readable, `readOnlyRootFilesystem: true`,
-  `allowPrivilegeEscalation: false` and `capabilities.drop: ["ALL"]`.
-- Resources: a memory request and limit, and `GOMEMLIMIT` about 20% below the
-  limit. A CPU limit can slow uploads down, so set one only if your cluster
-  requires it.
-- A `terminationGracePeriodSeconds` of 20, above the 15 seconds that the
-  server needs to finish its requests.
-- Migrations run when the pod starts. The first start of a new version can
-  take longer than the others.
-- An Ingress or Gateway that terminates TLS, with the rules of the
-  [reverse proxy](#reverse-proxy-and-tls): pass `Host` unchanged, set
-  `X-Forwarded-For`, allow a body of 100 MB, and serve Scanopsis at the root of
-  its own host name. Set `SCANOPSIS_TRUSTED_PROXIES` to the addresses of the
-  ingress controller pods.
+- Probes: `/healthz` for liveness (the process runs) and `/readyz` for
+  readiness (the database answers). A startup probe gives the first start of a
+  new version, with its migrations, time.
+- A `terminationGracePeriodSeconds` of 20, above the 15 seconds Scanopsis
+  needs to finish its requests.
+- An Ingress or Gateway that follows the [proxy rules](#reverse-proxy-and-tls):
+  `Host` unchanged, `X-Forwarded-For` set, a body of up to 100 MB, Scanopsis at
+  the root of its own host name. Set `SCANOPSIS_TRUSTED_PROXIES` to the
+  addresses of the ingress controller pods.
 - PostgreSQL outside the pod, see
-  [use an existing PostgreSQL](#use-an-existing-postgresql). Run a managed
-  database or an operator of your choice. A database in the same namespace is
-  out of scope here.
+  [use an existing PostgreSQL](#use-an-existing-postgresql).
 
-The manifest below follows this model. Replace the image with the one that you
-built and pushed to a registry that the cluster can pull from, and replace the
-public URL. It passed `kubectl apply --dry-run=client -f` with kubectl 1.37.2.
-It was not run on a cluster, so check the probes and the first start in yours.
+The manifest below follows this model. Replace the image with one you built
+and pushed to a registry the cluster can pull from, and the public URL. It
+passes `kubectl apply --dry-run=client` with kubectl 1.37.2, but it was not
+run on a cluster, so check the probes and the first start in yours.
 
 ```yaml
 apiVersion: apps/v1
@@ -1117,7 +944,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: scanopsis
-          image: registry.example.com/platform/scanopsis:v0.1.0
+          image: registry.example.com/platform/scanopsis:v0.2.0
           ports:
             - name: http
               containerPort: 8080
@@ -1181,334 +1008,246 @@ spec:
       targetPort: http
 ```
 
-After `kubectl apply`, wait for the pod and check it:
-
-```sh
-kubectl rollout status deployment/scanopsis
-kubectl get pods -l app=scanopsis
-```
-
-Expect `1/1` in the `READY` column. This output was not captured, because no
-cluster was available.
+A CPU limit can slow uploads down, so set one only if your cluster requires
+it. After `kubectl apply`, `kubectl rollout status deployment/scanopsis`
+should end with the pod `1/1` ready (example).
 
 ## Sizing
 
 The figures below are for up to 500 services and 3,000 pipelines a day. They
-were measured with Scanopsis `7e53111` (Go 1.27.4) and PostgreSQL 18.7 on one
-Docker Desktop machine. Measure again on your hardware if you are close to
-a limit.
+were measured with PostgreSQL 18.7 on one Docker Desktop machine during the
+work on version 0.2.0. Measure again on your hardware if you get close to a
+limit.
 
-### Memory and CPU
+### Memory
 
-**Give the Scanopsis container a memory limit of 512 MiB.** The image sets
-`GOMEMLIMIT=400MiB`, which suits that limit. If you set another limit, set
-`GOMEMLIMIT` to about 80% of it (`docker run -e GOMEMLIMIT=...`, or `environment:`
-in Compose). Scanopsis also takes the memory it lets uploads use from it: two
-fifths of `GOMEMLIMIT`, 160 MiB with the default.
+Give the Scanopsis container **512 MiB** with `GOMEMLIMIT=400MiB`.
+`compose.yaml` sets both, and the image sets `GOMEMLIMIT` on its own. For
+another limit, set `GOMEMLIMIT` to about 80% of it. Reserve **1 GiB or more**
+for PostgreSQL, so it can keep its working set in memory.
 
-Scanopsis keeps nothing but small caches in memory, apart from the uploads in
-progress. An upload is kept compressed, is read twice from memory (the first
-time to check it and count the findings, the second time to write the findings
-into the database in batches), and so needs memory in proportion to its size
-and not to its number of findings. The measurements are of the largest report
-the default limits allow: 60 MiB of JSON with 200,000 findings, sent as gzip
-(10 MiB). They were made with the container image (Scanopsis `6eaa325` before,
-the current one after), a PostgreSQL 18.7 container, and the container's limit
-set with `docker run --memory`. The peak is the process's highest resident memory
-(`VmHWM` in `/proc/<pid>/status`). `docker stats` samples once a second and
-misses it.
+Apart from small caches, Scanopsis holds only the uploads in progress. An
+upload is kept compressed, and its findings are streamed into the database in
+batches, so its memory follows the size of the report, not the number of
+findings. The test used the largest report the default limits allow: 60 MiB
+of JSON with 200,000 findings, sent as 10 MiB of gzip. The peak is the
+process's highest resident memory (`VmHWM` in `/proc/<pid>/status`);
+`docker stats` samples once a second and misses it.
 
-| State | Before | Now |
-|---|---|---|
-| Idle, a minute after start | 19.5 MiB (`docker stats` shows 10 to 12 MiB) | 19.5 MiB |
-| One maximum upload, peak | 280 MiB (killed at a limit of 256 MiB) | 81 MiB |
-| Eight maximum uploads at once, 512 MiB limit, peak | 1,050 MiB (4 at a time) | 256 MiB |
-| The same, after the burst | 885 MiB, for as long as the process runs | 27 MiB |
-| Eight uploads of the worst case for memory: 43 MiB of gzip that does not compress further (53 MiB of JSON), 512 MiB limit, peak | not measured | 220 MiB |
-| Eight maximum uploads without gzip (60 MiB each), 512 MiB limit, peak | not measured | 98 MiB, one at a time |
-| Eight maximum uploads, limit 256 MiB with `GOMEMLIMIT=200MiB`, peak | killed | 129 MiB (worst case: 207 MiB) |
+| Load | Peak memory |
+|---|---|
+| Idle, a minute after start | 19.5 MiB |
+| One maximum upload | 81 MiB |
+| Eight maximum uploads at once | 256 MiB, back to 27 MiB afterwards |
+| Eight worst-case uploads at once (43 MiB of gzip that does not compress further) | 220 MiB |
+| Eight maximum uploads without gzip (60 MiB each) | 98 MiB, processed one at a time |
+| Eight maximum uploads with a 256 MiB limit and `GOMEMLIMIT=200MiB` | 129 MiB (worst case 207 MiB) |
 
-All eight uploads in each test were stored with `201`, and no container was
-killed. One maximum upload takes 3 s from request to answer (2.3 s before).
-Eight at once take 7 s with gzip, 15 s for the worst case, and 25 s without
-gzip, because uploads wait for memory (see below).
+Every upload was stored with `201` and no container was killed. One maximum
+upload takes about 3 seconds from request to answer. Eight at once take 7
+seconds with gzip, 15 for the worst case and 25 without gzip, because uploads
+wait for memory. 256 MiB is the smallest limit that survived, with little room
+to spare, so use 512 MiB.
 
-What decides the memory of an upload:
+At 3,000 uploads a day, two arrive per minute on average, so memory stays
+close to the idle value.
 
-- **Admission by size.** An upload is estimated at twice its `Content-Length`
-  (the compressed body, and the copy the database driver makes to send it) plus
-  10 MiB for buffers; a request without a length counts as the largest. The
-  uploads being processed together may add up to the memory budget. An upload
-  that does not fit waits for up to 30 seconds and then gets `503 busy` with
-  `Retry-After: 5`. An upload that fits the free memory is admitted at once, even
-  when a larger one is waiting, so a small report does not sit behind a large one.
-  When the oldest waiting upload has waited 5 seconds, newer uploads queue behind
-  it, so a stream of reports cannot starve a large one; reports of up to 4 MiB
-  still pass it whenever they fit, because they hold their memory only for
-  milliseconds. Many small reports
-  run at once and a few large ones do. Separately, at most a quarter of the
-  database pool (`pool_max_conns`, at least 2) stores uploads at the same time, so
-  uploads cannot take every connection; one that cannot get a place within 30
-  seconds also gets `503 busy`. With the default budget of 160 MiB, a 10 MiB gzip upload (30 MiB) runs
-  five at a time, and the worst case above (96 MiB) one at a time.
-- **Memory goes back.** The heap is returned to the operating system when the
-  last large upload (an estimated 16 MiB or more) is done and none is running, and
-  a database connection that sent a report of 4 MiB or more is closed afterwards
-  and replaced. Without these two, the process kept the garbage of a burst for
-  minutes and each pooled connection kept a buffer as big as the largest report.
-- **Reading is limited in time, not in slots.** An upload has 5 minutes to send
-  its whole body, counted from when it was admitted, and then 60 seconds to be
-  answered. The 30 and 60 seconds of the rest of the server do not apply to it. A
-  slow client holds the share of memory its own report needs, for at most that
-  time, and no other client waits for a slot. With 10 MiB of gzip sent at
-  200 KB/s (52 seconds), the upload was cut off at 30 seconds with `400` before and
-  was stored with `201` now.
-- **The number of findings.** A report may hold at most 200,000 findings. The
-  limit no longer protects memory, which does not grow with it, but the size of
-  the transaction: the largest report is stored in about 3 seconds.
+### How uploads share memory
 
-At 3,000 uploads a day, the average is two a minute, so memory stays close to
-the idle value. The database container needs more: reserve 1 GiB or more of RAM
-for PostgreSQL, so that it can keep its working set in memory.
+Uploads use a memory budget of two fifths of `GOMEMLIMIT`: 160 MiB with the
+default.
 
-The smallest limit that survived the same tests is 256 MiB with
-`GOMEMLIMIT=200MiB`. The worst case peaked at 207 MiB, which leaves little room
-for anything else, and the uploads of large reports are then processed two at a
-time at most. Use 512 MiB.
+- **Admission by size.** Scanopsis estimates an upload at twice its
+  `Content-Length` plus 10 MiB. A request without a length counts as the
+  largest allowed. Uploads run together as long as their estimates fit the
+  budget, so a 10 MiB gzip upload (30 MiB) runs five at a time, and the worst
+  case above (96 MiB) one at a time.
+- **Small reports go first.** An upload that fits the free memory starts at
+  once, even when a larger one waits. Once the oldest waiting upload has waited
+  5 seconds, newer ones queue behind it so it is not starved. Reports of up to
+  4 MiB, which most are, still pass whenever they fit.
+- **Waiting is bounded.** An upload that does not fit within 30 seconds gets
+  `503` with the code `busy` and `Retry-After: 5`. The CI script in the
+  [GitLab CI guide](integrations/gitlab-ci.md) retries it.
+- **A quarter of the database pool.** At most a quarter of the database
+  connections (at least 2) store uploads at the same time, so uploads never
+  take every connection. An upload that waits 30 seconds for one also gets
+  `503 busy`.
+- **Memory goes back.** After a burst of large uploads, Scanopsis returns the
+  memory to the operating system and closes the database connections that
+  sent big reports.
+- **Slow links are fine.** An upload has 5 minutes to send its body and holds
+  only the memory its own report needs while it does. 10 MiB sent at 200 KB/s
+  (52 seconds) was stored with `201`.
 
-Limits on uploads, from one client address and from one project:
+A report may hold at most 200,000 findings. The largest is stored in about 3
+seconds.
 
-- The rate limit per client address is 60 uploads at once and then one a
-  second. Runners behind one NAT address share it. A burst of more than 60
-  pipelines that finish together from one address gets `429`.
-- The rate limit per GitLab project is 100 uploads at once and then one every 10
-  seconds (360 an hour), whatever the addresses of its runners. It is sized for
-  3,000 pipelines a day over 500 services, six a day for the average service: a
-  monorepo that scans 30 images uploads 31 reports per pipeline, so three can
-  finish together and 11 an hour can go on all day. A project above it gets `429`
-  with `project_rate_limited`. One job may also store at most 50 different
-  artifacts (`job_artifact_limit`). Both are described in the
-  [GitLab CI guide](integrations/gitlab-ci.md#retries-and-limits), whose script
-  retries a `429`.
+### Upload limits per address and project
 
-### Overload
+- **Per client address:** 60 uploads at once, then one a second. Runners behind
+  one NAT address share it, so more than 60 pipelines that finish together
+  from one address get `429`.
+- **Per GitLab project:** 100 uploads at once, then one every 10 seconds (360
+  an hour), whatever the runner addresses. A monorepo that scans 30 images
+  uploads 31 reports per pipeline: three pipelines can finish together, and 11
+  an hour can run all day. Above that, the job gets `429` with
+  `project_rate_limited`.
+- **Per job:** at most 50 different artifacts (`job_artifact_limit`).
 
-Scanopsis serves at most as many API requests at the same time as its pool has
-database connections (16 by default, `pool_max_conns` in the
-[database URL](configuration.md#database-url-parameters)). A request that finds
-every slot taken waits up to 3 seconds. If none frees up it is answered
-`503` with the code `busy` and a `Retry-After: 2` header, and the log has a
-warning `request rejected: too many concurrent requests`. Without the limit,
-requests queued for a connection for as long as the queries ahead of them took,
-seconds on a loaded database, and nothing told the client or the proxy that
-the server was overloaded.
+The [GitLab CI guide](integrations/gitlab-ci.md) explains these limits from
+the pipeline side.
 
-A request with a body is read in full before it takes a slot, so a slow client
-holds no slot while it sends. The bodies waiting for or holding a slot may take
-32 MiB together (each counts by its `Content-Length`, at least 64 KiB and at most 1 MiB, the limit
-of every API body); a request that finds no room within 3 seconds gets `503
-busy`, and a body over 1 MiB is answered `413` with the code
-`payload_too_large`. One address may reserve a quarter of that (8 MiB), so the bodies of one
-address cannot use up the memory of the others. A body is read before any slot
-is taken, so a slow body holds only its reserved bytes and never a slot, which
-matters because many users can share one address behind a proxy that is not in
-`SCANOPSIS_TRUSTED_PROXIES`. It must arrive within 2 seconds, shorter than the
-3-second wait, or the request is answered `408` with the code `request_timeout`
-and the bytes are released. Requests without a body take their address's share
-of the slots and a slot directly. The upload under `/api/v1/ingest/` has its own limits. One client address may hold at most a quarter of
-the slots (4 of 16; an IPv4 address whole, an IPv6 address by its `/64`), so
-one client cannot take them all; its further requests wait the same 3 seconds
-and then get `503 busy`. Behind a proxy that is not listed in
-`SCANOPSIS_TRUSTED_PROXIES` every user has the proxy's address and shares that
-quarter, so set it (see [configuration](configuration.md)).
+### When the server is busy
 
-Not counted are `/healthz`, `/readyz`, the web interface files and the Trivy
-upload, which has its own admission by memory (see above). `/readyz` checks the
-database over a connection of its own, so a busy server stays ready and an
-orchestrator does not restart it. That connection is one more than
-`pool_max_conns` for `max_connections` on the database. The real check runs at
-most once per second; callers within that second, and callers that arrive
-while a check is running, share its result, so a database that hangs cannot
-pile up probe requests, and each caller is answered `503` within 2 seconds at
-most.
+Scanopsis serves as many API requests at once as its pool has database
+connections: 16 by default, set with `pool_max_conns` in the database URL (see
+[database URL parameters](configuration.md#database-url-parameters)). A request that finds every slot
+taken waits up to 3 seconds. If none frees up, it gets `503` with the code
+`busy` and `Retry-After: 2`, and the log has the warning
+`request rejected: too many concurrent requests`.
 
-Measured with the test in `cmd/scanopsis` (a pool of 16, every connection held
-by a lock, 100 readers from one address at once): 4 requests (the share of one
-address) were waiting in the database, the other 96 were answered `503 busy`
-after 3.0 seconds, and `/readyz` answered `200` in 0.5 ms at the 95th
-percentile throughout.
+Some rules keep one client from crowding out the rest:
 
-A client should retry a `503 busy` after the time in `Retry-After`. If you see
-it regularly, the database is the limit, not the pool: look for slow
-statements (`pg_stat_activity`, `pg_stat_statements`), and raise
-`pool_max_conns` only if the database has spare capacity. A proxy may count
-`503` as a failure of the upstream; if it takes the server out of rotation on
-the first `503`, set it to retry or to ignore this status.
+- **One address, a quarter of the slots.** One client address (an IPv4
+  address, or an IPv6 `/64`) holds at most 4 of 16 slots. Behind a proxy that
+  is not in `SCANOPSIS_TRUSTED_PROXIES`, every user has the proxy's address
+  and shares that quarter, so set it.
+- **Bodies are read first.** A request body is read in full before the
+  request takes a slot, so a slow client never holds one. Waiting and running
+  bodies may use 32 MiB together, and one address a quarter of that. Each body
+  counts by its `Content-Length`, at least 64 KiB. A body must arrive within 2
+  seconds or the request gets `408` (`request_timeout`). A body over 1 MiB gets
+  `413` (`payload_too_large`).
+- **Not counted:** `/healthz`, `/readyz`, the web interface files and the
+  Trivy upload, which has its own rules (above).
+
+`/readyz` checks the database over a connection of its own, so a busy server
+stays ready and an orchestrator does not restart it. That connection is one
+more than `pool_max_conns` against the database's `max_connections`. The
+check runs at most once a second and callers share its result, so a hanging
+database cannot pile up probes; each caller gets an answer within 2 seconds.
+
+The integration test in `cmd/scanopsis` sends 100 requests at once from one
+address against a pool of 16 whose connections are all locked: 4 were served,
+96 got `503 busy` after 3.0 seconds, and `/readyz` answered in about 2 ms at
+the 95th percentile throughout.
+
+If you see `503 busy` often, the database is the bottleneck, not the pool.
+Look for slow statements (`pg_stat_activity`, `pg_stat_statements`) and raise
+`pool_max_conns` only if the database has capacity to spare. If your proxy
+takes a server out of rotation on its first `503`, make it retry or ignore
+this status instead.
 
 ### Database size
 
-The test uploaded each report 30 times, with a different job each time, into
-an empty database and then read `pg_total_relation_size` (table, indexes and
-compressed report storage) of `scans`, `vulnerabilities` and `secret_findings`.
+The size grows with the number of findings. Measured by uploading each report
+30 times into an empty database and reading `pg_total_relation_size` of
+`scans`, `vulnerabilities` and `secret_findings`:
 
-```sh
-docker compose exec -T db psql -U scanopsis -d scanopsis -c "
-SELECT relname AS table, pg_size_pretty(pg_total_relation_size(oid)) AS total,
-       pg_size_pretty(pg_indexes_size(oid)) AS indexes
-FROM pg_class WHERE relname IN ('scans','vulnerabilities','secret_findings') ORDER BY 1"
-```
-
-Output after 30 uploads of `image-full.json`:
-
-```text
-      table      |  total  | indexes
------------------+---------+---------
- scans           | 3584 kB | 64 kB
- secret_findings | 24 kB   | 16 kB
- vulnerabilities | 1520 kB | 312 kB
-```
-
-The results, as the size per scan (all three tables, divided by 30):
-
-| Report | Findings | JSON size | Size in the database per scan |
+| Report | Findings | JSON size | Database size per scan |
 |---|---|---|---|
-| `image-full.json` (python:3.9-slim-buster, fixture) | 138 | 951 KB | 170.9 KiB |
-| `image-suppressed.json` (same, 3 findings suppressed, fixture) | 138 | 952 KB | 170.9 KiB |
-| `secret-fs.json` (fixture) | 2 secrets | 3 KB | 6.7 KiB |
-| alpine:3.17.0, scanned with Trivy 0.76.2 | 92 | 589 KB | 118.4 KiB |
-| node:16-alpine, scanned with Trivy 0.76.2 | 91 | 631 KB | 114.7 KiB |
-| alpine:3.20, scanned with Trivy 0.76.2 | 2 | 26 KB | 13.1 KiB |
+| `image-full.json` (test fixture, python:3.9-slim-buster) | 138 | 951 KB | 170.9 KiB |
+| `secret-fs.json` (test fixture) | 2 secrets | 3 KB | 6.7 KiB |
+| alpine:3.17.0, Trivy 0.76.2 | 92 | 589 KB | 118.4 KiB |
+| node:16-alpine, Trivy 0.76.2 | 91 | 631 KB | 114.7 KiB |
+| alpine:3.20, Trivy 0.76.2 | 2 | 26 KB | 13.1 KiB |
 
-The last three rows come from reports made for this page, with the vulnerability
-data of that day. They were not committed.
-
-The size grows with the number of findings. A line through the measurements is
+As a rule of thumb:
 
 ```text
 size per image scan  ~  11 KiB + 1.2 KiB x findings
 ```
 
-About two thirds of it is the compressed copy of the report that Scanopsis
-keeps (113 KB of the 171 KiB for `image-full.json`). The findings themselves
-take about 376 bytes each, with indexes.
+About two thirds of that is the compressed copy of the original report, which
+Scanopsis keeps for 30 days unless the scan is current (see
+[data retention](operations.md#data-retention)).
 
-**Estimate for 90 days.** Assumptions: 3,000 pipelines a day, each uploading
-one image report and one secret report; 90 days of history (the default
-[retention](operations.md#data-retention) period) and no growth in the number
-of pipelines; the figures above. That makes 270,000 pipelines.
+**Estimate for 90 days**, with 3,000 pipelines a day, each uploading one image
+report and one secret report, and the default retention of 90 days:
 
-| Findings per image report | Per pipeline (image + secrets) | 90 days |
+| Findings per image report | Per pipeline | 90 days |
 |---|---|---|
 | 2 | 20 KiB | 5.5 GB |
 | 30 | 54 KiB | 14.8 GB |
-| 138 (like the fixture, an old image) | 182 KiB | about 50 GB |
+| 138 (an old image, like the fixture) | 182 KiB | about 50 GB |
 
-Retention also keeps, beyond the period, the latest scans of the branch each
-dashboard shows and of protected branches and tags. Scans of other short-lived
-branches expire like the rest. For 500 services with a few protected refs
-each, that adds well under 1 GB.
+Retention also keeps the latest scans of each dashboard branch and of
+protected branches and tags beyond the period: well under 1 GB for 500
+services. Size the disk for the estimate plus 50% (index growth, write-ahead
+log, vacuum), and the same again for backups. Most pipelines scan less, so
+your real figure is likely lower. The **Integrations** page shows your uploads
+per day. Shorten `retention.days` if you need less history.
 
-Size the disk for the estimate plus 50% for index growth, write-ahead log and
-vacuum, and reserve the same space again for backups. Shorten `retention.days` if
-you do not need the history: the database size scales with it. Most pipelines
-scan fewer images than one per pipeline, or scan only the main branch, which
-makes the real figure lower. Count your own: the number of uploads a day is on
-the **Integrations** page.
+Dashboards read the counts stored on each scan and never the stored reports,
+so they do not slow down as reports pile up.
 
-Reads are served from the counts stored on each scan row and do not read the
-compressed reports, so the portfolio does not slow down with the size of the
-reports. The response time of the portfolio and of the findings pages with 500
-services was not measured for this page.
+## Upgrade and roll back
 
-## Upgrades and rollback
-
-Schema changes are applied by the new version when it starts. There is no
-separate migration step. You deploy a version by building it from its branch,
-see [versions and branches](versions.md). The steps below show the checks around
-an upgrade.
+You deploy a new version by building its image from its version branch, see
+[upgrade to a newer version](versions.md#upgrade-to-a-newer-version) for the
+build steps, and [roll back to the previous version](versions.md#roll-back-to-the-previous-version)
+for the way back. Schema changes run when the new version starts; there is no
+separate migration step. This is what an upgrade from 0.1.0 to 0.2.0 looked
+like.
 
 ### Upgrade
 
-1. Read the [changelog](../CHANGELOG.md) of the new version branch, see
-   [find the newest version](versions.md#find-the-newest-version).
-2. Back up the database and the key, as in
-   [backup and restore](operations.md#backup-and-restore). This is the only
-   safe way back.
+1. **Back up the database** (see [operations](operations.md#back-up-the-database)).
+   It is your only safe way back.
 
    ```sh
    (umask 077; docker compose exec -T db pg_dump -U scanopsis -d scanopsis \
-     --format=custom > "scanopsis-before-upgrade.dump")
-   ls -l scanopsis-before-upgrade.dump
+     --format=custom > scanopsis-before-upgrade.dump)
+   ```
+
+2. **Note the schema version**, so you can see the upgrade happen:
+
+   ```sh
+   docker compose exec -T db psql -U scanopsis -d scanopsis -t -c "SELECT max(version_id) FROM goose_db_version"
    ```
 
    ```text
-   -rw-------  1 siyam  wheel  166549 Nov 19 19:14 scanopsis-before-upgrade.dump
+      6
    ```
 
-3. Note the schema version, so that you can check the upgrade:
-
-   ```sh
-   docker compose exec -T db psql -U scanopsis -d scanopsis -t -c "SELECT max(version_id) AS schema_version FROM goose_db_version"
-   ```
-
-   ```text
-                 3
-   ```
-
-4. Switch to the new version branch and build its image, then set it in
-   `.env` (`SCANOPSIS_IMAGE=...`), as in
-   [upgrade to a newer version](versions.md#upgrade-to-a-newer-version).
-5. Recreate the container:
-
-   ```sh
-   docker compose up -d
-   ```
-
-   Expected result: Compose recreates `scanopsis` and leaves the database
-   alone. The server applies the migrations before it listens. Wait about 30
-   seconds.
-
-6. Verify:
+3. **Switch the image.** Set `SCANOPSIS_IMAGE` in `.env` to the new image and
+   run `docker compose up -d`. Compose recreates `scanopsis` and leaves the
+   database alone. Scanopsis applies the migrations, then listens.
+4. **Check it.** After about 30 seconds:
 
    ```sh
    docker compose ps --format 'table {{.Service}}\t{{.Status}}'
    curl -s http://127.0.0.1:8080/api/v1/version
-   docker compose exec -T db psql -U scanopsis -d scanopsis -t -c "SELECT max(version_id) AS schema_version FROM goose_db_version"
+   docker compose exec -T db psql -U scanopsis -d scanopsis -t -c "SELECT max(version_id) FROM goose_db_version"
    ```
 
    ```text
-   SERVICE       STATUS
-   caddy         Up 40 seconds
-   db            Up 40 seconds (healthy)
-   fake-gitlab   Up 40 seconds
-   nginx         Up 40 seconds
-   scanopsis     Up 14 seconds (healthy)
-   {"version":"7e53111","commit":"7e53111","go":"go1.27.4"}
-                 5
+   SERVICE     STATUS
+   db          Up 24 seconds (healthy)
+   scanopsis   Up 10 seconds (healthy)
+   {"version":"v0.2.0","commit":"a58b46d","go":"go1.27.4"}
+     10
    ```
 
-   The schema version went from 3 to 5. (The other services in the output are
-   those of the test setup.) Sign in and open the portfolio:
-   the earlier data is still there. The test upgraded a database with one
-   scan, and the scan was unchanged.
+   The log has one `applying migration` and one `applied migration` line for
+   each change, with its duration. Sign in: your users and scans are still
+   there.
 
-If the new container does not become healthy, read `docker compose logs
-scanopsis`. A failed migration stops the server with `apply migrations:` and
-the database error. Migrations run under a database lock and in a
-transaction, so a failed one leaves the schema as it was.
+If the container does not become healthy, read `docker compose logs scanopsis`.
+A failed migration stops the server with `apply migration <file>:` and the
+database error. Most migrations run in a transaction, and the large index
+builds can safely run again, so the next start continues where the last one
+stopped. A migration that cannot lock a table within 10 seconds stops the
+start the same way; start again when the database is quieter.
 
 ### Roll back
 
-Go back to the backup. Do not rely on starting the old image against the
-migrated database. The test did that once and the old version started, because
-the two new migrations only added indexes and a column with a default, but this
-holds for no migration in general and the old version does not know what the
-new ones changed.
+Go back to your backup. Do not start the old image on the migrated database:
+the old version does not know what the new migrations changed.
 
-1. Build the image of the previous version branch and set it in `.env`, as in
-   [roll back to the previous version](versions.md#roll-back-to-the-previous-version).
-2. Stop Scanopsis and restore the backup over the database, as in
-   [restore](operations.md#restore-into-the-existing-database):
+1. Set `SCANOPSIS_IMAGE` in `.env` back to the old image.
+2. Stop Scanopsis and restore the backup over the database:
 
    ```sh
    docker compose stop scanopsis
@@ -1526,14 +1265,19 @@ new ones changed.
    ```sh
    docker compose up -d scanopsis
    curl -s http://127.0.0.1:8080/api/v1/version
-   docker compose exec -T db psql -U scanopsis -d scanopsis -t -c "SELECT max(version_id) AS schema_version FROM goose_db_version"
+   docker compose exec -T db psql -U scanopsis -d scanopsis -t -c "SELECT max(version_id) FROM goose_db_version"
    ```
 
    ```text
-   {"version":"0.0.1-old","commit":"6ddea02","go":"go1.27.4"}
-                 3
+   {"version":"v0.1.0","commit":"6eaa325","go":"go1.27.4"}
+      6
    ```
 
-Everything that changed after the backup is lost, including scans uploaded
-while the new version ran. Pipelines that run later upload again. The
+Everything that changed after the backup is gone, including scans uploaded
+while the new version ran; later pipelines upload again. Then do the
+[checks after a restore](operations.md#check-everything-after-a-restore). The
 secret key does not change in an upgrade.
+
+---
+
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
