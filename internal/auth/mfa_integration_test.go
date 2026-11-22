@@ -8,6 +8,7 @@ package auth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -39,8 +40,13 @@ func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := audit.New(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	recoveryKey, err := RecoveryKey(bytes.Repeat([]byte{3}, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := NewMFA(q, sessions, rec, clientip.New(nil).IP, MFAOptions{
 		Issuer: "Scanopsis", Box: box, Limiter: NewRateLimiter(30*time.Second, 50, nil), Now: clk.Now,
+		RecoveryKey: recoveryKey,
 	})
 
 	user, err := q.CreateLocalUser(ctx, store.CreateLocalUserParams{Username: "root", Role: store.RoleAdmin, PasswordHash: pgtype.Text{String: "x", Valid: true}})
@@ -121,8 +127,13 @@ func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM recovery_codes WHERE user_id = $1 AND used_at IS NULL", user.ID).Scan(&n); err != nil || n != 10 {
 		t.Fatalf("%d recovery codes stored, %v", n, err)
 	}
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM recovery_codes WHERE code_hash = $1", []byte(strings.ReplaceAll(rc.Codes[0], "-", ""))).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("recovery code stored in the clear (%d), %v", n, err)
+	plain := strings.ReplaceAll(rc.Codes[0], "-", "")
+	unsalted := sha256.Sum256([]byte(plain))
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM recovery_codes WHERE code_hash = $1 OR code_hash = $2", []byte(plain), unsalted[:]).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("recovery code stored in the clear or as a plain SHA-256 (%d), %v", n, err)
+	}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM recovery_codes WHERE user_id = $1 AND version = 2 AND code_hash = $2", user.ID, recoveryMAC(recoveryKey, user.ID, plain)).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("recovery code not stored as a version 2 HMAC (%d), %v", n, err)
 	}
 	w = call(m.StartEnrollmentHandler(), c1, "")
 	if w.Code != http.StatusConflict || errCode(t, w) != "mfa_already_enrolled" {
@@ -174,6 +185,24 @@ func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
 		t.Fatalf("%d unused recovery codes; want 9, %v", n, err)
 	}
 
+	// A code issued before version 2 (ten symbols, plain SHA-256, version 1
+	// after the migration) still works, once.
+	legacy := sha256.Sum256([]byte("abcdefghjk"))
+	if _, err := pool.Exec(ctx, "INSERT INTO recovery_codes (user_id, code_hash, version) VALUES ($1, $2, 1)", user.ID, legacy[:]); err != nil {
+		t.Fatal(err)
+	}
+	if w := call(m.VerifyHandler(), c4, codeBody("ABCDE-FGHJK")); w.Code != http.StatusNoContent {
+		t.Fatalf("legacy recovery code: %d %s", w.Code, w.Body)
+	}
+	cReuse := signIn()
+	if w := call(m.VerifyHandler(), cReuse, codeBody("abcde-fghjk")); w.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy recovery code reused: %d", w.Code)
+	}
+	// The version is part of the check: a legacy hash is never read as version 2.
+	if _, err := pool.Exec(ctx, "INSERT INTO recovery_codes (user_id, code_hash, version) VALUES ($1, $2, 3)", user.ID, legacy[:]); err == nil {
+		t.Fatal("version 3 accepted by the database")
+	}
+
 	// Audit trail: no code or secret in it.
 	rows, err := pool.Query(ctx, "SELECT action, detail::text FROM audit_log ORDER BY id")
 	if err != nil {
@@ -193,7 +222,7 @@ func TestIntegrationMFAEnrolVerifyReplayRecovery(t *testing.T) {
 			}
 		}
 	}
-	want := "mfa.enrolled mfa.failed mfa.verified mfa.failed mfa.verified mfa.failed"
+	want := "mfa.enrolled mfa.failed mfa.verified mfa.failed mfa.verified mfa.failed mfa.verified mfa.failed"
 	if got := strings.Join(actions, " "); got != want {
 		t.Fatalf("audit actions %q; want %q", got, want)
 	}
@@ -219,8 +248,13 @@ func TestIntegrationMFALockout(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := audit.New(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	recoveryKey, err := RecoveryKey(bytes.Repeat([]byte{3}, secretbox.KeySize))
+	if err != nil {
+		t.Fatal(err)
+	}
 	m := NewMFA(q, sessions, rec, clientip.New(nil).IP, MFAOptions{
 		Issuer: "Scanopsis", Box: box, Limiter: NewRateLimiter(time.Second, 1000, nil), Now: clk.Now,
+		RecoveryKey: recoveryKey,
 	})
 	user, err := q.CreateLocalUser(ctx, store.CreateLocalUserParams{Username: "root", Role: store.RoleAdmin, PasswordHash: pgtype.Text{String: "x", Valid: true}})
 	if err != nil {

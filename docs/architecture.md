@@ -181,7 +181,7 @@ starts (`internal/store/migrations`). The tables:
 |---|---|
 | `users` | One row per person. `source` is `local` or `gitlab`. Local users have an Argon2id `password_hash`. GitLab users have a `gitlab_user_id`. `role` is `admin` or `viewer`. Two-factor state: the encrypted secret, when it was enabled, the last accepted time step, the number of wrong codes in a row (ten lock the second factor), and a flag that forces a password change after a reset. |
 | `sessions` | One row per sign-in. The key is the SHA-256 of the session token, never the token. Holds a stable number shown in the session list, the user, the creation, last-seen and expiry times, whether the second factor was verified, and the client address and User-Agent (first 200 bytes) at sign-in. |
-| `recovery_codes` | The SHA-256 of each recovery code of a user and when it was used. |
+| `recovery_codes` | The stored form of each recovery code of a user (an HMAC keyed from the secret key, or the SHA-256 of a code issued by version 0.1.0), its version and when it was used. |
 | `settings` | The runtime settings. Plain values are JSON. Secret values are stored encrypted. Each row records whether the value came from the environment or from the Settings page, who changed it and when. |
 | `audit_log` | Security events: actor, action and a JSON detail. |
 | `services` | One service per GitLab project: name, GitLab project ID and path, optional SonarQube project key, how it was created (`ingest` or `manual`), and whether it is archived. |

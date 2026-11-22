@@ -5,9 +5,12 @@ package auth
 
 import (
 	"context"
+	"crypto/hkdf"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
@@ -30,7 +33,7 @@ import (
 const (
 	maxMFABody = 1 << 10
 	// maxMFACodeLen bounds the code field; the longest valid input is a
-	// recovery code with a hyphen (11 characters) plus some spacing.
+	// recovery code with its hyphens (23 characters) plus some spacing.
 	maxMFACodeLen = 64
 
 	totpPeriod     = 30
@@ -42,10 +45,52 @@ const (
 	mfaMaxFailures = 10
 
 	recoveryCodeCount = 10
-	recoveryHalf      = 5
+	// A recovery code is recoveryGroups groups of recoveryGroup symbols from
+	// recoveryAlphabet, about 99 bits.
+	recoveryGroup  = 5
+	recoveryGroups = 4
+	recoveryLen    = recoveryGroup * recoveryGroups
+	// legacyRecoveryLen is the length of the codes issued before storage
+	// version 2 (about 49.5 bits); they keep working until used or replaced.
+	legacyRecoveryLen = 10
 	// recoveryAlphabet has no characters that are easily confused (0/o, 1/l/i).
 	recoveryAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+
+	// recoveryKeyInfo separates the recovery-code key from every other use
+	// of SCANOPSIS_SECRET_KEY.
+	recoveryKeyInfo = "scanopsis recovery codes v2"
 )
+
+// Storage versions of recovery codes (recovery_codes.version).
+const (
+	// recoveryV1 is the SHA-256 of a legacy 10-symbol code.
+	recoveryV1 int16 = 1
+	// recoveryV2 is the HMAC-SHA-256, keyed with RecoveryKey, of the user id
+	// (8 bytes, big-endian) followed by the 20-symbol code.
+	recoveryV2 int16 = 2
+)
+
+// RecoveryKey derives the key that recovery codes are stored with from the
+// server's secret key (SCANOPSIS_SECRET_KEY), with HKDF-SHA-256 and a fixed
+// label. Changing the secret key makes the stored codes unusable, as it does
+// the TOTP secrets.
+func RecoveryKey(secretKey []byte) ([]byte, error) {
+	if len(secretKey) == 0 {
+		return nil, errors.New("recovery key: the secret key is empty")
+	}
+	return hkdf.Key(sha256.New, secretKey, nil, recoveryKeyInfo, sha256.Size)
+}
+
+// recoveryMAC is the stored form of a version 2 recovery code. The user id
+// binds the value to one account.
+func recoveryMAC(key []byte, userID int64, code string) []byte {
+	mac := hmac.New(sha256.New, key)
+	var id [8]byte
+	binary.BigEndian.PutUint64(id[:], uint64(userID)) //nolint:gosec // ids are positive; the bit pattern is what matters
+	mac.Write(id[:])
+	mac.Write([]byte(code))
+	return mac.Sum(nil)
+}
 
 // MFAStore is the persistence MFA needs; *store.Queries implements it.
 type MFAStore interface {
@@ -70,8 +115,11 @@ type MFAOptions struct {
 	// Limiter limits attempts per user for confirm and verify; callers use
 	// NewRateLimiter(30*time.Second, 5, nil).
 	Limiter *RateLimiter
-	Now     func() time.Time // nil means time.Now
-	Logger  *slog.Logger     // nil means slog.Default()
+	// RecoveryKey keys the stored form of recovery codes; derive it with
+	// RecoveryKey from SCANOPSIS_SECRET_KEY. Without it no codes are issued.
+	RecoveryKey []byte
+	Now         func() time.Time // nil means time.Now
+	Logger      *slog.Logger     // nil means slog.Default()
 }
 
 // MFA serves the two-factor endpoints: TOTP enrolment, its confirmation and
@@ -167,7 +215,7 @@ func (m *MFA) ConfirmEnrollmentHandler() http.Handler {
 			m.rejected(w, r, p, "totp")
 			return
 		}
-		codes, hashes, err := newRecoveryCodes()
+		codes, hashes, err := newRecoveryCodes(m.opts.RecoveryKey, user.ID)
 		if err != nil {
 			m.fail(w, r, "cannot generate recovery codes", err)
 			return
@@ -179,7 +227,7 @@ func (m *MFA) ConfirmEnrollmentHandler() http.Handler {
 			return
 		}
 		for _, h := range hashes {
-			if err := m.store.InsertRecoveryCode(ctx, store.InsertRecoveryCodeParams{UserID: user.ID, CodeHash: h}); err != nil {
+			if err := m.store.InsertRecoveryCode(ctx, store.InsertRecoveryCodeParams{UserID: user.ID, CodeHash: h, Version: recoveryV2}); err != nil {
 				m.fail(w, r, "cannot store recovery codes", err)
 				return
 			}
@@ -241,8 +289,8 @@ func (m *MFA) VerifyHandler() http.Handler {
 				}
 				accepted = used
 			}
-		} else if hash, valid := recoveryHash(code); valid {
-			used, err := queryRow(m.store.UseRecoveryCode(ctx, store.UseRecoveryCodeParams{UserID: user.ID, CodeHash: hash}))
+		} else if hash, version, valid := m.recoveryHash(user.ID, code); valid {
+			used, err := queryRow(m.store.UseRecoveryCode(ctx, store.UseRecoveryCodeParams{UserID: user.ID, CodeHash: hash, Version: version}))
 			if err != nil {
 				m.fail(w, r, "cannot use recovery code", err)
 				return
@@ -394,7 +442,8 @@ func isTOTPCode(code string) bool {
 }
 
 // normaliseCode lowercases code and drops spaces and hyphens, so that
-// "123 456" and "ABCDE-FGHJK" are accepted as typed from an app or a print-out.
+// "123 456" and "ABCDE-FGHJK-MNPQR-STUVW" are accepted as typed from an app or
+// a print-out.
 func normaliseCode(code string) string {
 	return strings.Map(func(r rune) rune {
 		if r == ' ' || r == '-' {
@@ -404,36 +453,48 @@ func normaliseCode(code string) string {
 	}, strings.ToLower(code))
 }
 
-// recoveryHash returns the SHA-256 of a normalised recovery code, and false
-// if code cannot be one.
-func recoveryHash(code string) ([]byte, bool) {
-	if len(code) != 2*recoveryHalf {
-		return nil, false
-	}
+// recoveryHash returns the stored form of a normalised recovery code for the
+// user and its storage version, and false if code cannot be a recovery code.
+// A 20-symbol code is version 2; a 10-symbol code was issued before version 2
+// and is looked up as its SHA-256.
+func (m *MFA) recoveryHash(userID int64, code string) ([]byte, int16, bool) {
 	for i := range len(code) {
 		if strings.IndexByte(recoveryAlphabet, code[i]) < 0 {
-			return nil, false
+			return nil, 0, false
 		}
 	}
-	h := sha256.Sum256([]byte(code))
-	return h[:], true
+	switch len(code) {
+	case recoveryLen:
+		if len(m.opts.RecoveryKey) == 0 {
+			return nil, 0, false
+		}
+		return recoveryMAC(m.opts.RecoveryKey, userID, code), recoveryV2, true
+	case legacyRecoveryLen:
+		h := sha256.Sum256([]byte(code))
+		return h[:], recoveryV1, true
+	}
+	return nil, 0, false
 }
 
-// newRecoveryCodes returns recoveryCodeCount distinct codes formatted
-// xxxxx-xxxxx and the SHA-256 of each normalised code.
-func newRecoveryCodes() (codes []string, hashes [][]byte, err error) {
+// newRecoveryCodes returns recoveryCodeCount distinct codes for the user,
+// formatted in hyphen-separated groups of recoveryGroup symbols, and the
+// version 2 stored form of each normalised code.
+func newRecoveryCodes(key []byte, userID int64) (codes []string, hashes [][]byte, err error) {
+	if len(key) == 0 {
+		return nil, nil, errors.New("no recovery key configured")
+	}
 	// Bytes at or above limit are rejected so that the choice stays uniform.
 	limit := byte(256 / len(recoveryAlphabet) * len(recoveryAlphabet))
 	seen := make(map[string]bool, recoveryCodeCount)
 	for len(codes) < recoveryCodeCount {
-		raw := make([]byte, 0, 2*recoveryHalf)
-		for len(raw) < 2*recoveryHalf {
-			var b [16]byte
+		raw := make([]byte, 0, recoveryLen)
+		for len(raw) < recoveryLen {
+			var b [32]byte
 			if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
 				return nil, nil, err
 			}
 			for _, c := range b {
-				if c < limit && len(raw) < 2*recoveryHalf {
+				if c < limit && len(raw) < recoveryLen {
 					raw = append(raw, recoveryAlphabet[int(c)%len(recoveryAlphabet)])
 				}
 			}
@@ -443,9 +504,12 @@ func newRecoveryCodes() (codes []string, hashes [][]byte, err error) {
 			continue
 		}
 		seen[plain] = true
-		h := sha256.Sum256(raw)
-		codes = append(codes, plain[:recoveryHalf]+"-"+plain[recoveryHalf:])
-		hashes = append(hashes, h[:])
+		groups := make([]string, 0, recoveryGroups)
+		for i := 0; i < recoveryLen; i += recoveryGroup {
+			groups = append(groups, plain[i:i+recoveryGroup])
+		}
+		codes = append(codes, strings.Join(groups, "-"))
+		hashes = append(hashes, recoveryMAC(key, userID, plain))
 	}
 	return codes, hashes, nil
 }

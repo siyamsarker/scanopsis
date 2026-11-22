@@ -113,7 +113,8 @@ test('1. setup creates the administrator and enrols two-factor', async ({ browse
   const codes = root.getByRole('list', { name: 'Recovery codes' }).getByRole('listitem');
   await expect(codes).toHaveCount(10);
   recoveryCode = (await codes.first().innerText()).trim();
-  expect(recoveryCode).not.toBe('');
+  // Four groups of five symbols from a 31-character alphabet.
+  expect(recoveryCode).toMatch(/^[a-hjkmnp-z2-9]{5}(-[a-hjkmnp-z2-9]{5}){3}$/);
 
   const proceed = root.getByRole('button', { name: 'Continue' });
   await expect(proceed).toBeDisabled();

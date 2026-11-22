@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -134,16 +135,21 @@ func (f *fakeMFAStore) InsertRecoveryCode(_ context.Context, a store.InsertRecov
 	if f.codes == nil {
 		f.codes = map[string]bool{}
 	}
-	f.codes[string(a.CodeHash)] = false
+	f.codes[codeKey(a.Version, a.CodeHash)] = false
 	return nil
+}
+
+// codeKey is how the fake store keys a stored code: version and hash.
+func codeKey(version int16, hash []byte) string {
+	return string(rune('0'+version)) + ":" + string(hash)
 }
 
 func (f *fakeMFAStore) UseRecoveryCode(_ context.Context, a store.UseRecoveryCodeParams) (int64, error) {
 	if f.recErr != nil {
 		return 0, f.recErr
 	}
-	if used, ok := f.codes[string(a.CodeHash)]; ok && !used {
-		f.codes[string(a.CodeHash)] = true
+	if used, ok := f.codes[codeKey(a.Version, a.CodeHash)]; ok && !used {
+		f.codes[codeKey(a.Version, a.CodeHash)] = true
 		return a.UserID, nil
 	}
 	return 0, pgx.ErrNoRows
@@ -171,6 +177,10 @@ func newMFAFixture(t *testing.T) *mfaFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
+	recoveryKey, err := RecoveryKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	s, ss, clk := newTestSessions(t, true)
 	f := &mfaFixture{
 		store:    &fakeMFAStore{user: store.User{ID: mfaUserID, Source: SourceLocal, Username: "vic"}},
@@ -184,11 +194,12 @@ func newMFAFixture(t *testing.T) *mfaFixture {
 	}
 	f.store.sessions = ss
 	f.mfa = NewMFA(f.store, s, f.audit, func(*http.Request) netip.Addr { return netip.MustParseAddr("203.0.113.9") }, MFAOptions{
-		Issuer:  "Scanopsis",
-		Box:     box,
-		Limiter: f.limiter,
-		Now:     clk.Now,
-		Logger:  slog.New(slog.NewTextHandler(f.logs, nil)),
+		Issuer:      "Scanopsis",
+		Box:         box,
+		Limiter:     f.limiter,
+		Now:         clk.Now,
+		Logger:      slog.New(slog.NewTextHandler(f.logs, nil)),
+		RecoveryKey: recoveryKey,
 	})
 	f.cookie = start(t, s, mfaUserID, nil)
 	return f
@@ -392,7 +403,7 @@ func TestMFAConfirmErrors(t *testing.T) {
 	}
 }
 
-var recoveryFormat = regexp.MustCompile(`^[abcdefghjkmnpqrstuvwxyz23456789]{5}-[abcdefghjkmnpqrstuvwxyz23456789]{5}$`)
+var recoveryFormat = regexp.MustCompile(`^[abcdefghjkmnpqrstuvwxyz23456789]{5}(-[abcdefghjkmnpqrstuvwxyz23456789]{5}){3}$`)
 
 func TestMFAConfirmIssuesRecoveryCodes(t *testing.T) {
 	f := newMFAFixture(t)
@@ -422,17 +433,17 @@ func TestMFAConfirmIssuesRecoveryCodes(t *testing.T) {
 			t.Fatalf("duplicate code %q", c)
 		}
 		seen[c] = true
-		h := sha256.Sum256([]byte(strings.ReplaceAll(c, "-", "")))
-		if used, ok := f.store.codes[string(h[:])]; !ok || used {
-			t.Fatalf("hash of %q not stored unused", c)
+		mac := recoveryMAC(f.mfa.opts.RecoveryKey, mfaUserID, strings.ReplaceAll(c, "-", ""))
+		if used, ok := f.store.codes[codeKey(recoveryV2, mac)]; !ok || used {
+			t.Fatalf("HMAC of %q not stored unused as version 2", c)
 		}
 	}
 	if len(f.store.codes) != 10 {
 		t.Fatalf("%d stored hashes; want exactly 10 (stale code deleted)", len(f.store.codes))
 	}
 	for k := range f.store.codes {
-		if len(k) != sha256.Size {
-			t.Fatalf("stored value of %d bytes is not a SHA-256", len(k))
+		if len(k) != len(codeKey(recoveryV2, nil))+sha256.Size {
+			t.Fatalf("stored key of %d bytes is not a version and a 32-byte MAC", len(k))
 		}
 	}
 	if !f.store.user.TotpEnabledAt.Valid || f.store.user.TotpLastStep != now.Unix()/30 {
@@ -777,7 +788,7 @@ func TestMFADefaults(t *testing.T) {
 func TestRecoveryCodesAreUniqueAndUniform(t *testing.T) {
 	seen := map[string]bool{}
 	for range 200 {
-		codes, hashes, err := newRecoveryCodes()
+		codes, hashes, err := newRecoveryCodes(bytes.Repeat([]byte{1}, 32), 1)
 		if err != nil || len(codes) != 10 || len(hashes) != 10 {
 			t.Fatal(err, len(codes))
 		}
@@ -976,4 +987,77 @@ func TestMFAVerifyLockoutStoreErrors(t *testing.T) {
 			t.Fatal("session verified although the reset failed")
 		}
 	})
+}
+
+func TestRecoveryCodeStrength(t *testing.T) {
+	// 20 symbols from 31: at least 99 bits.
+	if bits := float64(recoveryLen) * math.Log2(float64(len(recoveryAlphabet))); bits < 99 {
+		t.Fatalf("recovery codes carry %.1f bits", bits)
+	}
+	if _, _, err := newRecoveryCodes(nil, 1); err == nil {
+		t.Fatal("codes issued without a key")
+	}
+}
+
+func TestRecoveryKeyDerivation(t *testing.T) {
+	a, err := RecoveryKey(bytes.Repeat([]byte{7}, 32))
+	if err != nil || len(a) != 32 {
+		t.Fatalf("RecoveryKey = %x, %v", a, err)
+	}
+	b, _ := RecoveryKey(bytes.Repeat([]byte{8}, 32))
+	if bytes.Equal(a, b) || bytes.Equal(a, bytes.Repeat([]byte{7}, 32)) {
+		t.Fatal("the derived key does not depend on, or equals, the secret key")
+	}
+	if _, err := RecoveryKey(nil); err == nil {
+		t.Fatal("an empty secret key was accepted")
+	}
+	// The stored form depends on the user and the key, not only the code.
+	code := strings.Repeat("a", recoveryLen)
+	if bytes.Equal(recoveryMAC(a, 1, code), recoveryMAC(a, 2, code)) || bytes.Equal(recoveryMAC(a, 1, code), recoveryMAC(b, 1, code)) {
+		t.Fatal("the MAC ignores the user id or the key")
+	}
+}
+
+func TestMFAStoredCodeIsBoundToTheUser(t *testing.T) {
+	f := newMFAFixture(t)
+	_, codes := f.enrolled(t)
+	// Store another user's code: the same text does not unlock this user.
+	f.store.codes = map[string]bool{codeKey(recoveryV2, recoveryMAC(f.mfa.opts.RecoveryKey, mfaUserID+1, strings.ReplaceAll(codes[0], "-", ""))): false}
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(codes[0])); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a code stored for another user: %d", w.Code)
+	}
+}
+
+func TestMFALegacyRecoveryCodeStillWorksOnce(t *testing.T) {
+	f := newMFAFixture(t)
+	f.enrolled(t)
+	// A code issued before version 2: ten symbols, stored as SHA-256.
+	legacy := "abcde-fghjk"
+	sum := sha256.Sum256([]byte("abcdefghjk"))
+	f.store.codes[codeKey(recoveryV1, sum[:])] = false
+	h := f.mfa.VerifyHandler()
+	if w := f.do(t, h, codeBody(strings.ToUpper(legacy))); w.Code != http.StatusNoContent {
+		t.Fatalf("legacy code: %d %s", w.Code, w.Body)
+	}
+	if w := f.do(t, h, codeBody(legacy)); w.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy code reused: %d", w.Code)
+	}
+	// A legacy hash is never matched as version 2, nor the other way round.
+	f.store.codes[codeKey(recoveryV2, sum[:])] = false
+	if w := f.do(t, h, codeBody("abcdefghjk")); w.Code != http.StatusUnauthorized {
+		t.Fatalf("a version 2 row matched a legacy code: %d", w.Code)
+	}
+}
+
+func TestMFAWithoutRecoveryKeyIssuesNoCodes(t *testing.T) {
+	f := newMFAFixture(t)
+	f.mfa.opts.RecoveryKey = nil
+	secret, _ := f.enrol(t)
+	w := f.do(t, f.mfa.ConfirmEnrollmentHandler(), codeBody(f.codeAt(t, secret, f.clock.Now())))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("confirm without a recovery key: %d", w.Code)
+	}
+	if _, _, ok := f.mfa.recoveryHash(mfaUserID, strings.Repeat("a", recoveryLen)); ok {
+		t.Fatal("a version 2 code was looked up without a key")
+	}
 }

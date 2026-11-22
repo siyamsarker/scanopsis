@@ -14,7 +14,20 @@ ALTER TABLE sessions ADD CONSTRAINT sessions_id_key UNIQUE (id);
 ALTER TABLE sessions ADD COLUMN client_ip text NOT NULL DEFAULT '';
 ALTER TABLE sessions ADD COLUMN user_agent text NOT NULL DEFAULT '';
 
+-- How each recovery code is stored. 1: SHA-256 of a 10-character code, as
+-- issued before this migration; such codes keep working until they are used
+-- or replaced. 2: HMAC-SHA-256 of a 20-character code and the user id, with a
+-- key derived from SCANOPSIS_SECRET_KEY. New codes are always version 2, so
+-- the column has no default once existing rows are marked.
+ALTER TABLE recovery_codes ADD COLUMN version smallint NOT NULL DEFAULT 1
+    CONSTRAINT recovery_codes_version_check CHECK (version IN (1, 2));
+ALTER TABLE recovery_codes ALTER COLUMN version DROP DEFAULT;
+
 -- +goose Down
+-- Version 2 codes cannot be checked without this column: remove them, so the
+-- users concerned fall back to their authenticator app.
+DELETE FROM recovery_codes WHERE version <> 1;
+ALTER TABLE recovery_codes DROP COLUMN version;
 ALTER TABLE sessions DROP COLUMN user_agent;
 ALTER TABLE sessions DROP COLUMN client_ip;
 ALTER TABLE sessions DROP COLUMN id;

@@ -152,8 +152,13 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 			"setup_url", cfg.PublicURL.String()+"/setup", "setup_token", token)
 	}
 
+	recoveryKey, err := auth.RecoveryKey(cfg.SecretKey)
+	if err != nil {
+		return err
+	}
 	mfa := auth.NewMFA(q, sessions, rec, resolver.IP, auth.MFAOptions{
 		Issuer: "Scanopsis", Box: box, Limiter: auth.NewRateLimiter(30*time.Second, 5, nil), Logger: log,
+		RecoveryKey: recoveryKey,
 	})
 	localLogin := auth.NewLocalLogin(q, sessions, rec, resolver.IP,
 		auth.NewRateLimiter(12*time.Second, 10, nil), auth.NewRateLimiter(12*time.Second, 10, nil), log)

@@ -20,6 +20,7 @@ type RecoveryCode struct {
 	UserID   int64
 	CodeHash []byte
 	UsedAt   pgtype.Timestamptz
+	Version  int16
 }
 
 type Scan struct {

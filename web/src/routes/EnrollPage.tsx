@@ -124,7 +124,9 @@ function RecoveryStep({ codes, onContinue }: { codes: string[]; onContinue: () =
         className="grid grid-cols-1 gap-2 rounded-control border border-border bg-bg p-4 font-mono text-text sm:grid-cols-2"
       >
         {codes.map((code) => (
-          <li key={code}>{code}</li>
+          <li key={code} className="whitespace-nowrap">
+            {code}
+          </li>
         ))}
       </ul>
       <div className="flex flex-wrap gap-2">

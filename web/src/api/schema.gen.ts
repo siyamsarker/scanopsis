@@ -1196,7 +1196,7 @@ export interface components {
             password: string;
         };
         MFACode: {
-            /** @description A 6-digit TOTP code or a recovery code (xxxxx-xxxxx). */
+            /** @description A 6-digit TOTP code or a recovery code (xxxxx-xxxxx-xxxxx-xxxxx; codes of the older form xxxxx-xxxxx are still accepted until used). Case, spaces and hyphens do not matter. */
             code: string;
         };
         MFAEnrollment: {

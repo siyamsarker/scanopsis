@@ -33,34 +33,36 @@ func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID int64) error {
 }
 
 const insertRecoveryCode = `-- name: InsertRecoveryCode :exec
-INSERT INTO recovery_codes (user_id, code_hash) VALUES ($1, $2)
+INSERT INTO recovery_codes (user_id, code_hash, version) VALUES ($1, $2, $3)
 `
 
 type InsertRecoveryCodeParams struct {
 	UserID   int64
 	CodeHash []byte
+	Version  int16
 }
 
 func (q *Queries) InsertRecoveryCode(ctx context.Context, arg InsertRecoveryCodeParams) error {
-	_, err := q.db.Exec(ctx, insertRecoveryCode, arg.UserID, arg.CodeHash)
+	_, err := q.db.Exec(ctx, insertRecoveryCode, arg.UserID, arg.CodeHash, arg.Version)
 	return err
 }
 
 const useRecoveryCode = `-- name: UseRecoveryCode :one
 UPDATE recovery_codes SET used_at = now()
-WHERE user_id = $1 AND code_hash = $2 AND used_at IS NULL
+WHERE user_id = $1 AND code_hash = $2 AND version = $3 AND used_at IS NULL
 RETURNING user_id
 `
 
 type UseRecoveryCodeParams struct {
 	UserID   int64
 	CodeHash []byte
+	Version  int16
 }
 
-// UseRecoveryCode marks an unused code as used and returns it; no row means
-// the code is unknown or already used.
+// UseRecoveryCode marks an unused code stored with the given version as used
+// and returns it; no row means the code is unknown or already used.
 func (q *Queries) UseRecoveryCode(ctx context.Context, arg UseRecoveryCodeParams) (int64, error) {
-	row := q.db.QueryRow(ctx, useRecoveryCode, arg.UserID, arg.CodeHash)
+	row := q.db.QueryRow(ctx, useRecoveryCode, arg.UserID, arg.CodeHash, arg.Version)
 	var user_id int64
 	err := row.Scan(&user_id)
 	return user_id, err

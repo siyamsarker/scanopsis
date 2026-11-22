@@ -1206,7 +1206,7 @@ components:
       required: [code]
       additionalProperties: false
       properties:
-        code: { type: string, maxLength: 64, description: "A 6-digit TOTP code or a recovery code (xxxxx-xxxxx)." }
+        code: { type: string, maxLength: 64, description: "A 6-digit TOTP code or a recovery code (xxxxx-xxxxx-xxxxx-xxxxx; codes of the older form xxxxx-xxxxx are still accepted until used). Case, spaces and hyphens do not matter." }
     MFAEnrollment:
       type: object
       required: [secret, otpauth_uri]
