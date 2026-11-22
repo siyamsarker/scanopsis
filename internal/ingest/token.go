@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,11 +17,24 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/go-jose/go-jose/v4"
 )
 
 const (
 	verifyTimeout = 10 * time.Second
 	maxClaimLen   = 1024
+	// clockLeeway is how far in the future the nbf and iat of a token may be,
+	// for clocks that differ a little. go-oidc checks exp without leeway,
+	// nbf with five minutes and iat not at all; a token of a job that
+	// started is never meant to be valid in the future.
+	clockLeeway = 10 * time.Second
+	// keyRefetchInterval is the shortest time between two fetches of GitLab's
+	// signing keys. Every token with a key ID that is not in the cached set
+	// would otherwise make Scanopsis fetch them, so one forged token per
+	// request would turn into a request to GitLab per upload.
+	keyRefetchInterval = 10 * time.Second
+	// maxKeySetBytes bounds the key set read from GitLab.
+	maxKeySetBytes = 1 << 20
 )
 
 // Claims are the values of a verified GitLab CI/CD ID token that Scanopsis
@@ -68,10 +82,7 @@ func (v *verifier) forURL(gitlabURL string) *oidc.IDTokenVerifier {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.v == nil || v.url != gitlabURL {
-		// The key set keeps this context for its HTTP client only, so it
-		// must outlive any request.
-		ctx := oidc.ClientContext(context.Background(), v.client)
-		keys := fetchProbe{oidc.NewRemoteKeySet(ctx, gitlabURL+"/oauth/discovery/keys")}
+		keys := &keySet{url: gitlabURL + "/oauth/discovery/keys", client: v.client, now: v.now}
 		v.v = oidc.NewVerifier(gitlabURL, keys, &oidc.Config{ClientID: v.audience, Now: v.now})
 		v.url = gitlabURL
 	}
@@ -96,6 +107,8 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 		return nil, v.explain(err)
 	}
 	var wire struct {
+		NBF           flex `json:"nbf"`
+		IAT           flex `json:"iat"`
 		ProjectID     flex `json:"project_id"`
 		ProjectPath   flex `json:"project_path"`
 		NamespacePath flex `json:"namespace_path"`
@@ -107,6 +120,27 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 	}
 	if err := tok.Claims(&wire); err != nil {
 		return nil, &tokenError{msg: "The token claims are not a JSON object of the expected shape."}
+	}
+	// go-oidc accepts an nbf up to five minutes ahead and ignores iat. A token
+	// that is not valid yet, or was issued in the future, is refused with a
+	// small leeway for the clocks.
+	for _, f := range []struct {
+		in  flex
+		msg string
+	}{
+		{wire.NBF, "The token is not valid yet (nbf is in the future). Check that the clocks of GitLab and the Scanopsis server agree (NTP)."},
+		{wire.IAT, "The token was issued in the future (iat is ahead of the clock). Check that the clocks of GitLab and the Scanopsis server agree (NTP)."},
+	} {
+		if f.in == "" {
+			continue
+		}
+		secs, err := strconv.ParseFloat(string(f.in), 64)
+		if err != nil {
+			return nil, &tokenError{msg: "The token claims nbf and iat must be numeric dates."}
+		}
+		if v.now().Add(clockLeeway).Before(time.Unix(int64(secs), 0)) {
+			return nil, &tokenError{msg: f.msg}
+		}
 	}
 	c := &Claims{}
 	for _, f := range []struct {
@@ -164,26 +198,149 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 	return c, nil
 }
 
-// fetchFailedKey carries, per verification, a flag that fetchProbe sets when
+// fetchFailedKey carries, per verification, a flag that the key set sets when
 // the signing keys could not be fetched. go-oidc reports that failure only as
 // text (it does not wrap the error), and other messages can contain values
 // from the token, so the failure is marked where it happens instead.
 type fetchFailedKey struct{}
 
-// fetchProbe is a key set that marks failures to fetch the keys.
-type fetchProbe struct{ inner *oidc.RemoteKeySet }
+// keySet is the signing keys of one GitLab, fetched from its key URL. It is
+// go-oidc's key set with two changes: it fetches at most once in
+// keyRefetchInterval, and it never fetches for a token whose key ID it
+// already has, because that token is wrong, not the cache.
+//
+//   - A key ID that is in the cached set and a signature that does not verify
+//     is a forged or damaged token. Fetching again cannot change that.
+//   - A key ID that is not in the set may be a new key (GitLab rotated), so
+//     the keys are fetched, but only if the last fetch is older than the
+//     interval. Inside it the token is answered like any with a bad signature,
+//     and the answer of a failed fetch is remembered for the interval too, so
+//     a GitLab that is down is asked once, not once per request.
+type keySet struct {
+	url    string
+	client *http.Client
+	now    func() time.Time
+
+	mu        sync.Mutex
+	keys      []jose.JSONWebKey
+	fetchedAt time.Time // of the last fetch, successful or not; zero before the first
+	fetchErr  error     // what the last fetch returned
+}
+
+var errBadSignature = errors.New("failed to verify id token signature")
 
 // VerifySignature implements oidc.KeySet.
-func (p fetchProbe) VerifySignature(ctx context.Context, jwt string) ([]byte, error) {
-	payload, err := p.inner.VerifySignature(ctx, jwt)
-	// RemoteKeySet's own fetch error, produced before any token content is
-	// involved.
-	if err != nil && strings.HasPrefix(err.Error(), "fetching keys") {
-		if f, ok := ctx.Value(fetchFailedKey{}).(*atomic.Bool); ok {
-			f.Store(true)
+func (k *keySet) VerifySignature(ctx context.Context, jwt string) ([]byte, error) {
+	jws, err := jose.ParseSignedCompact(jwt, []jose.SignatureAlgorithm{jose.RS256})
+	if err != nil {
+		return nil, fmt.Errorf("oidc: malformed jwt: %w", err)
+	}
+	kid := ""
+	if len(jws.Signatures) > 0 {
+		kid = jws.Signatures[0].Header.KeyID
+	}
+
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if payload, ok := verifyWithKeys(k.keys, kid, jws); ok {
+		return payload, nil
+	}
+	if kid != "" && hasKey(k.keys, kid) {
+		return nil, errBadSignature
+	}
+	if !k.fetchedAt.IsZero() && k.now().Sub(k.fetchedAt) < keyRefetchInterval {
+		if k.fetchErr != nil {
+			markFetchFailed(ctx)
+			return nil, fmt.Errorf("fetching keys: %w", k.fetchErr)
+		}
+		return nil, errBadSignature
+	}
+	k.fetchedAt = k.now()
+	keys, err := k.fetch(ctx)
+	k.fetchErr = err
+	if err != nil {
+		markFetchFailed(ctx)
+		return nil, fmt.Errorf("fetching keys: %w", err)
+	}
+	k.keys = keys
+	if payload, ok := verifyWithKeys(keys, kid, jws); ok {
+		return payload, nil
+	}
+	return nil, errBadSignature
+}
+
+func markFetchFailed(ctx context.Context) {
+	if f, ok := ctx.Value(fetchFailedKey{}).(*atomic.Bool); ok {
+		f.Store(true)
+	}
+}
+
+// verifyWithKeys checks the signature with every key that has the key ID, or
+// every key when the token has none.
+func verifyWithKeys(keys []jose.JSONWebKey, kid string, jws *jose.JSONWebSignature) ([]byte, bool) {
+	for i := range keys {
+		if kid != "" && keys[i].KeyID != kid {
+			continue
+		}
+		if payload, err := jws.Verify(&keys[i]); err == nil {
+			return payload, true
 		}
 	}
-	return payload, err
+	return nil, false
+}
+
+func hasKey(keys []jose.JSONWebKey, kid string) bool {
+	for i := range keys {
+		if keys[i].KeyID == kid {
+			return true
+		}
+	}
+	return false
+}
+
+// fetch reads the key set. It does not depend on the context of the request
+// that triggered it, which others share the result of, but is bounded by
+// verifyTimeout and keeps the request's values.
+func (k *keySet) fetch(ctx context.Context) ([]jose.JSONWebKey, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, k.url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	resp, err := k.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxKeySetBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading the key set: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unable to fetch keys: %s", resp.Status)
+	}
+	if len(body) > maxKeySetBytes {
+		return nil, errors.New("the key set is too large")
+	}
+	var raw struct {
+		Keys []json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("the key set is not JSON: %w", err)
+	}
+	// A key this library cannot read (another type or algorithm) is left out
+	// instead of failing the whole set, as go-oidc does.
+	var keys []jose.JSONWebKey
+	for _, r := range raw.Keys {
+		var key jose.JSONWebKey
+		if err := key.UnmarshalJSON(r); err != nil || key.Use == "enc" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys, nil
 }
 
 // explain turns a go-oidc error into a message that names the failed check.

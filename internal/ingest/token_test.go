@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -198,17 +199,80 @@ func TestVerifyNumericClaims(t *testing.T) {
 	}
 }
 
-func TestVerifyClockSkewWindow(t *testing.T) {
+// testClock is a clock a test can move.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func newTestClock() *testClock { return &testClock{t: time.Now()} }
+
+func (c *testClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *testClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func (c *testClock) verifier() *verifier {
+	return &verifier{audience: testAudience, client: http.DefaultClient, now: c.now}
+}
+
+// nbf and iat in the future are refused beyond a small leeway. go-oidc alone
+// accepts an nbf five minutes ahead and ignores iat.
+func TestVerifyNotBeforeAndIssuedAt(t *testing.T) {
 	g := newGitLab(t)
 	v := newVerifier()
-	// A token valid from one minute ahead is within go-oidc's 5 minute leeway.
-	if _, te := v.verify(context.Background(), g.url, "Bearer "+g.token(t, func(c map[string]any) { c["nbf"] = time.Now().Add(time.Minute).Unix() })); te != nil {
-		t.Fatal(te)
+	tests := []struct {
+		name  string
+		claim string
+		ahead time.Duration
+		want  string // empty: accepted
+	}{
+		{"nbf in the past", "nbf", -time.Minute, ""},
+		{"nbf now", "nbf", 0, ""},
+		{"nbf a little ahead", "nbf", 5 * time.Second, ""},
+		{"nbf 30 s ahead", "nbf", 30 * time.Second, "not valid yet"},
+		{"nbf one minute ahead", "nbf", time.Minute, "not valid yet"},
+		{"nbf five minutes ahead", "nbf", 5 * time.Minute, "not valid yet"},
+		{"nbf an hour ahead", "nbf", time.Hour, "not valid yet"},
+		{"iat in the past", "iat", -time.Minute, ""},
+		{"iat a little ahead", "iat", 5 * time.Second, ""},
+		{"iat 30 s ahead", "iat", 30 * time.Second, "issued in the future"},
+		{"iat five minutes ahead", "iat", 5 * time.Minute, "issued in the future"},
+		{"iat an hour ahead", "iat", time.Hour, "issued in the future"},
 	}
-	// The verifier uses the injected clock.
-	v2 := &verifier{audience: testAudience, client: http.DefaultClient, now: func() time.Time { return time.Now().Add(2 * time.Hour) }}
-	if _, te := v2.verify(context.Background(), g.url, "Bearer "+g.token(t, nil)); te == nil || !strings.Contains(te.msg, "expired") {
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tok := g.token(t, func(c map[string]any) { c[tc.claim] = time.Now().Add(tc.ahead).Unix() })
+			_, te := v.verify(context.Background(), g.url, "Bearer "+tok)
+			switch {
+			case tc.want == "" && te != nil:
+				t.Fatalf("refused: %v", te)
+			case tc.want != "" && (te == nil || !strings.Contains(te.msg, tc.want) || te.unavailable):
+				t.Fatalf("got %v, want a message with %q", te, tc.want)
+			}
+		})
+	}
+	// Tokens without nbf or iat are not refused for it.
+	if _, te := v.verify(context.Background(), g.url, "Bearer "+g.token(t, func(c map[string]any) { delete(c, "nbf"); delete(c, "iat") })); te != nil {
+		t.Fatalf("no nbf or iat: %v", te)
+	}
+	// The verifier's clock decides, not the host's.
+	clock := newTestClock()
+	clock.advance(2 * time.Hour)
+	if _, te := clock.verifier().verify(context.Background(), g.url, "Bearer "+g.token(t, nil)); te == nil || !strings.Contains(te.msg, "expired") {
 		t.Fatalf("injected clock ignored: %v", te)
+	}
+	clock = newTestClock()
+	clock.advance(-time.Hour)
+	if _, te := clock.verifier().verify(context.Background(), g.url, "Bearer "+g.token(t, nil)); te == nil || !strings.Contains(te.msg, "not valid yet") {
+		t.Fatalf("a clock behind the token: %v", te)
 	}
 }
 
@@ -218,6 +282,7 @@ type rotatingGitLab struct {
 	mu   sync.Mutex
 	keys []jose.JSONWebKey
 	hits int
+	fail bool
 }
 
 func newRotating(t testing.TB) *rotatingGitLab {
@@ -227,6 +292,10 @@ func newRotating(t testing.TB) *rotatingGitLab {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.hits++
+		if r.fail {
+			http.Error(w, "down", http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		b, _ := json.Marshal(jose.JSONWebKeySet{Keys: r.keys})
 		_, _ = w.Write(b)
@@ -278,13 +347,15 @@ func TestVerifyKeyRotation(t *testing.T) {
 	r := newRotating(t)
 	g := &gitlab{url: r.ts.URL}
 	s1 := r.newKey(t, "key-1")
-	v := newVerifier()
+	clock := newTestClock()
+	v := clock.verifier()
 	ctx := context.Background()
 
 	t1 := r.sign(t, s1, g.claims())
 	if _, te := v.verify(ctx, g.url, "Bearer "+t1); te != nil {
 		t.Fatal(te)
 	}
+	clock.advance(keyRefetchInterval + time.Second)
 
 	// GitLab rotates: a token with an unknown kid is checked against a fresh
 	// copy of the key set, and then verifies.
@@ -310,15 +381,21 @@ func TestVerifyUnknownKidBeforePublication(t *testing.T) {
 	s2 := r.newKey(t, "key-2")
 	k2 := r.keys[1]
 	r.publish("key-1") // key-2 is not published yet
-	v := newVerifier()
+	clock := newTestClock()
+	v := clock.verifier()
 	tok := r.sign(t, s2, g.claims())
 	if _, te := v.verify(context.Background(), g.url, "Bearer "+tok); te == nil || !strings.Contains(te.msg, "signature is not valid") {
 		t.Fatalf("unpublished key accepted: %v", te)
 	}
-	// Once GitLab publishes the key, the same token verifies.
+	// Once GitLab publishes the key, the same token verifies, as soon as the
+	// keys may be fetched again.
 	r.mu.Lock()
 	r.keys = append(r.keys, k2)
 	r.mu.Unlock()
+	if _, te := v.verify(context.Background(), g.url, "Bearer "+tok); te == nil {
+		t.Fatal("the keys were fetched again inside the interval")
+	}
+	clock.advance(keyRefetchInterval)
 	if _, te := v.verify(context.Background(), g.url, "Bearer "+tok); te != nil {
 		t.Fatalf("after publication: %v", te)
 	}
@@ -379,5 +456,151 @@ func TestNamespaceAllowed(t *testing.T) {
 		if got := namespaceAllowed(tc.allowed, tc.ns); got != tc.want {
 			t.Errorf("namespaceAllowed(%q, %q) = %v, want %v", tc.allowed, tc.ns, got, tc.want)
 		}
+	}
+}
+
+// forged returns a token that claims a key ID, signed with a key GitLab does
+// not publish.
+func forged(t testing.TB, kid string, claims map[string]any) string {
+	t.Helper()
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.RS256, Key: jose.JSONWebKey{Key: k, KeyID: kid}}, (&jose.SignerOptions{}).WithType("JWT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, err := jwt.Signed(s).Claims(claims).Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tok
+}
+
+// Forged tokens do not make Scanopsis fetch GitLab's keys again and again.
+func TestVerifyKeyFetchesAreLimited(t *testing.T) {
+	r := newRotating(t)
+	g := &gitlab{url: r.ts.URL}
+	s1 := r.newKey(t, "key-1")
+	clock := newTestClock()
+	v := clock.verifier()
+	ctx := context.Background()
+	good := r.sign(t, s1, g.claims())
+	if _, te := v.verify(ctx, g.url, "Bearer "+good); te != nil {
+		t.Fatal(te)
+	}
+	if r.hits != 1 {
+		t.Fatalf("first verification fetched %d times", r.hits)
+	}
+
+	// An unknown key ID, many times, inside the interval: no fetch.
+	for i := range 30 {
+		tok := forged(t, "unknown-"+strconv.Itoa(i), g.claims())
+		if _, te := v.verify(ctx, g.url, "Bearer "+tok); te == nil || !strings.Contains(te.msg, "signature is not valid") || te.unavailable {
+			t.Fatalf("forged token: %v", te)
+		}
+	}
+	if r.hits != 1 {
+		t.Errorf("%d fetches for forged tokens inside the interval, want 1 in all", r.hits)
+	}
+
+	// After the interval one unknown key ID makes one fetch, and the next ones
+	// do not.
+	clock.advance(keyRefetchInterval)
+	for i := range 30 {
+		if _, te := v.verify(ctx, g.url, "Bearer "+forged(t, "other-"+strconv.Itoa(i), g.claims())); te == nil {
+			t.Fatal("forged token accepted")
+		}
+	}
+	if r.hits != 2 {
+		t.Errorf("%d fetches after the interval, want 2 in all", r.hits)
+	}
+
+	// A bad signature on a key ID that is in the cached set never fetches,
+	// even long after the last fetch: the token is wrong, not the cache.
+	clock.advance(30 * time.Minute)
+	damaged := good[:len(good)-6] + "AAAAAA"
+	for range 30 {
+		if _, te := v.verify(ctx, g.url, "Bearer "+damaged); te == nil || !strings.Contains(te.msg, "signature is not valid") {
+			t.Fatalf("damaged token: %v", te)
+		}
+		if _, te := v.verify(ctx, g.url, "Bearer "+forged(t, "key-1", g.claims())); te == nil {
+			t.Fatal("token signed with another key under a known key ID accepted")
+		}
+	}
+	if r.hits != 2 {
+		t.Errorf("%d fetches for bad signatures of a known key, want 2 in all", r.hits)
+	}
+	// Valid tokens are still verified from the cache.
+	if _, te := v.verify(ctx, g.url, "Bearer "+good); te != nil || r.hits != 2 {
+		t.Errorf("valid token: %v, %d fetches", te, r.hits)
+	}
+}
+
+// A GitLab that cannot be reached is asked once in the interval: a token with
+// an unknown key ID in that time is answered "unavailable" again, without
+// another request, and the first request after it asks again.
+func TestVerifyKeyFetchFailuresAreLimited(t *testing.T) {
+	r := newRotating(t)
+	g := &gitlab{url: r.ts.URL}
+	s1 := r.newKey(t, "key-1")
+	r.fail = true
+	clock := newTestClock()
+	v := clock.verifier()
+	ctx := context.Background()
+	tok := r.sign(t, s1, g.claims())
+	for i := range 5 {
+		_, te := v.verify(ctx, g.url, "Bearer "+tok)
+		if te == nil || !te.unavailable || !strings.Contains(te.msg, "could not fetch the signing keys") {
+			t.Fatalf("attempt %d: %v", i, te)
+		}
+	}
+	if r.hits != 1 {
+		t.Errorf("%d requests to a failing GitLab inside the interval, want 1", r.hits)
+	}
+	clock.advance(keyRefetchInterval)
+	if _, te := v.verify(ctx, g.url, "Bearer "+tok); te == nil || !te.unavailable {
+		t.Fatalf("%v", te)
+	}
+	if r.hits != 2 {
+		t.Errorf("%d requests after the interval, want 2", r.hits)
+	}
+	// GitLab comes back: the next attempt after the interval works.
+	r.mu.Lock()
+	r.fail = false
+	r.mu.Unlock()
+	clock.advance(keyRefetchInterval)
+	if _, te := v.verify(ctx, g.url, "Bearer "+tok); te != nil {
+		t.Fatalf("after recovery: %v", te)
+	}
+}
+
+// Keys that were fetched stay in use when a later fetch fails.
+func TestVerifyKeepsKeysWhenARefreshFails(t *testing.T) {
+	r := newRotating(t)
+	g := &gitlab{url: r.ts.URL}
+	s1 := r.newKey(t, "key-1")
+	clock := newTestClock()
+	v := clock.verifier()
+	ctx := context.Background()
+	tok := r.sign(t, s1, g.claims())
+	if _, te := v.verify(ctx, g.url, "Bearer "+tok); te != nil {
+		t.Fatal(te)
+	}
+	clock.advance(30 * time.Minute)
+	r.mu.Lock()
+	r.fail = true
+	r.mu.Unlock()
+	// A token of a key that is cached needs no fetch.
+	if _, te := v.verify(ctx, g.url, "Bearer "+tok); te != nil {
+		t.Fatalf("cached key not used: %v", te)
+	}
+	// A token with an unknown key ID tries a fetch, which fails.
+	if _, te := v.verify(ctx, g.url, "Bearer "+forged(t, "new", g.claims())); te == nil || !te.unavailable {
+		t.Fatalf("%v", te)
+	}
+	if _, te := v.verify(ctx, g.url, "Bearer "+tok); te != nil {
+		t.Fatalf("cached keys lost after a failed refresh: %v", te)
 	}
 }
