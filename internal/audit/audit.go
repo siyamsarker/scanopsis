@@ -36,6 +36,10 @@ const (
 	ActionServiceUpdated = "service.updated"
 	ActionServiceDeleted = "service.deleted"
 
+	// A SonarQube webhook that was refused. The actor is "sonarqube:unknown";
+	// the detail carries "reason" and "ip".
+	ActionWebhookRejected = "webhook.rejected"
+
 	// Data retention. The actor is "retention"; the detail carries the
 	// period, the cutoffs and how many rows of each kind were deleted.
 	ActionRetentionDeleted = "retention.deleted"

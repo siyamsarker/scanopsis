@@ -20,10 +20,11 @@ import (
 	"time"
 )
 
-const (
-	requestTimeout = 10 * time.Second
-	maxResponse    = 4 << 20
-)
+const maxResponse = 4 << 20
+
+// requestTimeout bounds one Web API call. It is a variable only so tests can
+// shorten it.
+var requestTimeout = 10 * time.Second
 
 // sharedMetricKeys are reported in both modes.
 var sharedMetricKeys = []string{

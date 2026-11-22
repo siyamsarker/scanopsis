@@ -215,7 +215,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Build:                httpapi.BuildInfo{Version: version, Commit: resolveCommit(), Go: runtime.Version()},
 		Secure:               cfg.Secure(),
 	}
-	sonarQube := sonar.New(pool, conf, sonar.Options{HTTPClient: httpClient, Logger: log})
+	sonarQube := sonar.New(pool, conf, sonar.Options{HTTPClient: httpClient, Logger: log, Audit: rec, ClientIP: resolver.IP})
 	features, err := mergeFeatures(
 		ingest.New(pool, conf, rec, ingest.Options{
 			Audience:   cfg.PublicURL.String(),

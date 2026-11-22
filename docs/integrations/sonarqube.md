@@ -97,8 +97,30 @@ SonarQube signs every delivery with the header `X-Sonar-Webhook-HMAC-SHA256`,
 the lowercase hex HMAC-SHA256 of the request body with the secret. Scanopsis
 accepts the delivery only if the signature matches. Webhooks time out after 10
 seconds and SonarQube does not retry them; Scanopsis answers `202` at once and
-processes the delivery in the background. The periodic sync covers lost
-deliveries.
+processes the delivery in the background, with 4 deliveries at a time. The
+periodic sync covers lost deliveries.
+
+### How deliveries and the sync are processed
+
+- Deliveries and the sync run apart. A slow SonarQube delays neither the
+  `202` answers nor the sync; a burst of deliveries does not delay the sync.
+- Up to 500 verified deliveries wait for a worker. A delivery that finds the
+  queue full is not lost: it stays `pending`, and the next sync reads the
+  analysis of its project (when linked by key) and marks it `linked`. If the
+  project is not linked by key, the delivery is marked `failed` (interrupted)
+  after 10 minutes plus two sync intervals, and you can redeliver it.
+- A sync stops early when reading the SonarQube version fails, or after 3 calls
+  in a row get no answer (a timeout or a refused connection). It then logs one
+  warning, shows the cause as `last_sync_error` and tries again at the next
+  interval, so an unreachable SonarQube costs about one timeout (10 seconds),
+  not one per project. A rejected token (401) also stops the sync.
+- A sync that has failures for some projects writes one warning line
+  (`SonarQube sync finished with failures`) with the number of failed
+  projects, the first project and its error, instead of one line per project.
+  The per-project lines are at the `debug` level.
+- No pooled database connection is held while SonarQube is called. The
+  advisory lock that lets one server sync at a time is held on a separate
+  connection for the duration of a sync.
 
 ### Private addresses
 
@@ -215,11 +237,24 @@ integration page as `unlinked` unless a service uses that project key.
 | Status and code | Cause | What to do |
 | --- | --- | --- |
 | 503 `sonar_not_configured` | The URL, the token or the webhook secret is not set. | Set all three in Settings. |
-| 401 `invalid_signature` | The header is missing, or the secret differs from the one in SonarQube, or something changed the body on the way (a proxy that rewrites it). | Set the same secret in both places; send the webhook straight to Scanopsis or through a proxy that passes the body unchanged. |
+| 401 `invalid_signature` | The header is missing, or the secret differs from the one in SonarQube, or something changed the body on the way (a proxy that rewrites it). | Set the same secret in both places; send the webhook straight to Scanopsis or through a proxy that passes the body unchanged. The rejection is in the audit log, see below. |
 | 400 `invalid_payload` | The body is not JSON, or has no `taskId` or `project.key`. | Make sure the webhook comes from SonarQube. |
 | 413 `payload_too_large` | The body is larger than 1 MiB. | Reduce the number of `sonar.analysis.*` properties. |
 | 500 `internal_error` | The database could not be reached. | See the server log. |
 | 202 | Accepted, also for a delivery seen before (same `taskId`). | None. |
+
+### Rejected webhooks in the audit log
+
+A webhook that is refused (a missing or wrong signature, a body that is too
+large, or a signed body that is not a SonarQube webhook) writes one audit event,
+**Webhook rejected** (`webhook.rejected`, actor `sonarqube:unknown`), with the
+`reason` (`invalid_signature`, `payload_too_large` or `invalid_payload`) and the
+client address, and one `WARN` line `webhook rejected` in the server log. So
+that anyone who can reach the endpoint cannot fill the audit log, at most 10
+events per client address are written at once, then one more per minute (an
+IPv6 client counts by its /64 network); further rejections are logged only at
+the `debug` level. The answer to the client is the same either way. If you see
+many, check the webhook secret in SonarQube and who can reach the endpoint.
 
 ### Outcomes on the integration page
 
@@ -235,11 +270,12 @@ integration page as `unlinked` unless a service uses that project key.
 | `failed`: ...the request failed or the answer was unreadable; see the server log. | SonarQube could not be reached (DNS, firewall, TLS certificate, timeout of 10 seconds, or a refused redirect). | Read the server log, which has the full error. |
 | `failed`: The SonarQube URL and token are not configured... | The settings were cleared after the delivery arrived. | Set them again. |
 | `failed`: The webhook has no readable analysedAt. | The payload has no valid analysis time. | Make sure the webhook comes from SonarQube. |
-| `failed`: The processing queue was full... | More than 100 deliveries were waiting. | None; the next sync reads the analysis. |
+| `pending`: The processing queue was full; the next sync will read the analysis. | More than 500 deliveries were waiting. | None; the next sync reads the analysis and marks it `linked`. |
+| `linked`: The processing queue was full; the sync read the analysis. | The delivery waited for the sync, which then stored the analysis. | None. |
 | `failed`: Storing the analysis failed; see the server log. | A database error. | Read the server log. |
 | `linked` with a note: A newer analysis (...) already exists | Another analysis finished before this one was read. The measures are from the newer one. | None; the next sync adds the newer analysis. |
 | `linked`: The analysis was already stored by a sync. | The sync was faster than the webhook. | None. |
-| `pending` | The delivery is waiting to be processed. | None, it changes within seconds. |
+| `pending` | The delivery is waiting to be processed. | None, it changes within seconds, or at the next sync when the queue was full (see above). |
 | `failed`: Processing was interrupted. Redeliver the webhook from SonarQube to process it again; analyses of projects linked by key are also picked up by the next sync. | The server stopped while processing it; a delivery pending for more than 10 minutes is marked this way by the next sync. | In SonarQube, open the project's (or the global) webhook settings, show the recent deliveries of the Scanopsis webhook and redeliver this one. A project already linked by key needs nothing: the next sync reads the analysis. |
 
 ### Other problems

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"time"
 
@@ -35,6 +36,7 @@ const (
 	outcomeLinked   = "linked"
 	outcomeUnlinked = "unlinked"
 	outcomeFailed   = "failed"
+	outcomePending  = "pending"
 )
 
 // webhookPayload is the part of the SonarQube webhook body that is used.
@@ -88,20 +90,20 @@ func (s *Sonar) webhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
-			httpapi.WriteError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The webhook payload is larger than 1 MiB.")
+			s.reject(w, r, http.StatusRequestEntityTooLarge, "payload_too_large", "The webhook payload is larger than 1 MiB.")
 			return
 		}
 		httpapi.WriteError(w, http.StatusBadRequest, "invalid_payload", "The request body could not be read.")
 		return
 	}
 	if !validSignature(snap.SonarWebhookSecret, body, r.Header.Get(signatureHeader)) {
-		httpapi.WriteError(w, http.StatusUnauthorized, "invalid_signature",
+		s.reject(w, r, http.StatusUnauthorized, "invalid_signature",
 			"The "+signatureHeader+" header is missing or does not match the webhook secret.")
 		return
 	}
 	var p webhookPayload
 	if err := json.Unmarshal(body, &p); err != nil || p.TaskID == "" || p.Project.Key == "" {
-		httpapi.WriteError(w, http.StatusBadRequest, "invalid_payload", "The payload is not a SonarQube webhook (taskId and project.key are required).")
+		s.reject(w, r, http.StatusBadRequest, "invalid_payload", "The payload is not a SonarQube webhook (taskId and project.key are required).")
 		return
 	}
 
@@ -118,11 +120,67 @@ func (s *Sonar) webhook(w http.ResponseWriter, r *http.Request) {
 		select {
 		case s.queue <- delivery{payload: p}:
 		default:
-			s.log.WarnContext(r.Context(), "SonarQube delivery queue is full", "task_id", p.TaskID)
-			s.finish(r.Context(), p.TaskID, outcomeFailed, nil, "The processing queue was full; the next sync will read the analysis.")
+			// The delivery stays pending; the next sync reads the analysis of
+			// a project linked by key and marks it linked.
+			s.warnQueueFull(r.Context())
+			s.finish(r.Context(), p.TaskID, outcomePending, nil, queuedDetail)
 		}
 	}
 	w.WriteHeader(http.StatusAccepted)
+}
+
+// warnQueueFull logs that the queue is full, at most once a minute, so a
+// burst does not write a line per delivery.
+func (s *Sonar) warnQueueFull(ctx context.Context) {
+	now := s.now().UnixNano()
+	last := s.queueWarned.Load()
+	if now-last < int64(time.Minute) || !s.queueWarned.CompareAndSwap(last, now) {
+		return
+	}
+	s.log.WarnContext(ctx, "SonarQube delivery queue is full; deliveries wait for the next sync", "queue_size", cap(s.queue))
+}
+
+// reject answers a refused webhook, records webhook.rejected with the reason
+// and the client address, and logs it. Anyone who can reach the endpoint can
+// cause a rejection, so records are bounded per client address: beyond the
+// burst, a rejection is logged at debug level only. The response is the same
+// either way.
+func (s *Sonar) reject(w http.ResponseWriter, r *http.Request, status int, code, message string) {
+	httpapi.WriteError(w, status, code, message)
+	var ip netip.Addr
+	if s.clientIP != nil {
+		ip = s.clientIP(r).Unmap()
+	}
+	addr := ""
+	if ip.IsValid() {
+		addr = ip.String()
+	}
+	attrs := []any{"status", status, "reason", code, "ip", addr}
+	if ok, _ := s.auditLimit.Allow(limitKey(ip)); !ok {
+		s.log.DebugContext(r.Context(), "webhook rejected; not recorded: too many rejections from this address", attrs...)
+		return
+	}
+	s.log.WarnContext(r.Context(), "webhook rejected", attrs...)
+	if s.audit == nil {
+		return
+	}
+	// The client may be gone, so the record does not depend on the request,
+	// but it cannot hold the request for long either.
+	actx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), auditTimeout)
+	defer cancel()
+	s.audit.Record(actx, "sonarqube:unknown", audit.ActionWebhookRejected, map[string]any{"reason": code, "ip": addr})
+}
+
+// limitKey is the rate-limit key of a client address: an IPv4 address, an
+// IPv6 /64, or "unknown".
+func limitKey(a netip.Addr) string {
+	switch {
+	case !a.IsValid():
+		return "unknown"
+	case a.Is4():
+		return a.String()
+	}
+	return netip.PrefixFrom(a, 64).Masked().String()
 }
 
 func (s *Sonar) finish(ctx context.Context, taskID, outcome string, serviceID *int64, detail string) {

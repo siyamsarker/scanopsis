@@ -310,8 +310,10 @@ func TestWebhookQueueFull(t *testing.T) {
 	e.s.queue = make(chan delivery, 1)
 	wantStatus(t, e, hook("task-11", "k", nil), 202)
 	wantStatus(t, e, hook("task-12", "k", nil), 202)
+	// The delivery that did not fit is not lost: it stays pending, marked as
+	// waiting for the sync.
 	d := e.delivery(t, "task-12")
-	if d.Outcome != "failed" || d.Detail != "The processing queue was full; the next sync will read the analysis." {
+	if d.Outcome != "pending" || d.Detail != queuedDetail {
 		t.Errorf("delivery: %+v", d)
 	}
 	if d := e.delivery(t, "task-11"); d.Outcome != "pending" {

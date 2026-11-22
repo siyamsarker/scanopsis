@@ -200,8 +200,8 @@ All jobs run inside the Scanopsis process. There is no separate worker.
 | Job | When | What it does |
 |---|---|---|
 | Session clean-up | Every hour | Deletes sessions that passed their absolute or idle expiry. |
-| SonarQube worker | Continuously | Processes queued webhook deliveries. |
-| SonarQube sync | Every sync interval, checked every 10 seconds; default 15 minutes, minimum 1 minute | Reads the newest analysis of every linked project, and marks deliveries that stayed pending for more than 10 minutes as interrupted. Runs under an advisory lock. |
+| SonarQube workers | Continuously | Four workers process queued webhook deliveries (up to 500 wait; a delivery that finds the queue full stays pending for the next sync). They run apart from the sync. |
+| SonarQube sync | Every sync interval, checked every 10 seconds; default 15 minutes, minimum 1 minute | Reads the newest analysis of every linked project, marks deliveries that stayed pending for more than 10 minutes as interrupted, and stops early when SonarQube does not answer. Runs under an advisory lock held on its own connection; no pooled connection is held while SonarQube is called. |
 | Retention | One minute after start, then every 24 hours | Deletes scan history older than the retention period, keeping the latest scan per ref and artifact. A run that deletes anything writes an audit event. See [data retention](operations.md#data-retention). |
 
 ## What "current" means

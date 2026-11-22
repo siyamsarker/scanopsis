@@ -48,11 +48,26 @@ SET outcome = $2, service_id = $3, detail = $4
 WHERE task_id = $1;
 
 -- InterruptSonarDeliveries fails deliveries that stayed pending since before
--- the cutoff, because the server stopped while processing them.
+-- the cutoff, because the server stopped while processing them. A delivery
+-- that waits for the sync because the processing queue was full (its detail
+-- is @queued_detail) is given until @queued_cutoff instead, so a sync can
+-- still read its analysis first.
 -- name: InterruptSonarDeliveries :execrows
 UPDATE sonar_deliveries
-SET outcome = 'failed', detail = $2
-WHERE outcome = 'pending' AND received_at < $1;
+SET outcome = 'failed', detail = @detail::text
+WHERE outcome = 'pending'
+  AND ((detail = @queued_detail::text AND received_at < @queued_cutoff::timestamptz)
+    OR (detail <> @queued_detail::text AND received_at < @cutoff::timestamptz));
+
+-- ResolveQueuedSonarDeliveries marks the deliveries that waited for the sync
+-- because the processing queue was full as linked, for projects whose newest
+-- analysis the sync has just read and stored.
+-- name: ResolveQueuedSonarDeliveries :execrows
+UPDATE sonar_deliveries d
+SET outcome = 'linked', detail = @detail::text,
+    service_id = (SELECT sv.id FROM services sv WHERE sv.sonar_project_key = d.project_key)
+WHERE d.outcome = 'pending' AND d.detail = @queued_detail::text
+  AND d.project_key = ANY(@project_keys::text[]);
 
 -- name: InsertSonarAnalysis :exec
 INSERT INTO sonar_analyses (

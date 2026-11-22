@@ -8,11 +8,13 @@ package sonar
 import (
 	"context"
 	"net/http"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/settings"
 	"github.com/siyamsarker/scanopsis/internal/store"
 	"github.com/siyamsarker/scanopsis/internal/store/storetest"
@@ -41,7 +43,15 @@ func newEnv(t *testing.T) *env {
 		SonarURL: fake.URL, SonarToken: testToken, SonarWebhookSecret: testSecret,
 		SonarSyncInterval: time.Hour,
 	}}
-	s := New(pool, cfg, Options{HTTPClient: fake.Client()})
+	s := New(pool, cfg, Options{
+		HTTPClient: fake.Client(),
+		Audit:      audit.New(store.New(pool), nil),
+		// Tests choose the client address with the X-Test-IP header.
+		ClientIP: func(r *http.Request) netip.Addr {
+			a, _ := netip.ParseAddr(r.Header.Get("X-Test-IP"))
+			return a
+		},
+	})
 	s.tick = 20 * time.Millisecond
 	return &env{pool: pool, fake: fake, cfg: cfg, s: s, h: s.Handlers()["sonarWebhook"], q: store.New(pool)}
 }

@@ -7,17 +7,37 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/siyamsarker/scanopsis/internal/auth"
 	"github.com/siyamsarker/scanopsis/internal/settings"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
-const queueSize = 100
+const (
+	// queueSize is how many verified deliveries wait for a worker. A delivery
+	// is a few kilobytes, so the queue is cheap; when it is still full, the
+	// delivery stays pending and the next sync reads its analysis.
+	queueSize = 500
+	// workers is how many deliveries are processed at the same time.
+	workers = 4
+)
+
+// Defaults of the rejection limiter: a client address gets this many
+// webhook.rejected records at once and then one more per DefaultAuditEvery.
+const (
+	DefaultAuditBurst = 10
+	DefaultAuditEvery = time.Minute
+)
+
+// auditTimeout bounds the audit write of a rejection.
+const auditTimeout = 5 * time.Second
 
 // SettingsSource provides the current settings.
 type SettingsSource interface{ Current() settings.Snapshot }
@@ -29,6 +49,15 @@ type Options struct {
 	HTTPClient *http.Client
 	Logger     *slog.Logger
 	Now        func() time.Time
+	// Audit records rejected webhooks. Nil records nothing.
+	Audit auth.AuditRecorder
+	// ClientIP returns the client address of a request, for the audit
+	// record and its limit. Nil means the address is not recorded.
+	ClientIP func(*http.Request) netip.Addr
+	// AuditLimiter limits how many rejections per client address are
+	// written to the audit log. Nil means a burst of DefaultAuditBurst and
+	// then one per DefaultAuditEvery.
+	AuditLimiter *auth.RateLimiter
 }
 
 // Sonar is the SonarQube integration.
@@ -41,6 +70,14 @@ type Sonar struct {
 	now  func() time.Time
 
 	queue chan delivery
+	// queueWarned is when the full queue was last logged (Unix nanoseconds).
+	queueWarned atomic.Int64
+	// workers is how many goroutines of Run process deliveries.
+	workers int
+
+	audit      auth.AuditRecorder
+	clientIP   func(*http.Request) netip.Addr
+	auditLimit *auth.RateLimiter
 	// tick is how often Run checks whether a sync is due.
 	tick time.Duration
 	// minInterval is the shortest sync interval honoured.
@@ -61,6 +98,10 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 		pool: pool, q: store.New(pool), cfg: cfg,
 		hc: opts.HTTPClient, log: opts.Logger, now: opts.Now,
 		queue:       make(chan delivery, queueSize),
+		workers:     workers,
+		audit:       opts.Audit,
+		clientIP:    opts.ClientIP,
+		auditLimit:  opts.AuditLimiter,
 		tick:        10 * time.Second,
 		minInterval: settings.MinSonarSyncInterval,
 	}
@@ -73,6 +114,9 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 	}
 	if s.now == nil {
 		s.now = time.Now
+	}
+	if s.auditLimit == nil {
+		s.auditLimit = auth.NewRateLimiter(DefaultAuditEvery, DefaultAuditBurst, s.now)
 	}
 	return s
 }

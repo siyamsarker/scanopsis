@@ -150,7 +150,7 @@ func TestSyncErrorHasNoInternals(t *testing.T) {
 	e.service(t, "platform/a", 0, "platform:a")
 	e.fake.Close()
 	e.runSync(t)
-	want := "platform:a: the request failed or the answer was unreadable; see the server log"
+	want := "the request failed or the answer was unreadable; see the server log"
 	if _, _, lastErr := e.state(); lastErr != want {
 		t.Errorf("lastErr %q", lastErr)
 	}

@@ -84,3 +84,30 @@ func (f *fixedSettings) set(fn func(*settings.Snapshot)) {
 	defer f.mu.Unlock()
 	fn(&f.snap)
 }
+
+// A delivery that waits for the sync because the queue was full is given two
+// more sync intervals than an interrupted one; after that it fails with the
+// redeliver message.
+func TestQueuedDeliveryIsInterruptedLater(t *testing.T) {
+	e := newEnv(t)
+	base := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	now := base
+	e.s.now = func() time.Time { return now }
+	e.s.queue = make(chan delivery, 1)
+	wantStatus(t, e, hook("fits", "unlinked", nil), 202)
+	wantStatus(t, e, hook("waits", "unlinked", nil), 202)
+
+	now = base.Add(11 * time.Minute) // an hour interval: 2h10m is the limit
+	e.runSync(t)
+	if d := e.delivery(t, "fits"); d.Outcome != "failed" {
+		t.Errorf("a delivery pending for 11 minutes is interrupted: %+v", d)
+	}
+	if d := e.delivery(t, "waits"); d.Outcome != "pending" || d.Detail != queuedDetail {
+		t.Errorf("a queued delivery must keep waiting for the sync: %+v", d)
+	}
+	now = base.Add(2*time.Hour + 11*time.Minute)
+	e.runSync(t)
+	if d := e.delivery(t, "waits"); d.Outcome != "failed" || d.Detail != interruptedDetail {
+		t.Errorf("after two more intervals: %+v", d)
+	}
+}

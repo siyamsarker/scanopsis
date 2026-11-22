@@ -153,7 +153,6 @@ func TestSyncErrors(t *testing.T) {
 	}
 
 	// An unknown project is reported, the others still run.
-	e.fake.Fail("api/server/version", 404)
 	e.service(t, "platform/gone", 0, "platform:gone")
 	e.runSync(t)
 	if _, _, lastErr := e.state(); lastErr != "platform:gone: SonarQube answered 404 on api/project_analyses/search" {
@@ -167,10 +166,10 @@ func TestSyncWrongTokenStopsEarly(t *testing.T) {
 	e.service(t, "platform/b", 0, "platform:b")
 	e.cfg.set(func(s *settings.Snapshot) { s.SonarToken = "wrong" })
 	e.runSync(t)
-	if n := e.fake.Count("api/project_analyses/search"); n != 1 {
-		t.Errorf("%d searches; a rejected token must stop the cycle", n)
+	if n := e.fake.Count("api/project_analyses/search"); n != 0 {
+		t.Errorf("%d searches; a rejected token must stop the cycle at the version call", n)
 	}
-	if _, _, lastErr := e.state(); lastErr != "platform:a: SonarQube answered 401 on api/project_analyses/search" {
+	if _, _, lastErr := e.state(); lastErr != "SonarQube answered 401 on api/server/version" {
 		t.Errorf("lastErr %q", lastErr)
 	}
 }

@@ -125,19 +125,31 @@ func (q *Queries) InsertSonarDelivery(ctx context.Context, arg InsertSonarDelive
 
 const interruptSonarDeliveries = `-- name: InterruptSonarDeliveries :execrows
 UPDATE sonar_deliveries
-SET outcome = 'failed', detail = $2
-WHERE outcome = 'pending' AND received_at < $1
+SET outcome = 'failed', detail = $1::text
+WHERE outcome = 'pending'
+  AND ((detail = $2::text AND received_at < $3::timestamptz)
+    OR (detail <> $2::text AND received_at < $4::timestamptz))
 `
 
 type InterruptSonarDeliveriesParams struct {
-	ReceivedAt pgtype.Timestamptz
-	Detail     string
+	Detail       string
+	QueuedDetail string
+	QueuedCutoff pgtype.Timestamptz
+	Cutoff       pgtype.Timestamptz
 }
 
 // InterruptSonarDeliveries fails deliveries that stayed pending since before
-// the cutoff, because the server stopped while processing them.
+// the cutoff, because the server stopped while processing them. A delivery
+// that waits for the sync because the processing queue was full (its detail
+// is @queued_detail) is given until @queued_cutoff instead, so a sync can
+// still read its analysis first.
 func (q *Queries) InterruptSonarDeliveries(ctx context.Context, arg InterruptSonarDeliveriesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, interruptSonarDeliveries, arg.ReceivedAt, arg.Detail)
+	result, err := q.db.Exec(ctx, interruptSonarDeliveries,
+		arg.Detail,
+		arg.QueuedDetail,
+		arg.QueuedCutoff,
+		arg.Cutoff,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -267,6 +279,31 @@ func (q *Queries) PinSonarKey(ctx context.Context, arg PinSonarKeyParams) (strin
 	var gitlab_project_path string
 	err := row.Scan(&gitlab_project_path)
 	return gitlab_project_path, err
+}
+
+const resolveQueuedSonarDeliveries = `-- name: ResolveQueuedSonarDeliveries :execrows
+UPDATE sonar_deliveries d
+SET outcome = 'linked', detail = $1::text,
+    service_id = (SELECT sv.id FROM services sv WHERE sv.sonar_project_key = d.project_key)
+WHERE d.outcome = 'pending' AND d.detail = $2::text
+  AND d.project_key = ANY($3::text[])
+`
+
+type ResolveQueuedSonarDeliveriesParams struct {
+	Detail       string
+	QueuedDetail string
+	ProjectKeys  []string
+}
+
+// ResolveQueuedSonarDeliveries marks the deliveries that waited for the sync
+// because the processing queue was full as linked, for projects whose newest
+// analysis the sync has just read and stored.
+func (q *Queries) ResolveQueuedSonarDeliveries(ctx context.Context, arg ResolveQueuedSonarDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resolveQueuedSonarDeliveries, arg.Detail, arg.QueuedDetail, arg.ProjectKeys)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const sonarAnalysisKnown = `-- name: SonarAnalysisKnown :one
