@@ -60,6 +60,31 @@ const documented = {
 
 // Scan IDs from the upload responses, by fixture name.
 const scanIds: Record<string, number> = {};
+// The service the payments-api uploads created.
+let paymentsId = 0;
+
+// Risk points as the pages count them (OWASP Dependency-Track weights).
+const WEIGHTS: Counts = { critical: 10, high: 5, medium: 3, low: 1, unknown: 5 };
+const risk = (findings: Finding[]) => findings.reduce((n, f) => n + WEIGHTS[f.severity], 0);
+const riskOf = (counts: Counts) =>
+  (Object.keys(WEIGHTS) as (keyof Counts)[]).reduce((n, k) => n + counts[k] * WEIGHTS[k], 0);
+
+/** Findings grouped by package and installed version, by risk points, then size and name. */
+function byPackage(findings: Finding[]) {
+  const groups = new Map<string, Finding[]>();
+  for (const f of findings) {
+    const key = `${f.pkg}\u0000${f.installed}`;
+    groups.set(key, [...(groups.get(key) ?? []), f]);
+  }
+  return [...groups.values()]
+    .map((items) => ({ pkg: items[0].pkg, items, risk: risk(items) }))
+    .sort(
+      (a, b) =>
+        b.risk - a.risk ||
+        b.items.length - a.items.length ||
+        a.pkg.localeCompare(b.pkg, 'en', { numeric: true }),
+    );
+}
 
 // Split so that secret scanners do not flag these fake values.
 const fakeAwsKey = ['AKIA', 'Z7Q3N5XK2WPLM4RT'].join('');
@@ -133,6 +158,7 @@ export function registerDashboardFlows(session: Session): void {
       { ...documented.suppressed, secrets: 0 },
     );
     scanIds[imageSuppressed.name] = first.scan_id;
+    paymentsId = first.service_id;
     expect(first.service_created).toBe(true);
     expect(first.replaced).toBe(false);
 
@@ -269,48 +295,76 @@ export function registerDashboardFlows(session: Session): void {
     await expect(points).toHaveCount(3); // header and the two image scans
   });
 
-  test('16. findings explorer: counts, filters, search, secrets and fixes', async () => {
+  test('16. findings explorer: counts, filters, grouping, details, secrets and the upgrade plan', async () => {
     const page = root();
-    await page.goto('/');
-    await page.getByRole('link', { name: 'payments-api' }).click();
-    await page.getByRole('link', { name: 'Explore findings' }).click();
-    await expect(page).toHaveURL(/\/services\/\d+\/findings/);
+    await page.goto(`/services/${paymentsId}/findings`);
     const m = main(page);
+    const list = m.getByRole('grid', { name: 'Vulnerabilities' });
 
-    await expect(m.getByText(`${sum(current.counts)} vulnerabilities, ${current.fixable} fixable`)).toBeVisible();
+    await expect(m.getByText(`${sum(current.counts)} vulnerabilities, ${current.fixable} fixable`)).toBeAttached();
     for (const [name, n] of Object.entries(current.counts)) {
       const label = name[0].toUpperCase() + name.slice(1);
       await expect(m.getByRole('button', { name: new RegExp(`^${label}\\s*${n}$`) })).toBeVisible();
     }
+    // The live summary: the risk points of everything loaded.
+    const summaryRegion = m.getByRole('region', { name: 'Selection summary' });
+    await expect(summaryRegion).toContainText(`Risk${riskOf(current.counts)} pts`);
 
-    // The Critical chip narrows the table to the critical findings.
+    // The Critical chip narrows the list to the critical findings, and the
+    // summary counts the selection against the whole.
     const critical = current.findings.filter((f) => f.severity === 'critical');
     await m.getByRole('button', { name: /^Critical\s*\d+$/ }).click();
-    await expect(m.getByText(`${plural(critical.length, 'vulnerability', 'vulnerabilities')}, `)).toBeVisible();
-    const rows = m.getByRole('table').getByRole('row');
-    await expect(rows).toHaveCount(critical.length + 1);
-    for (const f of critical) await expect(m.getByRole('table')).toContainText(f.vulnId);
-    await m.getByRole('button', { name: /^Critical\s*\d+$/ }).click();
-    await expect(m.getByText(`${sum(current.counts)} vulnerabilities`)).toBeVisible();
+    await expect(page).toHaveURL(/severity=critical/);
+    await expect(m.getByText(`${plural(critical.length, 'vulnerability', 'vulnerabilities')}, `)).toBeAttached();
+    await expect(summaryRegion).toContainText(`of ${sum(current.counts)} in focus`);
+    await expect(list.getByRole('row')).toHaveCount(critical.length + 1);
+    for (const f of critical) await expect(list).toContainText(f.vulnId);
 
-    // A search for a package narrows the table to that package.
+    // The details of a finding, from the keyboard: the fix, the other
+    // services with the same ID, and an advisory link that keeps the opener.
+    const first = critical[0];
+    await list.getByRole('row').nth(1).focus();
+    await page.keyboard.press('Enter');
+    const sheet = page.getByRole('dialog', { name: new RegExp(first.vulnId) });
+    await expect(sheet).toBeVisible();
+    await expect(sheet).toContainText(first.fixed ? first.fixed : 'No fixed version yet');
+    await expect(sheet).toContainText('Affects 1 other service: billing-worker.');
+    const advisory = sheet.getByRole('link', { name: /Advisory/ });
+    await expect(advisory).toHaveAttribute('href', /^https?:\/\//);
+    await expect(advisory).toHaveAttribute('rel', /noopener/);
+    await page.keyboard.press('Escape');
+    await expect(sheet).toHaveCount(0);
+    await expect(list.getByRole('row').nth(1)).toBeFocused();
+    await m.getByRole('button', { name: 'Clear filters' }).first().click();
+    await expect(page).not.toHaveURL(/severity=/);
+    await expect(m.getByText(`${sum(current.counts)} vulnerabilities, `)).toBeAttached();
+
+    // A search for a package narrows the list to that package.
     const needle = 'libc6';
     const hits = current.findings.filter((f) => f.pkg.toLowerCase().includes(needle));
     expect(hits.length).toBeGreaterThan(0);
     await m.getByLabel('Search package, vulnerability ID or title').fill(needle);
-    await expect(m.getByText(`${plural(hits.length, 'vulnerability', 'vulnerabilities')}, `)).toBeVisible();
-    await expect(rows).toHaveCount(hits.length + 1);
-    await expect(m.getByRole('table')).toContainText(needle);
-    await expect(m.getByRole('table')).not.toContainText('zlib1g');
-
-    // Advisory links open http(s) pages in a new tab and never hand over the opener.
-    const advisories = m.getByRole('table').locator('a[target="_blank"]');
-    await expect(advisories).toHaveCount(hits.length);
-    for (const link of await advisories.all()) {
-      await expect(link).toHaveAttribute('href', /^https?:\/\//);
-      await expect(link).toHaveAttribute('rel', /noopener/);
-    }
+    await expect(m.getByText(`${plural(hits.length, 'vulnerability', 'vulnerabilities')}, `)).toBeAttached();
+    await expect(list.getByRole('row')).toHaveCount(hits.length + 1);
+    await expect(list).toContainText(needle);
+    await expect(list).not.toContainText('zlib1g');
     await m.getByLabel('Search package, vulnerability ID or title').fill('');
+    await expect(m.getByText(`${sum(current.counts)} vulnerabilities, `)).toBeAttached();
+
+    // Grouped by package, the riskiest package comes first and folds away.
+    await m.getByRole('radiogroup', { name: 'Group by' }).getByRole('radio', { name: 'Package' }).click();
+    await expect(page).toHaveURL(/group=package/);
+    const top = byPackage(current.findings)[0];
+    const tree = m.getByRole('treegrid', { name: 'Vulnerabilities' });
+    const group = tree.locator('[aria-level="1"]').first();
+    await expect(group).toContainText(top.pkg);
+    await expect(group).toContainText(`${plural(top.items.length, 'finding')}`);
+    await expect(group).toContainText(`${top.risk} pts`);
+    await expect(group).toHaveAttribute('aria-expanded', 'true');
+    await group.focus();
+    await page.keyboard.press('Enter');
+    await expect(group).toHaveAttribute('aria-expanded', 'false');
+    await m.getByRole('radiogroup', { name: 'Group by' }).getByRole('radio', { name: 'None' }).click();
 
     // Secrets: rule and place, never the secret.
     await page.getByRole('tab', { name: /^Secrets/ }).click();
@@ -325,52 +379,81 @@ export function registerDashboardFlows(session: Session): void {
       expect(await page.locator('body').innerText()).not.toContain(value);
     }
 
-    // The upgrade plan.
-    await page.getByRole('tab', { name: 'Fix by upgrading' }).click();
-    await expect(
-      m.getByText(new RegExp(`^Upgrading \\d+ packages? clears \\d+ of ${current.fixable} fixable vulnerabilities$`)),
-    ).toBeVisible();
-    await expect(m.getByRole('table', { name: 'Packages to upgrade' }).getByRole('row').nth(1)).toContainText(/\d+ findings?/);
+    // The upgrade plan: fixable packages ranked by the risk they clear.
+    await page.getByRole('tab', { name: /^Fix by upgrading/ }).click();
+    const fixable = byPackage(current.findings.filter((f) => f.fixed !== ''));
+    const plan = fixable.slice(0, 5);
+    const cleared = plan.reduce((n, g) => n + g.risk, 0);
+    await expect(m).toContainText(
+      `upgrading ${plural(plan.length, 'package')} clears ${cleared} of ${riskOf(current.counts)}`,
+    );
+    const upgrades = m.getByRole('list', { name: 'Packages to upgrade' }).getByRole('listitem');
+    await expect(upgrades).toHaveCount(fixable.length);
+    await expect(upgrades.first()).toContainText(fixable[0].pkg);
+    await expect(upgrades.first()).toContainText(`−${fixable[0].risk} pts`);
   });
 
-  test('17. scan detail: links to GitLab and the difference to the previous scan', async () => {
+  test('17. scan detail: links to GitLab and the comparison with an earlier scan', async () => {
     const page = root();
-    await page.goto('/');
-    await page.getByRole('link', { name: 'payments-api' }).click();
-    // The latest scan of the image artifact, as the dashboard lists it.
-    await page.getByRole('link', { name: new RegExp(`^${current.artifact.replace('.', '\\.')}`) }).click();
-    await expect(page).toHaveURL(/\/scans\/\d+$/);
+    await page.goto(`/scans/${scanIds[current.name]}`);
     const m = main(page);
 
     await expect(m.getByRole('heading', { name: current.artifact })).toBeVisible();
     const project = `${gitlabUrl}/${currentJob.projectPath}`;
-    await expect(m.getByRole('link', { name: `Pipeline #${currentJob.pipelineId}` })).toHaveAttribute('href', `${project}/-/pipelines/${currentJob.pipelineId}`);
-    await expect(m.getByRole('link', { name: `Job #${currentJob.jobId}` })).toHaveAttribute('href', `${project}/-/jobs/${currentJob.jobId}`);
-    await expect(m.getByRole('link', { name: '01234567' })).toHaveAttribute('href', `${project}/-/commit/0123456789abcdef0123456789abcdef01234567`);
-    await expect(m).toContainText('Trivy version');
+    await expect(m.getByRole('link', { name: new RegExp(`^#${currentJob.pipelineId}`) })).toHaveAttribute('href', `${project}/-/pipelines/${currentJob.pipelineId}`);
+    await expect(m.getByRole('link', { name: new RegExp(`^#${currentJob.jobId}`) })).toHaveAttribute('href', `${project}/-/jobs/${currentJob.jobId}`);
+    await expect(m.getByRole('link', { name: /^01234567/ })).toHaveAttribute('href', `${project}/-/commit/0123456789abcdef0123456789abcdef01234567`);
+    await expect(m).toContainText('protected');
 
-    const c = current.counts;
-    await expect(m).toContainText(
-      new RegExp(`Critical\\s*${c.critical}\\s*High\\s*${c.high}\\s*Medium\\s*${c.medium}\\s*Low\\s*${c.low}\\s*Unknown\\s*${c.unknown}`),
+    // Posture: the numbers of this scan, each a way into the explorer.
+    const posture = m.getByRole('region', { name: 'Posture' });
+    await expect(posture).toContainText(`${sum(current.counts)} open findings worth ${riskOf(current.counts)} risk points`);
+    await expect(posture.getByRole('link', { name: /fixable/ })).toContainText(String(current.fixable));
+    await expect(posture.getByRole('link', { name: /suppressed/ })).toContainText(
+      String(current === imageSuppressed ? documented.suppressed.suppressed : 0),
     );
-    await expect(m).toContainText(new RegExp(`Fixable\\s*${current.fixable}\\s*with a fixed version`));
-    await expect(m).toContainText(new RegExp(`Suppressed\\s*${current === imageSuppressed ? documented.suppressed.suppressed : 0}`));
-    await expect(m).toContainText(new RegExp(`New\\s*${newKeys.length}\\s*not in the previous scan`));
-    await expect(m).toContainText(new RegExp(`Fixed\\s*${fixedKeys.length}\\s*no longer reported`));
-    await expect(m).toContainText(new RegExp(`Unchanged\\s*${unchangedKeys.length}\\s*${unchangedKeys.length} findings in both`));
-    if (newKeys.length === 0) await expect(m).toContainText('Nothing new since the previous scan');
+
+    // What changed since the previous scan of the same ref.
+    const changes = m.getByRole('region', { name: 'What changed' });
+    await expect(changes).toContainText(`Since pipeline #${previousJob.pipelineId} on main`);
+    await expect(changes).toContainText(`${riskOf(previous.counts)} → ${riskOf(current.counts)} points`);
+    await expect(page.getByRole('tab', { name: new RegExp(`^New\\s*${newKeys.length}$`) })).toBeVisible();
+    await expect(page.getByRole('tab', { name: new RegExp(`^Fixed\\s*${fixedKeys.length}$`) })).toBeVisible();
+    await expect(page.getByRole('tab', { name: new RegExp(`^Unchanged\\s*${unchangedKeys.length}$`) })).toBeVisible();
+    // The view opens on the first list with findings.
+    const opened = newKeys.length > 0 ? 'New' : 'Fixed';
+    await expect(page.getByRole('tab', { name: new RegExp(`^${opened}`) })).toHaveAttribute('aria-selected', 'true');
+    if (newKeys.length === 0) {
+      await expect(m.getByRole('list', { name: 'Fixed findings' }).getByRole('listitem')).toHaveCount(fixedKeys.length);
+    }
+
+    // The picker lists the earlier scans of the artifact; the previous one is chosen.
+    await changes.getByRole('button', { name: /^Compare with pipeline/ }).click();
+    const options = page.getByRole('listbox', { name: 'Earlier scans' }).getByRole('option');
+    await expect(options).toHaveCount(1);
+    await expect(options.first()).toContainText(`Pipeline #${previousJob.pipelineId}`);
+    await expect(options.first()).toContainText('Previous');
+    await expect(options.first()).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Escape');
+
+    // The same comparison, asked for by id, and a base that cannot be compared.
+    await page.goto(`/scans/${scanIds[current.name]}?base=${scanIds[previous.name]}`);
+    await expect(main(page).getByRole('region', { name: 'What changed' })).toContainText(`Since pipeline #${previousJob.pipelineId}`);
+    await page.goto(`/scans/${scanIds[previous.name]}?base=${scanIds[current.name]}`);
+    await expect(main(page)).toContainText('That scan cannot be compared');
 
     // The earlier scan knows it is no longer the current state, and is a first scan.
     await page.goto(`/scans/${scanIds[previous.name]}`);
     await expect(main(page)).toContainText('A newer scan of this artifact exists.');
-    await expect(main(page)).toContainText(`First scan of this artifact on this ref: all ${previous.findings.length} findings are new.`);
-    await expect(main(page).getByRole('link', { name: `Pipeline #${previousJob.pipelineId}` })).toHaveAttribute(
+    await expect(main(page)).toContainText('First scan of this artifact on this ref: every finding is new.');
+    await expect(page.getByRole('tab', { name: new RegExp(`^New\\s*${previousKeys.size}$`) })).toBeVisible();
+    await expect(main(page).getByRole('link', { name: new RegExp(`^#${previousJob.pipelineId}`) })).toHaveAttribute(
       'href',
       `${project}/-/pipelines/${previousJob.pipelineId}`,
     );
   });
 
-  test('18. vulnerability search lists the affected services', async () => {
+  test('18. vulnerability search summarises the vulnerability and lists the affected services', async () => {
     const page = root();
     const inBoth = current.findings.find(
       (f) => f.severity === 'critical' && imageFull.findings.some((g) => g.vulnId === f.vulnId),
@@ -379,13 +462,20 @@ export function registerDashboardFlows(session: Session): void {
     const id = inBoth?.vulnId ?? '';
 
     await page.goto('/search');
-    await page.getByLabel('Vulnerability ID').fill(id);
+    await expect(page.getByRole('heading', { name: 'Vulnerability search' })).toBeVisible();
+    await page.keyboard.press('/');
+    await expect(page.getByLabel('Vulnerability ID')).toBeFocused();
+    await page.keyboard.type(id);
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(new RegExp(`id=${id}`));
     const m = main(page);
-    await expect(m).toContainText(`${id} affects 2 services in 2 artifacts`);
-    await expect(m.getByRole('region', { name: 'payments-api' })).toContainText(inBoth?.pkg ?? '');
-    await expect(m.getByRole('region', { name: 'billing-worker' })).toContainText(inBoth?.pkg ?? '');
+    await expect(m).toContainText(`${id} affects 2 services in 2 images.`);
+    const card = m.getByRole('region', { name: 'Vulnerability summary' });
+    await expect(card).toContainText('Critical');
+    await expect(card).toContainText(inBoth?.fixed ? `Fixed in ${inBoth.fixed}` : 'No fixed version reported yet.');
+    const table = m.getByRole('table', { name: `Where ${id} is present` });
+    await expect(table.getByRole('rowgroup', { name: 'payments-api' })).toContainText(inBoth?.pkg ?? '');
+    await expect(table.getByRole('rowgroup', { name: 'billing-worker' })).toContainText(inBoth?.pkg ?? '');
 
     // A finding that payments-api suppressed is not in its current state.
     const suppressedHere = imageFull.findings.find(
@@ -393,15 +483,16 @@ export function registerDashboardFlows(session: Session): void {
     );
     if (suppressedHere) {
       await page.goto(`/search?id=${suppressedHere.vulnId}`);
-      await expect(m).toContainText(`${suppressedHere.vulnId} affects 1 service in 1 artifact`);
-      await expect(m.getByRole('region', { name: 'billing-worker' })).toBeVisible();
-      await expect(m.getByRole('region', { name: 'payments-api' })).toHaveCount(0);
+      await expect(m).toContainText(`${suppressedHere.vulnId} affects 1 service in 1 image.`);
+      await expect(m.getByRole('rowgroup', { name: 'billing-worker' })).toBeVisible();
+      await expect(m.getByRole('rowgroup', { name: 'payments-api' })).toHaveCount(0);
     }
 
     await page.getByLabel('Vulnerability ID').fill('CVE-2099-0001');
     await page.keyboard.press('Enter');
-    await expect(m.getByText('No service is affected in its current scans.')).toBeVisible();
-    await expect(m).toContainText('CVE-2099-0001 does not appear in the latest scan of any service, searching dashboard branches and protected refs.');
+    await expect(m.getByText('No service is affected in its current scans')).toBeVisible();
+    await expect(m).toContainText('CVE-2099-0001 is not in the latest scan of any service, searching dashboard branches and protected refs.');
+    await expect(m.getByRole('button', { name: 'Search all branches' })).toBeVisible();
   });
 
   test('19. admin: integrations, rejected uploads, audit log and archiving', async ({ request }) => {
@@ -600,20 +691,20 @@ export function registerDashboardFlows(session: Session): void {
 
     await page.goto(`/search?id=${id}`);
     await expect(scope.getByRole('radio', { name: 'Dashboard branches and protected refs' })).toBeChecked();
-    await expect(m).toContainText('Searched: dashboard branches and protected refs');
-    await expect(m.getByRole('region', { name: 'scope-demo' })).toHaveCount(0);
+    await expect(m).toContainText('Searched dashboard branches and protected refs');
+    await expect(m.getByRole('rowgroup', { name: 'scope-demo' })).toHaveCount(0);
 
     await scope.getByRole('radio', { name: 'All branches' }).click();
     await expect(page).toHaveURL(new RegExp(`id=${id}&scope=all`));
-    await expect(m).toContainText('Searched: all branches');
-    const hit = m.getByRole('region', { name: 'scope-demo' });
+    await expect(m).toContainText('Searched all branches');
+    const hit = m.getByRole('rowgroup', { name: 'scope-demo' });
     await expect(hit).toBeVisible();
     await expect(hit).toContainText('feature/old');
 
     // The scope is part of the address: a reload keeps it, and so does a new search.
     await page.reload();
     await expect(scope.getByRole('radio', { name: 'All branches' })).toBeChecked();
-    await expect(m.getByRole('region', { name: 'scope-demo' })).toBeVisible();
+    await expect(m.getByRole('rowgroup', { name: 'scope-demo' })).toBeVisible();
     await page.getByLabel('Vulnerability ID').fill('CVE-2099-0001');
     await page.keyboard.press('Enter');
     await expect(page).toHaveURL(/id=CVE-2099-0001&scope=all/);

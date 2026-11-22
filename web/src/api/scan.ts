@@ -1,12 +1,13 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { api, unwrap } from './client';
 import type { components } from './schema.gen';
 
 export type Scan = components['schemas']['Scan'];
 export type ScanDiff = components['schemas']['ScanDiff'];
+export type ScanSummary = components['schemas']['ScanSummary'];
 export type Vulnerability = components['schemas']['Vulnerability'];
 
 export function useScan(id: number) {
@@ -16,11 +17,37 @@ export function useScan(id: number) {
   });
 }
 
-export function useScanDiff(id: number) {
+/**
+ * The diff of a scan with its previous scan, or with `base`: any earlier
+ * scan of the same service, artifact and kind. While another base loads the
+ * last diff stays on screen (isPlaceholderData).
+ */
+export function useScanDiff(id: number, base: number | null = null) {
   return useQuery({
-    queryKey: ['scan', id, 'diff'],
+    queryKey: ['scan', id, 'diff', base],
+    placeholderData: keepPreviousData,
     queryFn: async () =>
-      unwrap(await api.GET('/api/v1/scans/{id}/diff', { params: { path: { id } } })),
+      unwrap(
+        await api.GET('/api/v1/scans/{id}/diff', {
+          params: { path: { id }, query: base === null ? {} : { base } },
+        }),
+      ),
+  });
+}
+
+/** Earlier scans of the same artifact and kind on every ref, newest first, page by page. */
+export function useEarlierScans(id: number, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: ['scan', id, 'earlier'],
+    enabled,
+    initialPageParam: undefined as number | undefined,
+    queryFn: async ({ pageParam }) =>
+      unwrap(
+        await api.GET('/api/v1/scans/{id}/earlier', {
+          params: { path: { id }, query: { limit: 50, before: pageParam } },
+        }),
+      ),
+    getNextPageParam: (last) => last.next_before ?? undefined,
   });
 }
 

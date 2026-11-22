@@ -1,41 +1,37 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import { Lock } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import { NO_VALUE, safeExternalUrl } from '../../format';
 import type { Scan } from '../../api/scan';
 import { ArtifactName } from '../../components/ArtifactName';
-import { Freshness } from '../../components/Freshness';
-import { Mono } from '../../components/Mono';
-import { Card, PageHeader } from '../../components/layout';
+import { CopyIconButton } from '../../components/CopyIconButton';
+import { PageHeader } from '../../components/layout';
 import { Skeleton } from '../../components/states';
+import { NO_VALUE, formatExactTime, relativeTime, shortSha } from '../../format';
+import { buttonClass } from '../../ui';
+import { SafeExternal } from '../findings/VulnDrawer';
+import { findingsHref } from './Posture';
 
 export function kindLabel(kind: Scan['kind']) {
   return kind === 'image' ? 'Image' : 'Secret scan of the source tree';
 }
 
-function MaybeLink({ href, children }: { href: string | null; children: ReactNode }) {
-  const safe = safeExternalUrl(href);
-  if (!safe) return <span>{children}</span>;
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <a
-      href={safe}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="underline decoration-border-strong underline-offset-2 hover:decoration-text"
-    >
-      {children}
-    </a>
+    <div className="min-w-0 border-line py-3 sm:border-l sm:pl-4 sm:first:border-l-0 sm:first:pl-0 lg:py-0">
+      <dt className="text-small text-text-muted">{label}</dt>
+      <dd className="mt-1 min-w-0 truncate text-body-s text-text">{children}</dd>
+    </div>
   );
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
+function When({ at }: { at: string }) {
   return (
-    <div className="min-w-0">
-      <dt className="text-sm text-text-muted">{label}</dt>
-      <dd className="mt-0.5 min-w-0 break-words text-text">{children}</dd>
-    </div>
+    <time dateTime={at} title={formatExactTime(at)}>
+      {relativeTime(at)}
+    </time>
   );
 }
 
@@ -43,56 +39,67 @@ export function ScanHeader({ scan, serviceName }: { scan: Scan; serviceName: str
   return (
     <>
       <PageHeader
-        eyebrow={
-          <nav aria-label="Breadcrumb">
-            <ol className="flex flex-wrap items-center gap-x-2">
-              <li>
-                <Link to="/" className="hover:text-text">
-                  Portfolio
-                </Link>
-              </li>
-              <li aria-hidden="true">›</li>
-              <li>
-                <Link to={`/services/${scan.service_id}`} className="hover:text-text">
-                  {serviceName}
-                </Link>
-              </li>
-              <li aria-hidden="true">›</li>
-              <li aria-current="page">Scan</li>
-            </ol>
-          </nav>
-        }
+        breadcrumb={[
+          { label: 'Portfolio', to: '/' },
+          { label: serviceName, to: `/services/${scan.service_id}` },
+          { label: `Pipeline #${scan.gitlab_pipeline_id}` },
+        ]}
         title={<ArtifactName name={scan.artifact_name} kind={scan.kind} className="text-[0.9em]" />}
-        subtitle={kindLabel(scan.kind)}
+        subtitle={
+          <>
+            {kindLabel(scan.kind)} scanned <When at={scan.scanned_at} /> on{' '}
+            <span className="font-mono text-text">{scan.ref}</span>
+            {scan.ref_protected ? ', a protected ref' : ''}
+          </>
+        }
+        actions={
+          <Link
+            to={
+              scan.kind === 'image'
+                ? findingsHref(scan, '')
+                : `/services/${scan.service_id}/findings?ref=${encodeURIComponent(scan.ref)}&tab=secrets`
+            }
+            className={buttonClass('secondary')}
+          >
+            Open current findings
+          </Link>
+        }
       />
-      <Card className="mb-8">
-        <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-4">
-          <Fact label="Pipeline">
-            <MaybeLink href={scan.pipeline_url}>Pipeline #{scan.gitlab_pipeline_id}</MaybeLink>
-          </Fact>
-          <Fact label="Job">
-            <MaybeLink href={scan.job_url}>Job #{scan.gitlab_job_id}</MaybeLink>
-          </Fact>
-          <Fact label="Commit">
-            <MaybeLink href={scan.commit_url}>
-              <Mono value={scan.commit_sha} kind="sha" />
-            </MaybeLink>
-          </Fact>
-          <Fact label="Ref">
-            <Mono value={scan.ref} />
-            {scan.ref_protected ? <span className="chip ml-2">protected</span> : null}
-          </Fact>
-          <Fact label="Trivy version">
-            <Mono value={scan.trivy_version || NO_VALUE} />
-          </Fact>
-          <Fact label="Scanned at">
-            <Freshness at={scan.scanned_at} prefix="" className="text-base" />
-          </Fact>
-          <Fact label="Received at">
-            <Freshness at={scan.received_at} prefix="" className="text-base" />
-          </Fact>
-        </dl>
-      </Card>
+      <dl className="mb-8 grid grid-cols-2 gap-x-4 border-y border-line py-1 sm:grid-cols-3 sm:gap-y-4 sm:py-4 lg:grid-cols-[repeat(6,auto)] lg:justify-between">
+        <Fact label="Pipeline">
+          <SafeExternal href={scan.pipeline_url}>#{scan.gitlab_pipeline_id}</SafeExternal>
+        </Fact>
+        <Fact label="Job">
+          <SafeExternal href={scan.job_url}>#{scan.gitlab_job_id}</SafeExternal>
+        </Fact>
+        <Fact label="Commit">
+          <span className="inline-flex max-w-full items-center gap-1">
+            <SafeExternal href={scan.commit_url}>
+              <span className="font-mono" title={scan.commit_sha}>
+                {shortSha(scan.commit_sha)}
+              </span>
+            </SafeExternal>
+            <CopyIconButton text={scan.commit_sha} label="Copy commit" />
+          </span>
+        </Fact>
+        <Fact label="Ref">
+          <span className="inline-flex max-w-full items-center gap-1.5">
+            <span className="truncate font-mono">{scan.ref}</span>
+            {scan.ref_protected ? (
+              <span className="tag shrink-0" title="Protected ref">
+                <Lock size={11} strokeWidth={2} aria-hidden="true" />
+                protected
+              </span>
+            ) : null}
+          </span>
+        </Fact>
+        <Fact label="Trivy">
+          <span className="font-mono">{scan.trivy_version || NO_VALUE}</span>
+        </Fact>
+        <Fact label="Received">
+          <When at={scan.received_at} />
+        </Fact>
+      </dl>
     </>
   );
 }
@@ -100,12 +107,12 @@ export function ScanHeader({ scan, serviceName }: { scan: Scan; serviceName: str
 export function ScanHeaderSkeleton() {
   return (
     <div aria-hidden="true">
-      <div className="pb-6">
+      <div className="pb-8">
         <Skeleton className="h-5 w-64" />
         <Skeleton className="mt-2 h-8 w-80 max-w-full" />
-        <Skeleton className="mt-2 h-6 w-48" />
+        <Skeleton className="mt-2 h-5 w-72" />
       </div>
-      <Skeleton className="mb-8 h-40 w-full rounded-card" />
+      <Skeleton className="mb-8 h-16 w-full" />
     </div>
   );
 }

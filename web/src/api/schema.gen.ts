@@ -579,8 +579,25 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Findings new and fixed since the previous scan of the same service, ref, artifact and kind. */
+        /** Findings new and fixed since the previous scan of the same service, ref, artifact and kind, or since an earlier scan chosen with base. */
         get: operations["getScanDiff"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{id}/earlier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Earlier scans of the same service, artifact and kind, newest first; the scans a diff can use as its base. */
+        get: operations["listEarlierScans"];
         put?: never;
         post?: never;
         delete?: never;
@@ -981,19 +998,32 @@ export interface components {
         ScanDiff: {
             /** Format: int64 */
             scan_id: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The scan compared with: the base asked for, else the previous scan of the same ref. null when there is none.
+             */
             previous_scan_id: number | null;
+            /** @description The scan compared with, as in previous_scan_id. */
+            base: components["schemas"]["ScanSummary"] | null;
             /** @description At most 500 findings, the most severe first. */
             new: components["schemas"]["Vulnerability"][];
             /** @description At most 500 findings, the most severe first. */
             fixed: components["schemas"]["Vulnerability"][];
+            /** @description At most 100 findings present in both scans, the most severe first, as reported in this scan. */
+            unchanged_items: components["schemas"]["Vulnerability"][];
             unchanged: number;
             /** @description Number of new findings, including any not listed in new. */
             new_total: number;
             /** @description Number of fixed findings, including any not listed in fixed. */
             fixed_total: number;
-            /** @description True when new or fixed lists fewer findings than new_total or fixed_total. */
+            /** @description True when new, fixed or unchanged_items lists fewer findings than new_total, fixed_total or unchanged. */
             truncated: boolean;
+            /** @description Every new finding by severity, listed or not. */
+            new_counts: components["schemas"]["SeverityCounts"];
+            /** @description Every fixed finding by its severity in the base scan, listed or not. */
+            fixed_counts: components["schemas"]["SeverityCounts"];
+            /** @description Every unchanged finding by its severity in this scan. */
+            unchanged_counts: components["schemas"]["SeverityCounts"];
         };
         TrendPoint: {
             /** Format: int64 */
@@ -1107,6 +1137,19 @@ export interface components {
              * @description Number of non-archived services with at least one such finding in the scope.
              */
             total_services: number;
+            /**
+             * Format: int64
+             * @description Number of artifacts (per service) with at least one such finding in the scope.
+             */
+            total_artifacts: number;
+            /** @description Every matching finding by the severity reported for it, listed or not. */
+            counts: components["schemas"]["SeverityCounts"];
+            /** @description A title reported for the vulnerability, empty when none was. Over every match. */
+            title: string;
+            /** @description An advisory URL reported for the vulnerability, empty when none was. */
+            primary_url: string;
+            /** @description Distinct fixed versions reported over every match, at most 20. */
+            fixed_versions: string[];
             /** @description True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name. */
             truncated: boolean;
             items: {
@@ -2735,7 +2778,10 @@ export interface operations {
     };
     getScanDiff: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Compare with this scan instead of the previous one: any earlier scan of the same service, artifact and kind, on any ref (see listEarlierScans). */
+                base?: number;
+            };
             header?: never;
             path: {
                 id: number;
@@ -2751,6 +2797,63 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScanDiff"];
+                };
+            };
+            /** @description The base is not an earlier scan of the same service, artifact and kind (code invalid_parameter). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            /** @description Not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["Busy"];
+        };
+    };
+    listEarlierScans: {
+        parameters: {
+            query?: {
+                /** @description Only scans of this ref. Every ref when absent. */
+                ref?: string;
+                /** @description Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page. */
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of scans. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanPage"];
+                };
+            };
+            /** @description Invalid parameter. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             401: components["responses"]["Unauthenticated"];

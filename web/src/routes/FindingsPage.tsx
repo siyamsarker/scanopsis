@@ -14,13 +14,16 @@ import { Select } from '../components/inputs';
 import { PageHeader } from '../components/layout';
 import { EmptyState, ErrorState, Skeleton, SkeletonTable } from '../components/states';
 import { TabPanel, Tabs } from '../components/Tabs';
+import { countOf, formatExactTime, relativeTime } from '../format';
+import { linkClass } from '../ui';
 import { parseFilters } from './findings/model';
 import { refChoices } from './service/refSource';
 import { FixTab } from './findings/FixTab';
 import { SecretsTab } from './findings/SecretsTab';
 import { VulnerabilitiesTab } from './findings/VulnerabilitiesTab';
+import './findings/findings.css';
 
-const TABS = ['vulnerabilities', 'secrets', 'fix'] as const;
+const TABS = ['vulnerabilities', 'fix', 'secrets'] as const;
 type TabId = (typeof TABS)[number];
 
 function NotFound() {
@@ -28,7 +31,7 @@ function NotFound() {
     <ErrorState
       title="Service not found"
       message="This service does not exist or was deleted."
-      className="rounded-card border border-border bg-surface"
+      className="panel"
     />
   );
 }
@@ -48,7 +51,7 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
   const service = useFindingsService(id);
   const overview = useFindingsOverview(id, urlRef ?? undefined);
   const gitRef = overview.data?.ref ?? undefined;
-  // Only the vulnerabilities tab narrows what is loaded; the upgrade list always
+  // Only the vulnerabilities tab narrows what is loaded; the upgrade plan always
   // works on the unfiltered state, so its totals never depend on a leftover filter.
   const urlFilters = parseFilters(params);
   const serverFilters: ServerFilters | undefined =
@@ -73,7 +76,7 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
   );
   if (Number.isNaN(id) || notFound) {
     return (
-      <section className="mx-auto max-w-7xl p-6">
+      <section>
         <PageHeader title="Findings" />
         <NotFound />
       </section>
@@ -82,7 +85,7 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
   const failure = service.error ?? overview.error;
   if (failure) {
     return (
-      <section className="mx-auto max-w-7xl p-6">
+      <section>
         <PageHeader title="Findings" />
         <ErrorState
           message={failure instanceof ApiError ? failure.message : 'Try again in a moment.'}
@@ -90,21 +93,21 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
             void service.refetch();
             void overview.refetch();
           }}
-          className="rounded-card border border-border bg-surface"
+          className="panel"
         />
       </section>
     );
   }
   if (!service.data || !overview.data) {
     return (
-      <section className="mx-auto max-w-7xl p-6" aria-busy="true">
-        <header className="pb-6">
-          <Skeleton className="h-5 w-32" />
+      <section aria-busy="true">
+        <header className="pb-8">
+          <Skeleton className="h-5 w-48" />
           <Skeleton className="mt-2 h-8 w-40" />
-          <Skeleton className="mt-3 h-4 w-48" />
+          <Skeleton className="mt-3 h-4 w-72" />
         </header>
-        <div className="overflow-hidden rounded-card border border-border bg-surface">
-          <SkeletonTable columns={5} />
+        <div className="overflow-hidden rounded-panel border border-line">
+          <SkeletonTable columns={4} />
         </div>
       </section>
     );
@@ -114,6 +117,8 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
   const newest = [...data.artifacts].sort(
     (a, b) => Date.parse(b.scanned_at) - Date.parse(a.scanned_at),
   )[0];
+  const c = data.counts;
+  const open = c.critical + c.high + c.medium + c.low + c.unknown;
 
   function setParam(name: string, value: string | null) {
     setParams(
@@ -127,28 +132,30 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
     );
   }
 
+  const images = data.artifacts.filter((a) => a.kind === 'image').length;
   return (
-    <section className="mx-auto max-w-7xl p-6">
+    <section>
       <PageHeader
-        eyebrow={
-          <Link
-            to={`/services/${id}`}
-            className="underline decoration-border-strong underline-offset-2 hover:decoration-text"
-          >
-            {service.data.name}
-          </Link>
-        }
+        breadcrumb={[
+          { label: 'Portfolio', to: '/' },
+          { label: service.data.name, to: `/services/${id}` },
+          { label: 'Findings' },
+        ]}
         title="Findings"
-        freshness={
-          data.data_at
-            ? {
-                at: data.data_at,
-                prefix: 'Scanned',
-                link: newest
-                  ? { label: `Pipeline ${newest.gitlab_pipeline_id}`, to: `/scans/${newest.id}` }
-                  : undefined,
-              }
-            : undefined
+        subtitle={
+          gitRef === undefined || !newest ? undefined : (
+            <>
+              Latest scan of {countOf(images, 'image')} on{' '}
+              <span className="font-mono text-text">{gitRef}</span>:{' '}
+              <Link to={`/scans/${newest.id}`} className={linkClass}>
+                pipeline #{newest.gitlab_pipeline_id}
+              </Link>
+              ,{' '}
+              <time dateTime={newest.scanned_at} title={formatExactTime(newest.scanned_at)}>
+                {relativeTime(newest.scanned_at)}
+              </time>
+            </>
+          )
         }
         actions={
           data.refs.length > 0 ? (
@@ -162,8 +169,9 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
         }
       />
       {gitRef === undefined || data.artifacts.length === 0 ? (
-        <div className="rounded-card border border-border bg-surface">
+        <div className="panel">
           <EmptyState
+            art="pipeline"
             title={gitRef === undefined ? 'No scans yet' : `No scans of ${gitRef} yet`}
             body={
               gitRef === undefined
@@ -180,13 +188,14 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
             value={tab}
             onChange={(next) => setParam('tab', next === 'vulnerabilities' ? null : next)}
             tabs={[
-              { id: 'vulnerabilities', label: 'Vulnerabilities' },
+              { id: 'vulnerabilities', label: 'Vulnerabilities', count: open },
+              { id: 'fix', label: 'Fix by upgrading', count: data.fixable },
               { id: 'secrets', label: 'Secrets', count: data.secrets },
-              { id: 'fix', label: 'Fix by upgrading' },
             ]}
           />
           <TabPanel idBase="findings" tab="vulnerabilities" value={tab}>
             <VulnerabilitiesTab
+              serviceId={id}
               rows={vulns.rows}
               loading={vulns.loading}
               loadingMore={vulns.loadingMore}
@@ -194,9 +203,6 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
               error={vulns.error}
               onRetry={vulns.retry}
             />
-          </TabPanel>
-          <TabPanel idBase="findings" tab="secrets" value={tab}>
-            <SecretsTab serviceId={id} gitRef={gitRef} />
           </TabPanel>
           <TabPanel idBase="findings" tab="fix" value={tab}>
             <FixTab
@@ -209,6 +215,9 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
               error={vulns.error}
               onRetry={vulns.retry}
             />
+          </TabPanel>
+          <TabPanel idBase="findings" tab="secrets" value={tab}>
+            <SecretsTab serviceId={id} gitRef={gitRef} />
           </TabPanel>
         </>
       )}

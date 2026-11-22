@@ -20,7 +20,8 @@ import (
 // million findings, see storetest.SeedVolume). On top of it one service has
 // the heavy shape that makes first-seen lookups expensive: 3 artifacts x 50
 // scans x 2000 findings, and a newest scan with 300 new findings. The p95
-// over 30 calls of the overview, the findings page, a scan diff and three
+// over 30 calls of the overview, the findings page, a scan diff with the
+// previous and with the oldest scan, the list of earlier scans and three
 // searches in the default scope, the dashboard branches and protected refs
 // (an ID in a few services, in a twenty-fifth of them and in three quarters of
 // them), must stay under 150 ms. Searches of every ref are measured and
@@ -35,7 +36,7 @@ func TestReadPerformance(t *testing.T) {
 
 	svc := newService(t, pool, "big", "grp/big", false)
 	base := time.Now().UTC().Truncate(time.Second)
-	var newest int64
+	var newest, oldest int64
 	for a := range 3 {
 		for n := range 50 {
 			scan := newScan(t, pool, svc, "image", fmt.Sprintf("img%d", a), "main", base.Add(-time.Duration(50-n)*time.Hour))
@@ -55,6 +56,9 @@ func TestReadPerformance(t *testing.T) {
 			refresh(t, pool, scan)
 			if a == 0 && n == 49 {
 				newest = scan
+			}
+			if a == 0 && n == 0 {
+				oldest = scan
 			}
 		}
 	}
@@ -90,6 +94,8 @@ func TestReadPerformance(t *testing.T) {
 		{"overview", fmt.Sprintf("/api/v1/services/%d/overview", svc), nil},
 		{"findings page", fmt.Sprintf("/api/v1/services/%d/vulnerabilities", svc), nil},
 		{"scan diff", fmt.Sprintf("/api/v1/scans/%d/diff", newest), nil},
+		{"scan diff with the oldest scan as base", fmt.Sprintf("/api/v1/scans/%d/diff?base=%d", newest, oldest), nil},
+		{"earlier scans", fmt.Sprintf("/api/v1/scans/%d/earlier", newest), nil},
 		{"search, ID in a few services", "/api/v1/search/vulnerabilities?id=" + typical, nil},
 		{"search, ID in every 25th service", "/api/v1/search/vulnerabilities?id=" + storetest.CommonVulnID, nil},
 		{"search, ID in 3 of 4 services", "/api/v1/search/vulnerabilities?id=" + storetest.WidespreadVulnID, nil},
@@ -188,6 +194,20 @@ func TestReadPerformance(t *testing.T) {
 	if dashF >= allF || allF <= maxSearchResults || allS != 375 {
 		t.Errorf("widespread ID: %d findings by default, %d in %d services in all; want fewer by default and more than %d in 375 services",
 			dashF, allF, allS, maxSearchResults)
+	}
+	// The summary covers every match, also beyond the listed ones.
+	var sum searchJSON
+	getJSON(t, mux, "/api/v1/search/vulnerabilities?scope=all&id="+storetest.WidespreadVulnID, &sum)
+	c := sum.Counts
+	if total := int64(c.Critical + c.High + c.Medium + c.Low + c.Unknown); total != allF || sum.TotalArtifacts < sum.TotalServices {
+		t.Errorf("summary: %d findings by severity, %d artifacts in %d services; want %d findings", total,
+			sum.TotalArtifacts, sum.TotalServices, allF)
+	}
+	// Earlier scans: the other 49 scans of the artifact, newest first.
+	var earlier scanPageJSON
+	getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/earlier?limit=200", newest), &earlier)
+	if len(earlier.Items) != 49 || earlier.Items[48].ID != oldest {
+		t.Errorf("earlier scans: %d listed, want 49 ending with %d", len(earlier.Items), oldest)
 	}
 	getJSON(t, mux, "/api/v1/search/vulnerabilities?id="+typical, &found)
 	if len(found.Items) == 0 {

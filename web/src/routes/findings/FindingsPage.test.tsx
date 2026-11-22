@@ -151,6 +151,43 @@ const SECRETS = {
   ],
 };
 
+const SCAN = {
+  ...OVERVIEW.artifacts[0],
+  id: 11,
+  gitlab_project_path: 'acme/payments-api',
+  pipeline_url: 'https://gitlab.example.com/acme/payments-api/-/pipelines/1234',
+  job_url: 'https://gitlab.example.com/acme/payments-api/-/jobs/1',
+  commit_url: null,
+};
+
+/** The same ID in this service and in two others. */
+function search(id: string) {
+  const hit = (serviceId: number, name: string) => ({
+    service: { ...SERVICE, id: serviceId, name },
+    ref: 'main',
+    artifact_name: 'app',
+    scan_id: 100 + serviceId,
+    scanned_at: '2026-11-19T10:00:00Z',
+    pkg_name: 'openssl',
+    installed_version: '3.0.1',
+    fixed_version: '3.0.9',
+    severity: 'CRITICAL',
+  });
+  return {
+    vuln_id: id,
+    scope: 'dashboard',
+    items: [hit(5, 'payments-api'), hit(6, 'billing-worker'), hit(7, 'auth-service')],
+    truncated: false,
+    total_findings: 3,
+    total_services: 3,
+    total_artifacts: 3,
+    counts: { critical: 3, high: 0, medium: 0, low: 0, unknown: 0 },
+    title: 'Title',
+    primary_url: '',
+    fixed_versions: ['3.0.9'],
+  };
+}
+
 /** Serves the service with vulnerabilities in pages of three, ordered by id. */
 function api(extra?: Handler): Handler {
   return async (call) => {
@@ -162,6 +199,9 @@ function api(extra?: Handler): Handler {
     if (url.pathname === '/api/v1/services/5') return json(200, SERVICE);
     if (url.pathname === '/api/v1/services/5/overview') return json(200, OVERVIEW);
     if (url.pathname === '/api/v1/services/5/secrets') return json(200, SECRETS);
+    if (url.pathname === '/api/v1/scans/11') return json(200, SCAN);
+    if (url.pathname === '/api/v1/search/vulnerabilities')
+      return json(200, search(q.get('id') ?? ''));
     if (url.pathname === '/api/v1/services/5/vulnerabilities') {
       const all = q.get('suppressed') === 'true' ? [...VULNS, SUPPRESSED] : VULNS;
       const after = Number(q.get('after') ?? 0);
@@ -180,7 +220,7 @@ function vulnCalls(calls: { path: string }[]) {
   return calls.filter((c) => c.path.startsWith('/api/v1/services/5/vulnerabilities'));
 }
 
-const summary = (text: string) => screen.findByText(text);
+const summary = (text: string) => screen.findByText(text, {}, { timeout: 4000 });
 
 beforeEach(() => {
   // jsdom has no layout: give every element a viewport so virtual rows are computed.
@@ -190,6 +230,11 @@ beforeEach(() => {
   Element.prototype.scrollTo = vi.fn();
 });
 afterEach(() => vi.restoreAllMocks());
+
+/** The list row that shows a vulnerability ID. */
+function row(id: string) {
+  return screen.getByText(id).closest('[role="row"]') as HTMLElement;
+}
 
 function bodyRows() {
   return screen.getAllByRole('row').slice(1);
@@ -205,7 +250,7 @@ describe('findings explorer', () => {
       'href',
       '/services/5',
     );
-    expect(screen.getByRole('link', { name: 'Pipeline 1234' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'pipeline #1234' })).toHaveAttribute(
       'href',
       '/scans/90',
     );
@@ -245,16 +290,12 @@ describe('findings explorer', () => {
     await summary('7 vulnerabilities, 6 fixable');
     expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
       'Severity',
-      'Vulnerability',
-      'Package',
-      'Installed → fixed',
-      'Target',
-      'Artifact',
+      'Vulnerability and package',
+      'Image and target',
       'First seen',
-      'Status',
     ]);
-    expect(screen.getByTitle('3.0.1 → 3.0.10, 3.1.2')).toBeInTheDocument();
-    expect(screen.getByTitle('1.2.9 → No fix')).toBeInTheDocument();
+    expect(screen.getByTitle('openssl 3.0.1 → 3.0.10, 3.1.2')).toBeInTheDocument();
+    expect(screen.getByTitle('zlib 1.2.9 → no fix')).toBeInTheDocument();
   });
 
   it('re-sorts by package when the header is activated', async () => {
@@ -262,9 +303,9 @@ describe('findings explorer', () => {
     renderApp('/services/5/findings');
     await summary('7 vulnerabilities, 6 fixable');
     fireEvent.click(
-      within(screen.getByRole('columnheader', { name: /Package/ })).getByRole('button'),
+      within(screen.getByRole('columnheader', { name: /package/ })).getByRole('button'),
     );
-    expect(screen.getByRole('columnheader', { name: /Package/ })).toHaveAttribute(
+    expect(screen.getByRole('columnheader', { name: /package/ })).toHaveAttribute(
       'aria-sort',
       'ascending',
     );
@@ -308,13 +349,13 @@ describe('findings explorer', () => {
       within(screen.getByRole('group', { name: 'Filter by fix availability' })).getByRole(
         'button',
         {
-          name: /No fix/,
+          name: /No fix yet/,
         },
       ),
     );
     expect(await summary('0 vulnerabilities, 0 fixable')).toBeInTheDocument();
     expect(screen.getByText('No vulnerabilities match these filters')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Clear filters' })[0]);
     expect(await summary('7 vulnerabilities, 6 fixable')).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent('/services/5/findings');
     expect(screen.getByTestId('location').textContent).not.toContain('severity');
@@ -344,21 +385,28 @@ describe('findings explorer', () => {
       ),
     ).toBe(true);
     expect(screen.getByTestId('location')).toHaveTextContent('suppressed=true');
-    const row = screen.getByText('vendor not affected').closest('[role="row"]') as HTMLElement;
-    expect(within(row).getByText('Suppressed')).toBeInTheDocument();
-    expect(row).toHaveTextContent('CVE-2024-0008');
+    const suppressed = row('CVE-2024-0008');
+    expect(within(suppressed).getByText('Suppressed')).toHaveAttribute(
+      'title',
+      'vendor not affected',
+    );
   });
 
   it('links advisories only for http(s) URLs', async () => {
     mockFetch(api());
     renderApp('/services/5/findings');
     await summary('7 vulnerabilities, 6 fixable');
-    const link = screen.getByRole('link', { name: /CVE-2024-0001/ });
+    fireEvent.click(row('CVE-2024-0001'));
+    let dialog = await screen.findByRole('dialog', { name: /CVE-2024-0001/ });
+    const link = within(dialog).getByRole('link', { name: /Advisory/ });
     expect(link).toHaveAttribute('href', 'https://avd.aquasec.com/nvd/cve-2024-0001');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noopener noreferrer');
-    expect(screen.getByText('CVE-2024-0004')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: /CVE-2024-0004/ })).toBeNull();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(row('CVE-2024-0004'));
+    dialog = await screen.findByRole('dialog', { name: /CVE-2024-0004/ });
+    expect(within(dialog).queryByRole('link', { name: /Advisory/ })).toBeNull();
     expect(document.querySelector('a[href^="javascript"]')).toBeNull();
   });
 
@@ -366,14 +414,8 @@ describe('findings explorer', () => {
     mockFetch(api());
     renderApp('/services/5/findings');
     await summary('7 vulnerabilities, 6 fixable');
-    const zlib = screen
-      .getByRole('button', { name: 'zlib' })
-      .closest('[role="row"]') as HTMLElement;
-    expect(within(zlib).getByText('No fix')).toBeInTheDocument();
-    const lodash = screen
-      .getByRole('button', { name: 'lodash' })
-      .closest('[role="row"]') as HTMLElement;
-    expect(within(lodash).getByText('4.17.21')).toBeInTheDocument();
+    expect(within(row('CVE-2024-0003')).getByText('no fix yet')).toBeInTheDocument();
+    expect(within(row('CVE-2024-0004')).getByText('4.17.21')).toBeInTheDocument();
   });
 
   it('opens a drawer from the keyboard, traps focus and closes with Escape', async () => {
@@ -386,12 +428,22 @@ describe('findings explorer', () => {
     const dialog = await screen.findByRole('dialog', { name: /CVE-2024-0001/ });
     expect(within(dialog).getByText('Title 1')).toBeInTheDocument();
     expect(within(dialog).getByText('debian 12')).toBeInTheDocument();
+    // The exact upgrade, as a command to copy.
+    expect(
+      within(dialog).getByText('apt-get install --only-upgrade openssl=3.0.9'),
+    ).toBeInTheDocument();
+    // Where else it is: the other two services, through the search API.
+    expect(await within(dialog).findByText('2 other services')).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: 'billing-worker' })).toHaveAttribute(
+      'href',
+      '/services/6/findings?q=CVE-2024-0001',
+    );
+    await within(dialog).findByRole('link', { name: 'Scan details' });
+    expect(within(dialog).getByRole('link', { name: /Pipeline #1234/ })).toHaveAttribute(
+      'href',
+      SCAN.pipeline_url,
+    );
     const close = within(dialog).getByRole('button', { name: 'Close details' });
-    expect(close).toHaveFocus();
-    fireEvent.keyDown(close, { key: 'Tab', shiftKey: true });
-    expect(within(dialog).getByRole('link', { name: 'Scan 11' })).toHaveFocus();
-    fireEvent.keyDown(within(dialog).getByRole('link', { name: 'Scan 11' }), { key: 'Tab' });
-    expect(close).toHaveFocus();
     fireEvent.keyDown(close, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
     await waitFor(() => expect(bodyRows()[0]).toHaveFocus());
@@ -401,9 +453,9 @@ describe('findings explorer', () => {
     mockFetch(api());
     renderApp('/services/5/findings?suppressed=true&q=curl');
     await summary('1 vulnerability, 1 fixable');
-    fireEvent.click(screen.getByRole('button', { name: 'curl' }));
+    fireEvent.click(row('CVE-2024-0008'));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('vendor not affected')).toBeInTheDocument();
+    expect(within(dialog).getByText('Suppressed: vendor not affected')).toBeInTheDocument();
   });
 
   it('changes the ref through the URL and requests that ref', async () => {
@@ -421,11 +473,12 @@ describe('findings explorer', () => {
     mockFetch(api());
     renderApp('/services/5/findings?tab=secrets');
     const table = await screen.findByRole('table', { name: 'Secret findings' });
-    const row = within(table).getByRole('row', { name: /aws-access-key-id/ });
-    expect(within(row).getByText('12–14')).toBeInTheDocument();
-    expect(within(row).getByText('config/prod.env')).toBeInTheDocument();
-    expect(within(row).getByText('AWS')).toBeInTheDocument();
-    expect(within(row).getByText('Critical')).toBeInTheDocument();
+    const secret = within(table).getByRole('row', { name: /aws-access-key-id/ });
+    expect(within(secret).getByTitle('config/prod.env:12–14')).toBeInTheDocument();
+    expect(within(secret).getByText('AWS')).toBeInTheDocument();
+    expect(within(secret).getByText('Critical')).toBeInTheDocument();
+    // The matched value is never shown: it is not stored.
+    expect(within(secret).getByText('Value not stored')).toBeInTheDocument();
   });
 
   it('shows the secrets empty state', async () => {
@@ -445,15 +498,16 @@ describe('findings explorer', () => {
     expect(vulnCalls(calls)).toHaveLength(0);
   });
 
-  it('groups fixable findings into upgrades in order with the highest fixed version', async () => {
+  it('ranks upgrades by the risk they clear, with the highest fixed version', async () => {
     mockFetch(api());
     renderApp('/services/5/findings?tab=fix');
-    const table = await screen.findByRole('table', { name: 'Packages to upgrade' });
+    const list = await screen.findByRole('list', { name: 'Packages to upgrade' });
+    // 1 critical × 10 + 4 high × 5 + 1 medium × 3 + 1 low = 34 points; zlib's 5 have no fix.
     expect(
-      await screen.findByText('Upgrading 4 packages clears 6 of 6 fixable vulnerabilities'),
+      screen.getByText(/upgrading 4 packages clears 29 of 34 \(85%, 6 findings\)/),
     ).toBeInTheDocument();
-    const rows = within(table).getAllByRole('row').slice(1);
-    expect(rows.map((r) => within(r).getAllByRole('cell')[1].textContent)).toEqual([
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows.map((r) => within(r).getAllByRole('link')[0].textContent)).toEqual([
       'openssl',
       'bar',
       'libfoo',
@@ -462,7 +516,8 @@ describe('findings explorer', () => {
     // comma list: 3.1.2 beats 3.0.10 and 3.0.9
     expect(rows[0]).toHaveTextContent('3.0.1');
     expect(rows[0]).toHaveTextContent('3.1.2');
-    expect(rows[0]).toHaveTextContent('2 findings');
+    expect(rows[0]).toHaveTextContent('−15 pts');
+    expect(rows[0]).toHaveTextContent('apt-get install --only-upgrade openssl=3.1.2');
     // numeric compare: 1.2.10 beats 1.2.9
     expect(rows[1]).toHaveTextContent('1.2.10');
     expect(rows[1]).not.toHaveTextContent('1.2.9');
@@ -475,8 +530,7 @@ describe('findings explorer', () => {
   it('leaves suppressed findings out of the upgrade list and keeps the ref in links', async () => {
     mockFetch(api());
     renderApp('/services/5/findings?tab=fix&suppressed=true&ref=main');
-    const table = await screen.findByRole('table', { name: 'Packages to upgrade' });
-    await screen.findByText('Upgrading 4 packages clears 6 of 6 fixable vulnerabilities');
+    const table = await screen.findByRole('list', { name: 'Packages to upgrade' });
     expect(within(table).queryByText('curl')).toBeNull();
     expect(within(table).getByRole('link', { name: 'bar' })).toHaveAttribute(
       'href',

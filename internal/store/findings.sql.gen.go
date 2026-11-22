@@ -46,6 +46,28 @@ func (q *Queries) FindingsClassCounts(ctx context.Context, scanIds []int64) ([]F
 	return items, nil
 }
 
+const findingsDiffBase = `-- name: FindingsDiffBase :one
+SELECT b.id
+FROM scans c
+JOIN scans b ON b.service_id = c.service_id AND b.artifact_name = c.artifact_name AND b.kind = c.kind
+            AND (b.scanned_at, b.id) < (c.scanned_at, c.id)
+WHERE c.id = $1 AND b.id = $2
+`
+
+type FindingsDiffBaseParams struct {
+	ScanID int64
+	BaseID int64
+}
+
+// FindingsDiffBase returns base_id when that scan is an earlier scan of the
+// same service, artifact and kind as scan_id, on any ref; no row otherwise.
+func (q *Queries) FindingsDiffBase(ctx context.Context, arg FindingsDiffBaseParams) (int64, error) {
+	row := q.db.QueryRow(ctx, findingsDiffBase, arg.ScanID, arg.BaseID)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const findingsDiffCounts = `-- name: FindingsDiffCounts :one
 WITH pairs AS (
     SELECT c.id AS cur_id,
@@ -163,18 +185,124 @@ func (q *Queries) FindingsDiffRows(ctx context.Context, scanIds []int64) ([]Find
 	return items, nil
 }
 
+const findingsEarlierScans = `-- name: FindingsEarlierScans :many
+SELECT s.id, s.service_id, s.kind, s.artifact_name, s.gitlab_pipeline_id, s.gitlab_job_id, s.ref,
+       s.ref_protected, s.commit_sha, s.trivy_version, s.schema_version, s.scanned_at, s.received_at,
+       s.count_critical, s.count_high, s.count_medium, s.count_low, s.count_unknown,
+       s.count_fixable, s.count_secrets, s.count_suppressed
+FROM scans c
+JOIN scans s ON s.service_id = c.service_id AND s.artifact_name = c.artifact_name AND s.kind = c.kind
+            AND (s.scanned_at, s.id) < (c.scanned_at, c.id)
+WHERE c.id = $1
+  AND ($2::text = '' OR s.ref = $2)
+  AND ($3::bigint = 0 OR (s.scanned_at, s.id) < (SELECT b.scanned_at, b.id FROM scans b WHERE b.id = $3))
+ORDER BY s.scanned_at DESC, s.id DESC
+LIMIT $4
+`
+
+type FindingsEarlierScansParams struct {
+	ScanID  int64
+	Ref     string
+	Before  int64
+	MaxRows int32
+}
+
+type FindingsEarlierScansRow struct {
+	ID               int64
+	ServiceID        int64
+	Kind             string
+	ArtifactName     string
+	GitlabPipelineID int64
+	GitlabJobID      int64
+	Ref              string
+	RefProtected     bool
+	CommitSha        string
+	TrivyVersion     string
+	SchemaVersion    int32
+	ScannedAt        pgtype.Timestamptz
+	ReceivedAt       pgtype.Timestamptz
+	CountCritical    int32
+	CountHigh        int32
+	CountMedium      int32
+	CountLow         int32
+	CountUnknown     int32
+	CountFixable     int32
+	CountSecrets     int32
+	CountSuppressed  int32
+}
+
+// FindingsEarlierScans returns the scans before scan_id of the same service,
+// artifact and kind, on every ref or only on @ref when it is not empty,
+// newest first by (scanned_at, id). before is the id of the last scan of the
+// previous page, or 0. A service's scans are read through the leading
+// service_id of scans_current_cover_idx; at the 90-day volume that is about a
+// thousand rows.
+func (q *Queries) FindingsEarlierScans(ctx context.Context, arg FindingsEarlierScansParams) ([]FindingsEarlierScansRow, error) {
+	rows, err := q.db.Query(ctx, findingsEarlierScans,
+		arg.ScanID,
+		arg.Ref,
+		arg.Before,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []FindingsEarlierScansRow{}
+	for rows.Next() {
+		var i FindingsEarlierScansRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ServiceID,
+			&i.Kind,
+			&i.ArtifactName,
+			&i.GitlabPipelineID,
+			&i.GitlabJobID,
+			&i.Ref,
+			&i.RefProtected,
+			&i.CommitSha,
+			&i.TrivyVersion,
+			&i.SchemaVersion,
+			&i.ScannedAt,
+			&i.ReceivedAt,
+			&i.CountCritical,
+			&i.CountHigh,
+			&i.CountMedium,
+			&i.CountLow,
+			&i.CountUnknown,
+			&i.CountFixable,
+			&i.CountSecrets,
+			&i.CountSuppressed,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const findingsFirstSeen = `-- name: FindingsFirstSeen :many
-SELECT v.id, min(s2.scanned_at)::timestamptz AS first_seen_at
+SELECT v.id, f.scanned_at::timestamptz AS first_seen_at
 FROM vulnerabilities v
 JOIN scans s ON s.id = v.scan_id
-JOIN scans s2 ON s2.service_id = s.service_id AND s2.ref = s.ref
-             AND s2.artifact_name = s.artifact_name AND s2.kind = s.kind
-JOIN vulnerabilities v2 ON v2.scan_id = s2.id
-                       AND md5(v2.vuln_id || chr(1) || v2.pkg_name || chr(1) || v2.target)
-                         = md5(v.vuln_id || chr(1) || v.pkg_name || chr(1) || v.target)
-                       AND v2.vuln_id = v.vuln_id AND v2.pkg_name = v.pkg_name AND v2.target = v.target
+CROSS JOIN LATERAL (
+    SELECT s2.scanned_at
+    FROM scans s2
+    WHERE s2.service_id = s.service_id AND s2.ref = s.ref
+      AND s2.artifact_name = s.artifact_name AND s2.kind = s.kind
+      AND EXISTS (
+          SELECT 1 FROM vulnerabilities v2
+          WHERE v2.scan_id = s2.id
+            AND md5(v2.vuln_id || chr(1) || v2.pkg_name || chr(1) || v2.target)
+              = md5(v.vuln_id || chr(1) || v.pkg_name || chr(1) || v.target)
+            AND v2.vuln_id = v.vuln_id AND v2.pkg_name = v.pkg_name AND v2.target = v.target)
+    ORDER BY s2.scanned_at, s2.id
+    LIMIT 1
+) f
 WHERE v.id = ANY($1::bigint[])
-GROUP BY v.id
 `
 
 type FindingsFirstSeenRow struct {
@@ -184,9 +312,12 @@ type FindingsFirstSeenRow struct {
 
 // FindingsFirstSeen returns, for each given vulnerability row, the scan time of
 // the earliest scan of the same service, ref, artifact and kind that contains
-// the same (vuln_id, pkg_name, target), suppressed or not. The md5 condition
-// is the expression of vulnerabilities_scan_key_idx, which makes the lookup
-// an index probe; the column comparisons rule out hash collisions.
+// the same (vuln_id, pkg_name, target), suppressed or not. The scans are
+// walked oldest first (scans_current_cover_idx backwards) and the walk stops at
+// the first scan that has the finding, so a finding that has been there all
+// along costs one probe instead of one per scan. The md5 condition is the
+// expression of vulnerabilities_scan_key_idx, which makes each probe an index
+// lookup; the column comparisons rule out hash collisions.
 func (q *Queries) FindingsFirstSeen(ctx context.Context, ids []int64) ([]FindingsFirstSeenRow, error) {
 	rows, err := q.db.Query(ctx, findingsFirstSeen, ids)
 	if err != nil {
@@ -538,11 +669,12 @@ WITH RECURSIVE all_cur AS (
     SELECT id, service_id, ref, artifact_name, kind, scanned_at FROM prot_cur
 ), found AS MATERIALIZED (
     SELECT cur.service_id, cur.ref, cur.artifact_name, cur.id AS scan_id, cur.scanned_at,
-           h.id AS vuln_row_id, h.pkg_name, h.installed_version, h.fixed_version, h.severity
+           h.id AS vuln_row_id, h.pkg_name, h.installed_version, h.fixed_version, h.severity,
+           h.title, h.primary_url
     FROM cur
     JOIN services s0 ON s0.id = cur.service_id AND NOT s0.archived
     CROSS JOIN LATERAL (
-        SELECT v.id, v.pkg_name, v.installed_version, v.fixed_version, v.severity
+        SELECT v.id, v.pkg_name, v.installed_version, v.fixed_version, v.severity, v.title, v.primary_url
         FROM vulnerabilities v
         WHERE v.scan_id = cur.id
           AND lower(left(v.vuln_id, 100)) = lower($3::text)
@@ -551,14 +683,25 @@ WITH RECURSIVE all_cur AS (
         OFFSET 0
     ) h
 ), totals AS (
-    SELECT count(*)::bigint AS total_findings, count(DISTINCT service_id)::bigint AS total_services
+    SELECT count(*)::bigint AS total_findings, count(DISTINCT service_id)::bigint AS total_services,
+           count(DISTINCT (service_id, artifact_name))::bigint AS total_artifacts,
+           count(*) FILTER (WHERE severity = 'CRITICAL')::bigint AS total_critical,
+           count(*) FILTER (WHERE severity = 'HIGH')::bigint AS total_high,
+           count(*) FILTER (WHERE severity = 'MEDIUM')::bigint AS total_medium,
+           count(*) FILTER (WHERE severity = 'LOW')::bigint AS total_low,
+           count(*) FILTER (WHERE severity = 'UNKNOWN')::bigint AS total_unknown,
+           coalesce(max(title) FILTER (WHERE title <> ''), '')::text AS summary_title,
+           coalesce(max(primary_url) FILTER (WHERE primary_url <> ''), '')::text AS summary_url,
+           coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
     FROM found
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,
        sv.created_via, sv.archived, sv.created_at, sv.default_ref,
        f.ref, f.artifact_name, f.scan_id, f.scanned_at,
        f.pkg_name, f.installed_version, f.fixed_version, f.severity,
-       totals.total_findings, totals.total_services
+       totals.total_findings, totals.total_services, totals.total_artifacts,
+       totals.total_critical, totals.total_high, totals.total_medium, totals.total_low, totals.total_unknown,
+       totals.summary_title, totals.summary_url, totals.fixed_versions
 FROM found f
 JOIN services sv ON sv.id = f.service_id
 CROSS JOIN totals
@@ -593,6 +736,15 @@ type FindingsSearchRow struct {
 	Severity          string
 	TotalFindings     int64
 	TotalServices     int64
+	TotalArtifacts    int64
+	TotalCritical     int64
+	TotalHigh         int64
+	TotalMedium       int64
+	TotalLow          int64
+	TotalUnknown      int64
+	SummaryTitle      string
+	SummaryUrl        string
+	FixedVersions     []string
 }
 
 // FindingsSearch lists the unsuppressed findings of a vulnerability ID in the
@@ -656,6 +808,15 @@ func (q *Queries) FindingsSearch(ctx context.Context, arg FindingsSearchParams) 
 			&i.Severity,
 			&i.TotalFindings,
 			&i.TotalServices,
+			&i.TotalArtifacts,
+			&i.TotalCritical,
+			&i.TotalHigh,
+			&i.TotalMedium,
+			&i.TotalLow,
+			&i.TotalUnknown,
+			&i.SummaryTitle,
+			&i.SummaryUrl,
+			&i.FixedVersions,
 		); err != nil {
 			return nil, err
 		}

@@ -1,0 +1,52 @@
+/*
+ * Copyright 2026 The Scanopsis Authors
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * The findings explorer, the scan page and the search page: the focus lens
+ * and the severity band. Colours come from the design tokens only.
+ */
+
+/* The focus lens: a lens-gradient edge draws in along the top of the filter
+   panel while a filter narrows the list, and a faint ring holds the panel. */
+.lens-panel {
+  position: relative;
+  transition: box-shadow var(--dur-enter) var(--easing-enter);
+}
+.lens-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  height: 2px;
+  background: var(--lens);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--dur-layout) var(--easing-enter);
+}
+.lens-panel[data-focused]::before {
+  transform: scaleX(1);
+}
+.lens-panel[data-focused] {
+  box-shadow:
+    var(--elev-1),
+    0 0 0 1px color-mix(in srgb, var(--lens-a) 28%, transparent);
+}
+
+/* A full-width tinted strip in a severity's colour (the drawer's head). */
+.sev-band {
+  background-color: color-mix(in srgb, var(--tone) 12%, var(--surface-overlay));
+  border-bottom: 1px solid color-mix(in srgb, var(--tone) 30%, transparent);
+}
+
+/* Rows of the upgrade plan beyond the chosen cut recede. */
+.upgrade-row {
+  transition: opacity var(--dur-micro) var(--easing-enter);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lens-panel,
+  .lens-panel::before,
+  .upgrade-row {
+    transition: none;
+  }
+}

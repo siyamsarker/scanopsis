@@ -452,7 +452,7 @@ Responses:
 
 ### `GET /api/v1/scans/{id}/diff`
 
-Findings new and fixed since the previous scan of the same service, ref, artifact and kind.
+Findings new and fixed since the previous scan of the same service, ref, artifact and kind, or since an earlier scan chosen with base.
 
 - Operation ID: `getScanDiff`
 - Authentication: Session
@@ -462,12 +462,40 @@ Parameters:
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
 | `id` | path | yes | integer (int64) |  |
+| `base` | query | no | integer (int64, minimum 1) | Compare with this scan instead of the previous one: any earlier scan of the same service, artifact and kind, on any ref (see listEarlierScans). |
 
 Responses:
 
 | Status | Description | Body |
 |---|---|---|
 | 200 | Diff. | `application/json` [ScanDiff](#scandiff) |
+| 400 | The base is not an earlier scan of the same service, artifact and kind (code invalid_parameter). | `application/json` [Error](#error) |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+
+### `GET /api/v1/scans/{id}/earlier`
+
+Earlier scans of the same service, artifact and kind, newest first; the scans a diff can use as its base.
+
+- Operation ID: `listEarlierScans`
+- Authentication: Session
+
+Parameters:
+
+| Name | In | Required | Type | Description |
+|---|---|---|---|---|
+| `id` | path | yes | integer (int64) |  |
+| `before` | query | no | integer (int64) | Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page. |
+| `limit` | query | no | integer (minimum 1, maximum 200, default 50) |  |
+| `ref` | query | no | string | Only scans of this ref. Every ref when absent. |
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 200 | One page of scans. | `application/json` [ScanPage](#scanpage) |
+| 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
 | 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
@@ -1231,14 +1259,19 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
+| `base` | [ScanSummary](#scansummary) or null | yes | The scan compared with, as in previous_scan_id. |
 | `fixed` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings, the most severe first. |
+| `fixed_counts` | [SeverityCounts](#severitycounts) | yes | Every fixed finding by its severity in the base scan, listed or not. |
 | `fixed_total` | integer | yes | Number of fixed findings, including any not listed in fixed. |
 | `new` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings, the most severe first. |
+| `new_counts` | [SeverityCounts](#severitycounts) | yes | Every new finding by severity, listed or not. |
 | `new_total` | integer | yes | Number of new findings, including any not listed in new. |
-| `previous_scan_id` | integer or null (int64) | yes |  |
+| `previous_scan_id` | integer or null (int64) | yes | The scan compared with: the base asked for, else the previous scan of the same ref. null when there is none. |
 | `scan_id` | integer (int64) | yes |  |
-| `truncated` | boolean | yes | True when new or fixed lists fewer findings than new_total or fixed_total. |
+| `truncated` | boolean | yes | True when new, fixed or unchanged_items lists fewer findings than new_total, fixed_total or unchanged. |
 | `unchanged` | integer | yes |  |
+| `unchanged_counts` | [SeverityCounts](#severitycounts) | yes | Every unchanged finding by its severity in this scan. |
+| `unchanged_items` | array of [Vulnerability](#vulnerability) | yes | At most 100 findings present in both scans, the most severe first, as reported in this scan. |
 
 ### ScanPage
 
@@ -1629,8 +1662,13 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
+| `counts` | [SeverityCounts](#severitycounts) | yes | Every matching finding by the severity reported for it, listed or not. |
+| `fixed_versions` | array of string | yes | Distinct fixed versions reported over every match, at most 20. |
 | `items` | array of object | yes |  |
+| `primary_url` | string | yes | An advisory URL reported for the vulnerability, empty when none was. |
 | `scope` | string (one of `dashboard`, `all`) | yes | The scope that was searched, as asked for. The totals below count within it. |
+| `title` | string | yes | A title reported for the vulnerability, empty when none was. Over every match. |
+| `total_artifacts` | integer (int64) | yes | Number of artifacts (per service) with at least one such finding in the scope. |
 | `total_findings` | integer (int64) | yes | Number of unsuppressed findings of this ID in the current scans of the scope, including any not listed in items. |
 | `total_services` | integer (int64) | yes | Number of non-archived services with at least one such finding in the scope. |
 | `truncated` | boolean | yes | True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name. |

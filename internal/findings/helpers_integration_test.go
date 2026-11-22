@@ -36,6 +36,7 @@ func newMux(pool *pgxpool.Pool, gitlabURL string) http.Handler {
 	mux.Handle("GET /api/v1/services/{id}/scans", h["listServiceScans"])
 	mux.Handle("GET /api/v1/scans/{id}", h["getScan"])
 	mux.Handle("GET /api/v1/scans/{id}/diff", h["getScanDiff"])
+	mux.Handle("GET /api/v1/scans/{id}/earlier", h["listEarlierScans"])
 	mux.Handle("GET /api/v1/services/{id}/vulnerabilities", h["listServiceVulnerabilities"])
 	mux.Handle("GET /api/v1/services/{id}/secrets", h["listServiceSecrets"])
 	mux.Handle("GET /api/v1/services/{id}/trends", h["getServiceTrends"])

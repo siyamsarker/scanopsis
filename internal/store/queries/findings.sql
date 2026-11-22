@@ -45,6 +45,35 @@ WHERE c.id = $1
 ORDER BY p.scanned_at DESC, p.id DESC
 LIMIT 1;
 
+-- FindingsDiffBase returns base_id when that scan is an earlier scan of the
+-- same service, artifact and kind as scan_id, on any ref; no row otherwise.
+-- name: FindingsDiffBase :one
+SELECT b.id
+FROM scans c
+JOIN scans b ON b.service_id = c.service_id AND b.artifact_name = c.artifact_name AND b.kind = c.kind
+            AND (b.scanned_at, b.id) < (c.scanned_at, c.id)
+WHERE c.id = @scan_id AND b.id = @base_id;
+
+-- FindingsEarlierScans returns the scans before scan_id of the same service,
+-- artifact and kind, on every ref or only on @ref when it is not empty,
+-- newest first by (scanned_at, id). before is the id of the last scan of the
+-- previous page, or 0. A service's scans are read through the leading
+-- service_id of scans_current_cover_idx; at the 90-day volume that is about a
+-- thousand rows.
+-- name: FindingsEarlierScans :many
+SELECT s.id, s.service_id, s.kind, s.artifact_name, s.gitlab_pipeline_id, s.gitlab_job_id, s.ref,
+       s.ref_protected, s.commit_sha, s.trivy_version, s.schema_version, s.scanned_at, s.received_at,
+       s.count_critical, s.count_high, s.count_medium, s.count_low, s.count_unknown,
+       s.count_fixable, s.count_secrets, s.count_suppressed
+FROM scans c
+JOIN scans s ON s.service_id = c.service_id AND s.artifact_name = c.artifact_name AND s.kind = c.kind
+            AND (s.scanned_at, s.id) < (c.scanned_at, c.id)
+WHERE c.id = @scan_id
+  AND (@ref::text = '' OR s.ref = @ref)
+  AND (@before::bigint = 0 OR (s.scanned_at, s.id) < (SELECT b.scanned_at, b.id FROM scans b WHERE b.id = @before))
+ORDER BY s.scanned_at DESC, s.id DESC
+LIMIT @max_rows;
+
 -- FindingsClassCounts counts unsuppressed vulnerabilities per Result class
 -- and severity over the given scans.
 -- name: FindingsClassCounts :many
@@ -140,21 +169,31 @@ LIMIT @max_rows;
 
 -- FindingsFirstSeen returns, for each given vulnerability row, the scan time of
 -- the earliest scan of the same service, ref, artifact and kind that contains
--- the same (vuln_id, pkg_name, target), suppressed or not. The md5 condition
--- is the expression of vulnerabilities_scan_key_idx, which makes the lookup
--- an index probe; the column comparisons rule out hash collisions.
+-- the same (vuln_id, pkg_name, target), suppressed or not. The scans are
+-- walked oldest first (scans_current_cover_idx backwards) and the walk stops at
+-- the first scan that has the finding, so a finding that has been there all
+-- along costs one probe instead of one per scan. The md5 condition is the
+-- expression of vulnerabilities_scan_key_idx, which makes each probe an index
+-- lookup; the column comparisons rule out hash collisions.
 -- name: FindingsFirstSeen :many
-SELECT v.id, min(s2.scanned_at)::timestamptz AS first_seen_at
+SELECT v.id, f.scanned_at::timestamptz AS first_seen_at
 FROM vulnerabilities v
 JOIN scans s ON s.id = v.scan_id
-JOIN scans s2 ON s2.service_id = s.service_id AND s2.ref = s.ref
-             AND s2.artifact_name = s.artifact_name AND s2.kind = s.kind
-JOIN vulnerabilities v2 ON v2.scan_id = s2.id
-                       AND md5(v2.vuln_id || chr(1) || v2.pkg_name || chr(1) || v2.target)
-                         = md5(v.vuln_id || chr(1) || v.pkg_name || chr(1) || v.target)
-                       AND v2.vuln_id = v.vuln_id AND v2.pkg_name = v.pkg_name AND v2.target = v.target
-WHERE v.id = ANY(@ids::bigint[])
-GROUP BY v.id;
+CROSS JOIN LATERAL (
+    SELECT s2.scanned_at
+    FROM scans s2
+    WHERE s2.service_id = s.service_id AND s2.ref = s.ref
+      AND s2.artifact_name = s.artifact_name AND s2.kind = s.kind
+      AND EXISTS (
+          SELECT 1 FROM vulnerabilities v2
+          WHERE v2.scan_id = s2.id
+            AND md5(v2.vuln_id || chr(1) || v2.pkg_name || chr(1) || v2.target)
+              = md5(v.vuln_id || chr(1) || v.pkg_name || chr(1) || v.target)
+            AND v2.vuln_id = v.vuln_id AND v2.pkg_name = v.pkg_name AND v2.target = v.target)
+    ORDER BY s2.scanned_at, s2.id
+    LIMIT 1
+) f
+WHERE v.id = ANY(@ids::bigint[]);
 
 -- name: FindingsSecrets :many
 SELECT f.id, f.scan_id, s.artifact_name, f.target, f.rule_id, f.category, f.severity,
@@ -283,11 +322,12 @@ WITH RECURSIVE all_cur AS (
     SELECT * FROM prot_cur
 ), found AS MATERIALIZED (
     SELECT cur.service_id, cur.ref, cur.artifact_name, cur.id AS scan_id, cur.scanned_at,
-           h.id AS vuln_row_id, h.pkg_name, h.installed_version, h.fixed_version, h.severity
+           h.id AS vuln_row_id, h.pkg_name, h.installed_version, h.fixed_version, h.severity,
+           h.title, h.primary_url
     FROM cur
     JOIN services s0 ON s0.id = cur.service_id AND NOT s0.archived
     CROSS JOIN LATERAL (
-        SELECT v.id, v.pkg_name, v.installed_version, v.fixed_version, v.severity
+        SELECT v.id, v.pkg_name, v.installed_version, v.fixed_version, v.severity, v.title, v.primary_url
         FROM vulnerabilities v
         WHERE v.scan_id = cur.id
           AND lower(left(v.vuln_id, 100)) = lower(@vuln_id::text)
@@ -296,14 +336,25 @@ WITH RECURSIVE all_cur AS (
         OFFSET 0
     ) h
 ), totals AS (
-    SELECT count(*)::bigint AS total_findings, count(DISTINCT service_id)::bigint AS total_services
+    SELECT count(*)::bigint AS total_findings, count(DISTINCT service_id)::bigint AS total_services,
+           count(DISTINCT (service_id, artifact_name))::bigint AS total_artifacts,
+           count(*) FILTER (WHERE severity = 'CRITICAL')::bigint AS total_critical,
+           count(*) FILTER (WHERE severity = 'HIGH')::bigint AS total_high,
+           count(*) FILTER (WHERE severity = 'MEDIUM')::bigint AS total_medium,
+           count(*) FILTER (WHERE severity = 'LOW')::bigint AS total_low,
+           count(*) FILTER (WHERE severity = 'UNKNOWN')::bigint AS total_unknown,
+           coalesce(max(title) FILTER (WHERE title <> ''), '')::text AS summary_title,
+           coalesce(max(primary_url) FILTER (WHERE primary_url <> ''), '')::text AS summary_url,
+           coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
     FROM found
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,
        sv.created_via, sv.archived, sv.created_at, sv.default_ref,
        f.ref, f.artifact_name, f.scan_id, f.scanned_at,
        f.pkg_name, f.installed_version, f.fixed_version, f.severity,
-       totals.total_findings, totals.total_services
+       totals.total_findings, totals.total_services, totals.total_artifacts,
+       totals.total_critical, totals.total_high, totals.total_medium, totals.total_low, totals.total_unknown,
+       totals.summary_title, totals.summary_url, totals.fixed_versions
 FROM found f
 JOIN services sv ON sv.id = f.service_id
 CROSS JOIN totals
