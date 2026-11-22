@@ -1239,9 +1239,12 @@ What decides the memory of an upload:
   (the compressed body, and the copy the database driver makes to send it) plus
   10 MiB for buffers; a request without a length counts as the largest. The
   uploads being processed together may add up to the memory budget. An upload
-  that does not fit waits, in order of arrival, for up to 30 seconds and then gets
-  `503 busy` with `Retry-After: 5`. Many small reports run at once and a few large
-  ones do. With the default budget of 160 MiB, a 10 MiB gzip upload (30 MiB) runs
+  that does not fit waits for up to 30 seconds and then gets `503 busy` with
+  `Retry-After: 5`. An upload that fits the free memory is admitted at once, even
+  when a larger one is waiting, so a small report does not sit behind a large one.
+  When the oldest waiting upload has waited 5 seconds, newer uploads queue behind
+  it, so a stream of small reports cannot starve a large one. Many small reports
+  run at once and a few large ones do. With the default budget of 160 MiB, a 10 MiB gzip upload (30 MiB) runs
   five at a time, and the worst case above (96 MiB) one at a time.
 - **Memory goes back.** The heap is returned to the operating system when the
   last large upload (an estimated 16 MiB or more) is done and none is running, and

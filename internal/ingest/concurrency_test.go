@@ -200,21 +200,22 @@ func TestBudgetFromLimit(t *testing.T) {
 }
 
 func TestMemBudget(t *testing.T) {
-	b := newMemBudget(100)
+	b, clock := clockedBudget(100)
 	ctx := context.Background()
 	r1, err := b.acquire(ctx, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 50 does not fit beside 60; a later, smaller request does not jump the
-	// queue.
+	// 50 does not fit beside 60; once it has waited the fairness bound, a
+	// later, smaller request does not jump the queue.
 	got := make(chan string, 4)
 	go func() {
 		rel, _ := b.acquire(ctx, 50)
 		got <- "50"
 		rel()
 	}()
-	time.Sleep(30 * time.Millisecond)
+	waitQueued(t, b, 1)
+	clock.advance(defaultFairWait)
 	go func() {
 		rel, _ := b.acquire(ctx, 10)
 		got <- "10"
@@ -235,7 +236,8 @@ func TestMemBudget(t *testing.T) {
 	cctx, cancel := context.WithCancel(ctx)
 	errc := make(chan error, 1)
 	go func() { _, err := b.acquire(cctx, 80); errc <- err }()
-	time.Sleep(30 * time.Millisecond)
+	waitQueued(t, b, 1)
+	clock.advance(defaultFairWait)
 	behind := make(chan struct{})
 	go func() {
 		rel, _ := b.acquire(ctx, 5) // fits beside 90 but waits behind the 80

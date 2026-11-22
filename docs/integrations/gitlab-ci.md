@@ -289,8 +289,11 @@ is its own, longer than the 30 seconds of the rest of the server, so a large
 report can cross a slow link. A body that is not complete by then is answered with
 `408`. Uploads are admitted by the memory they need, which follows their size,
 not by a fixed number: many small reports are processed at once, and a few
-large ones. An upload that finds no free memory waits up to 30 seconds and is then
-answered with `503` `busy`. See [sizing](../deployment.md#sizing).
+large ones. An upload that fits the free memory is admitted at once, even when a
+larger one is waiting, until the oldest waiting upload has waited 5 seconds;
+newer uploads then queue behind it, so large uploads are not starved. An upload
+that finds no free memory waits up to 30 seconds and is then answered with `503`
+`busy`. See [sizing](../deployment.md#sizing).
 
 ## Restrict who may upload
 
