@@ -359,7 +359,7 @@ describe('settings page', () => {
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(input.getAttribute('aria-describedby')).toContain(message.closest('p')!.id);
     expect(input).toHaveValue('soon');
-    expect(screen.getByText('Nothing was saved')).toBeVisible();
+    expect(screen.getByText('Nothing was saved.')).toBeVisible();
     expect(screen.getByText('Fix the settings marked in red, then save again.')).toBeVisible();
     const nav = screen.getByRole('navigation', { name: 'Settings sections' });
     expect(within(nav).getByRole('link', { name: /^Sessions\s?1\s?to fix$/ })).toBeInTheDocument();
@@ -367,12 +367,12 @@ describe('settings page', () => {
     expect(saveBar()).toHaveTextContent('1 unsaved change');
   });
 
-  it('reports other failures in a toast and keeps the edits', async () => {
+  it('reports other failures in the save bar and keeps the edits', async () => {
     mockFetch(settingsApi(() => apiError(500, 'internal', 'Something broke.')));
     renderApp('/settings');
     fireEvent.change(await screen.findByLabelText('Idle timeout'), { target: { value: '1h' } });
     save();
-    expect(await screen.findByText('Nothing was saved')).toBeVisible();
+    expect(await screen.findByText('Nothing was saved.')).toBeVisible();
     expect(screen.getByText('Something broke.')).toBeVisible();
     expect(screen.getByLabelText('Idle timeout')).toHaveValue('1h');
     expect(saveBar()).toHaveTextContent('1 unsaved change');

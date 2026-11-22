@@ -183,6 +183,7 @@ function EditDialog({
   onSave: (body: ServiceUpdate) => void;
 }) {
   const ids = useId();
+  const nameInput = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(service.name);
   const [sonar, setSonar] = useState(service.sonar_project_key ?? '');
   const [nameError, setNameError] = useState('');
@@ -209,6 +210,10 @@ function EditDialog({
         <span className="font-mono text-small break-all">{service.gitlab_project_path}</span>
       }
       modalStrict
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        nameInput.current?.focus();
+      }}
       footer={
         <>
           <button
@@ -239,6 +244,7 @@ function EditDialog({
           </label>
           <input
             id={`${ids}-name`}
+            ref={nameInput}
             className={inputClass}
             value={name}
             onChange={(e) => setName(e.target.value)}

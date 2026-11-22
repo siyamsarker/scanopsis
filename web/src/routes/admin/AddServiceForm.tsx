@@ -1,7 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useId, useState, type FormEvent } from 'react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import { useCreateService, type Service, type ServiceCreate } from '../../api/admin';
 import { ApiError } from '../../api/client';
 import { describeError } from '../../api/errors';
@@ -41,6 +41,7 @@ export function AddServiceDialog({
 }) {
   const create = useCreateService();
   const ids = useId();
+  const pathInput = useRef<HTMLInputElement>(null);
   const [path, setPath] = useState('');
   const [name, setName] = useState('');
   const [sonar, setSonar] = useState('');
@@ -104,6 +105,10 @@ export function AddServiceDialog({
       title="Add a service"
       description="Only the GitLab project path is needed. The first upload from its pipeline fills in the rest."
       modalStrict
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        pathInput.current?.focus();
+      }}
       footer={
         <>
           <button
@@ -137,6 +142,7 @@ export function AddServiceDialog({
           </label>
           <input
             {...field('path')}
+            ref={pathInput}
             className={monoInputClass}
             value={path}
             onChange={(e) => setPath(e.target.value)}

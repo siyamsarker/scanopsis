@@ -1,7 +1,7 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { RotateCcw, TriangleAlert, Undo2 } from 'lucide-react';
+import { CircleAlert, RotateCcw, TriangleAlert, Undo2 } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react';
 import { describeError } from '../api/errors';
 import {
@@ -473,15 +473,9 @@ function SettingsForm({ settings }: { settings: Setting[] }) {
           description: `${count === 1 ? 'The change applies' : `${count} changes apply`} now.`,
         });
       },
+      // The save bar says what went wrong; the fields say where.
       onError: (error) => {
-        if (error instanceof SettingsValidationError) {
-          toast.error('Nothing was saved', {
-            description: 'Fix the settings marked in red, then save again.',
-          });
-          focusFirstError(Object.keys(error.fields));
-        } else {
-          toast.error('Nothing was saved', { description: describeError(error) });
-        }
+        if (error instanceof SettingsValidationError) focusFirstError(Object.keys(error.fields));
       },
     });
   }
@@ -568,12 +562,32 @@ function SettingsForm({ settings }: { settings: Setting[] }) {
             aria-label="Unsaved changes"
             className="overlay flex flex-wrap items-center justify-between gap-3 rounded-panel px-4 py-3 sm:px-5"
           >
-            <p className="flex items-center gap-2.5 text-body-s text-text" aria-live="polite">
-              <span aria-hidden="true" className="size-2 rounded-full bg-brand" />
-              <span className="tabular-nums">
-                {dirty} unsaved {dirty === 1 ? 'change' : 'changes'}
-              </span>
-            </p>
+            <div className="min-w-0" aria-live="polite">
+              <p className="flex items-center gap-2.5 text-body-s text-text">
+                <span aria-hidden="true" className="size-2 rounded-full bg-brand" />
+                <span className="tabular-nums">
+                  {dirty} unsaved {dirty === 1 ? 'change' : 'changes'}
+                </span>
+              </p>
+              {update.isError ? (
+                <p className="mt-1 flex items-start gap-2 text-small text-text">
+                  <CircleAlert
+                    size={14}
+                    strokeWidth={1.75}
+                    aria-hidden="true"
+                    className="mt-0.5 shrink-0 text-fail"
+                  />
+                  <span>
+                    <span className="font-medium">Nothing was saved.</span>{' '}
+                    <span>
+                      {update.error instanceof SettingsValidationError
+                        ? 'Fix the settings marked in red, then save again.'
+                        : describeError(update.error)}
+                    </span>
+                  </span>
+                </p>
+              ) : null}
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"
