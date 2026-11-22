@@ -27,7 +27,7 @@ results as the pipelines run and shows them together, per service and across
 all services, so you can answer "which services need attention?" in seconds
 instead of clicking through job logs and SonarQube projects.
 
-![The service dashboard in the dark theme: Trivy findings by severity next to the SonarQube quality gate, ratings and coverage](docs/images/service-dark.png)
+![The service dashboard of payments-api in the dark theme: a risk ring around the risk score with the failed quality gate, a one-line verdict of what changed since the previous pipeline, and the pipeline strip with new and fixed findings per pipeline, gate results and coverage on new code](docs/images/service-dark.png)
 
 > **Status:** the newest version is **0.3.0** (branch `release/0.3.0`, tag
 > `v0.3.0`). It is an early version: every feature below works and is tested
@@ -129,8 +129,8 @@ flowchart LR
 ## Screenshots
 
 <p>
-  <img src="docs/images/portfolio-dark.png" alt="The portfolio in the dark theme, with a card per service" width="68%">
-  <img src="docs/images/portfolio-light-phone.png" alt="The portfolio in the light theme on a phone" width="22%">
+  <img src="docs/images/portfolio-dark.png" alt="The portfolio in the dark theme: the portfolio risk and what needs attention above a card per service with its risk ring, findings by severity and recent pipelines" width="68%">
+  <img src="docs/images/portfolio-light-phone.png" alt="The portfolio in the light theme on a phone: search, sort and filters above the service cards" width="22%">
 </p>
 
 The portfolio in the dark theme, and in the light theme on a phone. The
