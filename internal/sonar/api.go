@@ -49,10 +49,10 @@ type serviceSonarJSON struct {
 }
 
 type deliveryJSON struct {
-	TaskID     string    `json:"task_id"`
-	ProjectKey string    `json:"project_key"`
-	ReceivedAt time.Time `json:"received_at"`
-	Outcome    string    `json:"outcome"`
+	TaskID      string    `json:"task_id"`
+	ProjectKey  string    `json:"project_key"`
+	ReceivedAt  time.Time `json:"received_at"`
+	Outcome     string    `json:"outcome"`
 	ServiceID   *int64    `json:"service_id"`
 	ServiceName *string   `json:"service_name"`
 	Detail      string    `json:"detail"`
