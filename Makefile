@@ -22,12 +22,12 @@ COMMIT  ?= $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | $(
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 IMAGE   ?= scanopsis:dev
 
-.PHONY: generate generate-check test-integration help check fmt fmt-check lint test vuln build web-install web-lint web-test web-build web image image-scan clean headers test-scripts licenses dco
+.PHONY: generate generate-check test-integration help check fmt fmt-check lint test vuln build web-install web-lint web-test web-audit web-build web image image-scan clean headers test-scripts licenses dco
 
 help: ## List available targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
-check: fmt-check lint test vuln web-lint web-test build headers test-scripts licenses ## Run the fast checks (not coverage, perf, e2e or the image scan)
+check: fmt-check lint test vuln web-lint web-test build headers test-scripts licenses web-audit ## Run the fast checks (not coverage, perf, e2e or the image scan)
 
 fmt: ## Format Go code
 	$(GOLANGCI_LINT) fmt
@@ -66,6 +66,9 @@ web-lint: web-install ## Lint and type-check the web interface
 
 web-test: web-install ## Run web unit tests
 	cd web && npm test
+
+web-audit: web-install ## Audit the runtime npm dependencies (needs network access)
+	cd web && npm audit --omit=dev --audit-level=high
 
 web-build: web-install ## Build the web interface into web/dist/app
 	cd web && npm run build
