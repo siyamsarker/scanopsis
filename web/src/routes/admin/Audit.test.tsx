@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { json, makeUser, mockFetch, renderApp, type Handler } from '../../test-utils';
+import { chooseOption, json, makeUser, mockFetch, renderApp, type Handler } from '../../test-utils';
 
 const event = (id: number, extra: Record<string, unknown> = {}) => ({
   id,
@@ -53,10 +53,10 @@ describe('audit page', () => {
     expect(calls.some((c) => c.path === '/api/v1/admin/audit?action=login.failed&actor=ada')).toBe(
       true,
     );
-    expect(screen.getByLabelText('Action')).toHaveValue('login.failed');
+    expect(screen.getByLabelText('Action')).toHaveTextContent('Sign-in failed (login.failed)');
     expect(screen.getByLabelText('Filter by actor')).toHaveValue('ada');
 
-    fireEvent.change(screen.getByLabelText('Action'), { target: { value: '' } });
+    await chooseOption('Action', 'All actions');
     await waitFor(() =>
       expect(screen.getByTestId('location')).toHaveTextContent('/admin/audit?actor=ada'),
     );

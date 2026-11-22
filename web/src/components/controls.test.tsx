@@ -8,6 +8,7 @@ import { SearchInput, Select } from './inputs';
 import { Pagination } from './Pagination';
 import { Segmented } from './Segmented';
 import { TabPanel, Tabs } from './Tabs';
+import { chooseOption } from '../test-utils';
 
 const tabs = [
   { id: 'overview', label: 'Overview' },
@@ -135,7 +136,7 @@ describe('Segmented', () => {
 });
 
 describe('Select', () => {
-  it('has a visible label and reports the chosen value', () => {
+  it('has a visible label and reports the chosen value', async () => {
     const onChange = vi.fn();
     render(
       <Select
@@ -148,8 +149,10 @@ describe('Select', () => {
         ]}
       />,
     );
-    const select = screen.getByLabelText('Branch');
-    fireEvent.change(select, { target: { value: 'dev' } });
+    const select = screen.getByRole('combobox', { name: 'Branch' });
+    expect(select).toHaveTextContent('main');
+    expect(screen.getByText('Branch')).toBeVisible();
+    await chooseOption('Branch', 'develop');
     expect(onChange).toHaveBeenCalledWith('dev');
   });
 

@@ -12,9 +12,10 @@ import {
   type SettingValue,
 } from '../api/hooks';
 import { ErrorNote } from '../components/ErrorNote';
+import { PageHeader } from '../components/layout';
+import { ForbiddenState } from '../components/states';
 import {
   cardClass,
-  headingClass,
   inputClass,
   monoInputClass,
   primaryButtonClass,
@@ -388,7 +389,7 @@ export function SettingsPage() {
 
   let body;
   if (!isAdmin) {
-    body = <p className="mt-4 text-text-muted">You need the admin role to see this page.</p>;
+    body = <ForbiddenState title="You need the admin role to see this page." />;
   } else if (settings.isPending) {
     body = (
       <p role="status" className="mt-4 text-text-muted">
@@ -407,10 +408,10 @@ export function SettingsPage() {
 
   return (
     <>
-      <h1 className={headingClass}>Settings</h1>
-      <p className="mt-1 text-text-muted">
-        Runtime settings. Each one shows where its value comes from.
-      </p>
+      <PageHeader
+        title="Settings"
+        subtitle="Runtime settings. Each one shows where its value comes from."
+      />
       {body}
     </>
   );

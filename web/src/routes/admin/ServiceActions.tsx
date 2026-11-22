@@ -221,6 +221,7 @@ export function ServiceActions({
         <ConfirmDialog
           title={`Delete ${service.name}?`}
           confirmLabel="Delete service"
+          tone="danger"
           pending={remove.isPending}
           onConfirm={confirmDelete}
           onCancel={close}

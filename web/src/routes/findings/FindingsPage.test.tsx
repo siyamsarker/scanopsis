@@ -3,7 +3,15 @@
 
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import type { Vulnerability } from '../../api/findings';
-import { json, apiError, makeUser, mockFetch, renderApp, type Handler } from '../../test-utils';
+import {
+  chooseOption,
+  json,
+  apiError,
+  makeUser,
+  mockFetch,
+  renderApp,
+  type Handler,
+} from '../../test-utils';
 
 const SERVICE = {
   id: 5,
@@ -201,7 +209,7 @@ describe('findings explorer', () => {
       'href',
       '/scans/90',
     );
-    expect(screen.getByRole('combobox', { name: 'Ref' })).toHaveValue('main');
+    expect(screen.getByRole('combobox', { name: 'Ref' })).toHaveTextContent('main');
 
     const pages = vulnCalls(calls).map((c) => new URL(c.path, 'http://x').searchParams);
     expect(pages).toHaveLength(3);
@@ -386,7 +394,7 @@ describe('findings explorer', () => {
     expect(close).toHaveFocus();
     fireEvent.keyDown(close, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(bodyRows()[0]).toHaveFocus();
+    await waitFor(() => expect(bodyRows()[0]).toHaveFocus());
   });
 
   it('shows the suppression reason in the drawer', async () => {
@@ -402,9 +410,7 @@ describe('findings explorer', () => {
     const { calls } = mockFetch(api());
     renderApp('/services/5/findings');
     await summary('7 vulnerabilities, 6 fixable');
-    fireEvent.change(screen.getByRole('combobox', { name: 'Ref' }), {
-      target: { value: 'release' },
-    });
+    await chooseOption('Ref', 'release');
     await waitFor(() =>
       expect(calls.some((c) => c.path.includes('/overview?ref=release'))).toBe(true),
     );
@@ -545,9 +551,10 @@ describe('findings explorer', () => {
     renderApp('/services/5/findings');
     expect(await screen.findByText('No scans of release/2.x yet')).toBeInTheDocument();
     const select = screen.getByRole('combobox', { name: 'Ref' });
-    expect(select).toHaveValue('release/2.x');
+    expect(select).toHaveTextContent('release/2.x');
+    fireEvent.keyDown(select, { key: 'Enter' });
     expect(
-      within(select)
+      within(await screen.findByRole('listbox'))
         .getAllByRole('option')
         .map((o) => o.textContent),
     ).toEqual(['main', 'release', 'release/2.x']);

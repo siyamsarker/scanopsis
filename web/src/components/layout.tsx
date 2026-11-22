@@ -1,33 +1,79 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { useId, type ReactNode } from 'react';
+import { ChevronRight } from 'lucide-react';
+import { Fragment, useId, type ReactNode } from 'react';
+import { Link, type To } from 'react-router';
 import { Freshness, type FreshnessProps } from './Freshness';
 
+export interface Crumb {
+  label: ReactNode;
+  /** Omit for the current page (the last crumb). */
+  to?: To;
+}
+
+/** A breadcrumb trail, only where hierarchy exists (service, findings, scan). */
+export function Breadcrumb({ items, className = '' }: { items: Crumb[]; className?: string }) {
+  return (
+    <nav aria-label="Breadcrumb" className={className}>
+      <ol className="flex flex-wrap items-center gap-x-1 text-body-s text-text-muted">
+        {items.map((item, index) => (
+          <Fragment key={index}>
+            {index > 0 ? (
+              <li aria-hidden="true" className="text-text-faint">
+                <ChevronRight size={14} strokeWidth={1.75} />
+              </li>
+            ) : null}
+            <li aria-current={item.to === undefined ? 'page' : undefined} className="min-w-0">
+              {item.to !== undefined ? (
+                <Link
+                  to={item.to}
+                  className="rounded-[4px] transition-colors duration-micro hover:text-text"
+                >
+                  {item.label}
+                </Link>
+              ) : (
+                <span className="text-text">{item.label}</span>
+              )}
+            </li>
+          </Fragment>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
 /**
- * Page title row: the h1, an optional one-line subtitle, optional freshness of
- * the data, and an actions slot (buttons, filters) that wraps below on phones.
+ * Page title row: the h1 (24/32), one context line, optional freshness of the
+ * data, and right-aligned actions that wrap below on phones. `breadcrumb`
+ * goes above the title, only where the page sits in a hierarchy.
  */
 export function PageHeader({
   title,
   subtitle,
   freshness,
   actions,
+  breadcrumb,
   eyebrow,
 }: {
   title: ReactNode;
+  /** The context line: what this page shows, or the object's key facts. */
   subtitle?: ReactNode;
   freshness?: FreshnessProps;
   actions?: ReactNode;
-  /** A small line above the title, such as a breadcrumb or the parent name. */
+  breadcrumb?: Crumb[];
+  /** Free-form content above the title; prefer `breadcrumb`. */
   eyebrow?: ReactNode;
 }) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pb-6">
+    <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4 pb-6 sm:pb-8">
       <div className="min-w-0">
-        {eyebrow ? <div className="mb-1 text-sm text-text-muted">{eyebrow}</div> : null}
-        <h1 className="text-2xl font-semibold tracking-tight text-text">{title}</h1>
-        {subtitle ? <p className="mt-1 max-w-prose text-text-muted">{subtitle}</p> : null}
+        {breadcrumb ? <Breadcrumb items={breadcrumb} className="mb-2" /> : null}
+        {eyebrow ? <div className="mb-2 text-body-s text-text-muted">{eyebrow}</div> : null}
+        <h1 className="text-h2 font-semibold tracking-tight text-balance text-text">{title}</h1>
+        {subtitle ? (
+          <div className="mt-1 max-w-prose text-body-s text-text-muted">{subtitle}</div>
+        ) : null}
         {freshness ? <Freshness {...freshness} className="mt-2" /> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
@@ -36,8 +82,10 @@ export function PageHeader({
 }
 
 /**
- * The basic container: 12 px radius, 1 px border, flat. `padded` (default) gives
- * 24 px inner space; turn it off for tables and charts that go edge to edge.
+ * A top-level panel: 16 px radius, hairline border, first elevation. `padded`
+ * (default) gives 24 px inner space; turn it off for tables and charts that go
+ * edge to edge. Not every group needs one: tables and strips can sit on the
+ * canvas.
  */
 export function Card({
   children,
@@ -54,10 +102,7 @@ export function Card({
   'aria-label'?: string;
 }) {
   return (
-    <Tag
-      {...rest}
-      className={`rounded-card border border-border bg-surface shadow-[inset_0_1px_0_color-mix(in_srgb,var(--text)_5%,transparent)] ${padded ? 'p-6' : ''} ${className}`}
-    >
+    <Tag {...rest} className={`panel ${padded ? 'p-5 sm:p-6' : ''} ${className}`}>
       {children}
     </Tag>
   );
@@ -88,10 +133,10 @@ export function CardHeader({
       className={`flex flex-wrap items-start justify-between gap-x-4 gap-y-2 ${padded ? 'px-6 pt-6' : ''} pb-4`}
     >
       <div className="min-w-0">
-        <Heading id={id} className="text-base font-semibold tracking-tight text-text">
+        <Heading id={id} className="text-body font-semibold tracking-tight text-text">
           {title}
         </Heading>
-        {description ? <p className="mt-0.5 text-sm text-text-muted">{description}</p> : null}
+        {description ? <p className="mt-0.5 text-body-s text-text-muted">{description}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
@@ -114,13 +159,13 @@ export function Section({
 }) {
   const id = useId();
   return (
-    <section aria-labelledby={id} className={`mt-8 first:mt-0 ${className}`}>
+    <section aria-labelledby={id} className={`mt-10 first:mt-0 ${className}`}>
       <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 pb-4">
         <div className="min-w-0">
-          <h2 id={id} className="text-lg font-semibold tracking-tight text-text">
+          <h2 id={id} className="text-h3 font-semibold tracking-tight text-text">
             {title}
           </h2>
-          {description ? <p className="mt-0.5 text-text-muted">{description}</p> : null}
+          {description ? <p className="mt-0.5 text-body-s text-text-muted">{description}</p> : null}
         </div>
         {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
       </div>
@@ -154,7 +199,7 @@ export function Grid({
 }) {
   return (
     <div
-      className={`grid ${single ? 'grid-cols-1' : 'grid-cols-2'} gap-4 ${gridCols[cols]} ${className}`}
+      className={`grid ${single ? 'grid-cols-1' : 'grid-cols-2'} gap-4 lg:gap-6 ${gridCols[cols]} ${className}`}
     >
       {children}
     </div>

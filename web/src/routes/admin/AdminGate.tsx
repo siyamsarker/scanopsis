@@ -4,7 +4,7 @@
 import type { ReactNode } from 'react';
 import { useMe } from '../../api/hooks';
 import { PageHeader } from '../../components/layout';
-import { Skeleton } from '../../components/states';
+import { ForbiddenState, Skeleton } from '../../components/states';
 
 /**
  * Shows the page for admins only. Everyone else gets a calm message and the
@@ -25,14 +25,14 @@ export function AdminGate({
   const me = useMe();
   const isAdmin = me.data?.role === 'admin';
   return (
-    <div className="mx-auto max-w-6xl">
+    <div>
       <PageHeader title={title} subtitle={subtitle} actions={isAdmin ? actions : undefined} />
       {isAdmin ? (
         children
       ) : me.isPending ? (
         <Skeleton className="h-40 w-full" />
       ) : (
-        <p className="text-text-muted">You need the admin role to see this page.</p>
+        <ForbiddenState title="You need the admin role to see this page." />
       )}
     </div>
   );

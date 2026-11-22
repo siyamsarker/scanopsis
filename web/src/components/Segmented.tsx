@@ -47,7 +47,7 @@ export function Segmented<T extends string>({
       role="radiogroup"
       aria-label={label}
       onKeyDown={onKeyDown}
-      className={`inline-flex gap-0.5 rounded-control border border-border bg-bg p-0.5 ${className}`}
+      className={`inline-flex gap-0.5 rounded-inner border border-line bg-sunken p-0.5 ${className}`}
     >
       {options.map((option, index) => {
         const selected = index === current;
@@ -63,10 +63,10 @@ export function Segmented<T extends string>({
             aria-checked={selected}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(option.value)}
-            className={`inline-flex min-h-8 items-center justify-center gap-2 rounded-md px-3 text-sm font-medium transition-[background-color,color,box-shadow] duration-150 ease-out ${
+            className={`inline-flex min-h-8 items-center justify-center gap-2 rounded-[8px] px-3 text-body-s font-medium transition-[background-color,color,box-shadow] duration-micro ease-enter pointer-coarse:min-h-10 [&_svg]:shrink-0 ${
               selected
-                ? 'bg-surface-raised text-text shadow-[0_0_0_1px_var(--border-strong)]'
-                : 'text-text-muted hover:text-text'
+                ? 'bg-surface-raised text-text shadow-[0_0_0_1px_var(--line),var(--elev-1)]'
+                : 'text-text-muted hover:bg-wash hover:text-text'
             }`}
           >
             {option.label}

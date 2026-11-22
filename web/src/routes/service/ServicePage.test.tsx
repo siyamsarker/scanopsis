@@ -7,7 +7,14 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { createQueryClient } from '../../api/queryClient';
 import { readPalette } from '../../charts/palette';
 import type { ChartProps } from '../../charts/Chart';
-import { apiError, json, makeUser, mockFetch, type RecordedCall } from '../../test-utils';
+import {
+  chooseOption,
+  apiError,
+  json,
+  makeUser,
+  mockFetch,
+  type RecordedCall,
+} from '../../test-utils';
 import { ServicePage } from '../ServicePage';
 
 const chartCalls: ChartProps[] = [];
@@ -252,9 +259,9 @@ describe('service dashboard', () => {
     expect(tile('Secrets')).toHaveAttribute('href', `${base}&tab=secrets`);
     expect(within(tile('Secrets')).getByText('4')).toBeInTheDocument();
 
-    const newTile = screen.getByText('New since previous scan').parentElement?.parentElement;
+    const newTile = screen.getByText('New since previous scan').closest('div, a');
     expect(newTile).toHaveTextContent('6');
-    const fixedTile = screen.getByText('Fixed since previous scan').parentElement?.parentElement;
+    const fixedTile = screen.getByText('Fixed since previous scan').closest('div, a');
     expect(fixedTile).toHaveTextContent('9');
 
     expect(screen.getByRole('link', { name: 'Explore findings' })).toHaveAttribute('href', base);
@@ -312,11 +319,11 @@ describe('service dashboard', () => {
   it('switches the ref, refetching with it and writing it to the URL', async () => {
     const { calls } = setup();
     const select = await screen.findByLabelText('Git ref');
-    expect(select).toHaveValue('main');
+    expect(select).toHaveTextContent('main');
     expect(requested(calls, '/api/v1/services/7/overview')).toEqual([
       '/api/v1/services/7/overview',
     ]);
-    fireEvent.change(select, { target: { value: 'release/1.x' } });
+    await chooseOption('Git ref', 'release/1.x');
     await waitFor(() =>
       expect(screen.getByTestId('location')).toHaveTextContent('/services/7?ref=release%2F1.x'),
     );
@@ -474,9 +481,10 @@ describe('service dashboard', () => {
     expect(await screen.findByText('No scans of release/2.x yet')).toBeVisible();
     expect(screen.queryByText('No Trivy scans yet')).not.toBeInTheDocument();
     const select = screen.getByLabelText('Git ref');
-    expect(select).toHaveValue('release/2.x');
+    expect(select).toHaveTextContent('release/2.x');
+    fireEvent.keyDown(select, { key: 'Enter' });
     expect(
-      within(select)
+      within(await screen.findByRole('listbox'))
         .getAllByRole('option')
         .map((o) => o.textContent),
     ).toEqual(['main', 'release/1.x', 'release/2.x']);

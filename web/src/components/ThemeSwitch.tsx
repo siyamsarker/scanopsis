@@ -2,45 +2,39 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Monitor, Moon, Sun, type LucideIcon } from 'lucide-react';
-import { useState } from 'react';
-import { readStoredTheme, setTheme, type Theme } from '../theme';
+import { useTheme, type Theme } from '../theme';
 
-const options: { value: Theme; label: string; Icon: LucideIcon }[] = [
+export const themeOptions: { value: Theme; label: string; Icon: LucideIcon }[] = [
   { value: 'system', label: 'System', Icon: Monitor },
   { value: 'light', label: 'Light', Icon: Sun },
   { value: 'dark', label: 'Dark', Icon: Moon },
 ];
 
 /** Three-way theme choice. Each button reports whether it is the current choice. */
-export function ThemeSwitch() {
-  const [theme, setCurrent] = useState<Theme>(readStoredTheme);
-
-  function choose(value: Theme) {
-    setTheme(value);
-    setCurrent(value);
-  }
+export function ThemeSwitch({ className = '' }: { className?: string }) {
+  const [theme, setTheme] = useTheme();
 
   return (
     <div
       role="group"
       aria-label="Theme"
-      className="inline-flex rounded-control border border-border-strong bg-bg p-0.5"
+      className={`inline-flex gap-0.5 rounded-inner border border-line bg-sunken p-0.5 ${className}`}
     >
-      {options.map(({ value, label, Icon }) => (
+      {themeOptions.map(({ value, label, Icon }) => (
         <button
           key={value}
           type="button"
           aria-pressed={theme === value}
           aria-label={label}
           title={label}
-          onClick={() => choose(value)}
-          className={`inline-flex size-8 items-center justify-center rounded-[6px] transition-colors duration-150 ease-out ${
+          onClick={() => setTheme(value)}
+          className={`inline-flex size-8 items-center justify-center rounded-[8px] transition-colors duration-micro ease-enter pointer-coarse:size-10 ${
             theme === value
-              ? 'bg-surface-raised text-text shadow-sm ring-1 ring-border-strong'
-              : 'text-text-muted hover:text-text'
+              ? 'bg-surface-raised text-text shadow-[0_0_0_1px_var(--line),var(--elev-1)]'
+              : 'text-text-muted hover:bg-wash hover:text-text'
           }`}
         >
-          <Icon size={16} strokeWidth={1.5} aria-hidden="true" />
+          <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
         </button>
       ))}
     </div>

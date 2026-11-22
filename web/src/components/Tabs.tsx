@@ -55,7 +55,7 @@ export function Tabs({
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}
-      className={`flex gap-1 overflow-x-auto border-b border-border ${className}`}
+      className={`flex gap-1 overflow-x-auto border-b border-line [scrollbar-width:none] ${className}`}
     >
       {tabs.map((tab, index) => {
         const selected = index === current;
@@ -73,15 +73,17 @@ export function Tabs({
             aria-controls={panelId(idBase, tab.id)}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(tab.id)}
-            className={`-mb-px inline-flex min-h-10 shrink-0 items-center gap-2 border-b-2 px-3 font-medium transition-colors duration-150 ease-out ${
+            className={`relative -mb-px inline-flex min-h-11 shrink-0 items-center gap-2 rounded-t-inner px-3 text-body-s font-medium transition-colors duration-micro ease-enter after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:rounded-full after:transition-colors after:duration-micro ${
               selected
-                ? 'border-brand text-text'
-                : 'border-transparent text-text-muted hover:border-border-strong hover:text-text'
+                ? 'text-text after:bg-brand'
+                : 'text-text-muted after:bg-transparent hover:bg-wash hover:text-text hover:after:bg-line-strong'
             }`}
           >
             {tab.label}
             {tab.count !== undefined ? (
-              <span className="rounded-full bg-border px-1.5 text-sm tabular-nums text-text">
+              <span
+                className={`rounded-full px-1.5 text-caption font-medium tabular-nums ${selected ? 'bg-[color-mix(in_srgb,var(--brand)_16%,transparent)] text-text' : 'bg-wash text-text-muted'}`}
+              >
                 {formatInt(tab.count)}
               </span>
             ) : null}

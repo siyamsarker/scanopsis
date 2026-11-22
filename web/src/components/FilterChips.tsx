@@ -3,6 +3,7 @@
 
 import { Check } from 'lucide-react';
 import { formatInt } from '../format';
+import { SeverityMark } from './SeverityMark';
 import type { SeverityKey } from './severityModel';
 
 export interface ChipOption {
@@ -16,8 +17,8 @@ export interface ChipOption {
 
 /**
  * Toggle chips for facets ("Critical 12", "Fixable 340"). Each chip is a toggle
- * button (aria-pressed) and a selected chip shows a check mark as well as a
- * stronger border. Multi-select by default; `single` makes selecting one clear
+ * button (aria-pressed). A selected chip is "in focus": a lens-gradient ring, a
+ * raised fill and a check mark, so the state never depends on colour alone. Multi-select by default; `single` makes selecting one clear
  * the others, and pressing the selected chip again clears it.
  */
 export function FilterChips({
@@ -51,19 +52,26 @@ export function FilterChips({
             type="button"
             aria-pressed={on}
             onClick={() => toggle(option.value)}
-            className={`inline-flex min-h-8 items-center gap-2 rounded-full border px-3 text-sm font-medium transition-[background-color,border-color] duration-150 ease-out ${
+            className={`inline-flex min-h-8 items-center gap-1.5 rounded-full px-3 text-body-s font-medium transition-[background-color,border-color,color,box-shadow] duration-micro ease-enter pointer-coarse:min-h-11 ${
               on
-                ? 'border-text bg-surface-raised text-text'
-                : 'border-border-strong bg-transparent text-text-muted hover:border-text-muted hover:text-text'
+                ? 'lens-ring text-text shadow-[0_0_0_3px_color-mix(in_srgb,var(--lens-a)_14%,transparent)]'
+                : 'border border-line bg-transparent text-text-muted hover:border-line-strong hover:bg-wash hover:text-text'
             }`}
           >
-            {on ? <Check size={14} strokeWidth={1.5} aria-hidden="true" /> : null}
-            {option.severity ? (
-              <span aria-hidden="true" className={`tone-${option.severity} chart-dot`} />
+            {on ? (
+              <Check
+                size={14}
+                strokeWidth={2.25}
+                aria-hidden="true"
+                className="-ml-0.5 text-brand"
+              />
             ) : null}
+            {option.severity ? <SeverityMark severity={option.severity} size={10} /> : null}
             {option.label}
             {option.count !== undefined ? (
-              <span className="tabular-nums text-text-muted">{formatInt(option.count)}</span>
+              <span className={`tabular-nums ${on ? 'text-text-muted' : 'text-text-faint'}`}>
+                {formatInt(option.count)}
+              </span>
             ) : null}
           </button>
         );

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import { App } from './App';
 import type { Me } from './api/client';
@@ -64,6 +64,23 @@ export function renderApp(path: string, client: QueryClient = createQueryClient(
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * Chooses an option of a Select (a combobox named by its label): opens the
+ * list from the keyboard and clicks the option, as a person would.
+ */
+export async function chooseOption(label: string | RegExp, option: string | RegExp) {
+  const trigger = screen.getByRole('combobox', { name: label });
+  fireEvent.keyDown(trigger, { key: 'Enter' });
+  fireEvent.click(await screen.findByRole('option', { name: option }));
+}
+
+/** Opens a menu (dropdown) from its trigger button. */
+export async function openMenu(name: string | RegExp) {
+  const [trigger] = await screen.findAllByRole('button', { name });
+  fireEvent.keyDown(trigger, { key: 'Enter' });
+  return screen.findByRole('menu');
 }
 
 export function makeUser(overrides: Partial<Me> = {}): Me {

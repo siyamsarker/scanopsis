@@ -1,11 +1,11 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { CircleHelp, Info, OctagonAlert, TriangleAlert, CircleAlert } from 'lucide-react';
 import { useRef, type ReactNode } from 'react';
 import { Link, type To } from 'react-router';
 import { formatInt } from '../format';
 import { useCssom } from './cssom';
+import { SeverityMark } from './SeverityMark';
 import {
   SEVERITY_LABEL,
   SEVERITY_ORDER,
@@ -19,17 +19,10 @@ import {
 /** Optional destination per severity level, e.g. the findings list filtered to that level. */
 export type SeverityLinks = Partial<Record<SeverityKey, To>>;
 
-const icons = {
-  critical: OctagonAlert,
-  high: TriangleAlert,
-  medium: CircleAlert,
-  low: Info,
-  unknown: CircleHelp,
-} as const;
-
 /**
- * A severity as icon, colour and word together: the shape differs per level so
- * colour is never the only carrier. Pass `count` to append a number.
+ * A severity as shape, colour and word together: a status pill with the
+ * level's shape (diamond, triangle, filled circle, hollow circle, dashed
+ * circle), so colour is never the only carrier. Pass `count` to append a number.
  */
 export function SeverityBadge({
   severity,
@@ -41,13 +34,12 @@ export function SeverityBadge({
   className?: string;
 }) {
   const key = severityKey(severity);
-  const Icon = icons[key];
   return (
     <span className={`chip tone-${key} ${className}`}>
-      <Icon size={14} strokeWidth={1.5} aria-hidden="true" className="tone-fg shrink-0" />
+      <SeverityMark severity={key} size={11} />
       {SEVERITY_LABEL[key]}
       {count !== undefined ? (
-        <span className="tabular-nums text-text-muted">{formatInt(count)}</span>
+        <span className="font-semibold tabular-nums">{formatInt(count)}</span>
       ) : null}
     </span>
   );
@@ -66,7 +58,7 @@ function Segment({
 }) {
   const ref = useRef<HTMLElement>(null);
   useCssom(ref, { flexGrow: value, flexBasis: 0 });
-  const className = `tone-${tone} tone-bg block h-full min-w-1 transition-[filter] duration-150 ease-out ${to !== undefined ? 'hover:brightness-110' : ''}`;
+  const className = `tone-${tone} tone-bg block h-full min-w-1 transition-[filter] duration-micro ease-enter ${to !== undefined ? 'hover:brightness-110' : ''}`;
   if (to !== undefined) {
     return (
       <Link
@@ -111,7 +103,7 @@ export function SeverityBar({
       <div
         role={linked ? 'group' : 'img'}
         aria-label={`Severity breakdown: ${summary}`}
-        className={`flex w-full gap-0.5 overflow-hidden rounded-full bg-border ${height}`}
+        className={`flex w-full gap-0.5 overflow-hidden rounded-full bg-line ${height}`}
       >
         {visible.map((key) => (
           <Segment
@@ -123,7 +115,9 @@ export function SeverityBar({
           />
         ))}
       </div>
-      {showSummary ? <p className="mt-2 text-sm text-text-muted tabular-nums">{summary}</p> : null}
+      {showSummary ? (
+        <p className="mt-2 text-body-s text-text-muted tabular-nums">{summary}</p>
+      ) : null}
     </div>
   );
 }
@@ -153,28 +147,35 @@ export function SeverityCounts({
   return (
     <ul
       aria-label={`Findings by severity: ${summarizeCounts(counts)}`}
-      className={`flex ${stack ? 'flex-col gap-1' : 'flex-wrap gap-x-4 gap-y-1'} ${className}`}
+      className={`flex ${stack ? 'flex-col gap-1' : 'flex-wrap gap-x-3.5 gap-y-1'} ${className}`}
     >
       {keys.map((key) => {
         const body: ReactNode = (
           <>
-            <span aria-hidden="true" className={`tone-${key} chart-dot shrink-0`} />
-            <span className={counts[key] === 0 ? 'text-text-muted' : 'text-text'}>
+            <SeverityMark
+              severity={key}
+              size={10}
+              className={counts[key] === 0 ? 'opacity-45' : ''}
+            />
+            <span className={counts[key] === 0 ? 'text-text-faint' : 'text-text-muted'}>
               {SEVERITY_LABEL[key]}
             </span>
             <span
-              className={`tabular-nums ${stack ? 'ml-auto' : ''} ${counts[key] === 0 ? 'text-text-muted' : 'font-medium text-text'}`}
+              className={`tabular-nums ${stack ? 'ml-auto' : ''} ${counts[key] === 0 ? 'text-text-faint' : 'font-semibold text-text'}`}
             >
               {formatInt(counts[key])}
             </span>
           </>
         );
-        const row = 'flex items-center gap-2 text-sm';
+        const row = 'flex items-center gap-1.5 text-body-s';
         const to = links?.[key];
         return (
           <li key={key}>
             {to !== undefined ? (
-              <Link to={to} className={`${row} -mx-1 rounded px-1 hover:bg-surface-raised`}>
+              <Link
+                to={to}
+                className={`${row} -mx-1.5 rounded-[6px] px-1.5 transition-colors duration-micro hover:bg-wash`}
+              >
                 {body}
               </Link>
             ) : (

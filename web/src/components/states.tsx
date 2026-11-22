@@ -1,37 +1,13 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { CircleAlert, RotateCw } from 'lucide-react';
+import { RotateCw } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { ApertureMark } from './ApertureMark';
-import { secondaryButtonClass } from '../ui';
+import { Link } from 'react-router';
+import { buttonClass } from '../ui';
+import { LensArcs, StateArt, type EmptyArt } from './illustrations';
 
-/**
- * The aperture motif behind empty states: the mark inside two quiet rings over
- * a soft brand glow. Decorative, static, drawn in currentColor.
- */
-export function ApertureOrnament({ size = 112 }: { size?: number }) {
-  return (
-    <span
-      aria-hidden="true"
-      className="aperture-halo relative flex size-40 shrink-0 items-center justify-center text-brand"
-    >
-      <svg
-        width={size + 24}
-        height={size + 24}
-        viewBox="0 0 136 136"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth={1}
-        className="absolute opacity-30"
-      >
-        <circle cx="68" cy="68" r="66" strokeDasharray="2 6" strokeLinecap="round" />
-        <circle cx="68" cy="68" r="50" className="opacity-60" />
-      </svg>
-      <ApertureMark size={Math.round(size / 2.2)} />
-    </span>
-  );
-}
+export type { EmptyArt } from './illustrations';
 
 export interface EmptyStep {
   title: string;
@@ -39,15 +15,21 @@ export interface EmptyStep {
 }
 
 /**
- * Nothing to show yet. The aperture, a plain title and one sentence of what
- * happens next, with an optional action. Variant "connect" lists numbered next
- * steps for getting data in. Use `compact` inside cards and tables.
+ * Nothing to show yet. A small illustration, a plain title, one sentence of
+ * what happens next and, where possible, the action that fixes it.
+ *
+ * `art` picks the illustration: "lens" (default), "services" (nothing
+ * registered), "search" (no match for a filter), "clean" (nothing to fix),
+ * "pipeline" (connect a pipeline), "timeline" (no history yet), "locked",
+ * "lost" and "error". Variant "connect" lists numbered next steps and defaults
+ * to the pipeline art. Use `compact` inside cards and tables.
  */
 export function EmptyState({
   title,
   body,
   action,
   variant = 'default',
+  art,
   steps,
   compact = false,
   headingLevel = 2,
@@ -58,6 +40,7 @@ export function EmptyState({
   /** A button or link, e.g. "Add a service". */
   action?: ReactNode;
   variant?: 'default' | 'connect';
+  art?: EmptyArt;
   /** Numbered next steps; shown for variant "connect". */
   steps?: EmptyStep[];
   compact?: boolean;
@@ -65,37 +48,49 @@ export function EmptyState({
   className?: string;
 }) {
   const Heading = `h${headingLevel}` as const;
+  const shown = art ?? (variant === 'connect' ? 'pipeline' : 'lens');
   return (
     <div
       className={`flex flex-col items-center text-center ${compact ? 'px-4 py-8' : 'px-6 py-12 sm:py-16'} ${className}`}
     >
-      {compact ? <ApertureOrnament size={64} /> : <ApertureOrnament />}
-      <Heading className="mt-2 text-lg font-semibold tracking-tight text-text">{title}</Heading>
-      {body ? <div className="mt-2 max-w-md text-text-muted">{body}</div> : null}
+      <div className={`empty-art ${compact ? 'w-28' : 'w-40'}`}>
+        <StateArt art={shown} />
+      </div>
+      <Heading
+        className={`mt-4 font-semibold tracking-tight text-text ${compact ? 'text-body' : 'text-h3'}`}
+      >
+        {title}
+      </Heading>
+      {body ? <div className="mt-1.5 max-w-md text-body-s text-text-muted">{body}</div> : null}
       {variant === 'connect' && steps && steps.length > 0 ? (
-        <ol className="mt-6 w-full max-w-md space-y-4 text-left">
+        <ol className="mt-6 w-full max-w-md space-y-0 text-left">
           {steps.map((step, index) => (
-            <li key={step.title} className="flex gap-3">
+            <li key={step.title} className="relative flex gap-3 pb-4 last:pb-0">
+              {index < steps.length - 1 ? (
+                <span aria-hidden="true" className="absolute top-7 bottom-0 left-3 w-px bg-line" />
+              ) : null}
               <span
                 aria-hidden="true"
-                className="flex size-6 shrink-0 items-center justify-center rounded-full border border-border-strong font-mono text-sm tabular-nums text-text"
+                className="relative flex size-6 shrink-0 items-center justify-center rounded-full border border-line-strong bg-surface text-caption font-semibold text-text tabular-nums"
               >
                 {index + 1}
               </span>
-              <span className="min-w-0">
-                <span className="block font-medium text-text">
+              <span className="min-w-0 pt-0.5">
+                <span className="block text-body-s font-medium text-text">
                   <span className="sr-only">Step {index + 1}: </span>
                   {step.title}
                 </span>
                 {step.body ? (
-                  <span className="mt-0.5 block text-text-muted">{step.body}</span>
+                  <span className="mt-0.5 block text-body-s text-text-muted">{step.body}</span>
                 ) : null}
               </span>
             </li>
           ))}
         </ol>
       ) : null}
-      {action ? <div className="mt-6">{action}</div> : null}
+      {action ? (
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2">{action}</div>
+      ) : null}
     </div>
   );
 }
@@ -110,6 +105,7 @@ export function ErrorState({
   detail,
   onRetry,
   retrying = false,
+  action,
   compact = false,
   className = '',
 }: {
@@ -119,6 +115,8 @@ export function ErrorState({
   detail?: string;
   onRetry?: () => void;
   retrying?: boolean;
+  /** Another way out, next to Try again (a link back). */
+  action?: ReactNode;
   compact?: boolean;
   className?: string;
 }) {
@@ -127,27 +125,36 @@ export function ErrorState({
       role="alert"
       className={`flex flex-col items-center text-center ${compact ? 'px-4 py-8' : 'px-6 py-12'} ${className}`}
     >
-      <span className="flex size-12 items-center justify-center rounded-full border border-border bg-bg">
-        <CircleAlert size={24} strokeWidth={1.5} aria-hidden="true" className="text-fail" />
-      </span>
-      <h2 className="mt-4 text-lg font-semibold tracking-tight text-text">{title}</h2>
-      <p className="mt-2 max-w-md text-text-muted">{message}</p>
-      {detail ? <p className="mt-2 font-mono text-sm text-text-muted">{detail}</p> : null}
-      {onRetry ? (
-        <button
-          type="button"
-          className={`${secondaryButtonClass} mt-6`}
-          onClick={onRetry}
-          disabled={retrying}
-        >
-          <RotateCw
-            size={16}
-            strokeWidth={1.5}
-            aria-hidden="true"
-            className={retrying ? 'animate-spin' : undefined}
-          />
-          {retrying ? 'Trying again' : 'Try again'}
-        </button>
+      <div className={compact ? 'w-24' : 'w-32'}>
+        <StateArt art="error" />
+      </div>
+      <h2
+        className={`mt-3 font-semibold tracking-tight text-text ${compact ? 'text-body' : 'text-h3'}`}
+      >
+        {title}
+      </h2>
+      <p className="mt-1.5 max-w-md text-body-s text-text-muted">{message}</p>
+      {detail ? <p className="mt-2 font-mono text-caption text-text-faint">{detail}</p> : null}
+      {onRetry || action ? (
+        <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+          {onRetry ? (
+            <button
+              type="button"
+              className={buttonClass('secondary')}
+              onClick={onRetry}
+              disabled={retrying}
+            >
+              <RotateCw
+                size={16}
+                strokeWidth={1.75}
+                aria-hidden="true"
+                className={retrying ? 'animate-spin' : undefined}
+              />
+              {retrying ? 'Trying again' : 'Try again'}
+            </button>
+          ) : null}
+          {action}
+        </div>
       ) : null}
     </div>
   );
@@ -184,11 +191,10 @@ export function SkeletonStat() {
     <div
       role="status"
       aria-label="Loading"
-      className="min-h-28 rounded-card border border-border bg-surface p-4"
+      className="flex min-h-30 flex-col rounded-panel border border-line bg-surface p-5"
     >
       <Skeleton className="h-4 w-24" />
-      <Skeleton className="mt-2 h-9 w-20" />
-      <Skeleton className="mt-2 h-4 w-32" />
+      <Skeleton className="mt-auto h-9 w-20" />
     </div>
   );
 }
@@ -205,7 +211,7 @@ export function SkeletonTable({
 }) {
   const row = density === 'compact' ? 'h-8' : 'h-11';
   return (
-    <div role="status" aria-label="Loading" className="divide-y divide-border">
+    <div role="status" aria-label="Loading" className="divide-y divide-line">
       {Array.from({ length: rows }, (_, r) => (
         <div key={r} className={`flex items-center gap-6 px-4 ${row}`}>
           {Array.from({ length: columns }, (_, c) => (
@@ -245,3 +251,93 @@ const barHeights: Record<number, string> = {
   85: 'h-[85%]',
   90: 'h-[90%]',
 };
+
+/**
+ * The lens mark turning: a loading indicator for a whole page or a large
+ * region. Its two arcs rotate in opposite directions; with reduced motion it
+ * stands still and the text says what is happening.
+ */
+export function LensSpinner({ size = 48 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 48 48" width={size} height={size} fill="none" aria-hidden="true">
+      <circle cx="24" cy="24" r="21" stroke="var(--line)" strokeWidth="1.5" />
+      <g className="lens-spin-a">
+        <LensArcs cx={24} cy={24} r={11} strokeWidth={2.5} className="text-lens-a" />
+      </g>
+    </svg>
+  );
+}
+
+/** A full-page loading state, centred in the space it is given. */
+export function PageLoader({
+  label = 'Loading',
+  fullScreen = false,
+}: {
+  /** What is loading, read by screen readers and shown under the mark. */
+  label?: string;
+  /** Fill the viewport (before the app shell exists) instead of the content area. */
+  fullScreen?: boolean;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`flex flex-col items-center justify-center gap-4 ${fullScreen ? 'min-h-dvh' : 'min-h-[50vh]'}`}
+    >
+      <LensSpinner />
+      <p className="text-body-s text-text-muted">{label}…</p>
+    </div>
+  );
+}
+
+/** Not found: a page or an object that does not exist (or no longer does). */
+export function NotFoundState({
+  title = 'Page not found',
+  body,
+  homeLabel = 'Go to the portfolio',
+  homeTo = '/',
+}: {
+  title?: string;
+  body?: ReactNode;
+  homeLabel?: string;
+  homeTo?: string;
+}) {
+  return (
+    <div className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
+      <div className="w-40">
+        <StateArt art="lost" />
+      </div>
+      <p className="mt-4 font-mono text-caption text-text-faint">404</p>
+      <h1 className="mt-1 text-h2 font-semibold tracking-tight text-text">{title}</h1>
+      <div className="mt-2 max-w-md text-body-s text-text-muted">
+        {body ??
+          'The page you asked for does not exist. Check the address, or start again from the portfolio.'}
+      </div>
+      <Link to={homeTo} className={`${buttonClass('secondary')} mt-6`}>
+        {homeLabel}
+      </Link>
+    </div>
+  );
+}
+
+/** Forbidden: the person is signed in but their role does not allow this page. */
+export function ForbiddenState({
+  title = 'You need the admin role for this page',
+  body = 'Ask an administrator of this Scanopsis to change your role if you need access.',
+}: {
+  title?: string;
+  body?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col items-center px-6 py-16 text-center">
+      <div className="w-36">
+        <StateArt art="locked" />
+      </div>
+      <p className="mt-4 text-h3 font-semibold tracking-tight text-text">{title}</p>
+      <div className="mt-1.5 max-w-md text-body-s text-text-muted">{body}</div>
+      <Link to="/" className={`${buttonClass('secondary')} mt-6`}>
+        Go to the portfolio
+      </Link>
+    </div>
+  );
+}

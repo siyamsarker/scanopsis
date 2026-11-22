@@ -3,7 +3,15 @@
 
 import { fireEvent, screen, within } from '@testing-library/react';
 import { formatRelative } from './UsersPage';
-import { apiError, json, makeUser, mockFetch, renderApp, type Handler } from '../test-utils';
+import {
+  apiError,
+  chooseOption,
+  json,
+  makeUser,
+  mockFetch,
+  renderApp,
+  type Handler,
+} from '../test-utils';
 
 // Relative to the clock, so the rendered text does not change with the date.
 const admin = makeUser({
@@ -82,10 +90,10 @@ describe('users page', () => {
     );
     renderApp('/admin/users');
     const select = await screen.findByLabelText('Role for grace');
-    expect(select).toHaveValue('viewer');
-    fireEvent.change(select, { target: { value: 'admin' } });
+    expect(select).toHaveTextContent('Viewer');
+    await chooseOption('Role for grace', 'Admin');
     expect(await screen.findByText('Role changed to Admin.')).toBeInTheDocument();
-    expect(screen.getByLabelText('Role for grace')).toHaveValue('admin');
+    expect(screen.getByLabelText('Role for grace')).toHaveTextContent('Admin');
     expect(screen.getByLabelText('Role for grace')).toBeEnabled();
     expect(calls.find((c) => c.method === 'PATCH')).toMatchObject({
       path: '/api/v1/users/2',
@@ -103,8 +111,8 @@ describe('users page', () => {
       ),
     );
     renderApp('/admin/users');
-    const select = await screen.findByLabelText('Role for grace');
-    fireEvent.change(select, { target: { value: 'admin' } });
+    await screen.findByLabelText('Role for grace');
+    await chooseOption('Role for grace', 'Admin');
     expect(await screen.findByText('Saving…')).toBeInTheDocument();
     expect(screen.getByLabelText('Role for grace')).toBeDisabled();
     release(json(200, { ...grace, role: 'admin' }));
@@ -124,14 +132,14 @@ describe('users page', () => {
       ),
     );
     renderApp('/admin/users');
-    const select = await screen.findByLabelText('Role for ada');
-    fireEvent.change(select, { target: { value: 'viewer' } });
+    await screen.findByLabelText('Role for ada');
+    await chooseOption('Role for ada', 'Viewer');
     expect(
       await screen.findByText(
         'You cannot remove the last administrator. Make another user an admin first.',
       ),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText('Role for ada')).toHaveValue('admin');
+    expect(screen.getByLabelText('Role for ada')).toHaveTextContent('Admin');
     expect(screen.getByLabelText('Role for ada')).toBeEnabled();
   });
 

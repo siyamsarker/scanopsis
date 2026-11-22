@@ -1,24 +1,26 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import {
-  useEffect,
-  useId,
-  useRef,
-  type KeyboardEvent,
-  type ReactNode,
-  type RefObject,
-} from 'react';
-import { cardClass, primaryButtonClass, secondaryButtonClass } from '../ui';
+import { useRef, type ReactNode, type RefObject } from 'react';
+import { buttonClass } from '../ui';
+import { Dialog } from './Dialog';
 
 /**
- * A modal confirmation. Focus starts on the safe choice, Tab stays inside the
- * dialog, Escape cancels, and focus returns to the control that opened it.
+ * A modal confirmation (role alertdialog). Focus starts on the safe choice,
+ * Tab stays inside, Escape cancels (not while pending), and focus returns to
+ * the control that opened it. Render it while the question is open; it is
+ * shown as soon as it mounts.
+ *
+ * `tone="danger"` is for destructive actions: the confirm button turns
+ * critical. Name the object and the consequence in the title and the body
+ * ("Delete alice?" / "This removes alice with their sessions...").
  */
 export function ConfirmDialog({
   title,
   children,
   confirmLabel,
+  cancelLabel = 'Cancel',
+  tone = 'default',
   pending = false,
   onConfirm,
   onCancel,
@@ -26,74 +28,85 @@ export function ConfirmDialog({
 }: {
   title: string;
   children: ReactNode;
+  /** The action, as a verb: "Delete user", "Archive". */
   confirmLabel: string;
+  cancelLabel?: string;
+  tone?: 'default' | 'danger';
   pending?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   /** Where focus goes on close; defaults to the control that had focus when the dialog opened. */
   returnFocusTo?: RefObject<HTMLElement | null>;
 }) {
-  const titleId = useId();
   const cancel = useRef<HTMLButtonElement>(null);
-  const confirm = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const target = returnFocusTo?.current ?? (document.activeElement as HTMLElement | null);
-    cancel.current?.focus();
-    return () => target?.focus();
-  }, [returnFocusTo]);
-
-  function onKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Escape' && !pending) {
-      event.stopPropagation();
-      onCancel();
-    } else if (event.key === 'Tab') {
-      const first = cancel.current;
-      const last = confirm.current?.disabled ? first : confirm.current;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last?.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first?.focus();
-      }
-    }
-  }
 
   return (
-    <div className="fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4">
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        onKeyDown={onKeyDown}
-        className={`${cardClass} rise w-full max-w-md p-6`}
-      >
-        <h2 id={titleId} className="text-lg font-semibold text-text">
-          {title}
-        </h2>
-        <div className="mt-2 text-text-muted">{children}</div>
-        <div className="mt-6 flex flex-wrap justify-end gap-2">
+    <Dialog
+      open
+      role="alertdialog"
+      hideClose
+      modalStrict
+      size="sm"
+      title={title}
+      onOpenChange={(open) => {
+        if (!open && !pending) onCancel();
+      }}
+      onOpenAutoFocus={(event) => {
+        event.preventDefault();
+        cancel.current?.focus();
+      }}
+      onCloseAutoFocus={(event) => {
+        const target = returnFocusTo?.current;
+        if (target) {
+          event.preventDefault();
+          target.focus();
+        }
+      }}
+      onEscapeKeyDown={(event) => {
+        if (pending) event.preventDefault();
+      }}
+      footer={
+        <>
           <button
             ref={cancel}
             type="button"
-            className={secondaryButtonClass}
+            className={buttonClass('secondary')}
             disabled={pending}
             onClick={onCancel}
           >
-            Cancel
+            {cancelLabel}
           </button>
           <button
-            ref={confirm}
             type="button"
-            className={primaryButtonClass}
+            className={buttonClass(tone === 'danger' ? 'danger' : 'primary')}
             disabled={pending}
+            aria-busy={pending || undefined}
             onClick={onConfirm}
           >
+            {pending ? <Spinner /> : null}
             {confirmLabel}
           </button>
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    >
+      <div className="text-body-s text-text-muted [&_p+p]:mt-2">{children}</div>
+    </Dialog>
+  );
+}
+
+/** A small spinning arc for buttons that wait on the server. */
+export function Spinner({ className = '' }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width={16}
+      height={16}
+      fill="none"
+      aria-hidden="true"
+      className={`animate-spin ${className}`}
+    >
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" />
+      <path d="M14 8a6 6 0 0 0-6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }

@@ -8,7 +8,7 @@ import { createQueryClient } from '../../api/queryClient';
 import type { Portfolio, PortfolioItem } from '../../api/portfolio';
 import { readPalette } from '../../charts/palette';
 import type { ChartProps } from '../../charts/Chart';
-import { apiError, json, mockFetch } from '../../test-utils';
+import { apiError, chooseOption, json, mockFetch } from '../../test-utils';
 import { PortfolioPage } from '../PortfolioPage';
 import { readParams, visibleItems, writeParams } from './model';
 
@@ -176,7 +176,7 @@ describe('PortfolioPage', () => {
     renderPage();
     await screen.findByText('bravo');
     expect(names()).toEqual(['bravo', 'alpha', 'charlie', 'echo', 'delta']);
-    fireEvent.change(screen.getByLabelText('Sort by'), { target: { value: 'name' } });
+    await chooseOption('Sort by', 'Sort by name');
     expect(names()).toEqual(['alpha', 'bravo', 'charlie', 'delta', 'echo']);
     expect(screen.getByTestId('location')).toHaveTextContent('/?sort=name');
   });

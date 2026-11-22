@@ -15,7 +15,10 @@ import {
   useUsers,
 } from '../api/hooks';
 import { ConfirmDialog } from '../components/ConfirmDialog';
-import { cardClass, headingClass, secondaryButtonClass, selectClass } from '../ui';
+import { Select } from '../components/inputs';
+import { PageHeader } from '../components/layout';
+import { ForbiddenState } from '../components/states';
+import { cardClass, secondaryButtonClass } from '../ui';
 
 const units: [Intl.RelativeTimeFormatUnit, number][] = [
   ['year', 365 * 24 * 3600],
@@ -163,7 +166,7 @@ function Access({ user, isSelf }: { user: User; isSelf: boolean }) {
         <button
           ref={deleteButton}
           type="button"
-          className={`${secondaryButtonClass} text-fail`}
+          className={secondaryButtonClass}
           disabled={pending}
           onClick={() => setConfirm('delete')}
         >
@@ -177,6 +180,7 @@ function Access({ user, isSelf }: { user: User; isSelf: boolean }) {
         <ConfirmDialog
           title={`Disable ${user.username}?`}
           confirmLabel="Disable"
+          tone="danger"
           pending={setDisabled.isPending}
           onConfirm={() =>
             setDisabled.mutate(
@@ -197,6 +201,7 @@ function Access({ user, isSelf }: { user: User; isSelf: boolean }) {
         <ConfirmDialog
           title={`Delete ${user.username}?`}
           confirmLabel="Delete user"
+          tone="danger"
           pending={remove.isPending}
           onConfirm={() => remove.mutate(user.id, { onSettled: () => setConfirm(null) })}
           onCancel={() => setConfirm(null)}
@@ -242,16 +247,19 @@ function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
       <td className={cell}>{user.email}</td>
       <td className={cell}>{user.source === 'gitlab' ? 'GitLab' : 'Local'}</td>
       <td className={cell}>
-        <select
-          aria-label={`Role for ${user.username}`}
-          className={selectClass}
+        <Select
+          label={`Role for ${user.username}`}
+          hideLabel
+          size="sm"
+          className="w-32"
           value={shown}
           disabled={update.isPending}
-          onChange={(e) => update.mutate({ id: user.id, role: e.target.value as Role })}
-        >
-          <option value="admin">Admin</option>
-          <option value="viewer">Viewer</option>
-        </select>
+          onChange={(role) => update.mutate({ id: user.id, role: role as Role })}
+          options={[
+            { value: 'admin', label: 'Admin' },
+            { value: 'viewer', label: 'Viewer' },
+          ]}
+        />
         <div aria-live="polite" className="mt-1 min-h-5 text-text-muted">
           {update.isError ? <Problem message={update.error.message} /> : status}
         </div>
@@ -357,14 +365,14 @@ export function UsersPage() {
   const me = useMe();
   return (
     <>
-      <h1 className={headingClass}>Users</h1>
-      <p className="mt-1 text-text-muted">
-        Everyone who has signed in, the role they hold, and whether they may sign in.
-      </p>
+      <PageHeader
+        title="Users"
+        subtitle="Everyone who has signed in, the role they hold, and whether they may sign in."
+      />
       {me.data?.role === 'admin' ? (
         <UsersTable />
       ) : (
-        <p className="mt-4 text-text-muted">You need the admin role to see this page.</p>
+        <ForbiddenState title="You need the admin role to see this page." />
       )}
     </>
   );
