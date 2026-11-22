@@ -174,7 +174,12 @@ func TestMigrateQueryIndexes(t *testing.T) {
 	}
 
 	// Simulate a build that was interrupted: the index exists but is invalid
-	// and the migration is not recorded. The next start must rebuild it.
+	// and the migration is not recorded. A start that stops in 00007 never
+	// reaches the later migrations, so roll those back first. The next start
+	// must rebuild the index and apply the rest.
+	if _, err := provider(t, pool).DownTo(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
 	for _, q := range []string{
 		`UPDATE pg_index SET indisvalid = false WHERE indexrelid = 'scans_current_cover_idx'::regclass`,
 		`DELETE FROM goose_db_version WHERE version_id = 7`,
