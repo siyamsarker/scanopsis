@@ -471,6 +471,83 @@ empty, read the error that `pg_dump` printed.
 Run the backup on a schedule, and copy the files to storage on another host.
 Test a restore regularly.
 
+### Encrypt backups at rest
+
+A backup holds password hashes, encrypted secrets and your scan data. Encrypt
+it before it leaves the host, and keep the key that decrypts it **apart from
+`SCANOPSIS_SECRET_KEY`**: whoever has both the backup and the secret key can
+read every secret in it, and a backup and its key stored together protect
+nothing. Use a separate key for each purpose, and store the backup key in your
+password manager or vault.
+
+With [age](https://github.com/FiloSottile/age) (the commands were run with
+age 1.3.2):
+
+```sh
+age-keygen -o backup-key.txt
+```
+
+```text
+Public key: age14c5m20x85hv834we8nszyg4ahmerl4jyex0rz7qvjrpmfsvs2g8qparejp
+```
+
+Move `backup-key.txt` off the host. The backup job needs only the public key:
+
+```sh
+PUBLIC_KEY=age14c5m20x85hv834we8nszyg4ahmerl4jyex0rz7qvjrpmfsvs2g8qparejp
+(umask 077; docker compose exec -T db pg_dump -U scanopsis -d scanopsis \
+  --format=custom | age -r "$PUBLIC_KEY" > "scanopsis-$(date +%F).dump.age")
+ls -l scanopsis-*.dump.age
+```
+
+```text
+-rw-------  1 siyam  wheel  34450 Nov 22 11:44 scanopsis-2026-11-22.dump.age
+```
+
+To restore, decrypt on a machine that has the key and pipe the result into
+`pg_restore`, as in the restore steps below:
+
+```sh
+age -d -i backup-key.txt scanopsis-2026-11-22.dump.age | docker compose exec -T db \
+  pg_restore -U scanopsis -d scanopsis --clean --if-exists --no-owner --exit-on-error
+```
+
+The restore printed nothing and exited with status 0.
+
+With GnuPG, use `gpg --encrypt --recipient backup@example.com` in place of
+`age -r`, and `gpg --decrypt` in place of `age -d`. The GnuPG commands were not
+run for this page.
+
+### Watch the disk of the database
+
+The database lives in the Docker volume `db-data`, on the disk that holds
+Docker's data (usually `/var/lib/docker`). Alert on the use of that disk at
+**70%** (warning) and **85%** (critical). Check the use of the file system
+that holds the volume with:
+
+```sh
+docker compose exec -T db df -h /var/lib/postgresql
+```
+
+```text
+Filesystem                Size      Used Available Use% Mounted on
+/dev/vda1               126.3G     26.4G     93.4G  22% /etc/hostname
+```
+
+(The mount name differs on your host. Read the `Use%` column.) Check the size
+of the volume itself with `docker system df -v`.
+
+The two levels have reasons:
+
+- A full disk stops PostgreSQL from writing. Scanopsis then answers uploads and
+  sign-ins with errors, and a database that ran out of space needs free space
+  to recover. Fix this before it happens, not after.
+- PostgreSQL, vacuum and the write-ahead log need free space to work, and the
+  cleanup of old data does not return space to the disk at once. A backup and a
+  restore need space as well. At 70% you still have time to add disk or to
+  shorten the [retention](operations.md#data-retention) period. At 85% you
+  have little room left: act at once.
+
 ### Restore into the existing database
 
 Use this to go back to an earlier state of a running installation.
@@ -494,7 +571,17 @@ Use this to go back to an earlier state of a running installation.
    `--clean` removes the current tables first, so you lose everything that
    changed after the backup.
 
-3. Start Scanopsis again and check it:
+3. Delete all sessions, as described in
+   [after a restore](#after-a-restore) below.
+
+   ```sh
+   docker compose exec -T db psql -U scanopsis -d scanopsis -c "DELETE FROM sessions;"
+   ```
+
+   Expected result: `DELETE` and the number of sessions that the backup
+   held, for example `DELETE 1`.
+
+4. Start Scanopsis again and check it:
 
    ```sh
    docker compose start scanopsis
@@ -503,8 +590,9 @@ Use this to go back to an earlier state of a running installation.
 
    Expected result: both containers are `healthy` after about 30 seconds.
 
-4. Sign in. Every change after the backup is gone. For example, a password
-   that was reset after the backup is back to the old one.
+5. Sign in. Every change after the backup is gone. For example, a password
+   that was reset after the backup is back to the old one. Then check the
+   users and the audit log, as described in [after a restore](#after-a-restore).
 
 ### Restore on a new host or an empty volume
 
@@ -532,13 +620,20 @@ Use this after a disaster, or to move Scanopsis to a new host.
 
    Expected result: `exit=0`.
 
-4. Start Scanopsis:
+4. Delete all sessions, as described in
+   [after a restore](#after-a-restore):
+
+   ```sh
+   docker compose exec -T db psql -U scanopsis -d scanopsis -c "DELETE FROM sessions;"
+   ```
+
+5. Start Scanopsis:
 
    ```sh
    docker compose up -d
    ```
 
-5. Check that it works: `curl -s http://127.0.0.1:8080/readyz` answers
+6. Check that it works: `curl -s http://127.0.0.1:8080/readyz` answers
    `{"status":"ready"}`. Sign in with an existing account and enter a
    two-factor code. The log has no `setup_token` line, because the restored
    database already has an administrator.
@@ -551,3 +646,60 @@ If it fails:
 | `pg_restore` cannot connect, or Scanopsis cannot connect after the restore | The database name, user or password differs. Compare `secrets/database_url` with `secrets/postgres_password`. |
 | Scanopsis restarts in a loop and the log says `cannot be decrypted: SCANOPSIS_SECRET_KEY changed or is wrong` | The key is not the one that belongs to this backup. Restore the original key. See [the secret key](configuration.md#the-secret-key). |
 | Sign-in works but two-factor codes give a server error | The same cause: wrong key, and no secret setting was saved. Restore the original key. |
+
+### After a restore
+
+A restore puts the database back to the state of the backup. Do these checks
+every time, also after a restore on a new host.
+
+1. **Delete all sessions.** The backup holds the sessions that were valid when
+   it was made. After the restore, they are valid again, including sessions
+   that you ended or that belonged to users whom you removed after the backup.
+   Delete all of them, with Scanopsis stopped, as in the restore steps above.
+   Everyone then signs in again, with the password and a two-factor code:
+
+   ```sh
+   docker compose exec -T db psql -U scanopsis -d scanopsis -c "DELETE FROM sessions;"
+   ```
+
+   ```text
+   DELETE 1
+   ```
+
+2. **Check the users.** Users, roles and two-factor settings are as they were
+   at the backup. Remove anyone who left since then, and set roles right:
+
+   ```sh
+   docker compose exec -T db psql -U scanopsis -d scanopsis -c \
+     "SELECT id, source, username, role, totp_enabled_at IS NOT NULL AS mfa, last_login_at FROM users ORDER BY id"
+   ```
+
+   ```text
+    id | source | username | role  | mfa | last_login_at
+   ----+--------+----------+-------+-----+---------------
+     1 | local  | root     | admin | f   |
+   (1 row)
+   ```
+
+   A user who set a new password, or reset two-factor authentication, after
+   the backup has the old state again. Tell them.
+
+3. **Read the end of the audit log.** The newest entries show the moment that
+   the backup was made. Everything after it, including failed sign-ins and
+   role changes, is gone:
+
+   ```sh
+   docker compose exec -T db psql -U scanopsis -d scanopsis -c \
+     "SELECT at, actor, action FROM audit_log ORDER BY id DESC LIMIT 5"
+   ```
+
+   ```text
+                 at               |     actor     |     action
+   -------------------------------+---------------+-----------------
+    2026-11-22 05:38:24.957072+00 | local:root    | setup.completed
+    2026-11-22 05:35:41.998319+00 | local:unknown | login.failed
+   ...
+   ```
+
+   If you restored because of a security incident, note the time of the last
+   entry: you have no record of what happened after it.

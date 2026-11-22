@@ -229,29 +229,54 @@ Go through this list when you deploy, and again after each upgrade.
    operators.
 4. **Back up `SCANOPSIS_SECRET_KEY` separately from the database.** A backup
    without the key is useless, and a key next to the backup protects nothing.
-5. **Restrict network paths.** Publish the port on the loopback interface only
+5. **Encrypt backups at rest.** Keep the key apart from `SCANOPSIS_SECRET_KEY` and from
+   the backups. See [encrypt backups at rest](operations.md#encrypt-backups-at-rest).
+6. **After every restore, delete all sessions and check the users and the audit
+   log.** A restore brings back the sessions of the backup. See
+   [after a restore](operations.md#after-a-restore).
+7. **Restrict network paths.** Publish the port on the loopback interface only
    (the Compose file does). Let only the reverse proxy reach it. Allow the
    database port only from Scanopsis. Allow outgoing connections only to GitLab
    and SonarQube.
-6. **Limit who may upload.** Set the allowed namespaces. Consider protected refs
+8. **Limit rates at the proxy, and restrict the SonarQube webhook (optional).**
+   Rate limits for sign-in, second factor and uploads add a layer in front of the
+   limits in Scanopsis. Let only the address of SonarQube call
+   `/api/v1/hooks/sonarqube`. You can also keep `/api/v1/version` (it shows the
+   version you run, to anyone) to your own networks. See
+   [limit rates and restrict the webhook](deployment.md#limit-rates-and-restrict-the-webhook-optional).
+9. **Limit who may upload.** Set the allowed namespaces. Consider protected refs
    only.
-7. **Link services by key.** Set the SonarQube key on each service so that no
-   analysis can claim it.
-8. **Use `https` for SonarQube.**
-9. **Rotate tokens.** Replace the SonarQube token and the webhook secret on a
-   schedule, and the GitLab application secret when someone with access leaves.
-   Change them on the Settings page. They apply to the next request.
-10. **Turn off local sign-in only when GitLab sign-in works**, and keep one
+10. **Link services by key.** Set the SonarQube key on each service so that no
+    analysis can claim it.
+11. **Use `https` for SonarQube.**
+12. **Rotate tokens.** Replace the SonarQube token and the webhook secret on a
+    schedule, and the GitLab application secret when someone with access leaves.
+    Change them on the Settings page. They apply to the next request.
+13. **Turn off local sign-in only when GitLab sign-in works**, and keep one
     local administrator you can recover with the command line. Scanopsis refuses
     to turn local sign-in off while GitLab sign-in is incomplete. See
     [recovering access](operations.md#recovering-access-when-locked-out).
-11. **Set allowed groups** for GitLab sign-in. Empty allows every GitLab user.
-12. **Read the audit log.** Look for failed sign-ins, `ingest.rejected`, role
+14. **Set allowed groups** for GitLab sign-in. Empty allows every GitLab user.
+15. **Promote a GitLab user to administrator only after the user has enrolled
+    two-factor authentication.** Until then, whoever first signs in as that
+    GitLab user chooses the authenticator. Check the user on the **Users** page.
+16. **Never point `gitlab.url` at another GitLab instance while GitLab users
+    exist.** Scanopsis identifies a GitLab user by the numeric user id, not by the
+    instance. Another instance can give the same id to a different person, who
+    then signs in as the existing user, administrators included. Remove the
+    GitLab users first, or start with a new database.
+17. **Read the audit log.** Look for failed sign-ins, `ingest.rejected`, role
     changes, `settings.changed` and `service.updated` by `sonarqube`.
-13. **Keep the setup token private** and finish the setup at once.
-14. **Limit who reads the container logs.** They hold client addresses, project
+18. **Keep the setup token private** and finish the setup at once.
+19. **Limit who reads the container logs.** They hold client addresses, project
     paths and, before the setup, the setup token.
-15. **Update.** Build the newest version branch and apply it. See
+20. **Keep the resource and log limits.** `compose.yaml` sets a memory limit with
+    `GOMEMLIMIT`, process limits (`pids_limit`) and log rotation for both
+    services. Keep them when you edit the file, and set the same limits with
+    `docker run` or in Kubernetes. See [host settings](deployment.md#host-settings).
+21. **Alert on the disk of the database at 70% and 85%.** A full disk stops the
+    database. See [watch the disk of the database](operations.md#watch-the-disk-of-the-database).
+22. **Update.** Build the newest version branch and apply it. See
     [versions and branches](versions.md#upgrade-to-a-newer-version) and
     [upgrades](deployment.md#upgrades-and-rollback). Never deploy `main`.
 
