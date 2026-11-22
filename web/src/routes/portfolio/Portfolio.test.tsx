@@ -316,6 +316,7 @@ describe('PortfolioPage', () => {
     ).toBeInTheDocument();
     expect(a.getByText('critical,')).toHaveClass('sr-only');
     expect(a.getByText('Gate failed')).toBeInTheDocument();
+    expect(a.getByText('4 fixable')).toBeInTheDocument();
     expect(a.getByText('84.2%')).toBeInTheDocument();
     expect(a.getByText(/Scanned/)).toHaveTextContent('Scanned 1 day ago');
     expect(await a.findByText('up 10 risk points since pipeline #11, worse')).toBeInTheDocument();

@@ -8,7 +8,7 @@ import { Link } from 'react-router';
 import type { PortfolioItem, ServiceHistory } from '../../api/portfolio';
 import { TargetLink } from '../../components/Freshness';
 import { Skeleton } from '../../components/states';
-import { formatPercent, relativeTime } from '../../format';
+import { formatInt, formatPercent, relativeTime } from '../../format';
 import {
   Delta,
   GateGlyph,
@@ -26,8 +26,17 @@ export const CI_GUIDE_URL =
 
 const GATE_TEXT = { pass: 'Gate passed', fail: 'Gate failed', none: 'No gate' } as const;
 
-/** The open findings as glyph and count per severity, zeros left out; read out as words. */
-export function CountsLine({ counts }: { counts: PortfolioItem['counts'] }) {
+/**
+ * The open findings as glyph and count per severity, zeros left out, read out
+ * as words, and how many of them have a fixed version.
+ */
+export function CountsLine({
+  counts,
+  fixable,
+}: {
+  counts: PortfolioItem['counts'];
+  fixable: number;
+}) {
   const present = SEVERITIES.filter((s) => counts[s] > 0);
   if (present.length === 0) {
     return <p className="text-body-s text-text-muted">No open findings</p>;
@@ -45,6 +54,12 @@ export function CountsLine({ counts }: { counts: PortfolioItem['counts'] }) {
           </span>
         </span>
       ))}
+      {fixable > 0 ? (
+        <span className="ml-auto text-text-muted">
+          <span className="sr-only">; </span>
+          {formatInt(fixable)} fixable
+        </span>
+      ) : null}
     </p>
   );
 }
@@ -145,7 +160,7 @@ export const ServiceCard = forwardRef<
 
       {scanned ? (
         <>
-          <CountsLine counts={counts} />
+          <CountsLine counts={counts} fixable={item.fixable} />
           <div className="flex min-h-[30px] items-center gap-3">
             {history && history.length > 1 ? (
               <Spark points={history} gitRef={item.ref ?? ''} />
