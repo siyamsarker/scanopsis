@@ -1,150 +1,152 @@
-# SonarQube integration
+# Connect SonarQube
 
-Scanopsis shows the quality gate, ratings, coverage and duplication that
-SonarQube reports for each service. It receives a webhook after every
-analysis, reads the results through the SonarQube Web API, and checks every
-linked project periodically in case a webhook was missed.
+Show the quality gate, ratings, coverage and duplication from SonarQube next to
+the Trivy results of each service. This guide connects the two servers and links
+your SonarQube projects to services.
 
-It shows exactly what SonarQube reports. A metric that SonarQube did not
-report is shown as "not available", never as 0.
+**Audience:** Operators · **Back to:** [README](../../README.md) · [All guides](../../README.md#documentation)
 
-This page was written for SonarQube Community Build 26.9. Names such as
-`sonarqube.example.com`, `platform/payments-api` and `platform:payments-api`
-are examples; replace them with your own.
+---
 
-Commands marked "example" have not been run against your servers: adapt them.
+## How it works
 
-## 1. Create a read-only user and token
+After every analysis, SonarQube sends a signed **webhook** to Scanopsis.
+Scanopsis then reads the results through the SonarQube **Web API** with a
+read-only token. Every sync interval (15 minutes by default) it also reads the
+newest analysis of every linked project, so a lost webhook only delays a result.
 
-Scanopsis needs a user that can only browse the projects.
+Scanopsis shows exactly what SonarQube reports. A metric that SonarQube did not
+report is shown as "Not available", never as 0.
 
-1. In SonarQube, go to **Administration > Security > Users** and create a user
-   such as `scanopsis-reader`.
+This guide was written for SonarQube Community Build 26.9. Names such as
+`sonarqube.example.com`, `platform/payments-api` and `platform:payments-api` are
+examples. Commands marked "example" need your SonarQube or GitLab, so adapt them
+before you run them.
+
+## Before you start
+
+You need:
+
+- A running Scanopsis, and an administrator account. See the [getting started
+  guide](../getting-started.md).
+- A SonarQube administrator, who can create a user and a webhook.
+- A network path in both directions: from SonarQube to Scanopsis for the
+  webhook, and from Scanopsis to SonarQube for the Web API.
+
+## Step 1. Create a read-only user and token
+
+Scanopsis needs a SonarQube user that can only browse projects.
+
+1. In SonarQube, open **Administration > Security > Users** and create a user,
+   for example `scanopsis-reader`.
 2. Give the user the **Browse** permission on the projects, directly or through
-   a group (for example a group that has Browse on every project or on a
-   permission template).
-3. Sign in as that user, or generate a token for it from the users page, under
-   **My Account > Security > Generate Tokens**. Choose a user token.
+   a group. A permission template makes this automatic for new projects.
+3. Create a **user token** for it: sign in as that user and open **My Account >
+   Security**, or generate the token from the Users page as an administrator.
 
-Do not give the user Execute Analysis or administrator rights. Scanopsis only
-calls these endpoints, which Browse allows:
+Do not give the user Execute Analysis or administrator rights. Scanopsis calls
+only these endpoints, which Browse allows:
 
 - `api/measures/component`
 - `api/qualitygates/project_status`
 - `api/project_analyses/search`
 - `api/server/version`
 
-Check the token (example, replace the URL and token):
+Check the token (example):
 
 ```sh
 curl -s -H "Authorization: Bearer $SONAR_TOKEN" https://sonarqube.example.com/api/server/version
 ```
 
-It prints the version, for example `26.9.0.12345`.
+It prints the SonarQube version, a number that starts with `26.9` on Community
+Build 26.9.
 
-## 2. Configure Scanopsis
+## Step 2. Enter SonarQube in Scanopsis
 
-Set these on the Settings page (an administrator), or as environment variables
-before the first start:
-
-| Setting | Environment variable | Value |
-| --- | --- | --- |
-| SonarQube URL | `SCANOPSIS_SONAR_URL` | `https://sonarqube.example.com` |
-| SonarQube token | `SCANOPSIS_SONAR_TOKEN` | The user token from step 1. |
-| Webhook secret | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | A long random string. |
-| Sync interval | `SCANOPSIS_SONAR_SYNC_INTERVAL` | Default `15m`, at least `1m`. |
-
-Generate a secret (example):
+Create a long random webhook secret:
 
 ```sh
 openssl rand -hex 32
 ```
 
-The webhook is refused with `sonar_not_configured` until the URL, the token and
-the webhook secret are all set. The token and the secret are stored encrypted
-and never logged.
+As an administrator, open **Settings** and fill in the group **SonarQube**. You
+can also seed these values at the first start with the environment variables:
+
+| Setting | Environment variable | Value |
+| --- | --- | --- |
+| `sonar.url` | `SCANOPSIS_SONAR_URL` | The base URL, for example `https://sonarqube.example.com`. |
+| `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | The user token from step 1. |
+| `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | The random secret you just created. |
+| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | How often to read every linked project. Default `15m`, at least `1m`. |
+
+Select **Save changes**. The page shows "Settings saved. Changes apply now." No
+restart is needed.
+
+The token and the secret are stored encrypted and never shown or logged. The URL
+and the token need each other: saving one without the other fails with "Required
+when other SonarQube settings are set." The webhook is refused with
+`sonar_not_configured` until all three are set.
 
 ### Use https
 
-The token is sent to SonarQube as a bearer token on every Web API call. An
-`https://` URL protects it. A plain `http://` URL is allowed, because internal
-servers often have no TLS, but then the token and the results cross the network
-in clear text. Scanopsis logs a warning ("the SonarQube token is sent without
-TLS") when it starts with, or is changed to, a plain `http://` URL. Use `https://`
-unless the network between the two servers is fully trusted.
+Scanopsis sends the token with every Web API call, so use an `https://` URL. A
+plain `http://` URL works, because internal servers often have no TLS, but then
+the token and the results cross the network in clear text. In that case
+Scanopsis logs `the SonarQube token is sent without TLS; use an https://
+SonarQube URL` the first time it calls SonarQube.
 
-When you change the SonarQube URL on the Settings page, enter the token again
-in the same save. Scanopsis refuses a new URL without it ("Enter this value
-again when you change the URL, so the stored one is never sent to a new
-address."), so a stored token is never sent to an address it was not entered
-for.
+Two more rules keep the token where it belongs:
 
-Scanopsis does not follow a redirect from SonarQube to another scheme or host,
-so the token cannot be sent elsewhere. If your SonarQube URL redirects (for
-example from `http` to `https`, or to another host name), configure the final
-address.
+- When you change the SonarQube URL, enter the token again in the same save.
+  Otherwise saving fails with "Enter this value again when you change the URL,
+  so the stored one is never sent to a new address."
+- Scanopsis does not follow a redirect to another scheme or host. If your
+  SonarQube URL redirects, for example from `http` to `https`, enter the final
+  address.
 
-## 3. Create the webhook in SonarQube
+## Step 3. Create the webhook in SonarQube
 
-Go to **Administration > Configuration > Webhooks** for all projects, or the
-project's **Project Settings > Webhooks** for one, and create a webhook:
+In SonarQube, open **Administration > Configuration > Webhooks** for all
+projects, or **Project Settings > Webhooks** for one project. Create a webhook
+with:
 
-- URL: `<Scanopsis URL>/api/v1/hooks/sonarqube`, for example
-  `https://scanopsis.example.com/api/v1/hooks/sonarqube`
-- Secret: the same string as the webhook secret in Scanopsis.
+- **URL**: your Scanopsis address plus `/api/v1/hooks/sonarqube`, for example
+  `https://scanopsis.example.com/api/v1/hooks/sonarqube`.
+- **Secret**: the webhook secret from step 2.
 
-SonarQube signs every delivery with the header `X-Sonar-Webhook-HMAC-SHA256`,
-the lowercase hex HMAC-SHA256 of the request body with the secret. Scanopsis
-accepts the delivery only if the signature matches. Webhooks time out after 10
-seconds and SonarQube does not retry them; Scanopsis answers `202` at once and
-processes the delivery in the background, with 4 deliveries at a time. The
-periodic sync covers lost deliveries.
+SonarQube signs each delivery: the header `X-Sonar-Webhook-HMAC-SHA256` holds
+the HMAC-SHA256 of the body, keyed with the secret. Scanopsis accepts a delivery
+only when the signature matches.
 
-### How deliveries and the sync are processed
+SonarQube waits only 10 seconds for an answer and does not retry. So Scanopsis
+answers `202` at once and does the work in the background.
 
-- Deliveries and the sync run apart. A slow SonarQube delays neither the
-  `202` answers nor the sync; a burst of deliveries does not delay the sync.
-- Up to 500 verified deliveries wait for a worker. A delivery that finds the
-  queue full is not lost: it stays `pending`, and the next sync reads the
-  analysis of its project (when linked by key) and marks it `linked`. If the
-  project is not linked by key, the delivery is marked `failed` (interrupted)
-  after 10 minutes plus two sync intervals, and you can redeliver it.
-- A sync stops early when reading the SonarQube version fails, or after 3 calls
-  in a row get no answer (a timeout or a refused connection). It then logs one
-  warning, shows the cause as `last_sync_error` and tries again at the next
-  interval, so an unreachable SonarQube costs about one timeout (10 seconds),
-  not one per project. A rejected token (401) also stops the sync.
-- A sync that has failures for some projects writes one warning line
-  (`SonarQube sync finished with failures`) with the number of failed
-  projects, the first project and its error, instead of one line per project.
-  The per-project lines are at the `debug` level.
-- No pooled database connection is held while SonarQube is called. The
-  advisory lock that lets one server sync at a time is held on a separate
-  connection for the duration of a sync.
-
-### Private addresses
+### If SonarQube refuses a private address
 
 SonarQube refuses to send webhooks to private or loopback addresses unless an
-administrator sets `sonar.validateWebhooks=false` (in `sonar.properties` or the
-server settings, depending on how SonarQube is run). That setting turns off the
-protection against webhooks that reach internal services, for every webhook on
-the server. Either give Scanopsis an address SonarQube accepts (a public name
-that resolves to a public address, behind your reverse proxy), or accept the
-trade-off and restrict who can create webhooks.
+administrator sets `sonar.validateWebhooks=false`. Where you set it depends on
+how SonarQube runs: in `sonar.properties` or in the server settings. That
+setting turns off the protection for every webhook on the server, so prefer one
+of these:
 
-Without webhooks Scanopsis still works: the sync reads the newest analysis of
-every linked project every sync interval (15 minutes by default).
+- Give Scanopsis an address that SonarQube accepts, such as a public name behind
+  your reverse proxy.
+- Or accept the trade-off and limit who can create webhooks.
 
-## 4. Link projects to services
+Without webhooks Scanopsis still works. The sync reads the newest analysis of
+every linked project every sync interval.
 
-A SonarQube project is shown on the service it is linked to. There are two ways.
+## Step 4. Link projects to services
 
-**Link by key.** On the Services page, enter the SonarQube project key on the
-service (for example `platform:payments-api`). This is the safest way and the
-only way the periodic sync uses.
+A SonarQube analysis is shown on the service its project is linked to. There are
+two ways to link.
 
-**Link from the pipeline.** Add scanner properties to the analysis step of the
-GitLab pipeline (example):
+**Link by key.** As an administrator, open **Services**, select **Edit** on the
+service and enter the **SonarQube project key**, for example
+`platform:payments-api`. This is the safest way, and the only way the sync uses.
+
+**Link from the pipeline.** Add two scanner properties to the analysis step of
+the GitLab pipeline (example):
 
 ```sh
 sonar-scanner \
@@ -153,27 +155,62 @@ sonar-scanner \
   -Dsonar.analysis.pipelineId="$CI_PIPELINE_ID"
 ```
 
-SonarQube copies properties that start with `sonar.analysis.` into the
-webhook. Scanopsis links by the project key first. It uses
-`sonar.analysis.gitlabProjectId` only for a service that has no SonarQube key
-yet: the first analysis that carries the property links the project, and
-Scanopsis saves the project key on that service, so the link is fixed from then
-on. The link is shown on the Services page, where an administrator can change
-or remove it. Administrators see each automatic link in the audit log, as a
-`service.updated` event by the actor `sonarqube` with the service, the key and
-the task ID. A pipeline cannot move a service to another SonarQube project, or
-attach itself to a service that is already linked to a different project.
-`sonar.analysis.pipelineId` is shown next to the analysis.
+SonarQube copies properties that start with `sonar.analysis.` into the webhook.
+Scanopsis then links this way:
 
-Archived services are never linked.
+1. It looks for a service with the project key first.
+2. Only if none has it, it looks for the service of the GitLab project in
+   `sonar.analysis.gitlabProjectId`. If that service has no SonarQube key yet,
+   the analysis links it and Scanopsis saves the key on the service. From then
+   on the link is fixed.
+3. A pipeline can never move a service to another SonarQube project, or take
+   over a service that is linked to a different one.
 
-Community Build analyses one branch per project (the main branch), so there is
-one result per project.
+Each automatic link shows up in the audit log as `service.updated` by the actor
+`sonarqube`, with the service, the key and the task ID. An administrator can
+change or remove the key on the Services page. `sonar.analysis.pipelineId` is
+shown next to the analysis.
 
-## 5. Modes: MQR and Standard
+Archived services are never linked and never synced.
+
+Community Build analyses one branch per project, the main branch, so each
+service has one SonarQube result.
+
+## Step 5. Check that it works
+
+1. Run an analysis in SonarQube.
+2. In Scanopsis, open **Integrations**. The **SonarQube** card shows **Ready**,
+   the server version, the last webhook, the last sync and the recent
+   deliveries. The server version appears after the first sync, about 10 seconds
+   after Scanopsis starts.
+3. Find your analysis under **Recent deliveries** with the outcome **Linked**,
+   then open the service. The analysis appears within a few seconds.
+
+In SonarQube, the delivery log of the webhook shows the HTTP status that
+Scanopsis answered.
+
+You can also send a signed test delivery by hand (example; set `SECRET` to your
+webhook secret):
+
+```sh
+BODY='{"taskId":"test-1","status":"SUCCESS","analysedAt":"2026-11-19T10:00:00+0000","project":{"key":"platform:payments-api"}}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://scanopsis.example.com/api/v1/hooks/sonarqube \
+  -H "Content-Type: application/json" -H "X-Sonar-Webhook-HMAC-SHA256: $SIG" \
+  --data "$BODY"
+```
+
+It prints `202`. The delivery then appears on the Integrations page as
+**Unlinked** unless a service has that project key. A real service with that key
+would make Scanopsis read the analysis from SonarQube, which fails for a made-up
+task, so use a key that no service has.
+
+## How Scanopsis reads analyses
+
+### MQR and Standard mode
 
 SonarQube reports ratings in one of two modes. Scanopsis detects the mode from
-the measures it gets, and supports both.
+the measures and supports both. There is nothing to configure.
 
 | | MQR mode | Standard mode |
 | --- | --- | --- |
@@ -182,107 +219,103 @@ the measures it gets, and supports both.
 | Maintainability | `software_quality_maintainability_rating` | `sqale_rating` |
 
 In both modes Scanopsis also reads `security_review_rating`, `coverage`,
-`duplicated_lines_density`, `ncloc`, `alert_status` and the hotspot measures.
-Every measure SonarQube returns is kept as reported. Ratings `1.0` to `5.0`
-are shown as A to E. The mode is shown with each analysis.
+`duplicated_lines_density`, `ncloc`, `alert_status` and the hotspot measures. It
+keeps every measure as reported, shows ratings `1.0` to `5.0` as A to E, and
+shows the mode with each analysis.
 
-Scanopsis adapts to the server's mode automatically; there is nothing to
-configure. It asks for the keys of both modes in one request. If a server
-rejects metric keys it does not know (HTTP 400 or 404), Scanopsis asks again
-with only the MQR keys, then with only the Standard keys, and remembers which
-set worked until the SonarQube URL or token is changed.
+Scanopsis asks for the keys of both modes in one request. If SonarQube rejects
+keys it does not know (HTTP 400 or 404), Scanopsis asks again with only the MQR
+keys, then with only the Standard keys. It remembers the set that worked until
+the SonarQube URL or token changes.
 
-## 6. Coverage of 0% after a failing test step
+### Deliveries and the sync
+
+- Four workers process deliveries. Up to 500 more can wait. A delivery that
+  finds the queue full is not lost: it stays **Pending**, and the next sync
+  reads the analysis if the project is linked by key.
+- Deliveries and the sync run apart. A slow SonarQube delays neither the `202`
+  answers nor the sync.
+- A sync stops early when reading the SonarQube version fails, after 3 calls in
+  a row get no answer, or when SonarQube rejects the token (401). It shows the
+  cause as the last sync error and tries again at the next interval. So an
+  unreachable SonarQube costs about one timeout of 10 seconds, not one per
+  project.
+- A sync with failures writes one warning, `SonarQube sync finished with
+  failures`, with the number of failed projects and the first error. The lines
+  per project are at `debug` level.
+- A delivery that stays **Pending** for more than 10 minutes is marked
+  **Failed** as interrupted. A delivery that waits because the queue was full
+  gets two more sync intervals first.
+- Only one server syncs at a time. The sync holds a PostgreSQL advisory lock on
+  a connection of its own, and no pooled connection while it calls SonarQube.
+
+### Coverage of 0% after a failing test step
 
 If a test step fails but still writes an empty coverage report, SonarQube
-analyses the project with no covered lines and reports 0% coverage. Scanopsis
-shows what SonarQube reports, so the coverage and, if the quality gate has a
-coverage condition, the gate will look bad. Fix the pipeline so that a failed
-test step does not publish an empty report, or does not run the analysis.
-
-## 7. Check that it works
-
-Open the integration page (an administrator; the data comes from
-`GET /api/v1/admin/integrations/sonarqube`). It shows:
-
-- `configured`: the URL and the token are set.
-- `server_version`: read from SonarQube by the last sync. It is empty until the
-  first sync has run (the first one starts shortly after the server starts).
-- `last_webhook_at`: when the last delivery arrived.
-- `last_sync_at` and `last_sync_error`: the last completed sync and its error.
-- `recent_deliveries`: the 50 newest deliveries and what happened to them.
-
-In SonarQube, the webhook's delivery log (Webhooks page) shows the HTTP status
-Scanopsis answered. Run an analysis and open the service: the analysis appears
-within a few seconds.
-
-You can also test the signature by hand (example, with your own secret and
-payload; the payload needs `taskId` and `project.key`):
-
-```sh
-BODY='{"taskId":"test-1","status":"SUCCESS","analysedAt":"2026-11-19T10:00:00+0000","project":{"key":"platform:payments-api"}}'
-SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $NF}')
-curl -i -X POST https://scanopsis.example.com/api/v1/hooks/sonarqube \
-  -H "Content-Type: application/json" -H "X-Sonar-Webhook-HMAC-SHA256: $SIG" \
-  --data "$BODY"
-```
-
-`HTTP/2 202` means the delivery was accepted. It then appears on the
-integration page as `unlinked` unless a service uses that project key.
+reports 0% coverage. Scanopsis shows what SonarQube reports, so the coverage
+looks bad, and so does the quality gate if it has a coverage condition. Fix the
+pipeline so that a failed test step does not publish an empty report, or skips
+the analysis.
 
 ## Troubleshooting
 
-### Responses of the webhook endpoint
+### Answers of the webhook endpoint
 
-| Status and code | Cause | What to do |
+| Status and code | Cause | Fix |
 | --- | --- | --- |
-| 503 `sonar_not_configured` | The URL, the token or the webhook secret is not set. | Set all three in Settings. |
-| 401 `invalid_signature` | The header is missing, or the secret differs from the one in SonarQube, or something changed the body on the way (a proxy that rewrites it). | Set the same secret in both places; send the webhook straight to Scanopsis or through a proxy that passes the body unchanged. The rejection is in the audit log, see below. |
-| 400 `invalid_payload` | The body is not JSON, or has no `taskId` or `project.key`. | Make sure the webhook comes from SonarQube. |
-| 413 `payload_too_large` | The body is larger than 1 MiB. | Reduce the number of `sonar.analysis.*` properties. |
-| 500 `internal_error` | The database could not be reached. | See the server log. |
-| 202 | Accepted, also for a delivery seen before (same `taskId`). | None. |
+| `202` | Accepted. A repeated delivery with the same `taskId` is accepted too, and processed once. | Nothing to do. |
+| `503` `sonar_not_configured` | The URL, the token or the webhook secret is not set. | Set all three in Settings. |
+| `401` `invalid_signature` | The header is missing, the secret differs from the one in SonarQube, or something on the way changed the body, such as a proxy that rewrites it. | Use the same secret in both places. Send the webhook straight to Scanopsis, or through a proxy that passes the body unchanged. |
+| `400` `invalid_payload` | The body is not JSON, or has no `taskId` or `project.key`. | Make sure the webhook comes from SonarQube. |
+| `413` `payload_too_large` | The body is larger than 1 MiB. | Pass fewer `sonar.analysis.*` properties. |
+| `500` `internal_error` | The database could not be reached. | Read the Scanopsis log. |
 
 ### Rejected webhooks in the audit log
 
-A webhook that is refused (a missing or wrong signature, a body that is too
-large, or a signed body that is not a SonarQube webhook) writes one audit event,
-**Webhook rejected** (`webhook.rejected`, actor `sonarqube:unknown`), with the
-`reason` (`invalid_signature`, `payload_too_large` or `invalid_payload`) and the
-client address, and one `WARN` line `webhook rejected` in the server log. So
-that anyone who can reach the endpoint cannot fill the audit log, at most 10
-events per client address are written at once, then one more per minute (an
-IPv6 client counts by its /64 network); further rejections are logged only at
-the `debug` level. The answer to the client is the same either way. If you see
-many, check the webhook secret in SonarQube and who can reach the endpoint.
+A refused webhook (missing or wrong signature, body too large, signed body that
+is not a SonarQube webhook) writes one audit event, **Webhook rejected**
+(`webhook.rejected`, actor `sonarqube:unknown`), with the reason and the client
+address. The server log gets a `webhook rejected` warning.
 
-### Outcomes on the integration page
+Anyone who can reach the endpoint can cause a refusal. To keep them from filling
+the audit log, Scanopsis records at most 10 per client address at once, then one
+per minute. An IPv6 client counts by its /64 network. The rest appear only in
+the server log at `debug` level. The answer is the same either way.
 
-| Outcome and detail | Cause | What to do |
+Many of these events mean a wrong webhook secret in SonarQube, or someone else
+calling the endpoint.
+
+### Outcomes on the Integrations page
+
+| Outcome and detail | Cause | Fix |
 | --- | --- | --- |
-| `unlinked`: No service is linked to SonarQube project "...". | No service has this project key, and the pipeline did not pass a usable `sonar.analysis.gitlabProjectId` of a service without a key. | Set the key on the service, or add `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`. |
-| `unlinked`: The service named by `sonar.analysis.gitlabProjectId` is linked to a different SonarQube project... | The service already has another key (for example the project was renamed). | Change the SonarQube key on the service. |
-| `unlinked`: ...cannot be linked to SonarQube project "..." because the service or the key is already linked. | The key belongs to another (possibly archived) service. | Free the key on the other service, or link by key. |
-| `failed`: The analysis task ended with status "...". | The analysis failed in SonarQube; nothing was stored. | Fix the analysis; the next successful one is stored. |
-| `failed`: Reading measures failed: SonarQube answered 401 on api/measures/component. | The token is wrong or revoked. | Create a new token and update the setting. |
-| `failed`: ... answered 403 or 404 on ... | The user lacks Browse on the project, or the project key does not exist. (Newer versions answer 404 for a missing permission.) | Grant Browse to the user. |
-| `failed`: ... answered 5xx on ... | SonarQube had an error. | Check SonarQube; the next sync retries. |
-| `failed`: ...the request failed or the answer was unreadable; see the server log. | SonarQube could not be reached (DNS, firewall, TLS certificate, timeout of 10 seconds, or a refused redirect). | Read the server log, which has the full error. |
-| `failed`: The SonarQube URL and token are not configured... | The settings were cleared after the delivery arrived. | Set them again. |
-| `failed`: The webhook has no readable analysedAt. | The payload has no valid analysis time. | Make sure the webhook comes from SonarQube. |
-| `pending`: The processing queue was full; the next sync will read the analysis. | More than 500 deliveries were waiting. | None; the next sync reads the analysis and marks it `linked`. |
-| `linked`: The processing queue was full; the sync read the analysis. | The delivery waited for the sync, which then stored the analysis. | None. |
-| `failed`: Storing the analysis failed; see the server log. | A database error. | Read the server log. |
-| `linked` with a note: A newer analysis (...) already exists | Another analysis finished before this one was read. The measures are from the newer one. | None; the next sync adds the newer analysis. |
-| `linked`: The analysis was already stored by a sync. | The sync was faster than the webhook. | None. |
-| `pending` | The delivery is waiting to be processed. | None, it changes within seconds, or at the next sync when the queue was full (see above). |
-| `failed`: Processing was interrupted. Redeliver the webhook from SonarQube to process it again; analyses of projects linked by key are also picked up by the next sync. | The server stopped while processing it; a delivery pending for more than 10 minutes is marked this way by the next sync. | In SonarQube, open the project's (or the global) webhook settings, show the recent deliveries of the Scanopsis webhook and redeliver this one. A project already linked by key needs nothing: the next sync reads the analysis. |
+| Pending | The delivery waits for a worker. | Nothing to do. It changes within seconds. |
+| Pending: `The processing queue was full; the next sync will read the analysis.` | More than 500 deliveries were waiting. | Nothing to do if the project is linked by key: the next sync reads the analysis and marks it Linked. Otherwise link it by key, or redeliver the webhook later. |
+| Linked: `The processing queue was full; the sync read the analysis.` | The delivery waited for the sync, which stored the analysis. | Nothing to do. |
+| Linked: `The analysis was already stored by a sync.` | The sync was faster than the webhook. | Nothing to do. |
+| Linked: `A newer analysis (...) already exists in SonarQube; the measures are from it. The next sync will add it.` | Another analysis finished before this one was read. | Nothing to do. |
+| Unlinked: `No service is linked to SonarQube project "...". ...` | No service has this project key, and the pipeline passed no usable `sonar.analysis.gitlabProjectId`. | Set the key on the service, or add `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`. See [step 4](#step-4-link-projects-to-services). |
+| Unlinked: `The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, ...` | The service already has another key, for example because the project was renamed. | Change the SonarQube key on the service. |
+| Unlinked: `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "..." because the service or the key is already linked.` | Another service, maybe an archived one, has this key. | Free the key on the other service, or link by key. |
+| Failed: `The analysis task ended with status "..."; nothing was stored.` | The analysis failed in SonarQube. | Fix the analysis. The next successful one is stored. |
+| Failed: `Reading measures failed: SonarQube answered 401 on api/measures/component. ...` | The token is wrong or revoked. | Create a new token and save it in Settings. |
+| Failed: `... SonarQube answered 403 on ...` or `... answered 404 on ...` | The user lacks Browse on the project, or the project key does not exist. Newer versions answer 404 for a missing permission. | Give the user Browse on the project. |
+| Failed: `... SonarQube answered 5xx on ...` | SonarQube had an error. | Check SonarQube. The next sync retries. |
+| Failed: `... the request failed or the answer was unreadable; see the server log. ...` | SonarQube could not be reached: DNS, firewall, TLS certificate, the 10-second timeout, or a refused redirect. | Read the Scanopsis log, which has the full error. |
+| Failed: `The SonarQube URL and token are not configured, so the analysis cannot be read.` | The settings were cleared after the delivery arrived. | Set them again. |
+| Failed: `The webhook has no readable analysedAt.` | The payload has no valid analysis time. | Make sure the webhook comes from SonarQube. |
+| Failed: `Storing the analysis failed; see the server log.` | A database error. | Read the Scanopsis log. |
+| Failed: `Processing was interrupted. Redeliver the webhook from SonarQube to process it again; ...` | Scanopsis stopped while it processed the delivery, so it stayed pending for more than 10 minutes. | In SonarQube, open the webhook settings, show the recent deliveries of the Scanopsis webhook and redeliver this one. A project linked by key needs nothing: the next sync reads it. |
 
 ### Other problems
 
-| Problem | Cause | What to do |
+| Problem | Cause | Fix |
 | --- | --- | --- |
-| SonarQube shows the webhook delivery as failed with a timeout or connection error | SonarQube cannot reach Scanopsis, or blocks private addresses. | See "Private addresses". |
-| Nothing is shown for a service | It has no SonarQube key and no analysis arrived with its project ID. | Link it (step 4). |
-| `last_sync_error` is set | The last sync could not read a project; the text names the project and the SonarQube status. | Fix the cause; the next sync clears it. |
-| A rating or coverage is "not available" | SonarQube did not report that metric for the analysis. | Check the project in SonarQube. |
+| SonarQube shows the delivery as failed, with a timeout or a connection error. | SonarQube cannot reach Scanopsis, or blocks private addresses. | See [If SonarQube refuses a private address](#if-sonarqube-refuses-a-private-address). |
+| A service shows no SonarQube data. | It has no SonarQube key, and no analysis arrived with its GitLab project ID. | Link it, see [step 4](#step-4-link-projects-to-services). |
+| The Integrations page shows "The last sync failed". | The last sync could not read a project. The text names the project and the SonarQube status. | Fix the cause. The next good sync clears it. |
+| A rating or the coverage says "Not available". | SonarQube did not report that metric for the analysis. | Check the project in SonarQube. |
+
+---
+
+[Back to the README](../../README.md) · [All guides](../../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
