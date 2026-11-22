@@ -106,7 +106,7 @@ function UpgradeRow({
             <span className="text-text-muted"> pts</span>
             <span className="text-text-faint">
               {' '}
-              · {formatPercent((group.risk / Math.max(1, total)) * 100, { digits: 0 })}
+              ({formatPercent((group.risk / Math.max(1, total)) * 100, { digits: 0 })})
             </span>
           </span>
         </div>

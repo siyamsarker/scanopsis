@@ -53,11 +53,10 @@ function Option({
             {scan.ref_protected ? (
               <Lock size={11} strokeWidth={2} aria-label="protected" className="shrink-0" />
             ) : null}
-            <span aria-hidden="true">·</span>
             <time
               dateTime={scan.scanned_at}
               title={formatExactTime(scan.scanned_at)}
-              className="shrink-0"
+              className="ml-1.5 shrink-0"
             >
               {formatShortDate(scan.scanned_at)}
             </time>

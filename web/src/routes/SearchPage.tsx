@@ -86,7 +86,7 @@ function Summary({ result }: { result: VulnerabilitySearch }) {
         </span>
         <span className="inline-flex items-center gap-1 font-mono text-body text-text">
           {result.vuln_id}
-          <CopyIconButton text={result.vuln_id} label="Copy vulnerability ID" />
+          <CopyIconButton text={result.vuln_id} label={`Copy ${result.vuln_id}`} />
         </span>
         {result.primary_url ? (
           <span className="ml-auto text-small">
