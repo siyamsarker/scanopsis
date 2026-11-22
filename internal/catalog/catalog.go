@@ -42,13 +42,15 @@ type Catalog struct {
 	cfg   SettingsSource
 	audit auth.AuditRecorder
 	log   *slog.Logger
-	// history caches the portfolio history (see encodedHistory).
+	// history caches the portfolio history (see historyCache).
 	history *historyCache
 }
 
 // New returns a Catalog.
 func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, log *slog.Logger) *Catalog {
-	return &Catalog{pool: pool, q: store.New(pool), cfg: cfg, audit: audit, log: log, history: &historyCache{}}
+	c := &Catalog{pool: pool, q: store.New(pool), cfg: cfg, audit: audit, log: log}
+	c.history = newHistoryCache(c)
+	return c
 }
 
 // Handlers returns the HTTP handlers by OpenAPI operation ID.

@@ -109,7 +109,7 @@ func TestPortfolioPerformance(t *testing.T) {
 	// twenty readers at once without sharing, it is reported only. The
 	// race detector slows its Go work, so the limit is scaled under it.
 	history := timed(t, c, "getPortfolioHistory")
-	forget := func() { c.history = &historyCache{} }
+	forget := func() { c.history = newHistoryCache(c) }
 	none := func() string { return "" }
 	cold := p95(repeat(30, func() time.Duration { forget(); return history() }))
 	shared := p95(together(20, 5, forget, history))

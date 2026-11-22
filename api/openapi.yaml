@@ -556,7 +556,7 @@ paths:
     get:
       tags: [services]
       summary: Recent pipelines of every service and the portfolio over the last week.
-      description: "For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts."
+      description: "For sparklines and deltas, loaded after the portfolio. Each service lists the state of its dashboard ref after each of its latest 20 pipelines; days gives the state of the whole portfolio 7, 6, ... and 1 day ago. A state is the sum over every artifact and kind of its latest scan at that moment, the rule the portfolio counts follow, so the last point of a service equals its portfolio counts. The answer is computed at most once every 30 seconds and may be that far behind the latest upload; when nothing changed it is reused for up to 2 minutes. generated_at says when it was computed."
       operationId: getPortfolioHistory
       responses:
         "200": { description: Portfolio history., content: { application/json: { schema: { $ref: "#/components/schemas/PortfolioHistory" } } } }

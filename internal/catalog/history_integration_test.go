@@ -6,6 +6,7 @@
 package catalog
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -188,10 +189,22 @@ func TestPortfolioHistoryEmpty(t *testing.T) {
 	}
 }
 
-// The history is cached, but a new scan, an archived service or another
-// dashboard branch shows at once, and concurrent readers get the same answer.
+// The history is cached. After a new scan, an archived service or another
+// dashboard branch the last history is served for the grace period, then the
+// change shows; concurrent readers share one computation.
 func TestPortfolioHistoryFollowsChanges(t *testing.T) {
 	c, pool, _ := newCatalog(t, "")
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	c.history.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	later := func() { clock.Add(int64(historyGrace)) }
+	var computed atomic.Int32
+	compute := c.history.compute
+	c.history.compute = func(ctx context.Context) ([]byte, error) {
+		computed.Add(1)
+		return compute(ctx)
+	}
+
 	now := time.Now().UTC()
 	svc := addService(t, pool, "svc", "g/svc", false)
 	pipelineScan(t, pool, svc, "image", "img", "main", 1, now.Add(-2*time.Hour), counts{High: 1})
@@ -215,15 +228,26 @@ func TestPortfolioHistoryFollowsChanges(t *testing.T) {
 	want("first", points(), []int64{svc*1000 + 1})
 	want("cached", points(), []int64{svc*1000 + 1})
 	pipelineScan(t, pool, svc, "image", "img", "main", 2, now.Add(-time.Hour), counts{High: 2})
+	want("within the grace period", points(), []int64{svc*1000 + 1})
+	later()
 	want("after an upload", points(), []int64{svc*1000 + 1, svc*1000 + 2})
 	pipelineScan(t, pool, svc, "image", "img", "dev", 3, now.Add(-time.Minute), counts{High: 3})
+	later()
 	want("another branch is the latest", points(), []int64{svc*1000 + 3})
 	mustExec(t, pool, `UPDATE services SET default_ref = 'main' WHERE id = $1`, svc)
+	later()
 	want("dashboard branch chosen", points(), []int64{svc*1000 + 1, svc*1000 + 2})
 	mustExec(t, pool, `UPDATE services SET archived = true WHERE id = $1`, svc)
+	later()
 	want("archived", points(), []int64{})
+	if n := computed.Load(); n != 5 {
+		t.Errorf("%d computations, want 5", n)
+	}
 
+	// Twenty readers after a change: one computation; each reader gets the
+	// last history or the new one, and the next reader the new one.
 	mustExec(t, pool, `UPDATE services SET archived = false WHERE id = $1`, svc)
+	later()
 	bodies := make([]string, 20)
 	var wg sync.WaitGroup
 	for i := range bodies {
@@ -231,8 +255,12 @@ func TestPortfolioHistoryFollowsChanges(t *testing.T) {
 	}
 	wg.Wait()
 	for i, b := range bodies {
-		if b != bodies[0] || !strings.Contains(b, `"pipeline_id":2`) {
-			t.Fatalf("reader %d got %s, reader 0 %s", i, b, bodies[0])
+		if !strings.Contains(b, `"services":[]`) && !strings.Contains(b, `"pipeline_id":2`) {
+			t.Errorf("reader %d got %s", i, b)
 		}
+	}
+	want("the next reader", points(), []int64{svc*1000 + 1, svc*1000 + 2})
+	if n := computed.Load(); n != 6 {
+		t.Errorf("%d computations, want 6", n)
 	}
 }

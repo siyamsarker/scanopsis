@@ -6,11 +6,9 @@ package catalog
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"net/http"
 	"slices"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -213,96 +211,10 @@ func (s *historyService) points() []historyPoint {
 	return out
 }
 
-// historyMaxAge bounds how long a computed history is served while the data
-// it was computed from looks unchanged. Changes the fingerprint does not see
-// (retention removing old scans, the day boundaries moving) show within it.
-const historyMaxAge = 30 * time.Second
-
-// fingerprintSQL changes whenever a scan is stored (an upload, including a
-// replaced one, inserts a new row with a higher id) and whenever a service
-// is added, removed, archived or given another dashboard branch. It reads
-// one index entry and the services table.
-const fingerprintSQL = `
-SELECT (SELECT COALESCE(max(id), 0) FROM scans)::text || ':' ||
-       COALESCE((SELECT md5(string_agg(id::text || chr(1) || archived::text || chr(1) || COALESCE(default_ref, chr(2)),
-                                       chr(3) ORDER BY id))
-                 FROM services), '')`
-
-// historyCache keeps the last encoded history. Concurrent requests that
-// find it stale share one computation instead of each running their own:
-// the history reads tens of thousands of scan rows, and twenty at once
-// would compete for the same CPU.
-type historyCache struct {
-	mu          sync.Mutex
-	fingerprint string
-	at          time.Time
-	body        []byte
-	pending     *historyFill
-}
-
-// historyFill is a computation in progress; done is closed when it ends.
-type historyFill struct {
-	done        chan struct{}
-	fingerprint string
-	body        []byte
-	err         error
-}
-
-// encodedHistory returns the history as JSON: the cached one while the data
-// fingerprint is unchanged and it is younger than historyMaxAge, else a
-// fresh one, computed once for all requests waiting at the time.
-func (c *Catalog) encodedHistory(ctx context.Context) ([]byte, error) {
-	var fp string
-	if err := c.pool.QueryRow(ctx, fingerprintSQL).Scan(&fp); err != nil {
-		return nil, err
-	}
-	h := c.history
-	h.mu.Lock()
-	if h.body != nil && h.fingerprint == fp && time.Since(h.at) < historyMaxAge {
-		body := h.body
-		h.mu.Unlock()
-		return body, nil
-	}
-	if f := h.pending; f != nil && f.fingerprint == fp {
-		h.mu.Unlock()
-		select {
-		case <-f.done:
-			return f.body, f.err
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-	f := &historyFill{done: make(chan struct{}), fingerprint: fp}
-	h.pending = f
-	h.mu.Unlock()
-
-	// The computation outlives a caller that gives up, so the others still
-	// get its result.
-	out, err := c.loadHistory(context.WithoutCancel(ctx), time.Now().UTC())
-	if err == nil {
-		// The body is shared by every reader from here on and never changed;
-		// the newline is added before that, as json.Encoder ends a response.
-		if f.body, err = json.Marshal(out); err == nil {
-			f.body = append(f.body, '\n')
-		}
-	}
-	f.err = err
-	h.mu.Lock()
-	if err == nil {
-		h.fingerprint, h.at, h.body = fp, out.GeneratedAt, f.body
-	}
-	if h.pending == f {
-		h.pending = nil
-	}
-	h.mu.Unlock()
-	close(f.done)
-	return f.body, f.err
-}
-
 // getPortfolioHistory returns the recent pipelines of every service and the
 // portfolio's daily state over the last week, for sparklines and deltas.
 func (c *Catalog) getPortfolioHistory(w http.ResponseWriter, r *http.Request) {
-	body, err := c.encodedHistory(r.Context())
+	body, err := c.history.get(r.Context())
 	if err != nil {
 		c.internalError(w, r, "cannot read portfolio history", err)
 		return
