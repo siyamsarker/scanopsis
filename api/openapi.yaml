@@ -12,6 +12,12 @@ info:
     authentication endpoints requires a session cookie. State-changing
     requests from browsers must be same-origin (checked with the
     Sec-Fetch-Site and Origin headers).
+
+    The server serves a limited number of API requests at a time, as many
+    as it has database connections. When all are busy a request waits a few
+    seconds and is then answered `503` with the code `busy` and a
+    `Retry-After` header (seconds). Nothing was done: retry the request.
+    The probes, the web interface and the Trivy upload are not counted.
 servers:
   - url: /
 tags:
@@ -43,7 +49,7 @@ paths:
   /readyz:
     get:
       tags: [ops]
-      summary: Readiness probe. Checks the database connection.
+      summary: Readiness probe. Checks the database over a connection of its own, so it answers while requests are waiting for the pool.
       operationId: readyz
       security: []
       responses:
@@ -70,6 +76,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Version" }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/auth/methods:
     get:
       tags: [auth]
@@ -83,6 +90,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/AuthMethods" }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/auth/gitlab/login:
     get:
       tags: [auth]
@@ -103,7 +111,7 @@ paths:
       responses:
         "302": { description: Redirect to the GitLab authorization endpoint. }
         "404": { description: GitLab sign-in is not configured., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { description: GitLab could not be reached., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: "GitLab could not be reached, or the server is busy (code busy; Retry-After gives seconds).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/v1/auth/gitlab/callback:
     get:
       tags: [auth]
@@ -122,6 +130,7 @@ paths:
       responses:
         "302": { description: Redirect to the application or to the sign-in page with an error code. }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/auth/local/login:
     post:
       tags: [auth]
@@ -140,7 +149,7 @@ paths:
         "403": { description: "The password is right, but an administrator disabled the account (code account_disabled).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "404": { description: Local sign-in is disabled., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many attempts from this network or for this username. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { description: The server is busy hashing other passwords and the request ended while waiting. Try again., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: "The server is busy: no slot became free within a few seconds (code busy; Retry-After gives seconds), or it is busy hashing other passwords and the request ended while waiting. Try again.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/auth/logout:
     post:
@@ -149,6 +158,7 @@ paths:
       responses:
         "204": { description: Signed out. The session is deleted and the cookie cleared. }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/me:
     get:
       tags: [auth]
@@ -168,6 +178,7 @@ paths:
               schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/users:
     get:
       tags: [users]
@@ -190,6 +201,7 @@ paths:
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/users/{id}:
     patch:
       tags: [users]
@@ -219,6 +231,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: "The change would leave no enabled administrator (code last_admin), or disables the caller's own account (code own_account).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
     delete:
       tags: [users]
       summary: Delete a user (admin only).
@@ -239,6 +252,7 @@ paths:
         "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: "The user is the last enabled administrator (code last_admin), or the caller (code own_account).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/setup:
     get:
       tags: [setup]
@@ -251,6 +265,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/SetupStatus" }
+        "503": { $ref: "#/components/responses/Busy" }
     post:
       tags: [setup]
       summary: Create the first administrator (local account) with the one-time setup token.
@@ -272,6 +287,7 @@ paths:
         "409": { description: Setup is already complete (code setup_complete)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many attempts. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/auth/mfa/verify:
     post:
       tags: [auth]
@@ -290,6 +306,7 @@ paths:
         "409": { description: Two-factor authentication is not enrolled yet (code mfa_enrollment_required)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "423": { description: Ten wrong codes in a row locked two-factor sign-in for this user (code mfa_locked). Every code is refused until an administrator resets two-factor authentication or the password; the user's sessions were ended., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many attempts. Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/auth/mfa/enrollment:
     post:
       tags: [auth]
@@ -306,6 +323,7 @@ paths:
               schema: { $ref: "#/components/schemas/MFAEnrollment" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "409": { description: Already enrolled (code mfa_already_enrolled)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/auth/mfa/enrollment/confirm:
     post:
       tags: [auth]
@@ -327,6 +345,7 @@ paths:
         "409": { description: No pending enrolment (code mfa_enrollment_not_started) or already enrolled., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { description: Too many attempts., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/me/password:
     post:
       tags: [auth]
@@ -347,6 +366,7 @@ paths:
         "401": { description: "Wrong current password (code invalid_credentials), or no session.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { description: Not a local account (code not_local) or second factor not verified., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/me/sessions:
     get:
       tags: [auth]
@@ -364,6 +384,7 @@ paths:
               schema: { $ref: "#/components/schemas/SessionList" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Busy" }
     delete:
       tags: [auth]
       summary: End every other session of the signed-in user.
@@ -377,6 +398,7 @@ paths:
               schema: { $ref: "#/components/schemas/SessionsEnded" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/me/sessions/{id}:
     delete:
       tags: [auth]
@@ -393,6 +415,7 @@ paths:
         "404": { description: The user has no other session with this id., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: This is the current session (code current_session)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/users/{id}/mfa:
     delete:
       tags: [users]
@@ -408,6 +431,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No such user., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/settings:
     get:
       tags: [settings]
@@ -421,6 +445,7 @@ paths:
               schema: { $ref: "#/components/schemas/SettingList" }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Busy" }
     patch:
       tags: [settings]
       summary: Change runtime settings (admin only). Changes apply immediately.
@@ -448,6 +473,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/ingest/trivy:
     post:
       tags: [ingest]
@@ -510,7 +536,7 @@ paths:
         "400": { description: Malformed payload (code invalid_payload)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { description: Missing or wrong signature (code invalid_signature)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "413": { description: Payload too large., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { description: SonarQube integration not configured (code sonar_not_configured)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: "SonarQube integration not configured (code sonar_not_configured), or the server is busy (code busy; Retry-After gives seconds).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
 
   /api/v1/portfolio:
     get:
@@ -521,6 +547,7 @@ paths:
         "200": { description: Portfolio., content: { application/json: { schema: { $ref: "#/components/schemas/Portfolio" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
 
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services:
     get:
       tags: [services]
@@ -534,6 +561,7 @@ paths:
         "200": { description: One page of services ordered by id., content: { application/json: { schema: { $ref: "#/components/schemas/ServicePage" } } } }
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Busy" }
     post:
       tags: [services]
       summary: Add a service by GitLab project path (admin only).
@@ -547,6 +575,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "409": { description: The project path or SonarQube key is already used (code conflict)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services/{id}:
     get:
       tags: [services]
@@ -557,6 +586,7 @@ paths:
         "200": { description: Service., content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
     patch:
       tags: [services]
       summary: "Rename, link a SonarQube project key, choose the dashboard branch, or archive (admin only)."
@@ -573,6 +603,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: The SonarQube key is already linked to another service (code conflict)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
     delete:
       tags: [services]
       summary: Delete a service and all its data (admin only).
@@ -584,6 +615,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services/{id}/overview:
     get:
       tags: [services]
@@ -596,6 +628,7 @@ paths:
         "200": { description: Overview., content: { application/json: { schema: { $ref: "#/components/schemas/Overview" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services/{id}/scans:
     get:
       tags: [scans]
@@ -611,6 +644,7 @@ paths:
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/scans/{id}:
     get:
       tags: [scans]
@@ -621,6 +655,7 @@ paths:
         "200": { description: Scan., content: { application/json: { schema: { $ref: "#/components/schemas/Scan" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/scans/{id}/diff:
     get:
       tags: [scans]
@@ -632,6 +667,7 @@ paths:
         "200": { description: Diff., content: { application/json: { schema: { $ref: "#/components/schemas/ScanDiff" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services/{id}/vulnerabilities:
     get:
       tags: [findings]
@@ -651,6 +687,7 @@ paths:
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services/{id}/secrets:
     get:
       tags: [findings]
@@ -663,6 +700,7 @@ paths:
         "200": { description: Secret findings., content: { application/json: { schema: { $ref: "#/components/schemas/SecretFindingList" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services/{id}/trends:
     get:
       tags: [services]
@@ -677,6 +715,7 @@ paths:
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/services/{id}/sonar:
     get:
       tags: [sonarqube]
@@ -689,6 +728,7 @@ paths:
         "200": { description: SonarQube data; latest is null when nothing was analysed yet., content: { application/json: { schema: { $ref: "#/components/schemas/ServiceSonar" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/search/vulnerabilities:
     get:
       tags: [findings]
@@ -700,6 +740,7 @@ paths:
         "200": { description: Matches., content: { application/json: { schema: { $ref: "#/components/schemas/VulnerabilitySearch" } } } }
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/admin/audit:
     get:
       tags: [admin]
@@ -719,6 +760,7 @@ paths:
         "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/admin/integrations/trivy:
     get:
       tags: [admin]
@@ -728,6 +770,7 @@ paths:
         "200": { description: Status., content: { application/json: { schema: { $ref: "#/components/schemas/TrivyIntegration" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/Busy" }
   /api/v1/admin/integrations/sonarqube:
     get:
       tags: [admin]
@@ -738,6 +781,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
+        "503": { $ref: "#/components/responses/Busy" }
 components:
   securitySchemes:
     ciIdToken:
@@ -751,6 +795,11 @@ components:
       name: __Host-scanopsis_session
       description: Named scanopsis_session when the public URL uses plain HTTP.
   responses:
+    Busy:
+      description: The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After.
+      headers:
+        Retry-After: { description: Seconds to wait before retrying., schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Unauthenticated:
       description: No valid session.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }

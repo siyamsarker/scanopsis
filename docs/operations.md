@@ -11,10 +11,15 @@ Scanopsis has two endpoints for monitoring. Neither needs a sign-in.
 | Endpoint | Meaning | Healthy answer | Unhealthy answer |
 |---|---|---|---|
 | `/healthz` | Liveness. The process is running. It does not check the database. | `200` with `{"status":"ok"}` | No answer |
-| `/readyz` | Readiness. The process can reach the database. | `200` with `{"status":"ready"}` | `503` with a status that names the failing part, without secrets |
+| `/readyz` | Readiness. The process can reach the database, over a connection of its own that requests never use. | `200` with `{"status":"ready"}` | `503` with a status that names the failing part, without secrets |
 
 Use `/healthz` to decide whether to restart the container. Use `/readyz` to
-decide whether to send traffic to it.
+decide whether to send traffic to it. `/readyz` checks the database over one
+connection that is not part of the pool, so it still answers `200` while the
+server is busy with requests and answers some of them with `503 busy` (see
+[overload](deployment.md#overload)); it fails only when the database cannot be
+reached. That connection counts against `max_connections` of the database, in
+addition to the pool.
 
 ```sh
 curl -s http://127.0.0.1:8080/healthz

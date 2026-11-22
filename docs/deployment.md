@@ -1289,6 +1289,36 @@ Limits on uploads, from one client address and from one project:
   [GitLab CI guide](integrations/gitlab-ci.md#retries-and-limits), whose script
   retries a `429`.
 
+### Overload
+
+Scanopsis serves at most as many API requests at the same time as its pool has
+database connections (16 by default, `pool_max_conns` in the
+[database URL](configuration.md#database-url-parameters)). A request that finds
+every slot taken waits up to 3 seconds. If none frees up it is answered
+`503` with the code `busy` and a `Retry-After: 2` header, and the log has a
+warning `request rejected: too many concurrent requests`. Without the limit,
+requests queued for a connection for as long as the queries ahead of them took,
+seconds on a loaded database, and nothing told the client or the proxy that
+the server was overloaded.
+
+Not counted are `/healthz`, `/readyz`, the web interface files and the Trivy
+upload, which has its own admission by memory (see above). `/readyz` checks the
+database over a connection of its own, so a busy server stays ready and an
+orchestrator does not restart it. That connection is one more than
+`pool_max_conns` for `max_connections` on the database.
+
+Measured with the test in `cmd/scanopsis` (a pool of 4, every connection held
+by a lock, 100 readers at once): 4 requests were waiting in the database, the
+other 96 were answered `503 busy` after 3.0 seconds, and `/readyz` answered
+`200` in 5 ms at the 95th percentile throughout.
+
+A client should retry a `503 busy` after the time in `Retry-After`. If you see
+it regularly, the database is the limit, not the pool: look for slow
+statements (`pg_stat_activity`, `pg_stat_statements`), and raise
+`pool_max_conns` only if the database has spare capacity. A proxy may count
+`503` as a failure of the upstream; if it takes the server out of rotation on
+the first `503`, set it to retry or to ignore this status.
+
 ### Database size
 
 The test uploaded each report 30 times, with a different job each time, into

@@ -5,7 +5,7 @@
 This page lists every endpoint of the HTTP API, generated from the OpenAPI
 document `api/openapi.yaml`. API version: 0.1.0.
 
-JSON API of Scanopsis. Every endpoint under /api/v1 except the authentication endpoints requires a session cookie. State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers).
+JSON API of Scanopsis. Every endpoint under /api/v1 except the authentication endpoints requires a session cookie. State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers). The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. The probes, the web interface and the Trivy upload are not counted.
 
 ## Authentication
 
@@ -48,6 +48,7 @@ Responses:
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/admin/integrations/sonarqube`
 
@@ -63,6 +64,7 @@ Responses:
 | 200 | Status. | `application/json` [SonarIntegration](#sonarintegration) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/admin/integrations/trivy`
 
@@ -78,6 +80,7 @@ Responses:
 | 200 | Status. | `application/json` [TrivyIntegration](#trivyintegration) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/auth/gitlab/callback`
 
@@ -101,6 +104,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 302 | Redirect to the application or to the sign-in page with an error code. | none |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/auth/gitlab/login`
 
@@ -123,7 +127,7 @@ Responses:
 |---|---|---|
 | 302 | Redirect to the GitLab authorization endpoint. | none |
 | 404 | GitLab sign-in is not configured. | `application/json` [Error](#error) |
-| 503 | GitLab could not be reached. | `application/json` [Error](#error) |
+| 503 | GitLab could not be reached, or the server is busy (code busy; Retry-After gives seconds). | `application/json` [Error](#error) |
 
 ### `POST /api/v1/auth/local/login`
 
@@ -146,7 +150,7 @@ Responses:
 | 403 | The password is right, but an administrator disabled the account (code account_disabled). | `application/json` [Error](#error) |
 | 404 | Local sign-in is disabled. | `application/json` [Error](#error) |
 | 429 | Too many attempts from this network or for this username. Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | The server is busy hashing other passwords and the request ended while waiting. Try again. | `application/json` [Error](#error) |
+| 503 | The server is busy: no slot became free within a few seconds (code busy; Retry-After gives seconds), or it is busy hashing other passwords and the request ended while waiting. Try again. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/auth/logout`
 
@@ -158,6 +162,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 204 | Signed out. The session is deleted and the cookie cleared. | none |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/auth/methods`
 
@@ -171,6 +176,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 200 | Enabled methods. | `application/json` [AuthMethods](#authmethods) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/auth/mfa/enrollment`
 
@@ -188,6 +194,7 @@ Responses:
 | 200 | Pending enrolment. | `application/json` [MFAEnrollment](#mfaenrollment) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 409 | Already enrolled (code mfa_already_enrolled). | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/auth/mfa/enrollment/confirm`
 
@@ -209,6 +216,7 @@ Responses:
 | 401 | Wrong code (code invalid_code), or no session. | `application/json` [Error](#error) |
 | 409 | No pending enrolment (code mfa_enrollment_not_started) or already enrolled. | `application/json` [Error](#error) |
 | 429 | Too many attempts. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/auth/mfa/verify`
 
@@ -233,6 +241,7 @@ Responses:
 | 409 | Two-factor authentication is not enrolled yet (code mfa_enrollment_required). | `application/json` [Error](#error) |
 | 423 | Ten wrong codes in a row locked two-factor sign-in for this user (code mfa_locked). Every code is refused until an administrator resets two-factor authentication or the password; the user's sessions were ended. | `application/json` [Error](#error) |
 | 429 | Too many attempts. Retry-After gives seconds. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/hooks/sonarqube`
 
@@ -255,7 +264,7 @@ Responses:
 | 400 | Malformed payload (code invalid_payload). | `application/json` [Error](#error) |
 | 401 | Missing or wrong signature (code invalid_signature). | `application/json` [Error](#error) |
 | 413 | Payload too large. | `application/json` [Error](#error) |
-| 503 | SonarQube integration not configured (code sonar_not_configured). | `application/json` [Error](#error) |
+| 503 | SonarQube integration not configured (code sonar_not_configured), or the server is busy (code busy; Retry-After gives seconds). | `application/json` [Error](#error) |
 
 ### `POST /api/v1/ingest/trivy`
 
@@ -307,6 +316,7 @@ Responses:
 |---|---|---|
 | 200 | Current user. | `application/json` [Me](#me) |
 | 401 | No valid session. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/me/password`
 
@@ -329,6 +339,7 @@ Responses:
 | 400 | Invalid request or weak password (code weak_password). | `application/json` [Error](#error) |
 | 401 | Wrong current password (code invalid_credentials), or no session. | `application/json` [Error](#error) |
 | 403 | Not a local account (code not_local) or second factor not verified. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/me/sessions`
 
@@ -346,6 +357,7 @@ Responses:
 | 200 | Sessions of the signed-in user. | `application/json` [SessionList](#sessionlist) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/me/sessions`
 
@@ -363,6 +375,7 @@ Responses:
 | 200 | How many sessions ended. | `application/json` [SessionsEnded](#sessionsended) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/me/sessions/{id}`
 
@@ -389,6 +402,7 @@ Responses:
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | The user has no other session with this id. | `application/json` [Error](#error) |
 | 409 | This is the current session (code current_session). | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/portfolio`
 
@@ -403,6 +417,7 @@ Responses:
 |---|---|---|
 | 200 | Portfolio. | `application/json` [Portfolio](#portfolio) |
 | 401 | No valid session. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/scans/{id}`
 
@@ -422,6 +437,7 @@ Responses:
 | 200 | Scan. | `application/json` [Scan](#scan) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/scans/{id}/diff`
 
@@ -443,6 +459,7 @@ Responses:
 | 200 | Diff. | `application/json` [ScanDiff](#scandiff) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/search/vulnerabilities`
 
@@ -464,6 +481,7 @@ Responses:
 | 200 | Matches. | `application/json` [VulnerabilitySearch](#vulnerabilitysearch) |
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services`
 
@@ -486,6 +504,7 @@ Responses:
 | 200 | One page of services ordered by id. | `application/json` [ServicePage](#servicepage) |
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/services`
 
@@ -507,6 +526,7 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 409 | The project path or SonarQube key is already used (code conflict). | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services/{id}`
 
@@ -526,6 +546,7 @@ Responses:
 | 200 | Service. | `application/json` [Service](#service) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `PATCH /api/v1/services/{id}`
 
@@ -554,6 +575,7 @@ Responses:
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
 | 409 | The SonarQube key is already linked to another service (code conflict). | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/services/{id}`
 
@@ -576,6 +598,7 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services/{id}/overview`
 
@@ -598,6 +621,7 @@ Responses:
 | 200 | Overview. | `application/json` [Overview](#overview) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services/{id}/scans`
 
@@ -623,6 +647,7 @@ Responses:
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services/{id}/secrets`
 
@@ -645,6 +670,7 @@ Responses:
 | 200 | Secret findings. | `application/json` [SecretFindingList](#secretfindinglist) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services/{id}/sonar`
 
@@ -667,6 +693,7 @@ Responses:
 | 200 | SonarQube data; latest is null when nothing was analysed yet. | `application/json` [ServiceSonar](#servicesonar) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services/{id}/trends`
 
@@ -691,6 +718,7 @@ Responses:
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/services/{id}/vulnerabilities`
 
@@ -720,6 +748,7 @@ Responses:
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/settings`
 
@@ -735,6 +764,7 @@ Responses:
 | 200 | Settings. | `application/json` [SettingList](#settinglist) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `PATCH /api/v1/settings`
 
@@ -757,6 +787,7 @@ Responses:
 | 400 | Validation failed (code invalid_settings); details name each key. | `application/json` [SettingsError](#settingserror) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/setup`
 
@@ -770,6 +801,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 200 | Setup status. | `application/json` [SetupStatus](#setupstatus) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/setup`
 
@@ -793,6 +825,7 @@ Responses:
 | 403 | Wrong setup token (code invalid_setup_token). | `application/json` [Error](#error) |
 | 409 | Setup is already complete (code setup_complete). | `application/json` [Error](#error) |
 | 429 | Too many attempts. Retry-After gives seconds. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/users`
 
@@ -816,6 +849,7 @@ Responses:
 | 400 | Invalid parameter. | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `PATCH /api/v1/users/{id}`
 
@@ -846,6 +880,7 @@ Responses:
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No such user. | `application/json` [Error](#error) |
 | 409 | The change would leave no enabled administrator (code last_admin), or disables the caller's own account (code own_account). | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/users/{id}`
 
@@ -872,6 +907,7 @@ Responses:
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No such user. | `application/json` [Error](#error) |
 | 409 | The user is the last enabled administrator (code last_admin), or the caller (code own_account). | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/users/{id}/mfa`
 
@@ -897,6 +933,7 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No such user. | `application/json` [Error](#error) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/version`
 
@@ -908,6 +945,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 200 | Build information. | `application/json` [Version](#version) |
+| 503 | The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /healthz`
 
@@ -924,7 +962,7 @@ Responses:
 
 ### `GET /readyz`
 
-Readiness probe. Checks the database connection.
+Readiness probe. Checks the database over a connection of its own, so it answers while requests are waiting for the pool.
 
 - Operation ID: `readyz`
 - Authentication: None

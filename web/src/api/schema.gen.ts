@@ -28,7 +28,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Readiness probe. Checks the database connection. */
+        /** Readiness probe. Checks the database over a connection of its own, so it answers while requests are waiting for the pool. */
         get: operations["readyz"];
         put?: never;
         post?: never;
@@ -1277,6 +1277,17 @@ export interface components {
         };
     };
     responses: {
+        /** @description The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. */
+        Busy: {
+            headers: {
+                /** @description Seconds to wait before retrying. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description No valid session. */
         Unauthenticated: {
             headers: {
@@ -1370,6 +1381,7 @@ export interface operations {
                     "application/json": components["schemas"]["Version"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getAuthMethods: {
@@ -1390,6 +1402,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuthMethods"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     gitlabLogin: {
@@ -1419,7 +1432,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description GitLab could not be reached. */
+            /** @description GitLab could not be reached, or the server is busy (code busy; Retry-After gives seconds). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1450,6 +1463,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            503: components["responses"]["Busy"];
         };
     };
     localLogin: {
@@ -1517,7 +1531,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The server is busy hashing other passwords and the request ended while waiting. Try again. */
+            /** @description The server is busy: no slot became free within a few seconds (code busy; Retry-After gives seconds), or it is busy hashing other passwords and the request ended while waiting. Try again. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1544,6 +1558,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            503: components["responses"]["Busy"];
         };
     };
     getMe: {
@@ -1565,6 +1580,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            503: components["responses"]["Busy"];
         };
     };
     listUsers: {
@@ -1600,6 +1616,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
     deleteUser: {
@@ -1649,6 +1666,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     updateUser: {
@@ -1704,6 +1722,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getSetupStatus: {
@@ -1724,6 +1743,7 @@ export interface operations {
                     "application/json": components["schemas"]["SetupStatus"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     completeSetup: {
@@ -1782,6 +1802,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     verifyMFA: {
@@ -1849,6 +1870,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     startMFAEnrollment: {
@@ -1879,6 +1901,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     confirmMFAEnrollment: {
@@ -1939,6 +1962,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     changePassword: {
@@ -1988,6 +2012,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     listMySessions: {
@@ -2010,6 +2035,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
     endOtherSessions: {
@@ -2032,6 +2058,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
     endMySession: {
@@ -2081,6 +2108,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     resetUserMFA: {
@@ -2121,6 +2149,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     listSettings: {
@@ -2143,6 +2172,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
     updateSettings: {
@@ -2178,6 +2208,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
     ingestTrivy: {
@@ -2344,7 +2375,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description SonarQube integration not configured (code sonar_not_configured). */
+            /** @description SonarQube integration not configured (code sonar_not_configured), or the server is busy (code busy; Retry-After gives seconds). */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -2374,6 +2405,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            503: components["responses"]["Busy"];
         };
     };
     listServices: {
@@ -2410,6 +2442,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            503: components["responses"]["Busy"];
         };
     };
     createService: {
@@ -2454,6 +2487,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getService: {
@@ -2486,6 +2520,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     deleteService: {
@@ -2517,6 +2552,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     updateService: {
@@ -2572,6 +2608,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getServiceOverview: {
@@ -2607,6 +2644,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     listServiceScans: {
@@ -2654,6 +2692,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getScan: {
@@ -2686,6 +2725,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getScanDiff: {
@@ -2718,6 +2758,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     listServiceVulnerabilities: {
@@ -2771,6 +2812,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     listServiceSecrets: {
@@ -2806,6 +2848,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getServiceTrends: {
@@ -2851,6 +2894,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     getServiceSonar: {
@@ -2886,6 +2930,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            503: components["responses"]["Busy"];
         };
     };
     searchVulnerabilities: {
@@ -2918,6 +2963,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthenticated"];
+            503: components["responses"]["Busy"];
         };
     };
     listAuditEvents: {
@@ -2957,6 +3003,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
     getTrivyIntegration: {
@@ -2979,6 +3026,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
     getSonarIntegration: {
@@ -3001,6 +3049,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            503: components["responses"]["Busy"];
         };
     };
 }

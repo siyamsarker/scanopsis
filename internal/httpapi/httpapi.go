@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"time"
 
 	"github.com/siyamsarker/scanopsis/internal/auth"
 	"github.com/siyamsarker/scanopsis/internal/store"
@@ -40,7 +41,9 @@ type UserStore interface {
 	DeleteUser(ctx context.Context, id int64) (store.User, error)
 }
 
-// Pinger checks that the database is reachable. *pgxpool.Pool implements it.
+// Pinger checks that the database is reachable. The readiness probe uses it;
+// it should not compete with request traffic for pooled connections (see
+// store.Probe).
 type Pinger interface {
 	Ping(ctx context.Context) error
 }
@@ -90,6 +93,13 @@ type Deps struct {
 	// The router applies the session and role checks; a missing entry
 	// answers 404 not_enabled.
 	Features map[string]http.Handler
+
+	// MaxConcurrent is the most database-backed API requests served at once;
+	// the others wait up to BusyWait and are then answered 503 busy. Set it to
+	// the size of the connection pool. Zero disables the limit. The probes,
+	// the web interface and the Trivy upload are not counted.
+	MaxConcurrent int
+	BusyWait      time.Duration // zero means DefaultBusyWait
 
 	Assets fs.FS // built web interface rooted at index.html; nil when not built
 	Build  BuildInfo
@@ -190,6 +200,7 @@ func (s *server) handler(routes []route) http.Handler {
 
 	var h http.Handler = mux
 	h = limitBody(h)
+	h = s.limitConcurrency(h)
 	h = csrf.Handler(h)
 	h = s.securityHeaders(h)
 	h = s.logRequests(h)

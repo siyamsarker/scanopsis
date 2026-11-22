@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Under heavy load the server no longer lets requests queue for a database connection for seconds. It serves as many API requests at once as the pool has connections (16 by default), makes the others wait at most 3 seconds and then answers `503` with the code `busy` and a `Retry-After` header. The probes, the web interface and the Trivy upload are not counted. The API reference documents the new answer on every operation.
+- `/readyz` checks the database over a connection of its own instead of one from the pool, so a server that is busy with requests stays ready and an orchestrator no longer restarts it. The connection is opened again after a failure and counts against `max_connections` of the database in addition to the pool.
 - Stopping the server with an upload still running no longer logs an error and exits with status 1 after the 15-second wait. The deadline is expected on a deliberate stop: the server logs a warning with the number of requests it cut off and exits with status 0. A real failure still exits with status 1.
 
 ### Security

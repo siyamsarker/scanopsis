@@ -200,13 +200,25 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	notEnabledLocal := httpapi.NotEnabled("Local sign-in")
 
+	// The readiness probe uses a connection of its own: a pool saturated by
+	// requests must not make a healthy server report "not ready".
+	probe := store.NewProbe(pool)
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		probe.Close(closeCtx)
+	}()
+
 	deps := httpapi.Deps{
-		Log:      log,
-		DB:       pool,
-		Users:    userStore{q: q, pool: pool},
-		Sessions: sessions,
-		Audit:    rec,
-		ClientIP: resolver.IP,
+		Log: log,
+		DB:  probe,
+		// Requests beyond the pool's size would only queue for a connection;
+		// they wait briefly for a slot and are then answered 503 busy.
+		MaxConcurrent: int(pool.Config().MaxConns),
+		Users:         userStore{q: q, pool: pool},
+		Sessions:      sessions,
+		Audit:         rec,
+		ClientIP:      resolver.IP,
 		LocalLogin: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if conf.Current().LocalLoginEnabled {
 				localLogin.ServeHTTP(w, r)

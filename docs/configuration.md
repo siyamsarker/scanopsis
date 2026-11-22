@@ -65,7 +65,7 @@ parameter in the database URL to change one.
 
 | Parameter | Default | Example | Effect |
 |---|---|---|---|
-| `pool_max_conns` | `16` | `?pool_max_conns=32` | The most connections one Scanopsis process opens. Requests wait for a free connection when all are busy, so raise it only with enough `max_connections` on the database (keep a few spare for backups and administration). |
+| `pool_max_conns` | `16` | `?pool_max_conns=32` | The most connections one Scanopsis process opens. It also limits how many API requests are served at once: further requests wait up to 3 seconds for a slot and are then answered `503 busy`. Raise it only with enough `max_connections` on the database (the process needs one more for the readiness probe; keep a few spare for backups and administration). |
 | `statement_timeout` | `30000` (30 seconds, in milliseconds) | `?statement_timeout=60000` | PostgreSQL cancels any statement that runs longer and the request fails with an error. `0` turns the limit off. An `options=-c statement_timeout=...` parameter also counts as a setting. |
 
 Example: `postgres://scanopsis:pw@db:5432/scanopsis?sslmode=disable&pool_max_conns=24`.
