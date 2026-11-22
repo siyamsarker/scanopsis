@@ -58,6 +58,9 @@ const (
 	codeBusy = "busy"
 	// codeTimeout: the body did not arrive within the read deadline.
 	codeTimeout = "request_timeout"
+	// codeUnavailable: the database could not be reached or could not take
+	// the work. The upload was not stored; retry.
+	codeUnavailable = "unavailable"
 )
 
 // DefaultReadTimeout is how long an admitted upload has to send its whole
@@ -384,6 +387,15 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, errPathTaken):
 		reject(http.StatusConflict, codeConflict,
 			"A different service already uses the project path "+claims.ProjectPath+". Archive or delete it in Scanopsis.")
+		return
+	case isUnavailable(ctx, err):
+		// Neither the client's fault nor a bug. It is not audited (the audit
+		// log is in the same database) and the client is told to retry.
+		i.log.ErrorContext(ctx, "cannot store scan: the database is not available",
+			"project", claims.ProjectPath, "job_id", claims.JobID, "error", err)
+		w.Header().Set("Retry-After", strconv.Itoa(unavailableRetryAfter))
+		httpapi.WriteError(w, http.StatusServiceUnavailable, codeUnavailable,
+			"The database is not available, so the report was not stored. Retry later.")
 		return
 	case err != nil:
 		i.log.ErrorContext(ctx, "cannot store scan", "project", claims.ProjectPath, "job_id", claims.JobID, "error", err)

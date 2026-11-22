@@ -78,10 +78,14 @@ mkdir -p "$out"
 
 # upload <report.json> <image|secret-fs>
 # Prints what happened and always returns 0: a problem with the upload never
-# changes the result of the job.
+# changes the result of the job. curl retries for about four minutes (8
+# retries, waiting 1 s, 2 s, 4 s and so on, or the Retry-After of the answer)
+# when Scanopsis answers 408, 429, 500, 502, 503 or 504, when a transfer times
+# out, and when the connection is refused (Scanopsis is restarting). It does
+# not retry other answers: a 4xx such as 401, 409 or 413 stays the same.
 upload() {
   gzip -c "$1" >"$1.gz"
-  code=$(curl -sS --max-time 120 --retry 2 -X POST \
+  code=$(curl -sS --max-time 120 --retry 8 --retry-connrefused --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
     -H 'Content-Encoding: gzip' \
@@ -128,7 +132,9 @@ What the script does, in order:
    findings your ignore file (`.trivyignore`) or VEX documents suppressed, so
    that Scanopsis can show them as suppressed.
 2. `upload` sends the report, gzip-compressed, and prints the HTTP status and
-   the answer. It always returns 0, so a failed upload cannot fail the job.
+   the answer. It retries a temporary failure (see
+   [Retries and limits](#retries-and-limits)). It always returns 0, so a failed
+   upload cannot fail the job.
 3. `jq` removes the vulnerabilities whose `Status` is not `fixed`, and
    `trivy convert` prints the table of HIGH and CRITICAL findings from what is
    left and returns exit code 1 if there are any. This is the gate you had
@@ -235,6 +241,35 @@ The match text of a secret is never stored. Scanopsis keeps the rule and the
 file and line only. (The raw report is kept compressed for audit, exactly as
 Trivy wrote it, and Trivy masks the secret in it.)
 
+## Retries and limits
+
+A problem on the Scanopsis side is usually temporary: a restart, a database that
+is not reachable yet, a burst of uploads. The script retries for about four
+minutes, so a short outage does not lose a scan. curl decides what to retry:
+
+| Answer | Cause | Retried |
+| --- | --- | --- |
+| `408` `request_timeout` | The body did not arrive within 5 minutes. | yes |
+| `429` | Too many uploads from the address (`too_many_requests`). | yes, after the `Retry-After` seconds |
+| `500`, `502`, `504` | An error in Scanopsis, or a proxy that could not reach it. | yes |
+| `503` | Scanopsis is busy (`busy`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`); each carries `Retry-After` except the GitLab one. | yes |
+| Connection refused, timeout | Scanopsis is down or restarting. | yes (`--retry-connrefused`) |
+| `400`, `401`, `403`, `409`, `413`, `415`, `422` | The request itself is wrong. The same request gets the same answer. | no |
+
+The script uses `--retry` and not `--retry-all-errors`, which would also repeat
+the last row and delay the job. Retrying is safe: a repeated upload of the same
+job, image and kind replaces the earlier one. curl 7.66 or later honours
+`Retry-After`; 8 retries with curl's doubling wait (1 s, 2 s, 4 s, up to 128 s)
+and `--retry-max-time 300` give the four minutes.
+
+Scanopsis reads an upload for at most 5 minutes after it accepted it. The limit
+is its own, longer than the 30 seconds of the rest of the server, so a large
+report can cross a slow link. A body that is not complete by then is answered with
+`408`. Uploads are admitted by the memory they need, which follows their size,
+not by a fixed number: many small reports are processed at once, and a few
+large ones. An upload that finds no free memory waits up to 30 seconds and is then
+answered with `503` `busy`. See [sizing](../deployment.md#sizing).
+
 ## Restrict who may upload
 
 > **Set the allowed namespaces on a shared or public GitLab instance.** With the
@@ -315,10 +350,13 @@ error line above it: wrong URL, DNS, TLS or firewall).
 | `422` `not_a_trivy_report`: `... SchemaVersion is missing` or `SchemaVersion 1 is not supported, only 2 is` | The file is not a Trivy JSON report, or has an unsupported schema version. | Create it with `--format json` from Trivy 0.50 or later. |
 | `413` `report_too_large`: `The report is larger than the limit of ... bytes (decompressed).` | The decompressed report is above the limit (64 MiB by default). | Scan fewer targets per report, or ask the administrator to raise the limit. |
 | `413` `report_too_large`: `The report has too many findings: ...` | The report holds more than 200000 vulnerabilities and secrets. | Split the scan, for example one report per image. |
-| `503` `busy`: `The server is processing other uploads. Retry later.` and a `Retry-After` header | Scanopsis processes at most 4 uploads at once, because each may hold a large report in memory, and the request ended (for example by a client timeout) before a slot was free. | Run the upload again after the number of seconds in `Retry-After`, or spread the uploads of many jobs over time. |
+| `503` `busy`: `The server is processing other uploads. Retry later.` and a `Retry-After` header | Uploads are admitted by the memory they need, and none was free within 30 seconds (or the request ended before). | The script retries. Otherwise run the upload again after the number of seconds in `Retry-After`, or spread the uploads of many jobs over time. |
+| `503` `unavailable`: `The database is not available, so the report was not stored. Retry later.` and a `Retry-After` header | Scanopsis cannot reach its PostgreSQL database, or the database cannot take the work now. The report was not stored. | The script retries. If it keeps happening, check the database and the log of Scanopsis (`cannot store scan: the database is not available`). |
+| `408` `request_timeout`: `The body did not arrive in time. Upload it faster, or retry.` | The whole body did not arrive within 5 minutes. | The script retries. Check the link between the runner and Scanopsis, or the size of the report. |
 | `409` `service_archived`: `The service for this project is archived. ...` | An administrator archived the service of this project. Archived services receive no data. | Ask an administrator to unarchive it. |
 | `409` `service_conflict`: `A different service already uses the project path ...` | Another service has this project path, for example from a deleted project with the same path. | Archive or delete the old service in Scanopsis. |
 | `429` `too_many_requests`: `Too many uploads from this address. Retry later.` and a `Retry-After` header | More than the allowed number of uploads per second from one address. | Upload fewer reports at once, or wait the number of seconds in `Retry-After`. |
 
 If the answer is `500` (`internal_error`), the upload was not stored and the
-cause is in the log of Scanopsis. Run the job again.
+cause is in the log of Scanopsis. The script retries it; if the retries fail too,
+run the job again.
