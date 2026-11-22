@@ -1,7 +1,8 @@
 # Development guide
 
 This guide explains how to set up a local development environment, build and
-run Scanopsis, and run the same checks as CI.
+run Scanopsis, and run the checks. The repository has no CI service: the
+checks run on your machine.
 
 ## Prerequisites
 
@@ -9,14 +10,14 @@ Install the following tools:
 
 | Tool | Version | Notes |
 |---|---|---|
-| Go | 1.27.4 | `go.mod` declares 1.27 as the minimum. CI uses 1.27.4. |
+| Go | 1.27.4 | `go.mod` declares 1.27 as the minimum. |
 | Node.js | 26.13.1 (LTS) | The exact version is in `.nvmrc`. |
 | GNU Make | 3.81 or later | The `Makefile` is the single entry point for every task. |
 | Docker | Any current release with BuildKit | Needed to build the container image, to run a local PostgreSQL and to run the integration tests. |
 | Git | Any current release | Version information is read from Git at build time. |
 
-Go tools used by the checks (golangci-lint, govulncheck, go-licenses,
-actionlint) are not installed separately. The `Makefile` runs them with
+Go tools used by the checks (golangci-lint, govulncheck, go-licenses, sqlc)
+are not installed separately. The `Makefile` runs them with
 `go run` at pinned versions, so the first run downloads them into the Go
 module cache.
 
@@ -35,8 +36,8 @@ nvm use
 | `cmd/scanopsis/` | Server entry point |
 | `web/` | Web interface (React, TypeScript, Vite, Tailwind CSS) |
 | `web/embed.go` | Embeds the built web interface into the Go binary |
-| `scripts/` | Helper scripts used by CI |
-| `.github/` | CI workflow, Dependabot, issue and pull request templates |
+| `scripts/` | Helper scripts for the checks and releases |
+| `.github/` | Code owners, issue and pull request templates |
 | `docs/` | Documentation for operators and developers |
 | `api/openapi.yaml` | The HTTP API contract |
 | `internal/` | Server packages: configuration, settings, authentication, HTTP API, database access |
@@ -48,7 +49,7 @@ Run `make help` to list every target. The most common ones are:
 
 | Command | What it does |
 |---|---|
-| `make check` | Runs every check that CI runs, except the image build. Run it before you open a pull request. |
+| `make check` | Runs the fast checks: formatting, lint, unit tests, vulnerabilities, web checks, build, headers, script tests and licences. Run it before you open a pull request. |
 | `make fmt` | Formats the Go code. |
 | `make test` | Runs the Go unit tests with the race detector. |
 | `make test-integration` | Runs the Go tests that need PostgreSQL, against a database in Docker. See [integration tests](#integration-tests). |
@@ -216,9 +217,9 @@ the current user cannot reach the Docker socket.
 
 ## Coverage
 
-`make coverage` is not part of `make check`, which stays fast. CI runs it in
-the Coverage job. Docker must be running, because the Go part includes the
-integration tests.
+`make coverage` is not part of `make check`, which stays fast. Run it before
+you open a pull request that changes code. Docker must be running, because the
+Go part includes the integration tests.
 
 ```sh
 make coverage
@@ -280,8 +281,7 @@ All files          |   96.91 |    89.67 |   95.62 |   97.08
 
 `make perf` builds the web interface and the image, starts PostgreSQL and
 Scanopsis in Docker, and checks the targets below. Docker must be running. It
-removes its containers and network when it ends, also when it fails. CI runs
-it in the Performance job.
+removes its containers and network when it ends, also when it fails.
 
 ```sh
 make perf
@@ -317,7 +317,7 @@ performance tests (go test)                                    ok         pass  
 `scripts/release-notes.sh <version>` prints the body of the `## [<version>]`
 section of `CHANGELOG.md`, without the heading and without the link references
 at the end of the file. It fails when the section is missing or empty. The
-release workflow uses it, and `make test-scripts` tests it. See
+release script uses it, and `make test-scripts` tests it. See
 [releasing](releasing.md).
 
 ```sh
@@ -353,8 +353,8 @@ Expected result: the command ends with a line like
 change when the generated files were already up to date.
 
 `make generate-check` runs the generation and fails if it changes any
-committed file. CI uses it, so commit the generated files together with your
-change.
+committed file. Run it before you open a pull request, and commit the
+generated files together with your change.
 
 ## Conventions
 
@@ -364,24 +364,22 @@ change.
   CONTRIBUTING.md. `make headers` checks this.
 - **Dependency pinning:** dependencies are pinned to exact versions
   (`go.mod`, `web/package.json` with `web/package-lock.json`), base images by
-  digest in the `Dockerfile`, and GitHub Actions by commit SHA. Dependabot
-  proposes updates weekly.
+  digest in the `Dockerfile`. Update them deliberately, one change at a time,
+  and run every check afterwards.
 - **Licence policy:** distributed dependencies may only use Apache-2.0, MIT,
   BSD-2-Clause, BSD-3-Clause, ISC or 0BSD licences, plus OFL-1.1 for fonts.
   `make licenses` enforces this.
 
-### Update the Trivy version used in CI
+### Image scan and sign-offs
 
-Dependabot does not update the Trivy version in
-`.github/workflows/ci.yml`. To change it:
+`make image-scan` builds the image and scans it with Trivy, which you install
+yourself (any current release). It fails on any HIGH or CRITICAL
+vulnerability and on any secret. Run it when you change the `Dockerfile` or a
+dependency.
 
-1. Download `trivy_<version>_Linux-64bit.tar.gz` from the
-   [Trivy releases page](https://github.com/aquasecurity/trivy/releases).
-2. Compute its SHA-256 with `shasum -a 256` (macOS) or `sha256sum` (Linux),
-   and compare it with the line for that file in `trivy_<version>_checksums.txt`
-   from the same release.
-3. Set `TRIVY_VERSION` and `TRIVY_SHA256` in the workflow to the new values,
-   in the same commit.
+`make dco` checks that every commit after `origin/main` has a
+`Signed-off-by` line that matches its author. Set `DCO_BASE` to check another
+range, for example `make dco DCO_BASE=HEAD~3`.
 
 ## Troubleshooting
 

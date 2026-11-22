@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Pinned tool versions. Tools run through `go run`, so nothing is installed
-# globally and every contributor and CI job uses the same version.
+# globally and every contributor uses the same version.
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.10.0
 SQLC          := go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
 GO_LICENSES   := go run github.com/google/go-licenses/v2@v2.0.1
-ACTIONLINT    := go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
 # Licence policy: only these licences may appear in distributed dependencies.
 # go-licenses takes a comma-separated list, license-checker a semicolon-separated one.
@@ -23,12 +22,12 @@ COMMIT  ?= $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | $(
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 IMAGE   ?= scanopsis:dev
 
-.PHONY: generate generate-check test-integration help check fmt fmt-check lint test vuln build web-install web-lint web-test web-build web image clean headers test-scripts licenses actionlint
+.PHONY: generate generate-check test-integration help check fmt fmt-check lint test vuln build web-install web-lint web-test web-build web image image-scan clean headers test-scripts licenses dco
 
 help: ## List available targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
 
-check: fmt-check lint test vuln web-lint web-test build headers test-scripts licenses actionlint ## Run every check that CI runs, except the image build
+check: fmt-check lint test vuln web-lint web-test build headers test-scripts licenses ## Run the fast checks (not coverage, perf, e2e or the image scan)
 
 fmt: ## Format Go code
 	$(GOLANGCI_LINT) fmt
@@ -76,18 +75,26 @@ web: web-build ## Alias for web-build
 image: ## Build the container image
 	docker build --build-arg VERSION='$(VERSION)' --build-arg COMMIT='$(COMMIT)' -t '$(IMAGE)' .
 
+# Two Trivy runs: the severity filter applies to secrets too, and every secret
+# finding must fail, whatever its severity.
+image-scan: image ## Build the image and fail on a HIGH or CRITICAL vulnerability or any secret (needs trivy)
+	trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 '$(IMAGE)'
+	trivy image --scanners secret --exit-code 1 '$(IMAGE)'
+
 headers: ## Fail if a source file lacks the SPDX licence header
 	bash scripts/check-headers.sh
 
-test-scripts: ## Test the CI helper scripts
+test-scripts: ## Test the helper scripts in scripts/
 	bash scripts/test-scripts.sh
 
 licenses: web-install ## Enforce the licence policy for Go and runtime npm dependencies
 	$(GO_LICENSES) check ./... --allowed_licenses='$(GO_LICENSES_ALLOWED)'
 	cd web && npm exec --no -- license-checker-rseidelsohn --production --excludePrivatePackages --onlyAllow '$(NPM_LICENSES_ALLOWED)'
 
-actionlint: ## Lint GitHub Actions workflows
-	$(ACTIONLINT)
+# DCO_BASE is the commit the checked range starts after.
+DCO_BASE ?= origin/main
+dco: ## Fail if a commit after DCO_BASE (default origin/main) lacks a matching Signed-off-by
+	bash scripts/check-dco.sh '$(DCO_BASE)' HEAD
 
 clean: ## Remove build output
 	rm -rf bin web/dist/app
@@ -96,7 +103,7 @@ clean: ## Remove build output
 
 e2e: ## Run the end-to-end tests in a browser against a Docker Compose stack
 	cd test/e2e && npm ci --ignore-scripts
-	cd test/e2e && if [ -n "$$CI" ]; then npx playwright install --with-deps chromium; else npx playwright install chromium; fi
+	cd test/e2e && npx playwright install chromium
 	cd test/e2e && npx playwright test
 
 e2e-down: ## Stop the end-to-end stack that E2E_KEEP=1 left running

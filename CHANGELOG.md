@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Administration pages for services, users, integration health and the audit log.
 - A dashboard branch for each service. An administrator chooses, on the Services page, the branch (ref) that the portfolio, the service dashboard and the findings explorer show, so a scan of a developer's branch can no longer replace what everyone sees. Until one is chosen, the branch with the most recent scan is shown, as before. A chosen branch without scans shows "No scans of that branch yet". The API returns `default_ref` on services and `ref_source` on the overview, trends and portfolio items, and `PATCH /api/v1/services/{id}` accepts `default_ref`.
 - Data retention: scan history, SonarQube analyses and deliveries are kept for a configurable number of days (`retention.days`, default 90), always keeping the latest scan of every service, ref, artifact and kind; audit events are kept for 365 days. Each run that deletes data is recorded in the audit log.
-- Coverage thresholds for the backend and the web interface (`make coverage`), a performance check of start-up time, memory, bundle size and response times (`make perf`), and a release workflow that publishes a multi-architecture image with SBOMs and checksums.
+- Coverage thresholds for the backend and the web interface (`make coverage`), a performance check of start-up time, memory, bundle size and response times (`make perf`), an image scan (`make image-scan`), a sign-off check (`make dco`), and a release script that publishes a multi-architecture image with SBOMs and checksums.
 
 ### Security
 

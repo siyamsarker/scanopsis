@@ -23,9 +23,9 @@ Install the following tools before you start.
 
 ## Local checks
 
-Run the checks before you open a pull request. CI runs the same checks.
+Run the checks before you open a pull request. The repository has no CI service, so reviewers rely on them.
 
-1. Run `make check` to run every check that CI runs, except the image build. It performs the following steps:
+1. Run `make check` to run the fast checks. It performs the following steps:
    - Checks that Go code is formatted.
    - Lints the Go code.
    - Runs the Go tests with the race detector.
@@ -38,10 +38,13 @@ Run the checks before you open a pull request. CI runs the same checks.
 
 To build the container image, run `make image`.
 
-Two slower checks are not part of `make check`, but CI runs them. Both need Docker. Run them when you change code that they measure:
+Slower checks are not part of `make check`. They need Docker. Run them when you change code that they cover:
 
 - `make coverage` enforces the test coverage minimums for Go and the web interface.
 - `make perf` checks the performance targets: bundle size, start-up time, idle memory, and the speed of the portfolio and report upload.
+- `make test-integration` runs the tests that need PostgreSQL, and `make e2e` the end-to-end tests in a browser.
+- `make image-scan` builds the image and scans it with Trivy.
+- `make dco` checks that your commits are signed off.
 
 See the [development guide](docs/development.md) for the details.
 

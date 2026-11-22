@@ -12,8 +12,8 @@
 #   DRY_RUN=true   (default) builds each architecture into the local Docker
 #                  daemon, pushes nothing and needs no credentials.
 #
-# Both architectures must pass the vulnerability and secret gates of CI
-# before anything is pushed.
+# Both architectures must pass the vulnerability and secret gates of
+# make image-scan before anything is pushed.
 #
 # Needs docker with buildx, jq, trivy and a clean checkout of the tag.
 # Usage: scripts/release-build.sh <x.y.z>
@@ -58,7 +58,7 @@ common=(--builder "$builder" --provenance=false --sbom=false
   --build-arg "VERSION=$version" --build-arg "COMMIT=$commit")
 
 # Every architecture is built into the local daemon and must pass the same
-# Trivy gates as CI before anything is pushed: no HIGH or CRITICAL
+# Trivy gates as make image-scan before anything is pushed: no HIGH or CRITICAL
 # vulnerability and no secret. The dry run keeps the SBOM of this build.
 echo "== scan ${platforms[*]} before publishing"
 for platform in "${platforms[@]}"; do
