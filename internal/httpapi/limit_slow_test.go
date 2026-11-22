@@ -6,6 +6,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -184,5 +185,42 @@ func TestConcurrencyLimitReleasesUnsentBodies(t *testing.T) {
 	}
 	if code, _ := postBody(t, srv.URL, ip(1)); code != 200 {
 		t.Errorf("request after the release = %d, want 200", code)
+	}
+}
+
+// Every body counts at least 64 KiB, so a burst of slow bodies that announce a
+// single byte is limited by the address's byte share like larger ones: 8 MiB
+// is 128 of them, not thousands.
+func TestConcurrencyLimitChargesAtLeastTheMinimumWeight(t *testing.T) {
+	shortBodyTimeout(t, 1500*time.Millisecond)
+	g := newGate()
+	close(g.release)
+	e := newEnv(t, func(d *Deps) {
+		limited(g, 64, 100*time.Millisecond)(d)
+		d.Features = map[string]http.Handler{"createService": g}
+	})
+	srv := httptest.NewServer(e.h)
+	defer srv.Close()
+
+	if got := bodyWeight(&http.Request{Body: io.NopCloser(strings.NewReader("x")), ContentLength: 1}); got != minBodyWeight {
+		t.Fatalf("weight of a 1-byte body = %d, want %d", got, minBodyWeight)
+	}
+	perClient := int(bodyBudget / clientBodyShare / minBodyWeight)
+	var conns []net.Conn
+	for range perClient + 20 {
+		conns = append(conns, sendHeaders(t, srv.Listener.Addr().String(), ip(1), 1))
+	}
+	time.Sleep(400 * time.Millisecond)
+	busy := 0
+	for _, c := range conns {
+		if strings.Contains(statusLine(c, 20*time.Millisecond), "503") {
+			busy++
+		}
+	}
+	for _, c := range conns {
+		_ = c.Close() // a server drains a tiny unread body until the client closes
+	}
+	if busy != 20 {
+		t.Errorf("%d answered 503, want the 20 beyond the %d bodies of the address's share", busy, perClient)
 	}
 }

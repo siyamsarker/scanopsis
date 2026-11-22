@@ -29,8 +29,8 @@ const (
 	clientShareDivisor = 4
 
 	// bodyBudget is the most memory the bodies of requests that wait for or
-	// hold a slot may take together. A body counts by its Content-Length, or
-	// by the largest body allowed when it has none.
+	// hold a slot may take together. A body counts by its Content-Length (at
+	// least minBodyWeight), or by the largest body allowed when it has none.
 	bodyBudget = 32 << 20
 
 	// clientBodyShare: one client address may reserve at most this fraction of
@@ -156,8 +156,14 @@ func (b *byteBudget) release(n int64) {
 	b.mu.Unlock()
 }
 
-// bodyWeight is what a request's body counts against the budget: its
-// Content-Length, or the largest allowed body when the length is unknown.
+// minBodyWeight is the least a buffered body counts against the byte
+// budgets, so that tiny declared lengths cannot multiply the number of bodies
+// being read at once.
+const minBodyWeight = 64 << 10
+
+// bodyWeight is what a request's body counts against the budgets: its
+// Content-Length, or the largest allowed body when the length is unknown, and
+// at least minBodyWeight. A request without a body counts nothing.
 func bodyWeight(r *http.Request) int64 {
 	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
 		return 0
@@ -165,7 +171,7 @@ func bodyWeight(r *http.Request) int64 {
 	if r.ContentLength < 0 || r.ContentLength > maxAPIBody {
 		return maxAPIBody
 	}
-	return r.ContentLength
+	return max(r.ContentLength, minBodyWeight)
 }
 
 // bufferBody reads the request body into memory, so that a slow client holds
@@ -177,17 +183,22 @@ func bufferBody(w http.ResponseWriter, r *http.Request) (status int) {
 	if r.Body == nil || r.Body == http.NoBody {
 		return 0
 	}
-	// A short deadline of its own for the read, restored for the rest of the
-	// request (the server sets it again for the next one). A writer that
+	// A short deadline of its own for the read, cleared after a complete read
+	// (the server sets its own again for the next request). A writer that
 	// cannot set it would leave the server's 30 s read timeout in force, which
 	// is far too long to hold reserved memory, so the request is refused.
 	rc := http.NewResponseController(w)
 	if err := rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)); err != nil {
 		return http.StatusInternalServerError
 	}
-	defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAPIBody))
 	_ = r.Body.Close()
+	if err == nil {
+		_ = rc.SetReadDeadline(time.Time{})
+	}
+	// After a failed read the deadline stays: net/http then gives up at once on
+	// the rest of the body before it sends the answer, instead of waiting for
+	// bytes that may never come.
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
 		return http.StatusRequestEntityTooLarge
@@ -276,7 +287,14 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 				return false, true
 			}
 		}
+		// bodyUnread is true while a body has not been read. An answer sent
+		// then makes the server first wait for the rest of a small body, up to
+		// its read timeout; an expired deadline ends that wait at once.
+		bodyUnread := bodyWeight(r) > 0
 		busy := func(why string) {
+			if bodyUnread {
+				_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+			}
 			s.Log.WarnContext(r.Context(), "request rejected: too many concurrent requests",
 				"method", r.Method, "path", r.URL.Path, "limit", s.MaxConcurrent, "reason", why, "waited", wait.String())
 			w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
@@ -316,6 +334,7 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 				return
 			}
 			defer budget.release(n)
+			bodyUnread = false
 			switch bufferBody(w, r) {
 			case http.StatusRequestEntityTooLarge:
 				writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request body is too large.")

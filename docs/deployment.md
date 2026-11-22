@@ -1303,7 +1303,7 @@ the server was overloaded.
 
 A request with a body is read in full before it takes a slot, so a slow client
 holds no slot while it sends. The bodies waiting for or holding a slot may take
-32 MiB together (each counts by its `Content-Length`, at most 1 MiB, the limit
+32 MiB together (each counts by its `Content-Length`, at least 64 KiB and at most 1 MiB, the limit
 of every API body); a request that finds no room within 3 seconds gets `503
 busy`, and a body over 1 MiB is answered `413` with the code
 `payload_too_large`. One address may reserve a quarter of that (8 MiB), so the bodies of one
