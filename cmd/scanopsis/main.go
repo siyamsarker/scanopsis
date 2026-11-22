@@ -54,6 +54,8 @@ var (
 const (
 	sessionCleanupInterval = time.Hour
 	startupTimeout         = 30 * time.Second
+	// shutdownGrace is how long a stop waits for requests in flight.
+	shutdownGrace = 15 * time.Second
 )
 
 func main() {
@@ -265,7 +267,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		return fmt.Errorf("listen on %s: %w", cfg.ListenAddr, err)
 	}
 	log.Info("scanopsis listening", "addr", ln.Addr().String())
-	return serve(ctx, ln, httpapi.New(deps))
+	return serve(ctx, ln, httpapi.New(deps), log, shutdownGrace)
 }
 
 // mergeFeatures combines the handlers of the feature packages, keyed by
@@ -423,10 +425,18 @@ func resolveCommit() string {
 }
 
 // serve runs an HTTP server on ln until ctx is cancelled, then shuts it down
-// gracefully.
-func serve(ctx context.Context, ln net.Listener, h http.Handler) error {
+// gracefully: it stops accepting connections and waits up to grace for
+// requests in flight. Requests still running after that, such as a slow
+// upload, are cut off; that is the expected result of a deliberate stop, so it
+// is logged as a warning and is not an error.
+func serve(ctx context.Context, ln net.Listener, h http.Handler, log *slog.Logger, grace time.Duration) error {
+	var inflight atomic.Int64
 	srv := &http.Server{
-		Handler:           h,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			inflight.Add(1)
+			defer inflight.Add(-1)
+			h.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -441,10 +451,16 @@ func serve(ctx context.Context, ln net.Listener, h http.Handler) error {
 	case <-ctx.Done():
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("shutdown: %w", err)
+		}
+		cutOff := inflight.Load()
+		_ = srv.Close()
+		log.Warn("shutdown deadline reached: requests still running were cut off",
+			"requests_cut_off", cutOff, "grace", grace.String())
 	}
 	if err := <-errCh; !errors.Is(err, http.ErrServerClosed) {
 		return err

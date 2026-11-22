@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"log/slog"
@@ -193,7 +194,7 @@ func TestServeShutsDownOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "ok") })
-	go func() { done <- serve(ctx, ln, h) }()
+	go func() { done <- serve(ctx, ln, h, discardLogger(), 5*time.Second) }()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
 	if err != nil {
@@ -217,6 +218,62 @@ func TestServeShutsDownOnCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("serve did not return after context cancellation")
+	}
+}
+
+// A request that outlives the grace period is cut off. That is what a
+// deliberate stop does to a slow upload, so serve reports it as a warning with
+// the number of requests cut off and returns nil, which makes the process
+// exit 0.
+func TestServeCutsOffSlowRequestsAfterGrace(t *testing.T) {
+	var lc net.ListenConfig
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	h := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+		_, _ = io.WriteString(w, "late")
+	})
+	var logs bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&logs, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serve(ctx, ln, h, log, 200*time.Millisecond) }()
+
+	clientDone := make(chan error, 1)
+	go func() {
+		req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		clientDone <- err
+	}()
+	<-started
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("serve returned %v, want nil when only the grace period ran out", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return after the grace period")
+	}
+	if err := <-clientDone; err == nil {
+		t.Error("the slow request completed; it should have been cut off")
+	}
+	var rec map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &rec); err != nil {
+		t.Fatalf("log output %q: %v", logs.String(), err)
+	}
+	if rec["level"] != "WARN" || rec["requests_cut_off"] != float64(1) {
+		t.Errorf("log = %v, want a WARN with requests_cut_off 1", rec)
 	}
 }
 

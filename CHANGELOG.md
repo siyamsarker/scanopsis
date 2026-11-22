@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Uploads stream findings into the database and are admitted by an estimate of the memory they need, so one maximum report peaks at about 80 MiB instead of about 280 MiB, and memory returns to idle after a burst. The image sets `GOMEMLIMIT=400MiB` for the recommended 512 MiB container.
 - An upload may take 5 minutes to arrive and is answered `408` when the body is late; a database outage is answered `503` with `Retry-After` instead of `500`. The CI script retries these answers for about four minutes.
 
+### Fixed
+
+- Stopping the server with an upload still running no longer logs an error and exits with status 1 after the 15-second wait. The deadline is expected on a deliberate stop: the server logs a warning with the number of requests it cut off and exits with status 0. A real failure still exits with status 1.
+
 ### Security
 
 - Sign-in rate limits can no longer be reset by flooding the server with made-up user names: a name whose failure budget is spent is kept apart from the bounded list that new names push old ones out of. IPv6 clients are now counted by `/48` instead of `/64` for sign-in and setup.
