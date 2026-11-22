@@ -1306,11 +1306,14 @@ holds no slot while it sends. The bodies waiting for or holding a slot may take
 32 MiB together (each counts by its `Content-Length`, at most 1 MiB, the limit
 of every API body); a request that finds no room within 3 seconds gets `503
 busy`, and a body over 1 MiB is answered `413` with the code
-`payload_too_large`. One address may reserve a quarter of that (8 MiB) and takes
-its share of the slots first, so slow or unsent bodies of one address cannot
-use up the memory or the slots of the others, and a body must arrive within 5
-seconds of the request being admitted, or the request is answered `408` with the
-code `request_timeout` and its reservation is released. The upload under `/api/v1/ingest/` has its own limits. One client address may hold at most a quarter of
+`payload_too_large`. One address may reserve a quarter of that (8 MiB), so the bodies of one
+address cannot use up the memory of the others. A body is read before any slot
+is taken, so a slow body holds only its reserved bytes and never a slot, which
+matters because many users can share one address behind a proxy that is not in
+`SCANOPSIS_TRUSTED_PROXIES`. It must arrive within 2 seconds, shorter than the
+3-second wait, or the request is answered `408` with the code `request_timeout`
+and the bytes are released. Requests without a body take their address's share
+of the slots and a slot directly. The upload under `/api/v1/ingest/` has its own limits. One client address may hold at most a quarter of
 the slots (4 of 16; an IPv4 address whole, an IPv6 address by its `/64`), so
 one client cannot take them all; its further requests wait the same 3 seconds
 and then get `503 busy`. Behind a proxy that is not listed in

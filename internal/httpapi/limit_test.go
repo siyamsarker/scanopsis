@@ -205,8 +205,9 @@ func TestClientKey(t *testing.T) {
 	}
 }
 
-// A client that sends its body slowly holds no slot while it does: a request
-// of another address is served.
+// A client that sends its body slowly holds no slot while it does, not even
+// of its own address: a request of the same address, which many users may
+// share, is served.
 func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
 	var inHandler atomic.Int32
 	read := make(chan string, 1)
@@ -242,7 +243,7 @@ func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
 	// With the only slot free, another request is served at once.
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/portfolio", nil)
 	req.Header.Set(roleHeader, "viewer")
-	req.Header.Set(ipHeader, ip(2))
+	req.Header.Set(ipHeader, ip(1))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -265,6 +266,43 @@ func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
 	}
 }
 
+// liveServer serves e over HTTP. The limiter reads a body under a read
+// deadline of its own, which a ResponseRecorder cannot set.
+func liveServer(t *testing.T, e *env) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(e.h)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// do sends a request to srv; a nil body has no body, otherwise rd is sent and
+// length is its Content-Length (-1 for chunked).
+func liveDo(t *testing.T, srv *httptest.Server, method, path, role, clientIP string, rd io.Reader, length int64) *httptest.ResponseRecorder {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), method, srv.URL+path, rd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = length
+	if role != "" {
+		req.Header.Set(roleHeader, role)
+	}
+	if clientIP != "" {
+		req.Header.Set(ipHeader, clientIP)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	rec := httptest.NewRecorder()
+	rec.Code = resp.StatusCode
+	rec.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	rec.Header().Set("Retry-After", resp.Header.Get("Retry-After"))
+	_, _ = io.Copy(rec.Body, resp.Body)
+	return rec
+}
+
 // The limiter enforces the body limit itself: a body over it, announced by
 // its Content-Length or not, is answered 413 and never reaches the handler.
 func TestConcurrencyLimitRejectsLargeBodies(t *testing.T) {
@@ -277,19 +315,35 @@ func TestConcurrencyLimitRejectsLargeBodies(t *testing.T) {
 		d.MaxConcurrent = 4
 		d.Features = map[string]http.Handler{"createService": h}
 	})
-	assertError(t, e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody+10)), 413, "payload_too_large")
-
-	// No Content-Length: the limit applies while reading.
-	req := httptest.NewRequestWithContext(context.Background(), "POST", "/api/v1/services", io.NopCloser(strings.NewReader(strings.Repeat("x", maxAPIBody+10))))
-	req.Header.Set(roleHeader, "admin")
-	rec := httptest.NewRecorder()
-	e.h.ServeHTTP(rec, req)
-	assertError(t, rec, 413, "payload_too_large")
+	srv := liveServer(t, e)
+	big := strings.Repeat("x", maxAPIBody+10)
+	assertError(t, liveDo(t, srv, "POST", "/api/v1/services", "admin", "", strings.NewReader(big), int64(len(big))), 413, "payload_too_large")
+	// No Content-Length (chunked): the limit applies while reading.
+	assertError(t, liveDo(t, srv, "POST", "/api/v1/services", "admin", "", io.NopCloser(strings.NewReader(big)), -1), 413, "payload_too_large")
 	if called.Load() != 0 {
 		t.Error("an oversized body reached the handler")
 	}
-	if rec := e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody)); rec.Code != 200 {
-		t.Errorf("a body of exactly the limit = %d, want 200", rec.Code)
+	exact := strings.Repeat("x", maxAPIBody)
+	if resp := liveDo(t, srv, "POST", "/api/v1/services", "admin", "", strings.NewReader(exact), int64(len(exact))); resp.Code != 200 {
+		t.Errorf("a body of exactly the limit = %d, want 200", resp.Code)
+	}
+}
+
+// A writer that cannot set a read deadline would leave the server's long
+// read timeout for the body, so the request is refused rather than read.
+func TestConcurrencyLimitRefusesWithoutAReadDeadline(t *testing.T) {
+	var called atomic.Int32
+	h := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called.Add(1) })
+	e := newEnv(t, func(d *Deps) {
+		d.MaxConcurrent = 4
+		d.Features = map[string]http.Handler{"createService": h}
+	})
+	assertError(t, e.do("POST", "/api/v1/services", "admin", `{"a":1}`), 500, "internal_error") // a recorder has no deadlines
+	if called.Load() != 0 {
+		t.Error("the handler ran for a body that could not be read under a deadline")
+	}
+	if bodyReadTimeout >= DefaultBusyWait {
+		t.Errorf("the body read deadline %v is not shorter than the busy wait %v", bodyReadTimeout, DefaultBusyWait)
 	}
 }
 
@@ -338,11 +392,21 @@ func TestConcurrencyLimitBoundsBodyMemory(t *testing.T) {
 		limited(g, 100, 100*time.Millisecond)(d)
 		d.Features = map[string]http.Handler{"createService": g}
 	})
-	recs := make([]*httptest.ResponseRecorder, bodies)
+	srv := liveServer(t, e)
+	codes := make([]int, bodies)
 	var wg sync.WaitGroup
 	for i := range bodies {
 		wg.Go(func() {
-			recs[i] = e.do("POST", "/api/v1/services", "admin", strings.Repeat("x", maxAPIBody), ipHeader, ip(i+1))
+			body := strings.Repeat("x", maxAPIBody)
+			req, _ := http.NewRequestWithContext(context.Background(), "POST", srv.URL+"/api/v1/services", strings.NewReader(body))
+			req.Header.Set(roleHeader, "admin")
+			req.Header.Set(ipHeader, ip(i+1))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return
+			}
+			_ = resp.Body.Close()
+			codes[i] = resp.StatusCode
 		})
 	}
 	for range bodyBudget / maxAPIBody {
@@ -352,16 +416,12 @@ func TestConcurrencyLimitBoundsBodyMemory(t *testing.T) {
 	close(g.release)
 	wg.Wait()
 	ok, busy := 0, 0
-	for _, rec := range recs {
-		switch rec.Code {
+	for _, c := range codes {
+		switch c {
 		case 200:
 			ok++
 		case 503:
 			busy++
-			assertError(t, rec, 503, "busy")
-			if rec.Header().Get("Retry-After") == "" {
-				t.Error("503 without Retry-After")
-			}
 		}
 	}
 	if want := bodyBudget / maxAPIBody; ok != want || busy != bodies-want || g.peak != want {

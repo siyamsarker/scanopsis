@@ -54,8 +54,10 @@ func limitedAPIPath(path string) bool {
 
 // bodyReadTimeout is how long reading a body may take. A client that has
 // reserved memory for a body and does not send it loses the reservation after
-// this and is answered 408. A variable so that a test can shorten it.
-var bodyReadTimeout = 5 * time.Second
+// this and is answered 408. It is shorter than DefaultBusyWait, so a request
+// that waited for body memory still has time to read its body. A variable so
+// that a test can shorten it.
+var bodyReadTimeout = 2 * time.Second
 
 // clientKey identifies a client for the per-client share: an IPv4 address
 // whole, an IPv6 address by its /64, as the other limiters do.
@@ -176,12 +178,14 @@ func bufferBody(w http.ResponseWriter, r *http.Request) (status int) {
 		return 0
 	}
 	// A short deadline of its own for the read, restored for the rest of the
-	// request (the server sets it again for the next one). Not every
-	// ResponseWriter supports it; the server's own read timeout still applies.
+	// request (the server sets it again for the next one). A writer that
+	// cannot set it would leave the server's 30 s read timeout in force, which
+	// is far too long to hold reserved memory, so the request is refused.
 	rc := http.NewResponseController(w)
-	if rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)) == nil {
-		defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
+	if err := rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)); err != nil {
+		return http.StatusInternalServerError
 	}
+	defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAPIBody))
 	_ = r.Body.Close()
 	var tooBig *http.MaxBytesError
@@ -203,8 +207,10 @@ func bufferBody(w http.ResponseWriter, r *http.Request) (status int) {
 // requests at a time, so that requests wait for a slot here, for a bounded
 // time, instead of queueing for a pooled database connection without limit.
 //
-//   - A request with a body is read in full first, so a slot is held only
-//     while the server works on the request and never while a client sends.
+//   - A request with a body is read in full first, under a short read
+//     deadline and within a memory budget (a quarter of it per client
+//     address), so a slot is held only while the server works on the request
+//     and never while a client sends. A slow body holds only bytes.
 //   - One client address holds at most a quarter of the slots (at least
 //     one), so one client cannot take them all. Behind a proxy that is not in
 //     SCANOPSIS_TRUSTED_PROXIES every user has the proxy's address and shares
@@ -277,26 +283,20 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 			writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again in a moment.")
 		}
 
-		// The client's share comes first, so one address cannot reserve the
-		// slots or the memory of the others with requests that only wait.
+		// The client address, which many users may share, is looked up first.
 		var share *clientShare
 		if s.ClientIP != nil {
 			if key, ok := clientKey(s.ClientIP(r)); ok {
 				share = shares.get(key)
 				defer shares.put(key, share)
-				switch got, gone := acquire(share.slots); {
-				case gone:
-					return // the client has gone; nobody reads an answer
-				case !got:
-					busy("client share")
-					return
-				}
-				defer func() { <-share.slots }()
 			}
 		}
 
-		// The body is read, within the memory budget of the client and the
-		// global one, before a slot is taken.
+		// A body is read first, before any slot is taken, so that a slow body
+		// holds only a reservation of memory and never a slot, which another
+		// user of the same address might need. The reservation is the
+		// client's part of the body budget, then the global one, and the
+		// read has a short deadline of its own.
 		if n := bodyWeight(r); n > 0 {
 			if share != nil {
 				switch got, gone := share.bytes.acquire(n, deadline, r.Context().Done()); {
@@ -323,9 +323,30 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 			case http.StatusRequestTimeout:
 				writeError(w, http.StatusRequestTimeout, "request_timeout", "The request body did not arrive in time.")
 				return
+			case http.StatusInternalServerError:
+				s.Log.ErrorContext(r.Context(), "cannot set a read deadline for a request body")
+				writeError(w, http.StatusInternalServerError, "internal_error", "Something went wrong. Try again later.")
+				return
+			}
+			// The wait for the slots starts now, not before the read.
+			if timer != nil {
+				timer.Stop()
+				timer = nil
 			}
 		}
 
+		// With the body in memory the request takes its client's share of the
+		// slots and then a global slot.
+		if share != nil {
+			switch got, gone := acquire(share.slots); {
+			case gone:
+				return // the client has gone; nobody reads an answer
+			case !got:
+				busy("client share")
+				return
+			}
+			defer func() { <-share.slots }()
+		}
 		switch got, gone := acquire(slots); {
 		case gone:
 			return

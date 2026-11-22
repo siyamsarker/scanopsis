@@ -63,9 +63,11 @@ func postBody(t *testing.T, url, clientIP string) (int, time.Duration) {
 }
 
 // Many requests from one address that announce a body and do not send it
-// cannot make another address's request busy: they are held to their
-// address's share of the slots and of the body memory.
-func TestConcurrencyLimitSlowBodiesOfOneClientDoNotBlockAnother(t *testing.T) {
+// hold bytes, not slots: they are held to the address's part of the body
+// memory, so another address's request is not made busy, and a request of the
+// same address without a body, as another user behind the same proxy would
+// send, is served at once.
+func TestConcurrencyLimitSlowBodiesOfOneClientHoldNoSlots(t *testing.T) {
 	shortBodyTimeout(t, 1500*time.Millisecond)
 	g := newGate()
 	close(g.release)
@@ -76,11 +78,12 @@ func TestConcurrencyLimitSlowBodiesOfOneClientDoNotBlockAnother(t *testing.T) {
 	srv := httptest.NewServer(e.h)
 	defer srv.Close()
 
+	perClient := bodyBudget / clientBodyShare / maxAPIBody
 	var conns []net.Conn
-	for range 12 {
+	for range perClient + 4 {
 		conns = append(conns, sendHeaders(t, srv.Listener.Addr().String(), ip(1), maxAPIBody))
 	}
-	time.Sleep(400 * time.Millisecond) // the ones over the share have given up
+	time.Sleep(400 * time.Millisecond) // the ones over the byte share have given up
 
 	busy := 0
 	for _, c := range conns {
@@ -88,25 +91,44 @@ func TestConcurrencyLimitSlowBodiesOfOneClientDoNotBlockAnother(t *testing.T) {
 			busy++
 		}
 	}
-	if want := 12 - 16/clientShareDivisor; busy != want {
-		t.Errorf("%d of the slow requests were answered 503, want %d (all over the share of %d)", busy, want, 16/clientShareDivisor)
+	if busy != 4 {
+		t.Errorf("%d of the slow requests were answered 503, want the 4 over the byte share of %d bodies", busy, perClient)
 	}
 
-	// The other address is served at once, although 4 bodies are reserved.
-	if code, took := postBody(t, srv.URL, ip(2)); code != 200 || took > time.Second {
-		t.Errorf("another address: %d after %v, want 200 at once", code, took)
+	// The same address without a body, and another address with one, are served at once.
+	for _, c := range []struct {
+		name string
+		do   func() (int, time.Duration)
+	}{
+		{"same address, no body", func() (int, time.Duration) {
+			req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/portfolio", nil)
+			req.Header.Set(roleHeader, "viewer")
+			req.Header.Set(ipHeader, ip(1))
+			start := time.Now()
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			return resp.StatusCode, time.Since(start)
+		}},
+		{"another address, with a body", func() (int, time.Duration) { return postBody(t, srv.URL, ip(2)) }},
+	} {
+		if code, took := c.do(); code != 200 || took > time.Second {
+			t.Errorf("%s: %d after %v, want 200 at once", c.name, code, took)
+		}
 	}
 }
 
 // One address cannot reserve more than its part of the body budget, even with
-// many slots: 8 MiB of the 32 MiB, so a ninth body of 1 MiB waits and is
-// answered busy while another address still gets room.
+// many slots: 8 MiB of the 32 MiB, so further bodies of 1 MiB are answered
+// busy while another address still gets room.
 func TestConcurrencyLimitCapsBodyBytesOfOneClient(t *testing.T) {
 	shortBodyTimeout(t, 1500*time.Millisecond)
 	g := newGate()
 	close(g.release)
 	e := newEnv(t, func(d *Deps) {
-		limited(g, 64, 100*time.Millisecond)(d) // a share of 16 slots
+		limited(g, 64, 100*time.Millisecond)(d)
 		d.Features = map[string]http.Handler{"createService": g}
 	})
 	srv := httptest.NewServer(e.h)
@@ -131,12 +153,11 @@ func TestConcurrencyLimitCapsBodyBytesOfOneClient(t *testing.T) {
 	}
 }
 
-// A client that reserves bytes with a Content-Length and does not send the
-// body is answered 408 after the short read deadline, and the reservation and
-// the share are free again.
+// Unsent bodies are answered 408 after the short read deadline and their
+// bytes are free again: with the address's byte share full of them, a further
+// body is busy, and once they have expired a complete request is served.
 func TestConcurrencyLimitReleasesUnsentBodies(t *testing.T) {
-	shortBodyTimeout(t, 300*time.Millisecond)
-
+	shortBodyTimeout(t, 400*time.Millisecond)
 	g := newGate()
 	close(g.release)
 	e := newEnv(t, func(d *Deps) {
@@ -146,16 +167,20 @@ func TestConcurrencyLimitReleasesUnsentBodies(t *testing.T) {
 	srv := httptest.NewServer(e.h)
 	defer srv.Close()
 
-	// With 4 slots one address holds 1: its second request is busy while the
-	// first waits for its body.
-	first := sendHeaders(t, srv.Listener.Addr().String(), ip(1), maxAPIBody)
-	time.Sleep(50 * time.Millisecond)
-	second := sendHeaders(t, srv.Listener.Addr().String(), ip(1), maxAPIBody)
-	if got := statusLine(second, 2*time.Second); !strings.Contains(got, "503") {
-		t.Errorf("second request of the address = %q, want 503 while the first holds the share", got)
+	perClient := bodyBudget / clientBodyShare / maxAPIBody
+	var unsent []net.Conn
+	for range perClient {
+		unsent = append(unsent, sendHeaders(t, srv.Listener.Addr().String(), ip(1), maxAPIBody))
 	}
-	if got := statusLine(first, 3*time.Second); !strings.Contains(got, "408") {
-		t.Errorf("unsent body: %q, want 408 after the read deadline", got)
+	time.Sleep(50 * time.Millisecond)
+	extra := sendHeaders(t, srv.Listener.Addr().String(), ip(1), maxAPIBody)
+	if got := statusLine(extra, 2*time.Second); !strings.Contains(got, "503") {
+		t.Errorf("a body over the address's byte share = %q, want 503", got)
+	}
+	for i, c := range unsent {
+		if got := statusLine(c, 3*time.Second); !strings.Contains(got, "408") {
+			t.Errorf("unsent body %d: %q, want 408 after the read deadline", i, got)
+		}
 	}
 	if code, _ := postBody(t, srv.URL, ip(1)); code != 200 {
 		t.Errorf("request after the release = %d, want 200", code)
