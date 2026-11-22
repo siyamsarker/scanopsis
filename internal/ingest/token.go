@@ -4,6 +4,7 @@
 package ingest
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -72,6 +73,9 @@ type verifier struct {
 	audience string
 	client   *http.Client
 	now      func() time.Time
+	// timeout bounds a verification and a fetch of the keys. 0 means
+	// verifyTimeout.
+	timeout time.Duration
 
 	mu  sync.Mutex
 	url string
@@ -82,7 +86,7 @@ func (v *verifier) forURL(gitlabURL string) *oidc.IDTokenVerifier {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	if v.v == nil || v.url != gitlabURL {
-		keys := &keySet{url: gitlabURL + "/oauth/discovery/keys", client: v.client, now: v.now}
+		keys := &keySet{url: gitlabURL + "/oauth/discovery/keys", client: v.client, now: v.now, timeout: v.timeout}
 		v.v = oidc.NewVerifier(gitlabURL, keys, &oidc.Config{ClientID: v.audience, Now: v.now})
 		v.url = gitlabURL
 	}
@@ -95,7 +99,7 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 	if te != nil {
 		return nil, te
 	}
-	ctx, cancel := context.WithTimeout(ctx, verifyTimeout)
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(v.timeout, verifyTimeout))
 	defer cancel()
 	fetchFailed := new(atomic.Bool)
 	tok, err := v.forURL(gitlabURL).Verify(context.WithValue(ctx, fetchFailedKey{}, fetchFailed), raw)
@@ -205,26 +209,40 @@ func (v *verifier) verify(ctx context.Context, gitlabURL, authorization string) 
 type fetchFailedKey struct{}
 
 // keySet is the signing keys of one GitLab, fetched from its key URL. It is
-// go-oidc's key set with two changes: it fetches at most once in
-// keyRefetchInterval, and it never fetches for a token whose key ID it
-// already has, because that token is wrong, not the cache.
+// go-oidc's key set with these changes: it fetches at most once in
+// keyRefetchInterval, it never fetches for a token whose key ID it already
+// has (that token is wrong, not the cache), and all requests that need a
+// fetch at the same time share one.
 //
 //   - A key ID that is in the cached set and a signature that does not verify
 //     is a forged or damaged token. Fetching again cannot change that.
 //   - A key ID that is not in the set may be a new key (GitLab rotated), so
-//     the keys are fetched, but only if the last fetch is older than the
-//     interval. Inside it the token is answered like any with a bad signature,
-//     and the answer of a failed fetch is remembered for the interval too, so
-//     a GitLab that is down is asked once, not once per request.
+//     the keys are fetched, but only if the last fetch ended more than the
+//     interval ago. Inside it the token is answered like any with a bad
+//     signature.
+//   - Every failed fetch (timeout, transport error, bad status, bad body) is
+//     remembered for the interval, so a GitLab that is down or hangs is asked
+//     once, not once per request, and the requests that wait for that fetch
+//     all get its answer when it ends. The cached keys stay in use.
 type keySet struct {
-	url    string
-	client *http.Client
-	now    func() time.Time
+	url     string
+	client  *http.Client
+	now     func() time.Time
+	timeout time.Duration // of one fetch; 0 means verifyTimeout
 
 	mu        sync.Mutex
 	keys      []jose.JSONWebKey
-	fetchedAt time.Time // of the last fetch, successful or not; zero before the first
+	fetchedAt time.Time // when the last fetch ended, successful or not; zero before the first
 	fetchErr  error     // what the last fetch returned
+	flight    *keyFetch // the fetch in progress, if any
+}
+
+// keyFetch is one fetch of the key set, which every request that needs the
+// keys while it runs waits for. keys and err are set before done is closed.
+type keyFetch struct {
+	done chan struct{}
+	keys []jose.JSONWebKey
+	err  error
 }
 
 var errBadSignature = errors.New("failed to verify id token signature")
@@ -241,32 +259,62 @@ func (k *keySet) VerifySignature(ctx context.Context, jwt string) ([]byte, error
 	}
 
 	k.mu.Lock()
-	defer k.mu.Unlock()
 	if payload, ok := verifyWithKeys(k.keys, kid, jws); ok {
+		k.mu.Unlock()
 		return payload, nil
 	}
 	if kid != "" && hasKey(k.keys, kid) {
+		k.mu.Unlock()
 		return nil, errBadSignature
 	}
-	if !k.fetchedAt.IsZero() && k.now().Sub(k.fetchedAt) < keyRefetchInterval {
-		if k.fetchErr != nil {
-			markFetchFailed(ctx)
-			return nil, fmt.Errorf("fetching keys: %w", k.fetchErr)
+	f := k.flight
+	if f == nil {
+		if !k.fetchedAt.IsZero() && k.now().Sub(k.fetchedAt) < keyRefetchInterval {
+			err := k.fetchErr
+			k.mu.Unlock()
+			if err != nil {
+				markFetchFailed(ctx)
+				return nil, fmt.Errorf("fetching keys: %w", err)
+			}
+			return nil, errBadSignature
 		}
-		return nil, errBadSignature
+		f = &keyFetch{done: make(chan struct{})}
+		k.flight = f
+		go k.run(context.WithoutCancel(ctx), f)
 	}
-	k.fetchedAt = k.now()
-	keys, err := k.fetch(ctx)
-	k.fetchErr = err
-	if err != nil {
+	k.mu.Unlock()
+
+	select {
+	case <-f.done:
+	case <-ctx.Done():
 		markFetchFailed(ctx)
-		return nil, fmt.Errorf("fetching keys: %w", err)
+		return nil, fmt.Errorf("fetching keys: %w", ctx.Err())
 	}
-	k.keys = keys
-	if payload, ok := verifyWithKeys(keys, kid, jws); ok {
+	if f.err != nil {
+		markFetchFailed(ctx)
+		return nil, fmt.Errorf("fetching keys: %w", f.err)
+	}
+	if payload, ok := verifyWithKeys(f.keys, kid, jws); ok {
 		return payload, nil
 	}
 	return nil, errBadSignature
+}
+
+// run fetches the key set for f and publishes the outcome. It runs in its own
+// goroutine, bounded by the fetch timeout, so no request's cancellation ends it
+// and a request that gives up does not stop the others from getting the keys.
+func (k *keySet) run(ctx context.Context, f *keyFetch) {
+	keys, err := k.fetch(ctx)
+	k.mu.Lock()
+	k.fetchedAt = k.now()
+	k.fetchErr = err
+	if err == nil {
+		k.keys = keys
+	}
+	k.flight = nil
+	k.mu.Unlock()
+	f.keys, f.err = keys, err
+	close(f.done)
 }
 
 func markFetchFailed(ctx context.Context) {
@@ -298,11 +346,9 @@ func hasKey(keys []jose.JSONWebKey, kid string) bool {
 	return false
 }
 
-// fetch reads the key set. It does not depend on the context of the request
-// that triggered it, which others share the result of, but is bounded by
-// verifyTimeout and keeps the request's values.
+// fetch reads the key set, in at most the fetch timeout.
 func (k *keySet) fetch(ctx context.Context) ([]jose.JSONWebKey, error) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyTimeout)
+	ctx, cancel := context.WithTimeout(ctx, cmp.Or(k.timeout, verifyTimeout))
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, k.url, nil)
 	if err != nil {
