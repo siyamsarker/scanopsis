@@ -434,8 +434,12 @@ export interface paths {
          *     never from the report. The body is the raw report (`Content-Type:
          *     application/json`), optionally gzip-compressed (`Content-Encoding:
          *     gzip`). A repeated upload for the same job, artifact and kind replaces
-         *     the earlier one. Rejections are written to the audit log, except rate-limited requests (429),
-         *     and at most a bounded number per client address for rejections before the namespace and protected-ref checks.
+         *     the earlier one. Rejections are written to the audit log, except requests limited per
+         *     client address (429, code too_many_requests), and at most a bounded number per client
+         *     address for rejections before the namespace and protected-ref checks and for the
+         *     per-project limits. A job stores at most 50 different artifacts (artifact name and
+         *     kind); a project may upload 100 reports at once and then one every 10 seconds. The
+         *     body must arrive within 5 minutes of the upload being accepted.
          */
         post: operations["ingestTrivy"];
         delete?: never;
@@ -2228,6 +2232,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description The body did not arrive within the read deadline of 5 minutes (code request_timeout). The connection is closed. Retry the upload. */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description The project's service is archived (code service_archived), or its path belongs to another service (code service_conflict). */
             409: {
                 headers: {
@@ -2264,7 +2277,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Too many uploads from this address. Retry-After gives seconds. */
+            /** @description Too many uploads from this address (code too_many_requests), too many from the project (code project_rate_limited), or the job already stored 50 different artifacts (code job_artifact_limit; its Retry-After is an hour, because waiting does not help that job). Retry-After gives seconds. */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -2273,7 +2286,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), or the server is processing other uploads and the request ended while waiting for a free slot (code busy; Retry-After gives seconds). */
+            /** @description The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), no memory was free for the upload within 30 seconds or the request ended while waiting (code busy; Retry-After gives seconds), or the database could not be reached (code unavailable; the report was not stored; Retry-After gives seconds). */
             503: {
                 headers: {
                     [name: string]: unknown;

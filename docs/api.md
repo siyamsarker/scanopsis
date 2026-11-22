@@ -261,7 +261,7 @@ Responses:
 
 Upload one Trivy JSON report from a GitLab CI job.
 
-Authenticated with the job's GitLab CI/CD ID token (`Authorization: Bearer <token>`), whose audience must be the Scanopsis public URL. The project, pipeline, job, ref and commit come from the verified token, never from the report. The body is the raw report (`Content-Type: application/json`), optionally gzip-compressed (`Content-Encoding: gzip`). A repeated upload for the same job, artifact and kind replaces the earlier one. Rejections are written to the audit log, except rate-limited requests (429), and at most a bounded number per client address for rejections before the namespace and protected-ref checks.
+Authenticated with the job's GitLab CI/CD ID token (`Authorization: Bearer <token>`), whose audience must be the Scanopsis public URL. The project, pipeline, job, ref and commit come from the verified token, never from the report. The body is the raw report (`Content-Type: application/json`), optionally gzip-compressed (`Content-Encoding: gzip`). A repeated upload for the same job, artifact and kind replaces the earlier one. Rejections are written to the audit log, except requests limited per client address (429, code too_many_requests), and at most a bounded number per client address for rejections before the namespace and protected-ref checks and for the per-project limits. A job stores at most 50 different artifacts (artifact name and kind); a project may upload 100 reports at once and then one every 10 seconds. The body must arrive within 5 minutes of the upload being accepted.
 
 - Operation ID: `ingestTrivy`
 - Authentication: CI ID token
@@ -284,12 +284,13 @@ Responses:
 | 400 | Malformed body or gzip stream (code invalid_report), or an unknown kind (code invalid_parameter). | `application/json` [Error](#error) |
 | 401 | Missing or invalid ID token (code invalid_token; the message names the failed check). | `application/json` [Error](#error) |
 | 403 | Project namespace not allowed (code namespace_not_allowed) or ref not protected (code ref_not_protected). | `application/json` [Error](#error) |
+| 408 | The body did not arrive within the read deadline of 5 minutes (code request_timeout). The connection is closed. Retry the upload. | `application/json` [Error](#error) |
 | 409 | The project's service is archived (code service_archived), or its path belongs to another service (code service_conflict). | `application/json` [Error](#error) |
 | 413 | Report larger than the limit or with too many findings (code report_too_large). | `application/json` [Error](#error) |
 | 415 | Unsupported content type or encoding (code unsupported_media_type). | `application/json` [Error](#error) |
 | 422 | Not a Trivy JSON report, or an unsupported schema version (code not_a_trivy_report). | `application/json` [Error](#error) |
-| 429 | Too many uploads from this address. Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), or the server is processing other uploads and the request ended while waiting for a free slot (code busy; Retry-After gives seconds). | `application/json` [Error](#error) |
+| 429 | Too many uploads from this address (code too_many_requests), too many from the project (code project_rate_limited), or the job already stored 50 different artifacts (code job_artifact_limit; its Retry-After is an hour, because waiting does not help that job). Retry-After gives seconds. | `application/json` [Error](#error) |
+| 503 | The GitLab URL is not configured (code ingest_not_configured), GitLab's signing keys could not be fetched (code gitlab_unavailable), no memory was free for the upload within 30 seconds or the request ended while waiting (code busy; Retry-After gives seconds), or the database could not be reached (code unavailable; the report was not stored; Retry-After gives seconds). | `application/json` [Error](#error) |
 
 ### `GET /api/v1/me`
 
