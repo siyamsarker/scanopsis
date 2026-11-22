@@ -178,8 +178,11 @@ describe('verdict', () => {
     expect(verdictSentence({ counts: zero, newFindings: 0, fixed: 5 })).toBe(
       'No open findings; 5 fixed and 0 new since the previous scan.',
     );
-    expect(verdictSentence({ gate: 'fail', counts: null, newFindings: 0, fixed: 0 })).toBe(
-      'Failing its quality gate; no scans on this branch yet.',
+    expect(
+      verdictSentence({ gate: 'fail', counts: null, newFindings: 0, fixed: 0, ref: 'release/9' }),
+    ).toBe('Failing its quality gate; no scans of release/9 yet.');
+    expect(verdictSentence({ counts: null, newFindings: 0, fixed: 0, ref: null })).toBe(
+      'No scans yet.',
     );
   });
 

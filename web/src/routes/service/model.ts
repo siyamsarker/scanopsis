@@ -185,6 +185,8 @@ export interface VerdictInput {
   sincePipeline?: number;
   /** Every current image scan is the first of its artifact: nothing to compare with. */
   firstScan?: boolean;
+  /** The branch shown; null when the service has no scans at all. */
+  ref?: string | null;
 }
 
 function changePhrase(input: VerdictInput) {
@@ -216,7 +218,7 @@ export function verdictSentence(input: VerdictInput): string {
   if (input.gate === 'fail') parts.push('failing its quality gate');
   else if (input.gate === 'pass') parts.push('passing its quality gate');
   if (input.counts === null) {
-    parts.push('no scans on this branch yet');
+    parts.push(input.ref ? `no scans of ${input.ref} yet` : 'no scans yet');
   } else {
     parts.push(severityPhrase(input.counts));
     parts.push(changePhrase(input));

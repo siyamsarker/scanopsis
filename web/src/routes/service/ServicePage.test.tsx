@@ -460,8 +460,9 @@ describe('service dashboard', () => {
     expect(await screen.findByText('No scans of release/9 yet')).toBeInTheDocument();
     expect(screen.getByText(/An administrator chose this branch/)).toBeInTheDocument();
     expect(screen.getByTestId('verdict')).toHaveTextContent(
-      'Failing its quality gate; no scans on this branch yet.',
+      'Failing its quality gate; no scans of release/9 yet.',
     );
+    expect(screen.queryByRole('link', { name: /Explore findings/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Fix first' })).not.toBeInTheDocument();
     expect(await screen.findByRole('region', { name: 'Code quality' })).toBeInTheDocument();
   });

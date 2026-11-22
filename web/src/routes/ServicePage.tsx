@@ -150,6 +150,7 @@ function Dashboard({ id }: { id: number }) {
           verdict={{
             gate: gateOf(latestSonar?.quality_gate_status),
             counts: scanned ? o.counts : null,
+            ref: o?.ref,
             newFindings: o?.new_since_previous ?? 0,
             fixed: o?.fixed_since_previous ?? 0,
             ...(o && trends.data ? baseOf(o, trends.data.points) : {}),

@@ -165,10 +165,12 @@ export function VerdictBand({
           </div>
 
           <div className="mt-5 flex flex-wrap gap-2">
-            <Link to={findingsHref(service.id, effectiveRef)} className={buttonClass('primary')}>
-              Explore findings
-              <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
-            </Link>
+            {latest ? (
+              <Link to={findingsHref(service.id, effectiveRef)} className={buttonClass('primary')}>
+                Explore findings
+                <ArrowRight size={16} strokeWidth={1.75} aria-hidden="true" />
+              </Link>
+            ) : null}
             {pipelineUrl && latest ? (
               <a
                 href={pipelineUrl}
