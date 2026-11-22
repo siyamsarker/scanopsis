@@ -72,21 +72,21 @@ func TestIngestAdmitsUploadsByMemory(t *testing.T) {
 		t.Fatal("a third upload finished while the others hold the memory")
 	case <-time.After(100 * time.Millisecond):
 	}
-	// A waiter whose request ends gets 503 busy with Retry-After.
+	// A waiter whose client goes away gets no answer and is not recorded:
+	// nobody reads the answer, and an audit write would only add load.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancelled := uploadAsync(ctx, e, body)
 	time.Sleep(50 * time.Millisecond)
 	cancel()
 	w := <-cancelled
-	if w.Code != http.StatusServiceUnavailable || errCode(t, w) != "busy" || w.Header().Get("Retry-After") == "" {
-		t.Fatalf("%d %q %s", w.Code, w.Header().Get("Retry-After"), w.Body)
+	if w.Body.Len() != 0 || w.Header().Get("Retry-After") != "" {
+		t.Fatalf("answered a client that went away: %d %q %s", w.Code, w.Header().Get("Retry-After"), w.Body)
 	}
-	if !strings.Contains(w.Body.String(), "The server is processing other uploads. Retry later.") {
-		t.Errorf("message: %s", w.Body)
-	}
-	// The token was valid, so the rejection is recorded.
-	if ev := e.audit.list(); len(ev) != 1 || ev[0].detail["reason"] != "busy" || ev[0].detail["project_path"] != "platform/payments-api" {
+	if ev := e.audit.list(); len(ev) != 0 {
 		t.Errorf("audit = %+v", ev)
+	}
+	if !strings.Contains(e.logs.String(), "upload abandoned by the client while waiting") {
+		t.Errorf("no debug line for the abandoned upload:\n%s", e.logs.String())
 	}
 	// Freed memory lets the waiter proceed.
 	bs.release <- struct{}{}
@@ -332,5 +332,36 @@ func TestIngestTrimsMemoryAfterLargeUploads(t *testing.T) {
 	case <-freed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("no trim after a large upload through the handler")
+	}
+}
+
+// Busy answers happen under load, so they are audited only within the
+// per-address bound, even though the token was valid.
+func TestIngestBusyIsAuditedWithinTheBound(t *testing.T) {
+	body := []byte(`{"SchemaVersion":2,"ArtifactName":"a"}`)
+	e := newHEnv(t, func(o *Options) { o.MemoryBudget = budgetFor(body, 1); o.AdmitWait = 20 * time.Millisecond })
+	bs := &blockingSaver{entered: make(chan struct{}, 16), release: make(chan struct{})}
+	e.in.store = bs
+	held := uploadAsync(context.Background(), e, body)
+	<-bs.entered
+	const n = 3 * DefaultAuditBurst
+	for range n {
+		w := <-uploadAsync(context.Background(), e, body)
+		if w.Code != http.StatusServiceUnavailable || errCode(t, w) != "busy" || w.Header().Get("Retry-After") == "" {
+			t.Fatalf("%d %q %s", w.Code, w.Header().Get("Retry-After"), w.Body)
+		}
+	}
+	close(bs.release)
+	if w := <-held; w.Code != http.StatusCreated {
+		t.Errorf("held upload: %d %s", w.Code, w.Body)
+	}
+	busy := 0
+	for _, ev := range e.audit.list() {
+		if ev.detail["reason"] == "busy" {
+			busy++
+		}
+	}
+	if busy != DefaultAuditBurst {
+		t.Errorf("%d busy rejections recorded for %d answers, want %d", busy, n, DefaultAuditBurst)
 	}
 }

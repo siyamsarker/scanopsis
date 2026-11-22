@@ -292,6 +292,19 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	reject := func(status int, code, message string, extra ...any) {
 		i.reject(ctx, w, ip, claims, !admitted, status, code, message, extra...)
 	}
+	// busy answers an upload that waited for memory or a database slot in
+	// vain. It happens under load, so it is audited only within the
+	// per-address bound, and not at all when the client has already gone:
+	// then nobody reads the answer, and an audit write would only add load.
+	busy := func(attr string, value any) {
+		if ctx.Err() != nil {
+			i.log.DebugContext(ctx, "upload abandoned by the client while waiting", "ip", ipString(ip), attr, value)
+			return
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
+		i.reject(ctx, w, ip, claims, true, http.StatusServiceUnavailable, codeBusy,
+			"The server is processing other uploads. Retry later.", attr, value)
+	}
 
 	if l := i.opts.Limiter; l != nil {
 		if ok, wait := l.Allow(limitKey(ip)); !ok {
@@ -399,8 +412,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	release, err := i.budget.acquire(wctx, weight)
 	cancel()
 	if err != nil {
-		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
-		reject(http.StatusServiceUnavailable, codeBusy, "The server is processing other uploads. Retry later.", "budget_bytes", i.opts.MemoryBudget)
+		busy("budget_bytes", i.opts.MemoryBudget)
 		return
 	}
 	defer func() {
@@ -457,8 +469,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		dcancel()
 	case <-dctx.Done():
 		dcancel()
-		w.Header().Set("Retry-After", strconv.Itoa(busyRetryAfter))
-		reject(http.StatusServiceUnavailable, codeBusy, "The server is processing other uploads. Retry later.", "budget_bytes", i.opts.MemoryBudget)
+		busy("db_slots", cap(i.dbSlots))
 		return
 	}
 	res, err := func() (Result, error) {

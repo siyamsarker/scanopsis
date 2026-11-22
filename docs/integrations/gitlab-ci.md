@@ -324,12 +324,13 @@ records at most 10 of those rejections per client address at once and then one
 more per minute; the others are answered the same way but appear only in the
 server log at debug level. When allowed namespaces are set, every later
 rejection (media type, kind, report too large or invalid, archived service,
-service conflict, busy, request timeout) comes from a project you chose to accept
+service conflict, request timeout) comes from a project you chose to accept
 and is always recorded. Without allowed namespaces any project can get that far,
 so these rejections are bounded per client address in the same way. The
 rejections for the project limits (`project_rate_limited`, `job_artifact_limit`)
-are always bounded per client address, because a project that keeps uploading
-would otherwise fill the audit log. A rate-limited
+and `busy` are always bounded per client address: they happen under load, and
+recording each one would add to it. An upload whose client gave up while it
+waited gets no answer and is not recorded. A rate-limited
 request (`429`) is never recorded. The "Recorded rejections" number on the
 Integrations page counts what was recorded.
 
