@@ -164,9 +164,12 @@ export default function CommandPalette({
               <Kbd className="hidden sm:inline-flex">Esc</Kbd>
             </div>
             <Command.List className="min-h-0 overflow-y-auto overscroll-contain p-2 [&_[cmdk-list-sizer]]:flex [&_[cmdk-list-sizer]]:flex-col">
-              <Command.Empty className="px-3 py-8 text-center text-body-s text-text-muted">
-                Nothing matches “{query}”.
-              </Command.Empty>
+              {/* A vulnerability ID always offers its search, so it never reads as no match. */}
+              {vulnId ? null : (
+                <Command.Empty className="px-3 py-8 text-center text-body-s text-text-muted">
+                  Nothing matches “{query}”.
+                </Command.Empty>
+              )}
               {vulnId ? (
                 <Command.Group heading="Vulnerability" forceMount className={groupClass}>
                   <Item

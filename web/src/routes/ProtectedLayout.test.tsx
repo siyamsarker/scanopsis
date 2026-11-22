@@ -214,9 +214,12 @@ describe('protected layout', () => {
     fireEvent.change(within(palette).getByRole('combobox'), {
       target: { value: 'cve-2024-3094' },
     });
-    fireEvent.click(
-      await within(palette).findByRole('option', { name: 'Search vulnerability CVE-2024-3094' }),
-    );
+    const offer = await within(palette).findByRole('option', {
+      name: 'Search vulnerability CVE-2024-3094',
+    });
+    // The ID is a match, so the palette does not also claim that nothing matches.
+    expect(within(palette).queryByText(/Nothing matches/)).toBeNull();
+    fireEvent.click(offer);
     await waitFor(() =>
       expect(screen.getByTestId('location')).toHaveTextContent('/search?id=CVE-2024-3094'),
     );

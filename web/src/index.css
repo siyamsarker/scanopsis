@@ -310,6 +310,12 @@ body {
   outline-offset: 2px;
 }
 
+/* The command palette's field is the only field of its dialog and shows its
+   caret; a ring there would be cut off by the edge of the panel. */
+[cmdk-input]:focus-visible {
+  outline: none;
+}
+
 /* Headings that take focus when a step changes are not controls: no ring. */
 [tabindex='-1']:focus-visible {
   outline: none;
