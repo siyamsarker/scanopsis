@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,10 @@ const (
 	// by the largest body allowed when it has none.
 	bodyBudget = 32 << 20
 
+	// clientBodyShare: one client address may reserve at most this fraction of
+	// the body budget at a time.
+	clientBodyShare = 4
+
 	// ingestPrefix holds the Trivy upload. It has its own admission control
 	// and body limit in the ingest package (memory and per-project limits),
 	// so neither limitBody nor the concurrency limit applies to it.
@@ -46,6 +51,11 @@ const (
 func limitedAPIPath(path string) bool {
 	return strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, ingestPrefix)
 }
+
+// bodyReadTimeout is how long reading a body may take. A client that has
+// reserved memory for a body and does not send it loses the reservation after
+// this and is answered 408. A variable so that a test can shorten it.
+var bodyReadTimeout = 5 * time.Second
 
 // clientKey identifies a client for the per-client share: an IPv4 address
 // whole, an IPv6 address by its /64, as the other limiters do.
@@ -65,13 +75,15 @@ func clientKey(a netip.Addr) (netip.Prefix, bool) {
 // clientShares holds one counting semaphore per client with a request in
 // progress; an entry exists only while it is used.
 type clientShares struct {
-	size int
-	mu   sync.Mutex
-	m    map[netip.Prefix]*clientShare
+	size      int
+	bodyBytes int64
+	mu        sync.Mutex
+	m         map[netip.Prefix]*clientShare
 }
 
 type clientShare struct {
 	slots chan struct{}
+	bytes *byteBudget // the client's own part of the body budget
 	refs  int
 }
 
@@ -80,7 +92,7 @@ func (c *clientShares) get(k netip.Prefix) *clientShare {
 	defer c.mu.Unlock()
 	e := c.m[k]
 	if e == nil {
-		e = &clientShare{slots: make(chan struct{}, c.size)}
+		e = &clientShare{slots: make(chan struct{}, c.size), bytes: newByteBudget(c.bodyBytes)}
 		c.m[k] = e
 	}
 	e.refs++
@@ -159,22 +171,32 @@ func bodyWeight(r *http.Request) int64 {
 // a body over maxAPIBody as too large. Any other read error is not handled
 // here: the handler gets the bytes read so far followed by the same error and
 // answers it as it always did.
-func bufferBody(w http.ResponseWriter, r *http.Request) (tooLarge bool) {
+func bufferBody(w http.ResponseWriter, r *http.Request) (status int) {
 	if r.Body == nil || r.Body == http.NoBody {
-		return false
+		return 0
+	}
+	// A short deadline of its own for the read, restored for the rest of the
+	// request (the server sets it again for the next one). Not every
+	// ResponseWriter supports it; the server's own read timeout still applies.
+	rc := http.NewResponseController(w)
+	if rc.SetReadDeadline(time.Now().Add(bodyReadTimeout)) == nil {
+		defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
 	}
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAPIBody))
 	_ = r.Body.Close()
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
-		return true
+		return http.StatusRequestEntityTooLarge
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return http.StatusRequestTimeout
 	}
 	var rd io.Reader = bytes.NewReader(data)
 	if err != nil {
 		rd = io.MultiReader(rd, errReader{err})
 	}
 	r.Body = io.NopCloser(rd)
-	return false
+	return 0
 }
 
 // limitConcurrency admits at most Deps.MaxConcurrent database-backed API
@@ -198,7 +220,10 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 		return next
 	}
 	slots := make(chan struct{}, s.MaxConcurrent)
-	shares := &clientShares{size: max(1, s.MaxConcurrent/clientShareDivisor), m: map[netip.Prefix]*clientShare{}}
+	shares := &clientShares{
+		size: max(1, s.MaxConcurrent/clientShareDivisor), bodyBytes: bodyBudget / clientBodyShare,
+		m: map[netip.Prefix]*clientShare{},
+	}
 	budget := newByteBudget(bodyBudget)
 	wait := s.BusyWait
 	if wait <= 0 {
@@ -252,25 +277,12 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 			writeError(w, http.StatusServiceUnavailable, "busy", "The server is busy. Try again in a moment.")
 		}
 
-		// The body is read, within the memory budget, before a slot is taken.
-		if n := bodyWeight(r); n > 0 {
-			switch got, gone := budget.acquire(n, deadline, r.Context().Done()); {
-			case gone:
-				return
-			case !got:
-				busy("body memory")
-				return
-			}
-			defer budget.release(n)
-			if bufferBody(w, r) {
-				writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request body is too large.")
-				return
-			}
-		}
-
+		// The client's share comes first, so one address cannot reserve the
+		// slots or the memory of the others with requests that only wait.
+		var share *clientShare
 		if s.ClientIP != nil {
 			if key, ok := clientKey(s.ClientIP(r)); ok {
-				share := shares.get(key)
+				share = shares.get(key)
 				defer shares.put(key, share)
 				switch got, gone := acquire(share.slots); {
 				case gone:
@@ -282,6 +294,38 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 				defer func() { <-share.slots }()
 			}
 		}
+
+		// The body is read, within the memory budget of the client and the
+		// global one, before a slot is taken.
+		if n := bodyWeight(r); n > 0 {
+			if share != nil {
+				switch got, gone := share.bytes.acquire(n, deadline, r.Context().Done()); {
+				case gone:
+					return
+				case !got:
+					busy("client body memory")
+					return
+				}
+				defer share.bytes.release(n)
+			}
+			switch got, gone := budget.acquire(n, deadline, r.Context().Done()); {
+			case gone:
+				return
+			case !got:
+				busy("body memory")
+				return
+			}
+			defer budget.release(n)
+			switch bufferBody(w, r) {
+			case http.StatusRequestEntityTooLarge:
+				writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request body is too large.")
+				return
+			case http.StatusRequestTimeout:
+				writeError(w, http.StatusRequestTimeout, "request_timeout", "The request body did not arrive in time.")
+				return
+			}
+		}
+
 		switch got, gone := acquire(slots); {
 		case gone:
 			return

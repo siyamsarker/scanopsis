@@ -205,7 +205,8 @@ func TestClientKey(t *testing.T) {
 	}
 }
 
-// A client that sends its body slowly holds no slot while it does.
+// A client that sends its body slowly holds no slot while it does: a request
+// of another address is served.
 func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
 	var inHandler atomic.Int32
 	read := make(chan string, 1)
@@ -219,19 +220,20 @@ func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
 	e := newEnv(t, func(d *Deps) {
 		d.MaxConcurrent = 1
 		d.BusyWait = 50 * time.Millisecond
+		d.ClientIP = ipFromHeader
 		d.Features = map[string]http.Handler{"createService": h, "getPortfolio": h}
 	})
 	srv := httptest.NewServer(e.h)
 	defer srv.Close()
 
 	// A request whose body arrives slowly: the header is sent, the body is not.
-	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "tcp", srv.Listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
 	_, _ = fmt.Fprintf(conn, "POST /api/v1/services HTTP/1.1\r\nHost: x\r\nContent-Length: 10\r\n"+
-		"Content-Type: application/json\r\n%s: admin\r\n\r\n12345", roleHeader)
+		"Content-Type: application/json\r\n%s: admin\r\n%s: %s\r\n\r\n12345", roleHeader, ipHeader, ip(1))
 	time.Sleep(200 * time.Millisecond)
 	if inHandler.Load() != 0 {
 		t.Fatal("the handler ran before the body was complete")
@@ -240,6 +242,7 @@ func TestConcurrencyLimitSlowBodyHoldsNoSlot(t *testing.T) {
 	// With the only slot free, another request is served at once.
 	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, srv.URL+"/api/v1/portfolio", nil)
 	req.Header.Set(roleHeader, "viewer")
+	req.Header.Set(ipHeader, ip(2))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

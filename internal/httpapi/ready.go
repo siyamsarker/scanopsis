@@ -37,7 +37,7 @@ func (c *readyCache) check(ctx context.Context, run func(context.Context) error)
 	if c.flight == nil {
 		flight := make(chan struct{})
 		c.flight = flight
-		go func() {
+		go func() { //nolint:gosec // G118: the check is shared by callers and must outlive any one request.
 			var err error
 			// However the check ends, even by a panic, its result is
 			// published and flight is closed, so no caller waits for ever.
