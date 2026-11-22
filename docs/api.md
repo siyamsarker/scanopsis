@@ -1456,6 +1456,8 @@ Type: object
 | Property | Type | Required | Description |
 |---|---|---|---|
 | `items` | array of object | yes |  |
-| `truncated` | boolean | yes | True when more than 1000 findings match and only the first 1000 (by service name) are listed. |
+| `total_findings` | integer (int64) | yes | Number of unsuppressed findings of this ID in current scans, including any not listed in items. |
+| `total_services` | integer (int64) | yes | Number of non-archived services with at least one such finding. |
+| `truncated` | boolean | yes | True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name. |
 | `vuln_id` | string | yes |  |
 

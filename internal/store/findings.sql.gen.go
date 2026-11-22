@@ -169,8 +169,10 @@ FROM vulnerabilities v
 JOIN scans s ON s.id = v.scan_id
 JOIN scans s2 ON s2.service_id = s.service_id AND s2.ref = s.ref
              AND s2.artifact_name = s.artifact_name AND s2.kind = s.kind
-JOIN vulnerabilities v2 ON v2.scan_id = s2.id AND v2.vuln_id = v.vuln_id
-                       AND v2.pkg_name = v.pkg_name AND v2.target = v.target
+JOIN vulnerabilities v2 ON v2.scan_id = s2.id
+                       AND md5(v2.vuln_id || chr(1) || v2.pkg_name || chr(1) || v2.target)
+                         = md5(v.vuln_id || chr(1) || v.pkg_name || chr(1) || v.target)
+                       AND v2.vuln_id = v.vuln_id AND v2.pkg_name = v.pkg_name AND v2.target = v.target
 WHERE v.id = ANY($1::bigint[])
 GROUP BY v.id
 `
@@ -182,7 +184,9 @@ type FindingsFirstSeenRow struct {
 
 // FindingsFirstSeen returns, for each given vulnerability row, the scan time of
 // the earliest scan of the same service, ref, artifact and kind that contains
-// the same (vuln_id, pkg_name, target), suppressed or not.
+// the same (vuln_id, pkg_name, target), suppressed or not. The md5 condition
+// is the expression of vulnerabilities_scan_key_idx, which makes the lookup
+// an index probe; the column comparisons rule out hash collisions.
 func (q *Queries) FindingsFirstSeen(ctx context.Context, ids []int64) ([]FindingsFirstSeenRow, error) {
 	rows, err := q.db.Query(ctx, findingsFirstSeen, ids)
 	if err != nil {
@@ -454,26 +458,48 @@ func (q *Queries) FindingsScansPage(ctx context.Context, arg FindingsScansPagePa
 }
 
 const findingsSearch = `-- name: FindingsSearch :many
-WITH hits AS MATERIALIZED (
-    SELECT v.id, v.scan_id, v.pkg_name, v.installed_version, v.fixed_version, v.severity
-    FROM vulnerabilities v
-    WHERE lower(v.vuln_id) = lower($2) AND NOT v.suppressed
+WITH RECURSIVE cur AS (
+    (SELECT id, service_id, ref, artifact_name, kind, scanned_at
+     FROM scans
+     ORDER BY service_id, ref, artifact_name, kind, scanned_at DESC, id DESC
+     LIMIT 1)
+    UNION ALL
+    SELECT n.id, n.service_id, n.ref, n.artifact_name, n.kind, n.scanned_at
+    FROM cur, LATERAL (
+        SELECT id, service_id, ref, artifact_name, kind, scanned_at
+        FROM scans
+        WHERE (service_id, ref, artifact_name, kind) > (cur.service_id, cur.ref, cur.artifact_name, cur.kind)
+        ORDER BY service_id, ref, artifact_name, kind, scanned_at DESC, id DESC
+        LIMIT 1
+    ) n
+), found AS MATERIALIZED (
+    SELECT cur.service_id, cur.ref, cur.artifact_name, cur.id AS scan_id, cur.scanned_at,
+           h.id AS vuln_row_id, h.pkg_name, h.installed_version, h.fixed_version, h.severity
+    FROM cur
+    JOIN services s0 ON s0.id = cur.service_id AND NOT s0.archived
+    CROSS JOIN LATERAL (
+        SELECT v.id, v.pkg_name, v.installed_version, v.fixed_version, v.severity
+        FROM vulnerabilities v
+        WHERE v.scan_id = cur.id
+          AND lower(left(v.vuln_id, 100)) = lower($2::text)
+          AND lower(v.vuln_id) = lower($2::text)
+          AND NOT v.suppressed
+        OFFSET 0
+    ) h
+), totals AS (
+    SELECT count(*)::bigint AS total_findings, count(DISTINCT service_id)::bigint AS total_services
+    FROM found
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,
        sv.created_via, sv.archived, sv.created_at, sv.default_ref,
-       cur.ref, cur.artifact_name, cur.id AS scan_id, cur.scanned_at,
-       h.pkg_name, h.installed_version, h.fixed_version, h.severity
-FROM hits h
-JOIN scans cur ON cur.id = h.scan_id
-JOIN services sv ON sv.id = cur.service_id
-WHERE NOT sv.archived
-  AND NOT EXISTS (
-      SELECT 1 FROM scans n
-      WHERE n.service_id = cur.service_id AND n.ref = cur.ref
-        AND n.artifact_name = cur.artifact_name AND n.kind = cur.kind
-        AND (n.scanned_at, n.id) > (cur.scanned_at, cur.id)
-  )
-ORDER BY sv.name, sv.id, cur.ref, cur.artifact_name, cur.id, h.pkg_name, h.installed_version, h.id
+       f.ref, f.artifact_name, f.scan_id, f.scanned_at,
+       f.pkg_name, f.installed_version, f.fixed_version, f.severity,
+       totals.total_findings, totals.total_services
+FROM found f
+JOIN services sv ON sv.id = f.service_id
+CROSS JOIN totals
+ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 0 WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 3 ELSE 4 END,
+         sv.name, sv.id, f.ref, f.artifact_name, f.scan_id, f.pkg_name, f.installed_version, f.vuln_row_id
 LIMIT $1
 `
 
@@ -500,17 +526,25 @@ type FindingsSearchRow struct {
 	InstalledVersion  string
 	FixedVersion      string
 	Severity          string
+	TotalFindings     int64
+	TotalServices     int64
 }
 
 // FindingsSearch lists the unsuppressed findings of a vulnerability ID in the
 // current state (latest scan per ref, artifact and kind) of every
-// non-archived service. The ID matches case-insensitively and exactly. It
-// starts from the lower(vuln_id) index and keeps a finding when no newer scan
-// of the same service, ref, artifact and kind exists, so its cost follows the
-// number of findings with that ID, not the number of scans. The CTE is
-// materialized so that the planner cannot instead walk every scan of every
-// service. At most @max_rows rows are returned; the caller asks for one more
-// than it shows to know whether the list was cut.
+// non-archived service. The ID matches case-insensitively and exactly.
+//
+// It first finds the current scans by jumping from one (service, ref,
+// artifact, kind) group to the next in scans_current_cover_idx (a recursive
+// "skip scan"), then probes vulnerabilities_vuln_id_scan_idx once per current
+// scan. The work therefore follows the number of current scans, not the
+// number of historical findings with that ID: an ID that is in most scans
+// costs the same as a rare one. OFFSET 0 keeps the planner from turning the
+// per-scan probe into a join over every historical match.
+//
+// The most severe findings come first and at most @max_rows rows are
+// returned; every row carries the true totals (matching current findings and
+// the services they are in), so the caller can report a cut list honestly.
 func (q *Queries) FindingsSearch(ctx context.Context, arg FindingsSearchParams) ([]FindingsSearchRow, error) {
 	rows, err := q.db.Query(ctx, findingsSearch, arg.MaxRows, arg.VulnID)
 	if err != nil {
@@ -538,6 +572,8 @@ func (q *Queries) FindingsSearch(ctx context.Context, arg FindingsSearchParams) 
 			&i.InstalledVersion,
 			&i.FixedVersion,
 			&i.Severity,
+			&i.TotalFindings,
+			&i.TotalServices,
 		); err != nil {
 			return nil, err
 		}
@@ -667,32 +703,38 @@ func (q *Queries) FindingsTrends(ctx context.Context, arg FindingsTrendsParams) 
 }
 
 const findingsVulnerabilityPage = `-- name: FindingsVulnerabilityPage :many
+WITH hits AS MATERIALIZED (
+    SELECT v.id, v.scan_id, v.target, v.class, v.pkg_type, v.pkg_name, v.pkg_path,
+           v.installed_version, v.fixed_version, v.vuln_id, v.severity, v.status, v.title,
+           v.primary_url, v.suppressed, v.suppression
+    FROM vulnerabilities v
+    WHERE v.scan_id = ANY($2::bigint[])
+      AND v.id > $3
+      AND ($4::boolean OR NOT v.suppressed)
+      AND (cardinality($5::text[]) = 0 OR v.severity = ANY($5::text[]))
+      AND ($6::boolean IS NULL OR (v.fixed_version <> '') = $6::boolean)
+      AND ($7::text = ''
+           OR strpos(lower(v.pkg_name), lower($7)) > 0
+           OR strpos(lower(v.vuln_id), lower($7)) > 0
+           OR strpos(lower(v.title), lower($7)) > 0)
+)
 SELECT v.id, v.scan_id, s.artifact_name, v.target, v.class, v.pkg_type, v.pkg_name, v.pkg_path,
        v.installed_version, v.fixed_version, v.vuln_id, v.severity, v.status, v.title,
        v.primary_url, v.suppressed, v.suppression
-FROM vulnerabilities v
+FROM hits v
 JOIN scans s ON s.id = v.scan_id
-WHERE v.scan_id = ANY($1::bigint[])
-  AND v.id > $2
-  AND ($3::boolean OR NOT v.suppressed)
-  AND (cardinality($4::text[]) = 0 OR v.severity = ANY($4::text[]))
-  AND ($5::boolean IS NULL OR (v.fixed_version <> '') = $5::boolean)
-  AND ($6::text = ''
-       OR strpos(lower(v.pkg_name), lower($6)) > 0
-       OR strpos(lower(v.vuln_id), lower($6)) > 0
-       OR strpos(lower(v.title), lower($6)) > 0)
 ORDER BY v.id
-LIMIT $7
+LIMIT $1
 `
 
 type FindingsVulnerabilityPageParams struct {
+	MaxRows           int32
 	ScanIds           []int64
 	After             int64
 	IncludeSuppressed bool
 	Severities        []string
 	Fixable           pgtype.Bool
 	Q                 string
-	MaxRows           int32
 }
 
 type FindingsVulnerabilityPageRow struct {
@@ -718,15 +760,19 @@ type FindingsVulnerabilityPageRow struct {
 // FindingsVulnerabilityPage returns one page, by id, of the vulnerabilities of
 // the given (current) scans. severities may be empty; fixable and q are
 // optional filters (q is a case-insensitive substring of package, ID or title).
+// The filtered rows are materialized and then sorted: without that, the
+// planner may walk the primary key in id order, expecting to meet the first
+// rows of the scans soon, and for a service whose scans are the newest in the
+// table read every finding ever stored (half a second at four million rows).
 func (q *Queries) FindingsVulnerabilityPage(ctx context.Context, arg FindingsVulnerabilityPageParams) ([]FindingsVulnerabilityPageRow, error) {
 	rows, err := q.db.Query(ctx, findingsVulnerabilityPage,
+		arg.MaxRows,
 		arg.ScanIds,
 		arg.After,
 		arg.IncludeSuppressed,
 		arg.Severities,
 		arg.Fixable,
 		arg.Q,
-		arg.MaxRows,
 	)
 	if err != nil {
 		return nil, err

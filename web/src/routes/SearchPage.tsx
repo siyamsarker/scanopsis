@@ -90,13 +90,15 @@ function Results({ result }: { result: VulnerabilitySearch }) {
     <div className="space-y-4">
       <div>
         <p className="text-lg font-semibold tracking-tight text-text">
-          <Mono value={result.vuln_id} /> affects {result.truncated ? 'at least ' : ''}
-          {countOf(byService.size, 'service')} in {countOf(artifacts.size, 'artifact')}
+          <Mono value={result.vuln_id} /> affects{' '}
+          {result.truncated
+            ? countOf(result.total_services, 'service')
+            : `${countOf(byService.size, 'service')} in ${countOf(artifacts.size, 'artifact')}`}
         </p>
         {result.truncated ? (
           <p role="status" className="mt-1 text-sm text-text-muted">
-            More findings match than can be listed. Showing the first 1 000, ordered by service
-            name.
+            {result.total_findings.toLocaleString('en-US')} findings match. Showing the{' '}
+            {result.items.length.toLocaleString('en-US')} most severe.
           </p>
         ) : null}
         <p className="mt-1 text-sm text-text-muted">

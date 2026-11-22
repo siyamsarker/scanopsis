@@ -5,6 +5,7 @@ package findings
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
@@ -42,41 +43,76 @@ type overviewJSON struct {
 	DataAt             *time.Time            `json:"data_at"`
 }
 
-// overview reads everything from one read-only REPEATABLE READ transaction,
-// so the artifacts, the counts per class, the package groups and the changes
-// come from the same snapshot even when a scan is ingested meanwhile.
+// overview validates the request, reads everything from one read-only
+// REPEATABLE READ transaction so the artifacts, the counts per class, the
+// package groups and the changes come from the same snapshot even when a scan
+// is ingested meanwhile, ends the transaction, and only then writes the
+// response: a slow client never holds a connection or an open transaction.
 func (f *Findings) overview(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	tx, err := f.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		f.internalError(w, r, "cannot begin read transaction", err)
-		return
-	}
-	// A read-only transaction has nothing to commit; rolling back releases it.
-	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
-	snap := *f
-	snap.q = f.q.WithTx(tx)
-	snap.overviewIn(w, r)
-}
-
-// overviewIn builds the overview with f.q bound to one snapshot.
-func (f *Findings) overviewIn(w http.ResponseWriter, r *http.Request) {
-	svc, ok := f.service(w, r)
+	id, ok := pathID(r)
 	if !ok {
+		notFound(w, "service")
 		return
 	}
 	requested, ok := refParam(w, r)
 	if !ok {
 		return
 	}
-	ctx := r.Context()
+	ov, err := f.loadOverview(r.Context(), id, requested)
+	var stage *stageError
+	switch {
+	case errors.Is(err, errNoService):
+		notFound(w, "service")
+	case errors.As(err, &stage):
+		f.internalError(w, r, stage.msg, stage.err)
+	case err != nil:
+		f.internalError(w, r, "cannot read overview", err)
+	default:
+		httpapi.WriteJSON(w, http.StatusOK, ov)
+	}
+}
+
+var errNoService = errors.New("no such service")
+
+// stageError names the step of a read that failed, for the log.
+type stageError struct {
+	msg string
+	err error
+}
+
+func (e *stageError) Error() string { return e.msg + ": " + e.err.Error() }
+func (e *stageError) Unwrap() error { return e.err }
+
+func stage(msg string, err error) error { return &stageError{msg, err} }
+
+// loadOverview builds the overview of a service inside one snapshot. The
+// transaction is rolled back (it has nothing to commit) before it returns.
+func (f *Findings) loadOverview(ctx context.Context, serviceID int64, requested string) (*overviewJSON, error) {
+	tx, err := f.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return nil, stage("cannot begin read transaction", err)
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	snap := *f
+	snap.q = f.q.WithTx(tx)
+	return snap.overviewIn(ctx, serviceID, requested)
+}
+
+// overviewIn builds the overview with f.q bound to one snapshot.
+func (f *Findings) overviewIn(ctx context.Context, serviceID int64, requested string) (*overviewJSON, error) {
+	svc, err := f.q.FindingsGetService(ctx, serviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, errNoService
+	}
+	if err != nil {
+		return nil, stage("cannot load service", err)
+	}
 	refs, err := f.refs(ctx, svc.ID)
 	if err != nil {
-		f.internalError(w, r, "cannot list refs", err)
-		return
+		return nil, stage("cannot list refs", err)
 	}
 	ref, source := pickRef(requested, svc.DefaultRef, refs)
-	ov := overviewJSON{
+	ov := &overviewJSON{
 		Service: newServiceJSON(svc.ID, svc.Name, svc.GitlabProjectID, svc.GitlabProjectPath,
 			svc.SonarProjectKey, svc.CreatedVia, svc.Archived, svc.CreatedAt, svc.DefaultRef),
 		RefSource:   source,
@@ -87,15 +123,13 @@ func (f *Findings) overviewIn(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, ids, err := f.currentScans(ctx, svc.ID, ref)
 	if err != nil {
-		f.internalError(w, r, "cannot load current scans", err)
-		return
+		return nil, stage("cannot load current scans", err)
 	}
 	if ref != "" {
 		ov.Ref = &ref
 	}
 	if len(rows) == 0 {
-		httpapi.WriteJSON(w, http.StatusOK, ov)
-		return
+		return ov, nil
 	}
 	var newest time.Time
 	for _, row := range rows {
@@ -113,8 +147,7 @@ func (f *Findings) overviewIn(w http.ResponseWriter, r *http.Request) {
 
 	classes, err := f.q.FindingsClassCounts(ctx, ids)
 	if err != nil {
-		f.internalError(w, r, "cannot count classes", err)
-		return
+		return nil, stage("cannot count classes", err)
 	}
 	byClass := map[string]*domain.SeverityCounts{}
 	for _, c := range classes {
@@ -131,18 +164,16 @@ func (f *Findings) overviewIn(w http.ResponseWriter, r *http.Request) {
 
 	groups, err := f.q.FindingsPackageGroups(ctx, ids)
 	if err != nil {
-		f.internalError(w, r, "cannot group packages", err)
-		return
+		return nil, stage("cannot group packages", err)
 	}
 	ov.TopPackages = topPackageJSON(groups)
 
 	diff, err := f.q.FindingsDiffCounts(ctx, ids)
 	if err != nil {
-		f.internalError(w, r, "cannot count changes", err)
-		return
+		return nil, stage("cannot count changes", err)
 	}
 	ov.NewSincePrevious, ov.FixedSincePrevious = int(diff.NewCount), int(diff.FixedCount)
-	httpapi.WriteJSON(w, http.StatusOK, ov)
+	return ov, nil
 }
 
 func topPackageJSON(rows []store.FindingsPackageGroupsRow) []packageImpactJSON {

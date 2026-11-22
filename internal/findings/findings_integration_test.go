@@ -697,10 +697,11 @@ func TestSearch(t *testing.T) {
 	if vid != "cve-1" {
 		t.Errorf("vuln_id = %q", vid)
 	}
+	// The most severe findings are listed first, then by service name.
 	eq(t, "cve-1", got, []string{
+		fmt.Sprintf("beta/main/web/%d/openssl 3.0.1 3.0.9 CRITICAL", f.b1),
 		fmt.Sprintf("alpha/main/web/%d/openssl 3.0.1 3.0.9 HIGH", f.s3),
 		fmt.Sprintf("alpha/main/worker/%d/openssl 3.0.1 3.0.9 HIGH", f.w1),
-		fmt.Sprintf("beta/main/web/%d/openssl 3.0.1 3.0.9 CRITICAL", f.b1),
 	})
 	// Fixed since: CVE-2 was in s1 and s2 but not in the current scan.
 	_, got = search("CVE-2")

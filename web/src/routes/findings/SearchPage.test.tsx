@@ -36,7 +36,14 @@ function searchApi(items: object[], extra?: Handler): Handler {
     if (call.path === '/api/v1/me') return json(200, makeUser());
     if (call.path.startsWith('/api/v1/search/vulnerabilities')) {
       const id = new URL(call.path, 'http://x').searchParams.get('id');
-      return json(200, { vuln_id: id, items, truncated: false });
+      return json(200, {
+        vuln_id: id,
+        items,
+        truncated: false,
+        total_findings: items.length,
+        total_services: new Set(items.map((i) => (i as { service: { id: number } }).service.id))
+          .size,
+      });
     }
     return undefined;
   };
@@ -88,17 +95,25 @@ describe('vulnerability search', () => {
     expect(within(auth).getByText('High')).toBeInTheDocument();
   });
 
-  it('says so when the matches were cut', async () => {
+  it('says so when the matches were cut and gives the true totals', async () => {
     mockFetch(async (call) => {
       if (call.path === '/api/v1/me') return json(200, makeUser());
       if (call.path.startsWith('/api/v1/search/vulnerabilities')) {
-        return json(200, { vuln_id: 'CVE-2024-3094', items: [ITEMS[0]], truncated: true });
+        return json(200, {
+          vuln_id: 'CVE-2024-3094',
+          items: [ITEMS[0]],
+          truncated: true,
+          total_findings: 4200,
+          total_services: 310,
+        });
       }
       return undefined;
     });
     renderApp('/search?id=CVE-2024-3094');
-    expect(await screen.findByText(/affects at least 1 service in 1 artifact/)).toBeInTheDocument();
-    expect(screen.getByText(/Showing the first 1.000/)).toBeInTheDocument();
+    expect(await screen.findByText(/affects 310 services/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/4,200 findings match\. Showing the 1 most severe/),
+    ).toBeInTheDocument();
   });
 
   it('runs the search from the id URL param', async () => {

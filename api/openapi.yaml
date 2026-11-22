@@ -1029,10 +1029,12 @@ components:
         generated_at: { type: string, format: date-time }
     VulnerabilitySearch:
       type: object
-      required: [vuln_id, items, truncated]
+      required: [vuln_id, items, truncated, total_findings, total_services]
       properties:
         vuln_id: { type: string }
-        truncated: { type: boolean, description: "True when more than 1000 findings match and only the first 1000 (by service name) are listed." }
+        total_findings: { type: integer, format: int64, description: "Number of unsuppressed findings of this ID in current scans, including any not listed in items." }
+        total_services: { type: integer, format: int64, description: "Number of non-archived services with at least one such finding." }
+        truncated: { type: boolean, description: "True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name." }
         items:
           type: array
           items:

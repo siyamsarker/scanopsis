@@ -34,9 +34,13 @@ func insertVulns(t *testing.T, pool *pgxpool.Pool, scan int64, prefix string, fr
 }
 
 type searchBody struct {
-	VulnID    string        `json:"vuln_id"`
-	Items     []interface{} `json:"items"`
-	Truncated bool          `json:"truncated"`
+	VulnID string `json:"vuln_id"`
+	Items  []struct {
+		Severity string `json:"severity"`
+	} `json:"items"`
+	Truncated     bool  `json:"truncated"`
+	TotalFindings int64 `json:"total_findings"`
+	TotalServices int64 `json:"total_services"`
 }
 
 func TestSearchIsBounded(t *testing.T) {
@@ -61,16 +65,26 @@ func TestSearchIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A second service, last by name, has one critical finding of the ID: a
+	// capped list must still show it, and the totals count both services.
+	other := newService(t, pool, "zzz-last", "grp/zzz", false)
+	zscan := newScan(t, pool, other, "image", "app", "main", now)
+	addVulns(t, pool, zscan, vuln{id: "CVE-2030-1", pkg: "z", version: "1", target: "t", class: "os-pkgs", severity: "CRITICAL"})
+
 	var wide searchBody
 	getJSON(t, mux, "/api/v1/search/vulnerabilities?id=cve-2030-1", &wide)
-	if len(wide.Items) != maxSearchResults || !wide.Truncated {
-		t.Errorf("1001 matches: %d items, truncated %v; want %d items and truncated", len(wide.Items), wide.Truncated, maxSearchResults)
+	if len(wide.Items) != maxSearchResults || !wide.Truncated || wide.TotalFindings != 1002 || wide.TotalServices != 2 {
+		t.Errorf("1002 matches: %d items, truncated %v, totals %d findings in %d services; want %d items, truncated, 1002 in 2",
+			len(wide.Items), wide.Truncated, wide.TotalFindings, wide.TotalServices, maxSearchResults)
+	}
+	if len(wide.Items) > 0 && wide.Items[0].Severity != "CRITICAL" {
+		t.Errorf("first listed finding is %s, want the critical one", wide.Items[0].Severity)
 	}
 
 	var narrow searchBody
 	getJSON(t, mux, "/api/v1/search/vulnerabilities?id=CVE-2031-2", &narrow)
-	if len(narrow.Items) != 1 || narrow.Truncated {
-		t.Errorf("one match: %d items, truncated %v", len(narrow.Items), narrow.Truncated)
+	if len(narrow.Items) != 1 || narrow.Truncated || narrow.TotalFindings != 1 || narrow.TotalServices != 1 {
+		t.Errorf("one match: %d items, truncated %v, totals %d/%d", len(narrow.Items), narrow.Truncated, narrow.TotalFindings, narrow.TotalServices)
 	}
 }
 

@@ -32,6 +32,10 @@ type Volume struct {
 // default volume, so searches have both a rare and a widespread match.
 const CommonVulnID = "CVE-2024-3094"
 
+// WidespreadVulnID is carried by every image scan of three quarters of the
+// services, like a library vulnerability that is in most images.
+const WidespreadVulnID = "CVE-2021-44228"
+
 // DefaultVolume is the shape of the target scale: 500 services over 90 days,
 // 540000 scans and several million findings. Findings drift slowly from scan
 // to scan, as real findings do, so first-seen lookups have history to walk.
@@ -95,6 +99,7 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, v Volume) error {
 		         'pkg' || (x.n %% 500), '1.0.' || (x.n %% 7),
 		         CASE WHEN x.n %% 3 = 0 THEN '' ELSE '2.0.' || (x.n %% 11) END,
 		         CASE WHEN g = 2 AND x.service_id %% %d = 0 THEN '%s'
+		              WHEN g = 3 AND x.service_id %% 4 <> 0 THEN '%s'
 		              ELSE 'CVE-' || (2018 + x.n %% 7) || '-' || x.n END,
 		         (ARRAY['CRITICAL','HIGH','MEDIUM','LOW','UNKNOWN'])[1 + x.n %% 5],
 		         'title ' || x.n, x.n %% 50 = 0
@@ -103,8 +108,8 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, v Volume) error {
 		                + g * 7 + CASE WHEN g = 1 THEN s.gitlab_pipeline_id / 10 ELSE 0 END) %% %d AS n
 		        FROM scans s CROSS JOIN generate_series(1, %d) g
 		        WHERE s.kind = 'image') x
-		  ORDER BY x.id, g`, v.CommonIDEveryNth, CommonVulnID, v.VulnIDPool, v.VulnsPerScan),
-		`ANALYZE`,
+		  ORDER BY x.id, g`, v.CommonIDEveryNth, CommonVulnID, WidespreadVulnID, v.VulnIDPool, v.VulnsPerScan),
+		`VACUUM (ANALYZE)`,
 	}
 	for _, q := range steps {
 		if _, err := conn.Exec(ctx, q); err != nil {
