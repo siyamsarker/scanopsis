@@ -9,6 +9,7 @@ import {
   makeUser,
   mockFetch,
   noContent,
+  openMenu,
   renderApp,
   type Handler,
 } from '../test-utils';
@@ -65,12 +66,13 @@ describe('describeAgent', () => {
 });
 
 describe('account page', () => {
-  it('is linked from the header', async () => {
+  it('is linked from the account menu', async () => {
     mockFetch(api([current]));
-    renderApp('/account');
-    expect(
-      await screen.findByRole('link', { name: 'Your account: Ada Lovelace, Admin' }),
-    ).toHaveAttribute('href', '/account');
+    renderApp('/');
+    const menu = await openMenu('Account: Ada Lovelace, Admin');
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Your account' }));
+    expect(await screen.findByRole('list', { name: 'Sessions' })).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('/account');
   });
 
   it('lists the sessions and marks this browser', async () => {
@@ -105,7 +107,11 @@ describe('account page', () => {
     fireEvent.click(
       await screen.findByRole('button', { name: 'End session Safari on iOS, 198.51.100.4' }),
     );
-    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(1));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('list', { name: 'Sessions' })).getAllByRole('listitem'),
+      ).toHaveLength(1),
+    );
     expect(screen.getByText('2001:db8::1')).toBeInTheDocument();
     expect(calls.filter((c) => c.method === 'DELETE')).toHaveLength(1);
   });

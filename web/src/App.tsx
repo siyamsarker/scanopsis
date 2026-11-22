@@ -3,6 +3,9 @@
 
 import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router';
+import { MotionRoot } from './components/shell/RouteTransition';
+import { PageLoader } from './components/states';
+import { Toaster } from './components/Toast';
 import { LoginPage } from './routes/LoginPage';
 import { NotFoundPage } from './routes/NotFoundPage';
 import { PasswordPage } from './routes/PasswordPage';
@@ -45,38 +48,35 @@ const AccountPage = lazy(() =>
   import('./routes/AccountPage').then((m) => ({ default: m.AccountPage })),
 );
 
-const loading = (
-  <p role="status" className="p-6 text-text-muted">
-    Loading…
-  </p>
-);
-
 export function App() {
   return (
-    <Suspense fallback={loading}>
-      <Routes>
-        <Route element={<SetupGate />}>
-          <Route path="/setup" element={<SetupPage />} />
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/2fa/setup" element={<EnrollPage />} />
-          <Route path="/2fa" element={<VerifyPage />} />
-          <Route path="/password" element={<PasswordPage />} />
-          <Route element={<ProtectedLayout />}>
-            <Route index element={<PortfolioPage />} />
-            <Route path="services/:id" element={<ServicePage />} />
-            <Route path="services/:id/findings" element={<FindingsPage />} />
-            <Route path="scans/:id" element={<ScanPage />} />
-            <Route path="search" element={<SearchPage />} />
-            <Route path="admin/services" element={<AdminServicesPage />} />
-            <Route path="admin/users" element={<UsersPage />} />
-            <Route path="admin/integrations" element={<IntegrationsPage />} />
-            <Route path="admin/audit" element={<AuditPage />} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="account" element={<AccountPage />} />
-            <Route path="*" element={<NotFoundPage />} />
+    <MotionRoot>
+      <Suspense fallback={<PageLoader fullScreen />}>
+        <Routes>
+          <Route element={<SetupGate />}>
+            <Route path="/setup" element={<SetupPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/2fa/setup" element={<EnrollPage />} />
+            <Route path="/2fa" element={<VerifyPage />} />
+            <Route path="/password" element={<PasswordPage />} />
+            <Route element={<ProtectedLayout />}>
+              <Route index element={<PortfolioPage />} />
+              <Route path="services/:id" element={<ServicePage />} />
+              <Route path="services/:id/findings" element={<FindingsPage />} />
+              <Route path="scans/:id" element={<ScanPage />} />
+              <Route path="search" element={<SearchPage />} />
+              <Route path="admin/services" element={<AdminServicesPage />} />
+              <Route path="admin/users" element={<UsersPage />} />
+              <Route path="admin/integrations" element={<IntegrationsPage />} />
+              <Route path="admin/audit" element={<AuditPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="account" element={<AccountPage />} />
+              <Route path="*" element={<NotFoundPage />} />
+            </Route>
           </Route>
-        </Route>
-      </Routes>
-    </Suspense>
+        </Routes>
+      </Suspense>
+      <Toaster />
+    </MotionRoot>
   );
 }

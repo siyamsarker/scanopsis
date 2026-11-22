@@ -2,22 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useQueryClient } from '@tanstack/react-query';
-import { LogOut, UserRound } from 'lucide-react';
-import { useEffect, useState } from 'react';
-import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
-import { api, ApiError, unwrap } from '../api/client';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { Navigate, Outlet, useLocation } from 'react-router';
 import { useMe } from '../api/hooks';
 import { nextStep, stepUrl } from '../auth/session';
-import { Wordmark } from '../components/ApertureMark';
-import { ThemeSwitch } from '../components/ThemeSwitch';
-import { primaryButtonClass, secondaryButtonClass } from '../ui';
+import { ErrorState, PageLoader } from '../components/states';
+import { PhoneBar } from '../components/shell/PhoneBar';
+import { RouteTransition } from '../components/shell/RouteTransition';
+import { useGlobalShortcuts } from '../components/shell/shortcuts';
+import { ShortcutsDialog } from '../components/shell/ShortcutsDialog';
+import { Sidebar, useSidebarCollapsed } from '../components/shell/Sidebar';
+import { useSignOut } from '../components/shell/useSignOut';
 
-const navLinkClass = ({ isActive }: { isActive: boolean }) =>
-  `rounded-control px-3 py-2 transition-colors duration-150 ease-out hover:bg-surface-raised ${
-    isActive
-      ? 'bg-surface-raised text-text shadow-[inset_0_-2px_0_var(--brand)]'
-      : 'text-text-muted'
-  }`;
+// The palette (and cmdk) loads the first time it is opened.
+const CommandPalette = lazy(() => import('../components/shell/CommandPalette'));
 
 /** Empties the query cache once, so data of an ended session is never kept. */
 function ClearCache() {
@@ -28,38 +26,49 @@ function ClearCache() {
   return null;
 }
 
+/**
+ * The application shell: sidebar (or the phone top bar), the page in one
+ * content container, the command palette and the shortcuts. Renders only for
+ * a complete session; otherwise it sends the person to the right step.
+ */
 export function ProtectedLayout() {
   const me = useMe();
   const location = useLocation();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [signingOut, setSigningOut] = useState(false);
-  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const { signOut, signingOut } = useSignOut();
+  const [collapsed, setCollapsed] = useSidebarCollapsed();
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteLoaded, setPaletteLoaded] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  function openPalette() {
+    setPaletteLoaded(true);
+    setPaletteOpen(true);
+  }
+
+  useGlobalShortcuts({
+    onPalette: () => {
+      if (me.data) openPalette();
+    },
+    onShortcuts: () => {
+      if (me.data) setShortcutsOpen(true);
+    },
+  });
 
   if (signingOut) return null;
 
-  if (me.isPending) {
-    return (
-      <p role="status" className="p-6 text-text-muted">
-        Loading…
-      </p>
-    );
-  }
+  if (me.isPending) return <PageLoader label="Loading your workspace" fullScreen />;
 
   if (me.isError) {
     return (
-      <div role="alert" className="mx-auto max-w-2xl p-6">
-        <p className="text-text">
-          Scanopsis could not load your account. Check your connection and try again.
-        </p>
-        <button
-          type="button"
-          className={`${primaryButtonClass} mt-4`}
-          onClick={() => void me.refetch()}
-        >
-          Try again
-        </button>
-      </div>
+      <main className="mx-auto flex min-h-dvh max-w-2xl items-center px-4">
+        <ErrorState
+          title="Your account could not be loaded"
+          message="Scanopsis could not load your account. Check your connection and try again."
+          onRetry={() => void me.refetch()}
+          retrying={me.isRefetching}
+          className="w-full"
+        />
+      </main>
     );
   }
 
@@ -80,101 +89,55 @@ export function ProtectedLayout() {
     return <Navigate to={stepUrl(step, location.pathname + location.search)} replace />;
   }
 
-  function finishSignOut() {
-    setSigningOut(true);
-    queryClient.clear();
-    void navigate('/login', { replace: true });
-  }
-
-  async function signOut() {
-    setSignOutError(null);
-    try {
-      unwrap(await api.POST('/api/v1/auth/logout'));
-    } catch (err) {
-      // 401 means the session is already gone, which is what signing out wants.
-      if (err instanceof ApiError && err.status === 401) {
-        finishSignOut();
-        return;
-      }
-      setSignOutError('Signing out failed. Check your connection and try again.');
-      return;
-    }
-    finishSignOut();
-  }
+  const showShortcuts = () => setShortcutsOpen(true);
 
   return (
-    <div className="min-h-screen">
-      <header className="sticky top-0 z-10 border-b border-border bg-surface/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 sm:px-6">
-          <Link to="/" className="rounded-control py-1 text-lg">
-            <Wordmark />
-          </Link>
-          <nav
-            aria-label="Main"
-            className="order-last -mx-1 flex w-full gap-1 overflow-x-auto px-1 sm:order-none sm:w-auto sm:shrink-0"
-          >
-            <NavLink to="/" end className={navLinkClass}>
-              Portfolio
-            </NavLink>
-            <NavLink to="/search" className={navLinkClass}>
-              Search
-            </NavLink>
-            {user.role === 'admin' && (
-              <>
-                <NavLink to="/admin/services" className={navLinkClass}>
-                  Services
-                </NavLink>
-                <NavLink to="/admin/users" className={navLinkClass}>
-                  Users
-                </NavLink>
-                <NavLink to="/admin/integrations" className={navLinkClass}>
-                  Integrations
-                </NavLink>
-                <NavLink to="/admin/audit" className={navLinkClass}>
-                  Audit log
-                </NavLink>
-                <NavLink to="/settings" className={navLinkClass}>
-                  Settings
-                </NavLink>
-              </>
-            )}
-          </nav>
-          <div className="ml-auto flex items-center gap-2 sm:gap-3">
-            <Link
-              to="/account"
-              title={`Signed in as ${user.name || user.username}`}
-              aria-label={`Your account: ${user.name || user.username}, ${user.role === 'admin' ? 'Admin' : 'Viewer'}`}
-              className="flex min-h-10 min-w-0 items-center gap-2 rounded-control px-2 text-text transition-colors duration-150 ease-out hover:bg-surface-raised"
-            >
-              <UserRound
-                size={18}
-                strokeWidth={1.5}
-                aria-hidden="true"
-                className="shrink-0 text-text-muted"
-              />
-              <span className="sr-only max-w-48 truncate xl:not-sr-only xl:block">
-                {user.name || user.username}
-              </span>
-              <span className="hidden rounded-control border border-border px-1.5 py-0.5 text-xs text-text-muted sm:inline">
-                {user.role === 'admin' ? 'Admin' : 'Viewer'}
-              </span>
-            </Link>
-            <ThemeSwitch />
-            <button type="button" className={secondaryButtonClass} onClick={() => void signOut()}>
-              <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />
-              <span className="sr-only xl:not-sr-only">Sign out</span>
-            </button>
-          </div>
-        </div>
-        {signOutError && (
-          <p role="alert" className="mx-auto max-w-7xl px-4 pb-3 text-text sm:px-6">
-            {signOutError}
-          </p>
-        )}
-      </header>
-      <main className="rise mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10">
-        <Outlet />
-      </main>
+    <div className="flex min-h-dvh">
+      <a
+        href="#main"
+        className="fixed top-2 left-2 z-[70] -translate-y-20 rounded-inner bg-brand px-3 py-2 text-body-s font-medium text-brand-ink focus:translate-y-0"
+      >
+        Skip to content
+      </a>
+      <Sidebar
+        user={user}
+        collapsed={collapsed}
+        onCollapsedChange={setCollapsed}
+        onPalette={openPalette}
+        onShortcuts={showShortcuts}
+        onSignOut={signOut}
+      />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <PhoneBar
+          user={user}
+          onPalette={openPalette}
+          onShortcuts={showShortcuts}
+          onSignOut={signOut}
+        />
+        <main
+          id="main"
+          tabIndex={-1}
+          className="mx-auto w-full max-w-[1344px] flex-1 px-4 pt-6 pb-16 sm:px-6 sm:pt-8 lg:px-8 lg:pt-10"
+        >
+          <Suspense fallback={<PageLoader />}>
+            <RouteTransition key={location.pathname}>
+              <Outlet />
+            </RouteTransition>
+          </Suspense>
+        </main>
+      </div>
+      {paletteLoaded ? (
+        <Suspense fallback={null}>
+          <CommandPalette
+            open={paletteOpen}
+            onOpenChange={setPaletteOpen}
+            isAdmin={user.role === 'admin'}
+            onShortcuts={showShortcuts}
+            onSignOut={signOut}
+          />
+        </Suspense>
+      ) : null}
+      <ShortcutsDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
     </div>
   );
 }

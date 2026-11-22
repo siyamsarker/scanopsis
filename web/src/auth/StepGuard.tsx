@@ -7,6 +7,7 @@ import { useMe } from '../api/hooks';
 import { ErrorNote } from '../components/ErrorNote';
 import { safeReturnTo } from './returnTo';
 import { nextStep, stepUrl, type SessionStep } from './session';
+import { PageLoader } from '../components/states';
 
 /**
  * Renders a session step only while it is the step the session is at. Other
@@ -29,11 +30,7 @@ export function StepGuard({
 
   if (hold && me.data) return children;
   if (me.isPending) {
-    return (
-      <p role="status" className="p-6 text-text-muted">
-        Loading…
-      </p>
-    );
+    return <PageLoader fullScreen />;
   }
   if (me.isError) {
     return (

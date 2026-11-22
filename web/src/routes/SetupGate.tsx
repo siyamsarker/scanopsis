@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { Navigate, Outlet, useLocation } from 'react-router';
 import { useSetupStatus } from '../api/hooks';
+import { PageLoader } from '../components/states';
 
 /**
  * While no administrator exists, every route shows the setup page. A failed
@@ -18,11 +19,7 @@ export function SetupGate() {
   const required = status.data?.required ?? known;
 
   if (required === undefined && status.isPending) {
-    return (
-      <p role="status" className="p-6 text-text-muted">
-        Loading…
-      </p>
-    );
+    return <PageLoader fullScreen />;
   }
   const onSetup = location.pathname === '/setup';
   if (required === true && !onSetup) return <Navigate to="/setup" replace />;

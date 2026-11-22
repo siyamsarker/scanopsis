@@ -1,15 +1,47 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { fireEvent, screen } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { createQueryClient } from '../api/queryClient';
-import { apiError, json, makeUser, mockFetch, noContent, renderApp } from '../test-utils';
+import { sidebarStorageKey } from '../components/shell/Sidebar';
+import { apiError, json, makeUser, mockFetch, noContent, openMenu, renderApp } from '../test-utils';
 
 const emptyPortfolio = {
   items: [],
   totals: { services: 0, failing_quality_gates: 0, services_with_critical: 0, fixable: 0 },
   generated_at: '2026-11-19T10:00:00Z',
 };
+
+const portfolio = {
+  ...emptyPortfolio,
+  items: [
+    {
+      service: {
+        id: 7,
+        name: 'payments-api',
+        gitlab_project_path: 'platform/payments-api',
+      },
+    },
+  ],
+};
+
+afterEach(() => {
+  localStorage.clear();
+  document.documentElement.removeAttribute('data-theme');
+});
+
+function signedIn(user = makeUser(), extra?: (path: string) => Response | undefined) {
+  return mockFetch((call) => {
+    if (call.path === '/api/v1/me') return json(200, user);
+    if (call.path === '/api/v1/portfolio') return json(200, emptyPortfolio);
+    return extra?.(call.path);
+  });
+}
+
+/** The sidebar's navigation: in jsdom the phone bar renders too, but its menu stays closed. */
+async function mainNav() {
+  return screen.findByRole('navigation', { name: 'Main' });
+}
 
 describe('protected layout', () => {
   it('redirects anonymous users to the login page with return_to', async () => {
@@ -28,39 +60,18 @@ describe('protected layout', () => {
     );
   });
 
-  it('shows the Users link, name and role for admins', async () => {
-    mockFetch((call) => {
-      if (call.path === '/api/v1/portfolio') return json(200, emptyPortfolio);
-      return call.path === '/api/v1/me' ? json(200, makeUser({ role: 'admin' })) : undefined;
-    });
-    renderApp('/');
-    for (const [name, href] of [
-      ['Services', '/admin/services'],
-      ['Integrations', '/admin/integrations'],
-      ['Audit log', '/admin/audit'],
-      ['Settings', '/settings'],
-    ]) {
-      expect(await screen.findByRole('link', { name })).toHaveAttribute('href', href);
-    }
-    expect(await screen.findByRole('link', { name: 'Users' })).toHaveAttribute(
-      'href',
-      '/admin/users',
+  it('shows a loading state while the account loads', async () => {
+    mockFetch((call) =>
+      call.path === '/api/v1/me' ? new Promise<Response>(() => {}) : json(200, { required: false }),
     );
-    expect(screen.getByRole('link', { name: 'Portfolio' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Search' })).toBeInTheDocument();
-    expect(screen.getByText('Ada Lovelace')).toBeInTheDocument();
-    expect(screen.getByText('Admin')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
-    expect(await screen.findByText('No services yet')).toBeInTheDocument();
+    renderApp('/');
+    expect(await screen.findByText('Loading your workspace…')).toBeInTheDocument();
   });
 
-  it('keeps every link, an accessible user name and the sign-out name in the header', async () => {
-    mockFetch((call) => {
-      if (call.path === '/api/v1/portfolio') return json(200, emptyPortfolio);
-      return call.path === '/api/v1/me' ? json(200, makeUser({ role: 'admin' })) : undefined;
-    });
+  it('lists every page in groups for admins, with the current one marked', async () => {
+    signedIn(makeUser({ role: 'admin' }));
     renderApp('/');
-    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    const nav = await mainNav();
     expect(Array.from(nav.querySelectorAll('a')).map((a) => a.textContent)).toEqual([
       'Portfolio',
       'Search',
@@ -70,40 +81,176 @@ describe('protected layout', () => {
       'Audit log',
       'Settings',
     ]);
-    expect(screen.getByTitle('Signed in as Ada Lovelace')).toHaveTextContent('Ada Lovelace');
-    expect(screen.getByTitle('Signed in as Ada Lovelace')).toHaveTextContent('Admin');
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    for (const [name, href] of [
+      ['Services', '/admin/services'],
+      ['Users', '/admin/users'],
+      ['Integrations', '/admin/integrations'],
+      ['Audit log', '/admin/audit'],
+      ['Settings', '/settings'],
+    ]) {
+      expect(within(nav).getByRole('link', { name })).toHaveAttribute('href', href);
+    }
+    expect(within(nav).getByText('Overview')).toBeInTheDocument();
+    expect(within(nav).getByText('Admin')).toBeInTheDocument();
+    expect(within(nav).getByRole('link', { name: 'Portfolio' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    );
+    expect(await screen.findByRole('heading', { name: 'Portfolio' })).toBeInTheDocument();
+    expect(await screen.findByText('No services yet')).toBeInTheDocument();
   });
 
-  it('offers the theme switch in the header', async () => {
-    mockFetch((call) => (call.path === '/api/v1/me' ? json(200, makeUser()) : undefined));
+  it('hides the admin pages from viewers and falls back to the username', async () => {
+    signedIn(makeUser({ role: 'viewer', name: '', username: 'grace' }));
     renderApp('/');
-    expect(await screen.findByRole('group', { name: 'Theme' })).toBeInTheDocument();
+    const nav = await mainNav();
+    expect(within(nav).queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+    expect(within(nav).queryByText('Admin')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Account: grace, Viewer' })).toBeInTheDocument();
   });
 
-  it('shows the mark with the wordmark in the header and the aperture in the empty state', async () => {
-    mockFetch((call) => {
-      if (call.path === '/api/v1/portfolio') return json(200, emptyPortfolio);
-      return call.path === '/api/v1/me' ? json(200, makeUser()) : undefined;
-    });
+  it('shows the signed-in person in the account menu with theme and sign-out', async () => {
+    signedIn();
+    renderApp('/');
+    const trigger = await screen.findByRole('button', { name: 'Account: Ada Lovelace, Admin' });
+    expect(trigger).toHaveTextContent('Ada Lovelace');
+    expect(trigger).toHaveTextContent('Admin');
+    const menu = await openMenu('Account: Ada Lovelace, Admin');
+    expect(within(menu).getByText('ada')).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Your account' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitemradio', { name: 'System' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    fireEvent.click(within(menu).getByRole('menuitemradio', { name: 'Dark' }));
+    expect(document.documentElement).toHaveAttribute('data-theme', 'dark');
+  });
+
+  it('shows the mark with the wordmark and the illustration in the empty state', async () => {
+    signedIn();
     const { container } = renderApp('/');
-    const mark = await screen.findByRole('link', { name: 'scanopsis' });
+    const [mark] = await screen.findAllByRole('link', { name: 'scanopsis' });
     expect(mark).toHaveAttribute('href', '/');
     expect(mark.querySelectorAll('svg path')).toHaveLength(2);
     await screen.findByText('No services yet');
-    expect(container.querySelectorAll('main .aperture-halo svg path')).toHaveLength(2);
+    expect(container.querySelector('main [data-art="pipeline"]')).not.toBeNull();
   });
 
-  it('hides the Users link for viewers and falls back to the username', async () => {
-    mockFetch((call) =>
-      call.path === '/api/v1/me'
-        ? json(200, makeUser({ role: 'viewer', name: '', username: 'grace' }))
-        : undefined,
+  it('collapses the sidebar to a rail and remembers it', async () => {
+    signedIn();
+    const first = renderApp('/');
+    fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }));
+    expect(screen.getByRole('complementary', { name: 'Sidebar' })).toHaveAttribute(
+      'data-collapsed',
+      'true',
     );
+    expect(localStorage.getItem(sidebarStorageKey)).toBe('collapsed');
+    // The labels stay for screen readers.
+    expect(within(await mainNav()).getByRole('link', { name: 'Portfolio' })).toBeInTheDocument();
+    first.unmount();
+
+    signedIn();
     renderApp('/');
-    expect(await screen.findByText('grace')).toBeInTheDocument();
-    expect(screen.getByText('Viewer')).toBeInTheDocument();
-    expect(screen.queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Expand sidebar' }));
+    expect(localStorage.getItem(sidebarStorageKey)).toBeNull();
+  });
+
+  it('keeps working when storage is blocked', async () => {
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('blocked');
+    });
+    signedIn();
+    renderApp('/');
+    fireEvent.click(await screen.findByRole('button', { name: 'Collapse sidebar' }));
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument();
+    vi.restoreAllMocks();
+  });
+
+  it('opens the phone menu as a sheet and closes it after navigating', async () => {
+    signedIn();
+    renderApp('/');
+    fireEvent.click(await screen.findByRole('button', { name: 'Open menu' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Menu' });
+    expect(within(sheet).getByRole('group', { name: 'Theme' })).toBeInTheDocument();
+    expect(within(sheet).getByRole('button', { name: 'Sign out' })).toBeInTheDocument();
+    fireEvent.click(within(sheet).getByRole('link', { name: 'Search' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Menu' })).toBeNull());
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/search'));
+  });
+
+  it('opens the command palette with Ctrl+K and jumps to a page', async () => {
+    signedIn();
+    renderApp('/');
+    await mainNav();
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    const input = within(palette).getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'audit' } });
+    fireEvent.click(await within(palette).findByRole('option', { name: /Audit log/ }));
+    await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent('/admin/audit'));
+    expect(screen.queryByRole('dialog', { name: 'Command palette' })).toBeNull();
+  });
+
+  it('lists services in the palette and offers to search a vulnerability ID', async () => {
+    signedIn(makeUser({ role: 'viewer' }), (path) =>
+      path === '/api/v1/portfolio' ? json(200, portfolio) : undefined,
+    );
+    mockFetch((call) => {
+      if (call.path === '/api/v1/me') return json(200, makeUser({ role: 'viewer' }));
+      if (call.path === '/api/v1/portfolio') return json(200, portfolio);
+      return undefined;
+    });
+    renderApp('/account');
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Search or jump to' }))[0]);
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    expect(
+      await within(palette).findByRole('option', { name: /payments-api/ }),
+    ).toBeInTheDocument();
+    expect(within(palette).queryByRole('option', { name: /Integrations/ })).toBeNull();
+    fireEvent.change(within(palette).getByRole('combobox'), {
+      target: { value: 'cve-2024-3094' },
+    });
+    fireEvent.click(
+      await within(palette).findByRole('option', { name: 'Search vulnerability CVE-2024-3094' }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent('/search?id=CVE-2024-3094'),
+    );
+  });
+
+  it('switches the theme from the palette', async () => {
+    signedIn();
+    renderApp('/');
+    await mainNav();
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    const palette = await screen.findByRole('dialog', { name: 'Command palette' });
+    fireEvent.click(await within(palette).findByRole('option', { name: 'Use the light theme' }));
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light');
+  });
+
+  it('shows the shortcuts with ? and focuses the page search with /', async () => {
+    signedIn();
+    renderApp('/search');
+    await mainNav();
+    fireEvent.keyDown(document.body, { key: '?' });
+    const dialog = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' });
+    expect(dialog).toHaveTextContent('Open the command palette');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    const field = document.querySelector<HTMLElement>('main [data-search-field]');
+    expect(field).not.toBeNull();
+    act(() => {
+      fireEvent.keyDown(document.body, { key: '/' });
+    });
+    expect(field).toHaveFocus();
+    // While typing, "?" is just a character.
+    fireEvent.keyDown(field!, { key: '?' });
+    expect(screen.queryByRole('dialog', { name: 'Keyboard shortcuts' })).toBeNull();
   });
 
   it('signs out with a POST and goes to the login page', async () => {
@@ -122,23 +269,26 @@ describe('protected layout', () => {
       return undefined;
     });
     renderApp('/');
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    const menu = await openMenu(/^Account:/);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Sign out' }));
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/login$/);
     expect(calls.some((c) => c.method === 'POST' && c.path === '/api/v1/auth/logout')).toBe(true);
   });
 
-  it('shows an error and stays signed in when sign-out fails', async () => {
+  it('shows an error toast and stays signed in when sign-out fails', async () => {
     mockFetch((call) => {
       if (call.path === '/api/v1/auth/logout') throw new TypeError('Failed to fetch');
       if (call.path === '/api/v1/me') return json(200, makeUser());
       return undefined;
     });
     renderApp('/');
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    const menu = await openMenu(/^Account:/);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Sign out' }));
+    const region = screen.getByRole('region', { name: /Notifications/ });
     expect(
-      await screen.findByText('Signing out failed. Check your connection and try again.'),
-    ).toBeVisible();
+      await within(region).findByText('Signing out failed. Check your connection and try again.'),
+    ).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
   });
 
@@ -151,11 +301,11 @@ describe('protected layout', () => {
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
   });
 
-  it('shows a not-found page with a link home', async () => {
-    mockFetch((call) => (call.path === '/api/v1/me' ? json(200, makeUser()) : undefined));
+  it('shows a not-found page with a way home', async () => {
+    signedIn();
     renderApp('/nowhere');
     expect(await screen.findByRole('heading', { name: 'Page not found' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'home page' })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: 'Go to the portfolio' })).toHaveAttribute('href', '/');
   });
 
   it('clears the query cache when the session is gone', async () => {
@@ -171,45 +321,29 @@ describe('protected layout', () => {
     expect(client.getQueryData(['users'])).toBeUndefined();
   });
 
-  it('clears the query cache on sign-out', async () => {
-    let out = false;
-    mockFetch((call) => {
-      if (call.path === '/api/v1/auth/logout') {
-        out = true;
-        return noContent();
-      }
-      if (call.path === '/api/v1/me')
-        return out ? apiError(401, 'unauthenticated', 'Sign in first.') : json(200, makeUser());
-      if (call.path === '/api/v1/auth/methods') return json(200, { gitlab: true, local: true });
-      return undefined;
-    });
-    const client = createQueryClient();
-    client.setQueryData(['anything'], 'cached');
-    renderApp('/', client);
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
-    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
-    expect(client.getQueryData(['anything'])).toBeUndefined();
-  });
-
-  it('treats a 401 from logout as signed out', async () => {
-    let out = false;
-    mockFetch((call) => {
-      if (call.path === '/api/v1/auth/logout') {
-        out = true;
-        return apiError(401, 'unauthenticated', 'Sign in first.');
-      }
-      if (call.path === '/api/v1/me')
-        return out ? apiError(401, 'unauthenticated', 'Sign in first.') : json(200, makeUser());
-      if (call.path === '/api/v1/auth/methods') return json(200, { gitlab: true, local: true });
-      return undefined;
-    });
-    const client = createQueryClient();
-    client.setQueryData(['anything'], 'cached');
-    renderApp('/', client);
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
-    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
-    expect(screen.getByTestId('location')).toHaveTextContent(/^\/login$/);
-    expect(client.getQueryData(['anything'])).toBeUndefined();
+  it('clears the query cache on sign-out, also when logout answers 401', async () => {
+    for (const answer of [noContent, () => apiError(401, 'unauthenticated', 'Gone.')]) {
+      let out = false;
+      mockFetch((call) => {
+        if (call.path === '/api/v1/auth/logout') {
+          out = true;
+          return answer();
+        }
+        if (call.path === '/api/v1/me')
+          return out ? apiError(401, 'unauthenticated', 'Sign in first.') : json(200, makeUser());
+        if (call.path === '/api/v1/auth/methods') return json(200, { gitlab: true, local: true });
+        return undefined;
+      });
+      const client = createQueryClient();
+      client.setQueryData(['anything'], 'cached');
+      const view = renderApp('/', client);
+      const menu = await openMenu(/^Account:/);
+      fireEvent.click(within(menu).getByRole('menuitem', { name: 'Sign out' }));
+      expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+      expect(screen.getByTestId('location')).toHaveTextContent(/^\/login$/);
+      expect(client.getQueryData(['anything'])).toBeUndefined();
+      view.unmount();
+    }
   });
 
   it('keeps the error and the session when logout answers 5xx', async () => {
@@ -221,10 +355,11 @@ describe('protected layout', () => {
     const client = createQueryClient();
     client.setQueryData(['anything'], 'cached');
     renderApp('/', client);
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+    const menu = await openMenu(/^Account:/);
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Sign out' }));
     expect(
-      await screen.findByText('Signing out failed. Check your connection and try again.'),
-    ).toBeVisible();
+      await screen.findAllByText('Signing out failed. Check your connection and try again.'),
+    ).not.toHaveLength(0);
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/$/);
     expect(client.getQueryData(['anything'])).toBe('cached');
   });
