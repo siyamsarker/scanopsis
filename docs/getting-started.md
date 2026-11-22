@@ -37,7 +37,7 @@ example to adapt: use your own clone location.
    cd scanopsis
    ```
 
-   Replace `X.Y.Z` with the newest version, for example `0.1.0`. See
+   Replace `X.Y.Z` with the newest version, for example `0.2.0`. See
    [find the newest version](versions.md#find-the-newest-version).
 
 2. Build the image with a tag that names the version. Use the same

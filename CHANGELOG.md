@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-22
+
+Upgrading from 0.1.0: back up first and follow [upgrade to a newer version](docs/versions.md#upgrade-to-a-newer-version). The first start applies migrations 7 to 10, which build new indexes without blocking writes; on a large database this takes from seconds to a few minutes. Things you will notice:
+
+- Sessions now end after 30 minutes without use and 12 hours after sign-in, unless you stored other values on the Settings page, and the session cookie ends with the browser.
+- The Compose file sets a memory limit of 512 MiB with `GOMEMLIMIT=400MiB`; take over the new `compose.yaml` and `.env.example` settings, and set `SCANOPSIS_TRUSTED_PROXIES` when a reverse proxy runs in front, because each client address now gets its own share of the request slots.
+- Cross-service search looks at the dashboard branches and protected branches and tags by default; choose "All branches" for the previous behaviour.
+- Retention now also expires the latest scans of unprotected branches that no dashboard shows, and clears the stored original report 30 days after a scan stops being current.
+- GitLab users are now bound to the GitLab URL they signed in through; after changing the GitLab URL they sign in as new viewers (see [GitLab users and the GitLab URL](docs/operations.md#gitlab-users-and-the-gitlab-url)).
+- New recovery codes are longer; existing ones keep working until used.
+
 ### Added
 
 - `scanopsis admin export-report <scan-id>` writes the original Trivy report of a scan to standard output, for checking a stored scan with `trivy convert`. It works in the container without a shell: `docker compose exec scanopsis /scanopsis admin export-report 42 > report.json`. A successful export is recorded in the audit log as `report.exported`; a report cleared by data retention fails with a clear message.
@@ -88,5 +99,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upload error responses no longer contain the GitLab URL or upstream error text.
 - npm dependencies are installed without running their install scripts.
 
-[Unreleased]: https://github.com/siyamsarker/scanopsis/compare/v0.1.0...main
+[Unreleased]: https://github.com/siyamsarker/scanopsis/compare/v0.2.0...main
+[0.2.0]: https://github.com/siyamsarker/scanopsis/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/siyamsarker/scanopsis/tree/release/0.1.0
