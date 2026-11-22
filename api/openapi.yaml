@@ -663,12 +663,30 @@ paths:
   /api/v1/scans/{id}/diff:
     get:
       tags: [scans]
-      summary: Findings new and fixed since the previous scan of the same service, ref, artifact and kind.
+      summary: Findings new and fixed since the previous scan of the same service, ref, artifact and kind, or since an earlier scan chosen with base.
       operationId: getScanDiff
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: base, in: query, description: "Compare with this scan instead of the previous one: any earlier scan of the same service, artifact and kind, on any ref (see listEarlierScans).", schema: { type: integer, format: int64, minimum: 1 } }
       responses:
         "200": { description: Diff., content: { application/json: { schema: { $ref: "#/components/schemas/ScanDiff" } } } }
+        "400": { description: "The base is not an earlier scan of the same service, artifact and kind (code invalid_parameter).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Busy" }
+  /api/v1/scans/{id}/earlier:
+    get:
+      tags: [scans]
+      summary: Earlier scans of the same service, artifact and kind, newest first; the scans a diff can use as its base.
+      operationId: listEarlierScans
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
+        - { name: ref, in: query, description: "Only scans of this ref. Every ref when absent.", schema: { type: string } }
+        - { name: before, in: query, description: "Return the scans that come after the scan with this id in newest-first order (by scan time, then id); use next_before from the previous page.", schema: { type: integer, format: int64 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        "200": { description: One page of scans., content: { application/json: { schema: { $ref: "#/components/schemas/ScanPage" } } } }
+        "400": { description: Invalid parameter., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { $ref: "#/components/responses/Busy" }
@@ -1064,16 +1082,21 @@ components:
         data_at: { type: [string, "null"], format: date-time, description: Scan time of the newest scan in this overview. }
     ScanDiff:
       type: object
-      required: [scan_id, previous_scan_id, new, fixed, unchanged, new_total, fixed_total, truncated]
+      required: [scan_id, previous_scan_id, base, new, fixed, unchanged_items, unchanged, new_total, fixed_total, truncated, new_counts, fixed_counts, unchanged_counts]
       properties:
         scan_id: { type: integer, format: int64 }
-        previous_scan_id: { type: [integer, "null"], format: int64 }
+        previous_scan_id: { type: [integer, "null"], format: int64, description: "The scan compared with: the base asked for, else the previous scan of the same ref. null when there is none." }
+        base: { oneOf: [ { $ref: "#/components/schemas/ScanSummary" }, { type: "null" } ], description: "The scan compared with, as in previous_scan_id." }
         new: { type: array, description: "At most 500 findings, the most severe first.", items: { $ref: "#/components/schemas/Vulnerability" } }
         fixed: { type: array, description: "At most 500 findings, the most severe first.", items: { $ref: "#/components/schemas/Vulnerability" } }
+        unchanged_items: { type: array, description: "At most 500 findings present in both scans, the most severe first, as reported in this scan.", items: { $ref: "#/components/schemas/Vulnerability" } }
         unchanged: { type: integer }
         new_total: { type: integer, description: "Number of new findings, including any not listed in new."  }
         fixed_total: { type: integer, description: "Number of fixed findings, including any not listed in fixed."  }
-        truncated: { type: boolean, description: "True when new or fixed lists fewer findings than new_total or fixed_total."  }
+        truncated: { type: boolean, description: "True when new, fixed or unchanged_items lists fewer findings than new_total, fixed_total or unchanged."  }
+        new_counts: { $ref: "#/components/schemas/SeverityCounts", description: "Every new finding by severity, listed or not." }
+        fixed_counts: { $ref: "#/components/schemas/SeverityCounts", description: "Every fixed finding by its severity in the base scan, listed or not." }
+        unchanged_counts: { $ref: "#/components/schemas/SeverityCounts", description: "Every unchanged finding by its severity in this scan." }
     TrendPoint:
       type: object
       required: [scan_id, kind, scanned_at, gitlab_pipeline_id, commit_sha, artifact_name, counts, fixable]
@@ -1169,12 +1192,17 @@ components:
         generated_at: { type: string, format: date-time }
     VulnerabilitySearch:
       type: object
-      required: [vuln_id, scope, items, truncated, total_findings, total_services]
+      required: [vuln_id, scope, items, truncated, total_findings, total_services, total_artifacts, counts, title, primary_url, fixed_versions]
       properties:
         vuln_id: { type: string }
         scope: { type: string, enum: [dashboard, all], description: "The scope that was searched, as asked for. The totals below count within it." }
         total_findings: { type: integer, format: int64, description: "Number of unsuppressed findings of this ID in the current scans of the scope, including any not listed in items." }
         total_services: { type: integer, format: int64, description: "Number of non-archived services with at least one such finding in the scope." }
+        total_artifacts: { type: integer, format: int64, description: "Number of artifacts (per service) with at least one such finding in the scope." }
+        counts: { $ref: "#/components/schemas/SeverityCounts", description: "Every matching finding by the severity reported for it, listed or not." }
+        title: { type: string, description: "A title reported for the vulnerability, empty when none was. Over every match." }
+        primary_url: { type: string, description: "An advisory URL reported for the vulnerability, empty when none was." }
+        fixed_versions: { type: array, maxItems: 20, items: { type: string }, description: "Distinct fixed versions reported over every match, at most 20." }
         truncated: { type: boolean, description: "True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name." }
         items:
           type: array

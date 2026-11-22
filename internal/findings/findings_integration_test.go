@@ -114,7 +114,7 @@ func TestHandlersCoverEveryOperation(t *testing.T) {
 	}
 	sort.Strings(got)
 	eq(t, "operations", got, []string{
-		"getScan", "getScanDiff", "getServiceOverview", "getServiceTrends", "listServiceScans",
+		"getScan", "getScanDiff", "getServiceOverview", "getServiceTrends", "listEarlierScans", "listServiceScans",
 		"listServiceSecrets", "listServiceVulnerabilities", "searchVulnerabilities",
 	})
 }
@@ -395,6 +395,9 @@ func TestScanDiff(t *testing.T) {
 	eq(t, "s3 new", view(d.New), []string{"web/CVE-4/LOW"})
 	eq(t, "s3 fixed", view(d.Fixed), []string{"web/CVE-2/CRITICAL"})
 	eq(t, "s3 unchanged", d.Unchanged, 2)
+	eq(t, "s3 unchanged items", view(d.UnchangedItems), []string{"web/CVE-1/HIGH", "web/CVE-3/HIGH"})
+	eq(t, "s3 counts", []countsJSON{d.NewCounts, d.FixedCounts, d.UnchangedCounts},
+		[]countsJSON{{Low: 1}, {Critical: 1}, {High: 2}})
 	if got := unix(d.New[0].FirstSeenAt); got != unix(at(f.base, day)) {
 		t.Errorf("new first_seen_at = %d", got)
 	}
@@ -425,6 +428,124 @@ func TestScanDiff(t *testing.T) {
 	if d = diff(f.f1); d.PreviousScanID != nil || len(d.New) != 1 {
 		t.Errorf("f1 = %+v", d)
 	}
+}
+
+func TestScanDiffBase(t *testing.T) {
+	f := seed(t)
+	mux := newMux(f.pool, "")
+	diff := func(scan, base int64) scanDiffJSON {
+		var d scanDiffJSON
+		getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff?base=%d", scan, base), &d)
+		return d
+	}
+
+	// s3 against s1 instead of its previous scan s2: CVE-3 and CVE-4 are new,
+	// CVE-2 is fixed and CVE-1 is unchanged.
+	d := diff(f.s3, f.s1)
+	if d.PreviousScanID == nil || *d.PreviousScanID != f.s1 || d.Base == nil || d.Base.ID != f.s1 {
+		t.Fatalf("s3 base = %v %+v, want %d", d.PreviousScanID, d.Base, f.s1)
+	}
+	eq(t, "base summary", []any{d.Base.Ref, d.Base.ArtifactName, d.Base.Kind, d.Base.Counts.Critical, d.Base.Counts.High},
+		[]any{"main", "web", "image", 1, 1})
+	eq(t, "s3/s1 new", view(d.New), []string{"web/CVE-3/HIGH", "web/CVE-4/LOW"})
+	eq(t, "s3/s1 fixed", view(d.Fixed), []string{"web/CVE-2/CRITICAL"})
+	eq(t, "s3/s1 totals", []int{d.NewTotal, d.FixedTotal, d.Unchanged}, []int{2, 1, 1})
+	eq(t, "s3/s1 unchanged items", view(d.UnchangedItems), []string{"web/CVE-1/HIGH"})
+	eq(t, "s3/s1 counts", []countsJSON{d.NewCounts, d.FixedCounts, d.UnchangedCounts},
+		[]countsJSON{{High: 1, Low: 1}, {Critical: 1}, {High: 1}})
+	if d.Fixed[0].ScanID != f.s1 {
+		t.Errorf("fixed scan id = %d, want %d", d.Fixed[0].ScanID, f.s1)
+	}
+
+	// The base may be on another ref: s3 against the older feature scan f1.
+	d = diff(f.s3, f.f1)
+	if d.Base == nil || d.Base.Ref != "feature" {
+		t.Fatalf("f1 base = %+v", d.Base)
+	}
+	eq(t, "s3/f1 new", view(d.New), []string{"web/CVE-1/HIGH", "web/CVE-3/HIGH", "web/CVE-4/LOW"})
+	eq(t, "s3/f1 fixed", view(d.Fixed), []string{"web/CVE-7/CRITICAL"})
+	eq(t, "s3/f1 unchanged", d.Unchanged, 0)
+
+	// Without base the previous scan of the same ref is used, and named.
+	var plain scanDiffJSON
+	getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff", f.s3), &plain)
+	if plain.Base == nil || plain.Base.ID != f.s2 {
+		t.Errorf("default base = %+v, want %d", plain.Base, f.s2)
+	}
+	getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff", f.s1), &plain)
+	if plain.Base != nil || plain.PreviousScanID != nil {
+		t.Errorf("first scan base = %+v", plain.Base)
+	}
+
+	// The base must be an earlier scan of the same service, artifact and kind.
+	for name, base := range map[string]string{
+		"itself": fmt.Sprint(f.s3), "newer": fmt.Sprint(f.s3), "other artifact": fmt.Sprint(f.w0),
+		"other kind": fmt.Sprint(f.r0), "other service": fmt.Sprint(f.b1), "unknown": "999999",
+		"zero": "0", "negative": "-4", "text": "x",
+	} {
+		scan := f.s3
+		if name == "newer" {
+			scan = f.s2
+		}
+		t.Run(name, func(t *testing.T) {
+			wantError(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff?base=%s", scan, base), 400, "invalid_parameter")
+		})
+	}
+	wantError(t, mux, fmt.Sprintf("/api/v1/scans/999999/diff?base=%d", f.s1), 404, "not_found")
+}
+
+func TestEarlierScans(t *testing.T) {
+	f := seed(t)
+	mux := newMux(f.pool, "")
+	type page struct {
+		Items []struct {
+			ID         int64  `json:"id"`
+			Ref        string `json:"ref"`
+			Artifact   string `json:"artifact_name"`
+			PipelineID int64  `json:"gitlab_pipeline_id"`
+		}
+		NextBefore *int64 `json:"next_before"`
+	}
+	list := func(path string) ([]int64, *int64) {
+		var p page
+		getJSON(t, mux, path, &p)
+		ids := []int64{}
+		for _, it := range p.Items {
+			ids = append(ids, it.ID)
+		}
+		return ids, p.NextBefore
+	}
+
+	// Every ref, newest first; never the scan itself, other artifacts or kinds.
+	ids, next := list(fmt.Sprintf("/api/v1/scans/%d/earlier", f.s3))
+	eq(t, "s3 earlier", ids, []int64{f.s2, f.s1, f.f1})
+	if next != nil {
+		t.Errorf("next_before = %d", *next)
+	}
+	ids, _ = list(fmt.Sprintf("/api/v1/scans/%d/earlier?ref=main", f.s3))
+	eq(t, "s3 earlier on main", ids, []int64{f.s2, f.s1})
+	ids, _ = list(fmt.Sprintf("/api/v1/scans/%d/earlier", f.w1))
+	eq(t, "w1 earlier", ids, []int64{f.w0})
+	ids, _ = list(fmt.Sprintf("/api/v1/scans/%d/earlier", f.f1))
+	eq(t, "f1 earlier", ids, []int64{})
+
+	// Pages follow next_before.
+	ids, next = list(fmt.Sprintf("/api/v1/scans/%d/earlier?limit=2", f.s3))
+	eq(t, "page 1", ids, []int64{f.s2, f.s1})
+	if next == nil || *next != f.s1 {
+		t.Fatalf("next_before = %v, want %d", next, f.s1)
+	}
+	ids, next = list(fmt.Sprintf("/api/v1/scans/%d/earlier?limit=2&before=%d", f.s3, *next))
+	eq(t, "page 2", ids, []int64{f.f1})
+	if next != nil {
+		t.Errorf("last page next_before = %d", *next)
+	}
+
+	for _, q := range []string{"limit=0", "limit=201", "before=-1", "before=x", "ref=" + strings.Repeat("r", 1025)} {
+		wantError(t, mux, fmt.Sprintf("/api/v1/scans/%d/earlier?%s", f.s3, q), 400, "invalid_parameter")
+	}
+	wantError(t, mux, "/api/v1/scans/999999/earlier", 404, "not_found")
+	wantError(t, mux, "/api/v1/scans/x/earlier", 404, "not_found")
 }
 
 type vulnPage = vulnerabilityPageJSON
@@ -703,6 +824,18 @@ func TestSearch(t *testing.T) {
 		fmt.Sprintf("alpha/main/web/%d/openssl 3.0.1 3.0.9 HIGH", f.s3),
 		fmt.Sprintf("alpha/main/worker/%d/openssl 3.0.1 3.0.9 HIGH", f.w1),
 	})
+	// The summary counts every match: severities as reported per artifact,
+	// the artifacts per service, the distinct fixed versions and a title.
+	var sum searchJSON
+	getJSON(t, mux, "/api/v1/search/vulnerabilities?id=CVE-1", &sum)
+	eq(t, "cve-1 summary", []any{sum.Counts, sum.TotalServices, sum.TotalArtifacts, sum.Title, sum.PrimaryURL, sum.FixedVersions},
+		[]any{countsJSON{Critical: 1, High: 2}, int64(2), int64(3), "openssl flaw", "", []string{"3.0.9"}})
+	getJSON(t, mux, "/api/v1/search/vulnerabilities?id=CVE-3", &sum)
+	eq(t, "cve-3 fixed versions", sum.FixedVersions, []string{"1.0.5", "1.1.2"})
+	getJSON(t, mux, "/api/v1/search/vulnerabilities?id=CVE-404", &sum)
+	eq(t, "no match summary", []any{sum.Counts, sum.TotalArtifacts, sum.Title, sum.FixedVersions},
+		[]any{countsJSON{}, int64(0), "", []string{}})
+
 	// Fixed since: CVE-2 was in s1 and s2 but not in the current scan.
 	_, got = search("CVE-2")
 	eq(t, "cve-2", got, []string{})
@@ -740,6 +873,7 @@ func TestDatabaseFailureIs500(t *testing.T) {
 		fmt.Sprintf("/api/v1/services/%d/overview", f.alpha),
 		fmt.Sprintf("/api/v1/scans/%d", f.s1),
 		fmt.Sprintf("/api/v1/scans/%d/diff", f.s1),
+		fmt.Sprintf("/api/v1/scans/%d/earlier", f.s3),
 		"/api/v1/search/vulnerabilities?id=CVE-1",
 	} {
 		wantError(t, mux, p, 500, "internal_error")

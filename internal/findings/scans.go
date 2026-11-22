@@ -128,26 +128,63 @@ func (f *Findings) getScan(w http.ResponseWriter, r *http.Request) {
 }
 
 type scanDiffJSON struct {
-	ScanID         int64               `json:"scan_id"`
+	ScanID int64 `json:"scan_id"`
+	// PreviousScanID is the scan compared with: the base asked for, else the
+	// previous scan of the same ref; Base summarises it.
 	PreviousScanID *int64              `json:"previous_scan_id"`
+	Base           *scanSummaryJSON    `json:"base"`
 	New            []vulnerabilityJSON `json:"new"`
 	Fixed          []vulnerabilityJSON `json:"fixed"`
+	UnchangedItems []vulnerabilityJSON `json:"unchanged_items"`
 	Unchanged      int                 `json:"unchanged"`
-	// NewTotal and FixedTotal count every new and fixed finding; New and
-	// Fixed list at most maxDiffItems each, the most severe first, and
-	// Truncated is true when either list was cut.
-	NewTotal   int  `json:"new_total"`
-	FixedTotal int  `json:"fixed_total"`
-	Truncated  bool `json:"truncated"`
+	// NewTotal and FixedTotal count every new and fixed finding; New, Fixed
+	// and UnchangedItems list at most maxDiffItems each, the most severe
+	// first, and Truncated is true when any of them was cut. The counts per
+	// severity cover every finding, listed or not.
+	NewTotal        int        `json:"new_total"`
+	FixedTotal      int        `json:"fixed_total"`
+	Truncated       bool       `json:"truncated"`
+	NewCounts       countsJSON `json:"new_counts"`
+	FixedCounts     countsJSON `json:"fixed_counts"`
+	UnchangedCounts countsJSON `json:"unchanged_counts"`
 }
 
-// maxDiffItems bounds each of the new and fixed lists of a scan diff, and so
-// the number of findings whose first-seen time is looked up.
+// severityCounts counts diff rows per severity.
+func severityCounts(rows []store.FindingsDiffRowsRow) countsJSON {
+	var c countsJSON
+	for _, v := range rows {
+		switch v.Severity {
+		case "CRITICAL":
+			c.Critical++
+		case "HIGH":
+			c.High++
+		case "MEDIUM":
+			c.Medium++
+		case "LOW":
+			c.Low++
+		default:
+			c.Unknown++
+		}
+	}
+	return c
+}
+
+// maxDiffItems bounds each of the new, fixed and unchanged lists of a scan
+// diff, and so the number of findings whose first-seen time is looked up.
 const maxDiffItems = 500
 
+const invalidBaseMsg = "The base parameter must be the id of an earlier scan of the same service, artifact and kind."
+
 // scanDiff compares the unsuppressed findings of a scan with those of the
-// previous scan of the same service, ref, artifact and kind.
+// previous scan of the same service, ref, artifact and kind, or with the
+// scan named by the base parameter: any earlier scan of the same service,
+// artifact and kind, on any ref.
 func (f *Findings) scanDiff(w http.ResponseWriter, r *http.Request) {
+	baseID, err := intParam(r, "base", 0, 1, 1<<62)
+	if err != nil {
+		invalid(w, invalidBaseMsg)
+		return
+	}
 	scan, ok := f.loadScan(w, r)
 	if !ok {
 		return
@@ -155,10 +192,25 @@ func (f *Findings) scanDiff(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	out := scanDiffJSON{ScanID: scan.ID, New: []vulnerabilityJSON{}, Fixed: []vulnerabilityJSON{}}
 	ids := []int64{scan.ID}
-	prev, err := f.q.FindingsPreviousScan(ctx, scan.ID)
+	var prev int64
+	if baseID != 0 {
+		prev, err = f.q.FindingsDiffBase(ctx, store.FindingsDiffBaseParams{ScanID: scan.ID, BaseID: baseID})
+		if errors.Is(err, pgx.ErrNoRows) {
+			invalid(w, invalidBaseMsg)
+			return
+		}
+	} else {
+		prev, err = f.q.FindingsPreviousScan(ctx, scan.ID)
+	}
 	switch {
 	case err == nil:
-		out.PreviousScanID = &prev
+		base, err := f.q.FindingsGetScan(ctx, prev)
+		if err != nil {
+			f.internalError(w, r, "cannot load base scan", err)
+			return
+		}
+		summary := newScanSummary(scanRow(base))
+		out.PreviousScanID, out.Base = &prev, &summary
 		ids = append(ids, prev)
 	case !errors.Is(err, pgx.ErrNoRows):
 		f.internalError(w, r, "cannot find previous scan", err)
@@ -177,24 +229,41 @@ func (f *Findings) scanDiff(w http.ResponseWriter, r *http.Request) {
 			prevRows = append(prevRows, row)
 		}
 	}
-	added, removed, unchanged := domain.Diff(prevRows, curRows, func(v store.FindingsDiffRowsRow) domain.Key {
+	key := func(v store.FindingsDiffRowsRow) domain.Key {
 		return domain.Key{VulnID: v.VulnID, PkgName: v.PkgName, Target: v.Target}
-	})
+	}
+	added, removed, unchanged := domain.Diff(prevRows, curRows, key)
+	// The unchanged findings are the current ones, once per key, that are not new.
+	isNew := make(map[domain.Key]bool, len(added))
+	for _, v := range added {
+		isNew[key(v)] = true
+	}
+	kept := make([]store.FindingsDiffRowsRow, 0, unchanged)
+	listed := make(map[domain.Key]bool, unchanged)
+	for _, v := range curRows {
+		if k := key(v); !isNew[k] && !listed[k] {
+			listed[k] = true
+			kept = append(kept, v)
+		}
+	}
 	out.Unchanged = unchanged
 	out.NewTotal, out.FixedTotal = len(added), len(removed)
+	out.NewCounts, out.FixedCounts, out.UnchangedCounts = severityCounts(added), severityCounts(removed), severityCounts(kept)
 	if len(added) > maxDiffItems {
 		added, out.Truncated = added[:maxDiffItems], true
 	}
 	if len(removed) > maxDiffItems {
 		removed, out.Truncated = removed[:maxDiffItems], true
 	}
-
-	rowIDs := make([]int64, 0, len(added)+len(removed))
-	for _, v := range added {
-		rowIDs = append(rowIDs, v.ID)
+	if len(kept) > maxDiffItems {
+		kept, out.Truncated = kept[:maxDiffItems], true
 	}
-	for _, v := range removed {
-		rowIDs = append(rowIDs, v.ID)
+
+	rowIDs := make([]int64, 0, len(added)+len(removed)+len(kept))
+	for _, list := range [][]store.FindingsDiffRowsRow{added, removed, kept} {
+		for _, v := range list {
+			rowIDs = append(rowIDs, v.ID)
+		}
 	}
 	seen, err := f.firstSeen(ctx, rowIDs)
 	if err != nil {
@@ -207,7 +276,54 @@ func (f *Findings) scanDiff(w http.ResponseWriter, r *http.Request) {
 	for _, v := range removed {
 		out.Fixed = append(out.Fixed, newVulnerability(store.FindingsVulnerabilityPageRow(v), seen))
 	}
+	out.UnchangedItems = make([]vulnerabilityJSON, 0, len(kept))
+	for _, v := range kept {
+		out.UnchangedItems = append(out.UnchangedItems, newVulnerability(store.FindingsVulnerabilityPageRow(v), seen))
+	}
 	httpapi.WriteJSON(w, http.StatusOK, out)
+}
+
+// listEarlierScans lists the scans before a scan of the same service,
+// artifact and kind, newest first: the scans it can be compared with. They
+// come from every ref unless the ref parameter names one.
+func (f *Findings) listEarlierScans(w http.ResponseWriter, r *http.Request) {
+	ref, ok := refParam(w, r)
+	if !ok {
+		return
+	}
+	before, err := intParam(r, "before", 0, 0, 1<<62)
+	if err != nil {
+		invalid(w, err.Error())
+		return
+	}
+	limit, err := intParam(r, "limit", defaultScanLimit, 1, maxScanLimit)
+	if err != nil {
+		invalid(w, err.Error())
+		return
+	}
+	scan, ok := f.loadScan(w, r)
+	if !ok {
+		return
+	}
+	rows, err := f.q.FindingsEarlierScans(r.Context(), store.FindingsEarlierScansParams{
+		ScanID: scan.ID, Ref: ref, Before: before, MaxRows: int32(limit) + 1, //nolint:gosec // limit <= 200
+	})
+	if err != nil {
+		f.internalError(w, r, "cannot list earlier scans", err)
+		return
+	}
+	page := scanPageJSON{Items: make([]scanSummaryJSON, 0, len(rows))}
+	more := len(rows) > int(limit)
+	if more {
+		rows = rows[:limit]
+	}
+	for _, row := range rows {
+		page.Items = append(page.Items, newScanSummary(scanRow(row)))
+	}
+	if more {
+		page.NextBefore = &rows[len(rows)-1].ID
+	}
+	httpapi.WriteJSON(w, http.StatusOK, page)
 }
 
 type trendPointJSON struct {

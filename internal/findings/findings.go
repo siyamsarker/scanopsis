@@ -60,6 +60,7 @@ func (f *Findings) Handlers() map[string]http.Handler {
 		"listServiceScans":           http.HandlerFunc(f.listScans),
 		"getScan":                    http.HandlerFunc(f.getScan),
 		"getScanDiff":                http.HandlerFunc(f.scanDiff),
+		"listEarlierScans":           http.HandlerFunc(f.listEarlierScans),
 		"listServiceVulnerabilities": http.HandlerFunc(f.listVulnerabilities),
 		"listServiceSecrets":         http.HandlerFunc(f.listSecrets),
 		"getServiceTrends":           http.HandlerFunc(f.trends),

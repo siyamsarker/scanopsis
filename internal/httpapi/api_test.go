@@ -77,6 +77,7 @@ var rbacRoutes = []struct {
 	{"GET", "/api/v1/services/3/scans", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/scans/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/scans/3/diff", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
+	{"GET", "/api/v1/scans/3/earlier", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/services/3/vulnerabilities", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/services/3/secrets", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/services/3/trends", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
@@ -489,6 +490,7 @@ func TestNotEnabled(t *testing.T) {
 var featureIDs = []string{
 	"ingestTrivy", "sonarWebhook", "getPortfolio", "listServices", "createService", "getService",
 	"updateService", "deleteService", "getServiceOverview", "listServiceScans", "getScan", "getScanDiff",
+	"listEarlierScans",
 	"listServiceVulnerabilities", "listServiceSecrets", "getServiceTrends", "getServiceSonar",
 	"searchVulnerabilities", "getTrivyIntegration", "getSonarIntegration", "listAuditEvents",
 }

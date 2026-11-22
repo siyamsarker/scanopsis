@@ -281,17 +281,17 @@ func (f *Findings) search(w http.ResponseWriter, r *http.Request) {
 		f.internalError(w, r, "cannot search vulnerabilities", err)
 		return
 	}
-	out := struct {
-		VulnID        string           `json:"vuln_id"`
-		Scope         string           `json:"scope"`
-		Items         []searchItemJSON `json:"items"`
-		TotalFindings int64            `json:"total_findings"`
-		TotalServices int64            `json:"total_services"`
-		Truncated     bool             `json:"truncated"`
-	}{VulnID: id, Scope: scope, Items: make([]searchItemJSON, 0, len(rows))}
+	out := searchJSON{VulnID: id, Scope: scope, Items: make([]searchItemJSON, 0, len(rows)), FixedVersions: []string{}}
 	if len(rows) > 0 {
-		out.TotalFindings, out.TotalServices = rows[0].TotalFindings, rows[0].TotalServices
+		t := rows[0]
+		out.TotalFindings, out.TotalServices, out.TotalArtifacts = t.TotalFindings, t.TotalServices, t.TotalArtifacts
 		out.Truncated = out.TotalFindings > int64(len(rows))
+		out.Counts = countsJSON{
+			Critical: int(t.TotalCritical), High: int(t.TotalHigh), Medium: int(t.TotalMedium),
+			Low: int(t.TotalLow), Unknown: int(t.TotalUnknown),
+		}
+		out.Title, out.PrimaryURL = t.SummaryTitle, t.SummaryUrl
+		out.FixedVersions = fixedVersions(t.FixedVersions)
 	}
 	for _, s := range rows {
 		out.Items = append(out.Items, searchItemJSON{
@@ -303,6 +303,46 @@ func (f *Findings) search(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	httpapi.WriteJSON(w, http.StatusOK, out)
+}
+
+type searchJSON struct {
+	VulnID         string           `json:"vuln_id"`
+	Scope          string           `json:"scope"`
+	Items          []searchItemJSON `json:"items"`
+	TotalFindings  int64            `json:"total_findings"`
+	TotalServices  int64            `json:"total_services"`
+	TotalArtifacts int64            `json:"total_artifacts"`
+	Truncated      bool             `json:"truncated"`
+	// A summary of the vulnerability over every match, listed or not.
+	Counts        countsJSON `json:"counts"`
+	Title         string     `json:"title"`
+	PrimaryURL    string     `json:"primary_url"`
+	FixedVersions []string   `json:"fixed_versions"`
+}
+
+// maxFixedVersions bounds the fixed versions a search summary lists.
+const maxFixedVersions = 20
+
+// fixedVersions splits the reported fixed versions (each may be a
+// comma-separated list), drops duplicates and keeps at most
+// maxFixedVersions, in the order the database sorted them.
+func fixedVersions(reported []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, list := range reported {
+		for _, v := range strings.Split(list, ",") {
+			v = strings.TrimSpace(v)
+			if v == "" || seen[v] {
+				continue
+			}
+			seen[v] = true
+			if len(out) == maxFixedVersions {
+				return out
+			}
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func validSearchID(id string) bool {

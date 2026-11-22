@@ -137,20 +137,28 @@ func TestScanDiffIsBounded(t *testing.T) {
 		New []struct {
 			FirstSeenAt time.Time `json:"first_seen_at"`
 		} `json:"new"`
-		Fixed      []interface{} `json:"fixed"`
-		Unchanged  int           `json:"unchanged"`
-		NewTotal   int           `json:"new_total"`
-		FixedTotal int           `json:"fixed_total"`
-		Truncated  bool          `json:"truncated"`
+		Fixed          []interface{} `json:"fixed"`
+		UnchangedItems []struct {
+			FirstSeenAt time.Time `json:"first_seen_at"`
+		} `json:"unchanged_items"`
+		Unchanged  int        `json:"unchanged"`
+		NewCounts  countsJSON `json:"new_counts"`
+		NewTotal   int        `json:"new_total"`
+		FixedTotal int        `json:"fixed_total"`
+		Truncated  bool       `json:"truncated"`
 	}
 	getJSON(t, mux, fmt.Sprintf("/api/v1/scans/%d/diff", cur), &d)
 	if len(d.New) != maxDiffItems || d.NewTotal != 597 || len(d.Fixed) != 3 || d.FixedTotal != 3 || !d.Truncated {
 		t.Errorf("diff: %d new listed of %d, %d fixed listed of %d, truncated %v", len(d.New), d.NewTotal, len(d.Fixed), d.FixedTotal, d.Truncated)
 	}
-	if d.Unchanged != 100 {
-		t.Errorf("unchanged = %d, want 100", d.Unchanged)
+	if d.Unchanged != 100 || len(d.UnchangedItems) != 100 {
+		t.Errorf("unchanged = %d, %d listed; want 100", d.Unchanged, len(d.UnchangedItems))
 	}
-	for _, v := range d.New {
+	// The counts per severity cover the new findings that are not listed.
+	if c := d.NewCounts; c.Critical+c.High+c.Medium+c.Low+c.Unknown != 597 {
+		t.Errorf("new_counts = %+v, want 597 in all", c)
+	}
+	for _, v := range append(d.New, d.UnchangedItems...) {
 		if v.FirstSeenAt.IsZero() {
 			t.Fatal("a listed finding has no first-seen time")
 		}

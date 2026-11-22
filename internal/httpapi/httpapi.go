@@ -171,6 +171,7 @@ func (s *server) routes() []route {
 		{"GET", "/api/v1/services/{id}/scans", s.requireComplete(s.feature("listServiceScans"))},
 		{"GET", "/api/v1/scans/{id}", s.requireComplete(s.feature("getScan"))},
 		{"GET", "/api/v1/scans/{id}/diff", s.requireComplete(s.feature("getScanDiff"))},
+		{"GET", "/api/v1/scans/{id}/earlier", s.requireComplete(s.feature("listEarlierScans"))},
 		{"GET", "/api/v1/services/{id}/vulnerabilities", s.requireComplete(s.feature("listServiceVulnerabilities"))},
 		{"GET", "/api/v1/services/{id}/secrets", s.requireComplete(s.feature("listServiceSecrets"))},
 		{"GET", "/api/v1/services/{id}/trends", s.requireComplete(s.feature("getServiceTrends"))},
