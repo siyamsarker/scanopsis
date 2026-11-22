@@ -1,296 +1,277 @@
 # Security
 
-This page describes what Scanopsis protects, who it protects it from, how, and
-what it does not protect against. It is written for the person who deploys
-Scanopsis and has to decide whether it is safe to run in their network. To
-report a vulnerability, see [how to report a vulnerability](#how-to-report-a-vulnerability).
+This page helps you decide whether Scanopsis is safe to run in your network:
+what it protects, from whom, how, and what it leaves to you. It ends with a
+hardening checklist.
 
+**Audience:** Operators · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
+
+---
+
+To report a vulnerability, see [report a vulnerability](#report-a-vulnerability).
 For how the parts fit together, see the [architecture](architecture.md).
 
-## Threat model
-
-### Assets
+## What needs protecting
 
 | Asset | Why it matters | Where it lives |
 |---|---|---|
-| Scan data | A list of the known vulnerabilities of every service shows an attacker where to strike. Treat it as sensitive. | `scans`, `vulnerabilities`, `secret_findings`, `sonar_analyses` tables |
-| Credentials | The GitLab sign-in application secret, the SonarQube token and the webhook secret. | `settings` table, encrypted |
+| Scan data | A list of every service's known vulnerabilities shows an attacker where to strike. Treat it as sensitive. | `scans`, `vulnerabilities`, `secret_findings`, `sonar_analyses` tables |
+| Credentials | The GitLab application secret, the SonarQube token and the webhook secret. | `settings` table, encrypted |
 | Sessions | A stolen session is a signed-in user. | `sessions` table (hashed), browser cookie |
-| Two-factor secrets and recovery codes | They are the second factor. | `users` table (encrypted), `recovery_codes` table (hashed) |
-| Password hashes | Offline guessing of local passwords. | `users` table (Argon2id) |
-| `SCANOPSIS_SECRET_KEY` | Decrypts every stored secret. | Environment or a mounted secret file |
-| The setup token | Creates the first administrator. | Server log, until the setup completes |
+| Two-factor secrets and recovery codes | They are the second factor. | `users` table (encrypted), `recovery_codes` table (keyed hash) |
+| Password hashes | They allow offline guessing of local passwords. | `users` table (Argon2id) |
+| `SCANOPSIS_SECRET_KEY` | It decrypts every stored secret. | A mounted secret file, or the environment |
+| The setup token | It creates the first administrator. | The server log, until setup is done |
 | The audit log | Evidence of what happened. | `audit_log` table |
 
-### Actors
+## Who can do what
 
 | Actor | Trust | What they can do |
 |---|---|---|
 | Viewer | Signed in, two-factor verified | Read scan data and SonarQube results. |
-| Administrator | Signed in, two-factor verified | Everything a viewer can, and change settings, users, services, and read the audit log. |
+| Administrator | Signed in, two-factor verified | Everything a viewer can, plus settings, users, services and the audit log. |
 | CI job | Anyone who can run a job on your GitLab | Upload reports for its own project, if the project is allowed. |
-| SonarQube | Your SonarQube server | Send signed webhooks. Scanopsis calls it with a read-only token. |
-| Network attacker | None | Reach the public address, read or alter traffic that is not protected by TLS, send forged requests. |
-| Anyone with access to the database or a backup | Fully trusted by design | Reads everything that is not encrypted. Cannot read the encrypted secrets without the key. |
-| Anyone with access to the host, the container or the log | Fully trusted by design | Reads the key, the setup token and the database URL. |
+| SonarQube | Your SonarQube server | Send signed webhooks. Scanopsis reads from it with a read-only token. |
+| Network attacker | None | Reach the public address, read or change traffic without TLS, send forged requests. |
+| Anyone with the database or a backup | Fully trusted by design | Read everything that is not encrypted, but not the encrypted secrets without the key. |
+| Anyone with the host, the container or the log | Fully trusted by design | Read the key, the setup token and the database URL. |
 
 Scanopsis does not defend against an attacker who controls the host, the
-database and the key at the same time.
+database and the key at once.
 
-### Trust boundaries
+In short, the trust boundaries are: TLS ends at your reverse proxy; the proxy
+and Scanopsis share a private network; Scanopsis reaches PostgreSQL over a
+private network; GitLab and SonarQube are trusted to say who a user or a job
+is, and nothing more.
 
-The boundaries are listed in the [architecture](architecture.md#trust-boundaries).
-In short: TLS ends at your reverse proxy; the proxy and Scanopsis share a
-private network; Scanopsis reaches PostgreSQL over a private network; GitLab
-and SonarQube are trusted to say who a user or a job is, and nothing more.
+## How Scanopsis protects it
 
-## Controls
-
-Each row names the control and where it is implemented, so that you can check
-it in the code.
+Each row names where the control lives, so you can check it in the code.
 
 ### Sessions and sign-in
 
 | Control | What it does | Where |
 |---|---|---|
-| Session tokens are hashed | The browser holds 32 random bytes. The database stores only their SHA-256, so a database leak does not give out sessions. | `internal/auth/sessions.go` |
-| Cookie attributes | The cookie is `HttpOnly` and `SameSite=Lax`. With an `https` public URL it is also `Secure` and named with the `__Host-` prefix, which makes browsers refuse a cookie with a domain or a path other than `/`. | `internal/auth/sessions.go` |
-| Session lifetime | A session ends after the idle timeout (default 30 minutes) or the absolute timeout (default 12 hours), as OWASP ASVS level 2 asks. The server enforces both. The cookie has no `Expires` or `Max-Age`, so the browser also drops it when it closes. A new sign-in replaces the old session. | `internal/auth/sessions.go`, [configuration](configuration.md#runtime-settings) |
-| Session list | The **Account** page (`GET /api/v1/me/sessions`) lists the user's own sessions with the time they started, their last use, the client address and the browser as recorded at sign-in. The user can end any other session, or all of them at once. Each such action is recorded as `session.revoked`. The session list never contains token hashes. | `internal/auth/mysessions.go`, `web/src/routes/AccountPage.tsx` |
-| Cross-site request protection | State-changing requests from a browser must be same-origin. The server checks `Sec-Fetch-Site` and `Origin` with the standard library's cross-origin protection and answers `403 cross_origin` otherwise. Requests without those headers (curl, CI jobs) are not browser requests and pass. | `internal/httpapi/httpapi.go` |
-| Mandatory two-factor authentication | Every user, local or GitLab, must enrol a TOTP app. A session that has not passed the second factor can call only the sign-in and enrolment endpoints. | `internal/httpapi/middleware.go`, `internal/auth/mfa.go` |
-| New session token after the second factor | When a correct code is accepted, the session gets a new random token and the old one stops working. A token captured between the password step and the code step never becomes a full session. | `internal/auth/sessions.go` |
-| Lock after ten wrong codes | Ten wrong codes in a row lock the second factor of that user. Every code, right or wrong, is then refused with `423 mfa_locked`, and all sessions of the user are ended. The lock stays until an administrator resets two-factor authentication or the password (**Reset two-factor** on the Users page, or the administration command). A correct code sets the count back to zero. | `internal/auth/mfa.go`, `internal/store/migrations/00005_mfa_lockout.sql` |
-| Code replay protection | Each accepted TOTP time step is recorded, and a code for the same or an older step is refused. A code is accepted one step (30 seconds) before or after the current one. | `internal/auth/mfa.go` |
-| Recovery codes | Ten single-use codes of 20 characters from a 31-character alphabet (about 99 bits each), shown once in groups of five. Each is stored as an HMAC-SHA-256 over the user id and the code, with a key derived from `SCANOPSIS_SECRET_KEY` by HKDF-SHA-256, so a copy of the database alone does not allow testing guesses. Codes issued by version 0.1.0 (10 characters, stored as plain SHA-256) keep working until they are used or replaced by a new enrolment; each stored code records which form it has. Changing the secret key makes the codes unusable, as it does the two-factor secrets. | `internal/auth/mfa.go`, `internal/store/migrations/00008_account_security.sql` |
-| Rate limits | Local sign-in, setup, two-factor codes, password changes and uploads are limited per client address or per user. See [rate limits](configuration.md#rate-limits). Once the failure budget of a user name is spent, every password for it is refused until the budget refills, the correct one included, so the limit cannot be used to test guesses. The limit tables are bounded in memory, and a key whose budget is spent is kept apart from the bounded list of other keys, so a flood of made-up names cannot reset it. IPv6 clients are counted by `/48` for sign-in and setup. | `internal/auth/ratelimit.go`, `internal/auth/local.go` |
-| Argon2id passwords | Argon2id with 64 MiB, 3 passes and 4 lanes. At most two hashes are computed at once, so a flood cannot exhaust memory. An unknown user costs the same time as a known one. Passwords must have at least 12 characters. | `internal/auth/password.go`, `internal/auth/policy.go` |
-| GitLab sign-in | Authorization code flow with PKCE, a state value and a nonce, kept in a 10-minute cookie. The ID token is verified. `return_to` is cleaned first (dot segments and repeated slashes resolved) and checked afterwards: a backslash or a control character anywhere, raw or percent-encoded, or a result that does not start with exactly one `/`, gives `/`. Only the path and query are kept. The web interface applies the same rule before it navigates. | `internal/auth/gitlab.go`, `web/src/auth/returnTo.ts` |
-| Group allow-list | When allowed groups are set, the groups are read from GitLab during sign-in. Users in none of them are refused. | `internal/auth/gitlab.go` |
+| Hashed session tokens | The browser holds 32 random bytes; the database stores only their SHA-256. A database leak gives away no sessions. | `internal/auth/sessions.go` |
+| Cookie attributes | `HttpOnly` and `SameSite=Lax`. With an `https` public URL also `Secure`, with the `__Host-` prefix, so browsers refuse it for another domain or path. | `internal/auth/sessions.go` |
+| Session lifetime | A session ends after the idle timeout (default 30 minutes) or the absolute timeout (default 12 hours), as OWASP ASVS level 2 asks. The cookie has no expiry, so the browser drops it on close. A new sign-in replaces the old session. | `internal/auth/sessions.go`, [runtime settings](configuration.md#runtime-settings) |
+| Session list | The **Account** page lists your sessions (start, last use, address, browser) and lets you end any other one, or all. Each is recorded as `session.revoked`. | `internal/auth/mysessions.go`, `web/src/routes/AccountPage.tsx` |
+| Cross-site request protection | Changes from a browser must come from the same origin. The server checks `Sec-Fetch-Site` and `Origin` and answers `403 cross_origin` otherwise. Requests without those headers (curl, CI jobs) are not browser requests and pass. | `internal/httpapi/httpapi.go` |
+| Mandatory two-factor authentication | Every user, local or GitLab, enrols a TOTP app. A session that has not passed the second factor can only call the sign-in and enrolment endpoints. | `internal/httpapi/middleware.go`, `internal/auth/mfa.go` |
+| New token after the second factor | A correct code gives the session a new random token. A token caught between password and code never becomes a full session. | `internal/auth/sessions.go` |
+| Lock after ten wrong codes | Ten wrong codes in a row lock the user's second factor (`423 mfa_locked`) and end the user's sessions, until an administrator resets two-factor authentication or the password. A correct code resets the count. | `internal/auth/mfa.go` |
+| No code replay | Each accepted TOTP time step is recorded; the same or an older step is refused. A code is valid one step (30 seconds) before or after now. | `internal/auth/mfa.go` |
+| Recovery codes | Ten single-use codes of 20 characters (about 99 bits each), shown once. Each is stored as an HMAC-SHA-256 with a key derived from `SCANOPSIS_SECRET_KEY`, so a copy of the database alone cannot test guesses. Shorter codes from version 0.1.0 keep working until used or replaced. | `internal/auth/mfa.go` |
+| Rate limits | Sign-in, setup, two-factor codes, password changes and uploads are limited per client address or per user, see [rate limits](configuration.md#rate-limits). After repeated wrong passwords for a name, every password for it is refused for a while, so the limit cannot confirm a guess. A flood of made-up names cannot reset a spent budget. IPv6 clients count by `/48` for sign-in and setup. | `internal/auth/ratelimit.go`, `internal/auth/local.go` |
+| Argon2id passwords | 64 MiB, 3 passes, 4 lanes. At most two hashes run at once, so a flood cannot exhaust memory. An unknown user takes as long as a known one. Passwords need at least 12 characters. | `internal/auth/password.go`, `internal/auth/policy.go` |
+| GitLab sign-in | Authorization code flow with PKCE, state and nonce, kept in a 10-minute cookie; the ID token is verified. `return_to` is cleaned and checked, so it can only lead to a path on Scanopsis itself. | `internal/auth/gitlab.go`, `web/src/auth/returnTo.ts` |
+| Group allow-list | With allowed groups set, users in none of them are refused at sign-in. | `internal/auth/gitlab.go` |
 | New GitLab users are viewers | Nobody becomes an administrator automatically. | `internal/store/queries/users.sql` |
-| GitLab identity bound to the instance | A GitLab user is stored with the GitLab URL (the OpenID Connect issuer) and the user id there, unique as a pair. A sign-in through another GitLab instance, even with the same user id, never matches an existing account. The administration commands refuse a GitLab name that matches accounts of several instances. | `internal/auth/gitlab.go`, `internal/store/migrations/00008_account_security.sql`, `cmd/scanopsis/admin.go` |
-| The last administrator cannot be demoted | The last enabled administrator can be neither demoted, disabled nor deleted. The check holds row locks on the enabled administrators, so two concurrent changes cannot both succeed. | `internal/store/store.go`, `internal/store/users.go` |
-| Disable and delete users | An administrator can disable a user (every sign-in refused, local and GitLab; all sessions end in the same transaction; a session left behind is not accepted either) and enable the user again, or delete the user (sessions and recovery codes go with the row; audit events keep the actor name). Administrators cannot do either to their own account. A disabled local account is refused only after the right password, so the answer reveals nothing to someone guessing. Recorded as `user.disabled`, `user.enabled` and `user.deleted`. The administration commands `disable-user`, `enable-user` and `delete-user` do the same. | `internal/httpapi/api.go`, `internal/store/users.go`, `cmd/scanopsis/admin.go` |
+| GitLab identity bound to the instance | A GitLab user is stored with the GitLab URL (the OpenID Connect issuer) and the user ID there. A sign-in through another GitLab instance never matches an existing account, even with the same ID. | `internal/auth/gitlab.go`, `cmd/scanopsis/admin.go` |
+| The last administrator stays | The last enabled administrator can be neither demoted, disabled nor deleted, even by two changes at once. | `internal/store/store.go`, `internal/store/users.go` |
+| Disable and delete users | Disabling refuses every sign-in and ends all sessions at once. A disabled local account is refused only after the right password, so a guesser learns nothing. Administrators cannot disable or delete themselves. | `internal/httpapi/api.go`, `internal/store/users.go`, `cmd/scanopsis/admin.go` |
 
 ### Secrets at rest
 
 | Control | What it does | Where |
 |---|---|---|
-| AES-256-GCM, bound to the purpose | TOTP secrets and the secret settings are encrypted with the key. The purpose (for example `totp:42` or `setting:sonar.token`) is authenticated, so a ciphertext copied to another row or setting fails to decrypt. | `internal/secretbox/secretbox.go` |
-| Secrets are never returned | The API does not return secret settings. The Settings page can only replace or reset them. | `internal/settings` |
-| A new URL needs the secret again | When you change the GitLab URL or the SonarQube URL on the Settings page, you must enter the secret that is sent there (the application secret, or the token) again. A stored secret is never sent to a new address by a single edit of the URL. | `internal/settings/settings.go` |
-| File variants | The database URL, the key and the secrets can be read from files, so they stay out of the environment and out of `docker inspect`. | `internal/config/config.go` |
-| No secret values in scan data | A secret finding stores the rule and the location. The matched text is never read from the report or stored. The compressed original is kept as Trivy wrote it, and Trivy masks the value in it. | `internal/ingest/parse.go` |
-| Logs | The log never contains passwords, codes, cookies, headers, query strings, the database URL, the key or secret settings. The one exception is the setup token. | `internal/httpapi/middleware.go` |
+| AES-256-GCM, bound to the purpose | TOTP secrets and secret settings are encrypted with the key. The purpose (such as `totp:42` or `setting:sonar.token`) is authenticated, so a value copied to another row fails to decrypt. | `internal/secretbox/secretbox.go` |
+| Secrets are never returned | The API never returns secret settings. The Settings page can only replace or clear them. | `internal/settings` |
+| A new URL needs the secret again | When you change the GitLab or SonarQube URL, you must enter the secret sent there again, so a stored secret never goes to a new address by a single edit. | `internal/settings/settings.go` |
+| File variants | The database URL, the key and the secrets can come from files, out of the environment and `docker inspect`. | `internal/config/config.go` |
+| No secret values in scan data | A secret finding keeps the rule and the location, never the matched text. The stored original report is as Trivy wrote it, and Trivy masks the value there. | `internal/ingest/parse.go` |
+| Clean logs | The log never contains passwords, codes, cookies, headers, query strings, the database URL, the key or secret settings. The one exception is the setup token. | `internal/httpapi/middleware.go` |
 
 ### Uploads from CI
 
 | Control | What it does | Where |
 |---|---|---|
-| Token signature | The ID token must be signed with a key that your GitLab publishes at `/oauth/discovery/keys`. | `internal/ingest/token.go` |
-| Issuer and audience | `iss` must be the configured GitLab URL, and `aud` must contain the Scanopsis public URL. A token made for another service is refused. | `internal/ingest/token.go` |
-| Lifetime | Expired tokens and tokens that are not valid yet are refused. | `internal/ingest/token.go` |
-| Required claims | Project ID and path, namespace path, pipeline, job, ref, `ref_protected` and a commit hash must be present and well formed. | `internal/ingest/token.go` |
+| Token signature | The ID token must be signed with a key your GitLab publishes at `/oauth/discovery/keys`. | `internal/ingest/token.go` |
+| Issuer and audience | `iss` must be the configured GitLab URL, and `aud` must contain the Scanopsis public URL. | `internal/ingest/token.go` |
+| Lifetime and claims | Expired or not-yet-valid tokens are refused. Project, namespace, pipeline, job, ref, `ref_protected` and commit must be present and well formed. | `internal/ingest/token.go` |
 | Allowed namespaces | When set, only projects in the listed groups, or below them, may upload. | `internal/ingest/ingest.go` |
 | Protected refs only | When set, only pipelines on protected branches and tags may upload. | `internal/ingest/ingest.go` |
-| Identity from the token | The project, job, ref and commit come from the token, never from the report. | `internal/ingest/ingest.go` |
-| Bounded input | A report may be 64 MiB decompressed and hold 200,000 findings. The body and the decompressed stream are limited separately. | `internal/ingest/ingest.go`, `internal/ingest/parse.go` |
-| Rate limit | 60 uploads at once per client address, then one per second. | `cmd/scanopsis/main.go` |
-| Bounded work | Uploads are admitted by an estimate of the memory they need, from a budget of two fifths of `GOMEMLIMIT`, all addresses together; findings are streamed into the database, so memory does not grow with their number. An upload that does not fit waits up to 30 seconds, then gets `503 busy`; one that fits is not held back by a larger one that waits, until that one has waited 5 seconds, except reports of up to 4 MiB, which pass whenever they fit. At most a quarter of the database pool stores uploads at once. Each project may upload 100 reports at once and then one every 10 seconds, and each job at most 50 artifacts. | `internal/ingest/ingest.go` |
-| Messages without internals | The answers to the caller never contain the GitLab URL or the text of an upstream error. Both stay in the server log. | `internal/ingest/token.go`, `internal/ingest/ingest.go` |
-| Report time | A report time in the future is replaced by the server time, so an uploader cannot keep a scan "current" forever. | `internal/ingest/ingest.go` |
-| Rejections are audited, with a bound | A rejected upload is written to the audit log with the reason. Rejections that anyone with an ID token from your GitLab can cause (before the project has passed the allowed-namespaces and protected-ref checks, and always while no namespace is allowed) are recorded at most 10 at once per client address and then one a minute, so they cannot fill the log. Rate-limited requests are not recorded. A rejection of a project that passed the allow-list is always recorded. | `internal/ingest/ingest.go` |
-| Warning when uploads are open | While GitLab is configured and no namespace is allowed, every project of the GitLab instance may upload. Scanopsis logs a warning once for each time the settings enter that state. | `internal/ingest/ingest.go` |
+| Identity from the token | Project, job, ref and commit come from the token, never from the report. | `internal/ingest/ingest.go` |
+| Bounded input | A report may be 64 MiB decompressed and hold 200,000 findings. | `internal/ingest/ingest.go`, `internal/ingest/parse.go` |
+| Bounded work | 60 uploads at once per address, then one a second. Uploads are admitted by the memory they need, from a shared budget; at most a quarter of the database pool stores uploads at once. Each project may upload 100 reports at once, then one every 10 seconds, and each job at most 50 artifacts. See [sizing](deployment.md#sizing). | `internal/ingest/ingest.go`, `cmd/scanopsis/main.go` |
+| No internals in answers | Answers never contain the GitLab URL or an upstream error. Both stay in the server log. | `internal/ingest/token.go`, `internal/ingest/ingest.go` |
+| Report time | A report time in the future is replaced by the server time, so nobody can keep a scan "current" forever. | `internal/ingest/ingest.go` |
+| Audited rejections, with a bound | Rejections go to the audit log with the reason. The ones anyone with a token from your GitLab can cause are recorded at most 10 at once per address, then one a minute, so they cannot flood the log. | `internal/ingest/ingest.go` |
+| Warning when uploads are open | While no namespace is allowed, every project of the GitLab instance may upload, and Scanopsis logs a warning. | `internal/ingest/ingest.go` |
 
 ### SonarQube webhook
 
 | Control | What it does | Where |
 |---|---|---|
-| HMAC signature | The body must carry a valid HMAC-SHA256 in `X-Sonar-Webhook-HMAC-SHA256`, compared in constant time. | `internal/sonar/webhook.go` |
-| Small payload | The body is limited to 1 MiB. | `internal/sonar/webhook.go` |
-| Deduplication and bounded redelivery | A task ID is processed once. A failed delivery may be redelivered only for the same project, at least one minute after the last attempt, and at most five times in all. | `internal/store/queries/sonar.sql` |
-| Values come from SonarQube | The webhook says which project and task. The measures are read from the SonarQube Web API with the configured token. | `internal/sonar/webhook.go` |
-| Link by key first | A project key linked to a service decides. The `gitlabProjectId` scanner property can only link a service that has no SonarQube key yet, and never moves a link. | `internal/sonar/webhook.go` |
-| No redirects to other hosts | Web API calls refuse a redirect to another scheme or host, so the token cannot be sent elsewhere. | `internal/sonar/sonar.go` |
+| HMAC signature | The body needs a valid HMAC-SHA256 in `X-Sonar-Webhook-HMAC-SHA256`, compared in constant time. | `internal/sonar/webhook.go` |
+| Small payload | At most 1 MiB. | `internal/sonar/webhook.go` |
+| One delivery, bounded redelivery | A task ID is processed once. A failed one may be redelivered for the same project only, a minute apart, at most five times. | `internal/store/queries/sonar.sql` |
+| Values come from SonarQube | The webhook only says which project and task. The measures are read from SonarQube with the configured token. | `internal/sonar/webhook.go` |
+| Link by key first | A project key set on a service decides. The `gitlabProjectId` scanner property can only link a service that has no key yet, and never moves a link. | `internal/sonar/webhook.go` |
+| No redirects elsewhere | Calls to SonarQube refuse a redirect to another scheme or host, so the token stays put. | `internal/sonar/sonar.go` |
 
 ### Browser and transport
 
 | Control | What it does | Where |
 |---|---|---|
-| Content-Security-Policy | `default-src 'self'` with `script-src 'self'` and `style-src 'self'`, so no inline script or style runs. `object-src 'none'`, `base-uri 'none'`, `form-action 'self'`, `frame-ancestors 'none'`. | `internal/httpapi/middleware.go` |
+| Content-Security-Policy | `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`. No inline script or style runs. | `internal/httpapi/middleware.go` |
 | Other headers | `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin`. | `internal/httpapi/middleware.go` |
 | HSTS | With an `https` public URL: `Strict-Transport-Security: max-age=63072000; includeSubDomains`. | `internal/httpapi/middleware.go` |
-| Link scheme filtering | The web interface turns a link into an anchor only if it uses `http` or `https`. A `javascript:` or `data:` URL from a report is shown as plain text. External links use `rel="noopener noreferrer"`. | `web/src/format/index.ts` |
-| Certificate checks | Scanopsis verifies the certificate of GitLab and SonarQube. There is no option to turn this off. An internal CA is added with `SCANOPSIS_CA_FILE`. | `cmd/scanopsis/main.go` |
+| Safe links | Only `http` and `https` links from reports become links; `javascript:` or `data:` stays plain text. External links use `rel="noopener noreferrer"`. | `web/src/format/index.ts` |
+| Certificate checks | Certificates of GitLab and SonarQube are always checked; there is no switch to turn this off. Add a private CA with `SCANOPSIS_CA_FILE`. | `cmd/scanopsis/main.go` |
 | Client address | `X-Forwarded-For` is believed only from `SCANOPSIS_TRUSTED_PROXIES`, read from right to left. | `internal/clientip/clientip.go` |
-| Request limits | JSON bodies are limited to 1 MiB (uploads have their own limit), headers must arrive within 10 seconds, and requests have read and write timeouts. | `internal/httpapi/middleware.go`, `cmd/scanopsis/main.go` |
+| Request limits | API bodies up to 1 MiB (uploads have their own limit), headers within 10 seconds, plus read and write timeouts. | `internal/httpapi/middleware.go`, `cmd/scanopsis/main.go` |
 
 ### Audit log
 
-Sign-ins, failed sign-ins, role changes, users disabled, enabled or deleted,
-sessions ended by their user (`session.revoked`), two-factor events (including
-`mfa.locked`), setting changes, service changes, rejected uploads, every
-retention run that deleted data (`retention.deleted`), and the administration
-commands are written to the `audit_log` table, with the actor, the action and a detail that never
-contains a secret. A `settings.changed` event lists, for every changed setting,
-the value before and after; for a secret it records only that it changed. A failed sign-in for a user name that matches no account is
-recorded as `local:unknown`, because it may be a password typed into the wrong
-field. Administrators read it on the **Audit** page. Writing an
-event never blocks the action: a failure is logged instead. Old events are
-removed by [data retention](operations.md#data-retention) after at least 365 days.
+Sign-ins and failed sign-ins, role changes, disabled, enabled and deleted
+users, ended sessions, two-factor events (including `mfa.locked`), setting
+changes, service changes, rejected uploads, retention runs that deleted data,
+and every administration command go to the `audit_log` table, with actor,
+action and a detail that never holds a secret. A `settings.changed` event
+lists each setting's value before and after; for a secret it records only
+that it changed. A failed sign-in for an unknown name is recorded as
+`local:unknown`, because it may be a password typed into the wrong field.
+Administrators read it on the **Audit log** page. Writing an event never
+blocks the action; a failure is logged instead. [Data retention](operations.md#data-retention)
+removes events after 365 days at the earliest.
 
 ### The container
 
-The image holds only the static binary (a distroless base, no shell, no
+The image holds only the static binary (a distroless base: no shell, no
 package manager) and runs as user 65532. The Compose file drops all
-capabilities, sets `no-new-privileges`, mounts the root file system read-only,
-publishes the port on the loopback interface only, and puts the database on a
-network with no route out.
+capabilities, sets `no-new-privileges`, mounts the root file system
+read-only, publishes the port on the loopback interface only, and puts the
+database on a network with no route out.
 
-## Known limitations and accepted risks
+## Known limits and accepted risks
 
-These are known. They are accepted for the reasons given, and each has a
-mitigation.
+Each is accepted for the reason given, and each has a way to soften it.
 
-1. **One instance only.** Rate limits, the setup token and the settings
-   snapshot live in memory. A second server would have its own limits and would
-   not see setting changes until it restarts. Run one server. See
-   [single instance](architecture.md#single-instance).
+1. **One instance only.** Rate limits, the setup token and the settings live
+   in memory per process. A second server would have its own limits and miss
+   setting changes until it restarts. Run one server.
 
 2. **The first SonarQube project to name an unlinked service links it.** A
-   service without a SonarQube key is linked to the project of the first
-   analysis that carries `sonar.analysis.gitlabProjectId` with that service's
-   GitLab project ID. Anyone who can run an analysis in your SonarQube can
-   claim an unlinked service this way. The link is recorded in the audit log
-   (action `service.updated`, actor `sonarqube`, with the task ID) and an
-   administrator can change or remove it on the Services page. Set the key on
-   each service yourself to avoid it.
+   service without a SonarQube key is linked to the first analysis that
+   carries `sonar.analysis.gitlabProjectId` with its GitLab project ID. Anyone
+   who can run an analysis in your SonarQube can claim such a service. The link
+   is in the audit log (`service.updated`, actor `sonarqube`), and an
+   administrator can change it. Set the key on each service yourself to avoid
+   it.
 
 3. **An `http` SonarQube URL is allowed.** Internal SonarQube servers often
-   have no TLS. The token and the results then cross the network in clear text.
-   Scanopsis logs a warning when it starts with, or is changed to, such a URL.
-   Use `https` unless the network between the two servers is fully trusted.
+   have no TLS, but then the token and the results cross the network in clear
+   text. Scanopsis logs a warning. Use `https` unless the network is fully
+   trusted.
 
-4. **The setup token is written to the log until the setup completes.** While
-   no administrator exists, anyone who can read the log can create the first
-   administrator. Complete the setup right after the first start, and restrict
-   who reads the container logs. The token exists only in memory, changes at
-   every start, and stops working when the setup completes.
+4. **The setup token is in the log until setup is done.** While no
+   administrator exists, anyone who can read the log can create one. Finish the
+   setup right after the first start and limit who reads container logs. The
+   token lives only in memory, changes at every start and dies with the setup.
 
-5. **A replayed SonarQube webhook after retention.** When
-   [retention](operations.md#data-retention) deletes a delivery record, a
-   captured, validly signed webhook body could be replayed. It can only add a
-   historical analysis point, with the measures read from SonarQube at that
-   time. It can never change the current state, which is the latest analysis by
-   analysis date. To capture a signed body, an attacker needs access to the
-   delivery log of SonarQube or to the TLS path between the two servers.
+5. **A signed SonarQube webhook can be replayed after retention.** Once
+   [retention](operations.md#data-retention) deletes the delivery record, a
+   captured, validly signed body could be sent again. It can only add a
+   historical analysis point with measures read from SonarQube at that time,
+   never change the current state. Capturing a signed body needs access to
+   SonarQube's delivery log or the TLS path between the servers.
 
-6. **Local sign-in and two-factor sign-in can be locked by repeated failures.**
-   After repeated failed passwords for an account, local sign-in for that
-   account is refused for a short time, even with the correct password. This
-   prevents the rate limit from revealing a correct guess. An attacker who
-   knows a user name can therefore make that user wait. Ten wrong two-factor
-   codes in a row lock the second factor until an administrator resets it; an
-   attacker needs the first factor to cause this. GitLab sign-in and the
-   [administration commands](operations.md#administration-commands) remain
-   available while a local sign-in limit applies.
+6. **Repeated failures can lock a user out for a while.** After repeated
+   wrong passwords, local sign-in for that account is refused for a short time,
+   even with the right password, so the limit never confirms a guess. Someone
+   who knows a user name can therefore make that user wait. Ten wrong
+   two-factor codes lock the second factor until an administrator resets it;
+   that needs the first factor. GitLab sign-in and the
+   [administration commands](operations.md#administration-commands) keep
+   working.
 
-7. **Anyone who can run a job on your GitLab can obtain a token that Scanopsis
+7. **Anyone who can run a job on your GitLab gets a token Scanopsis
    accepts.** The token proves the job, not the intent. Restrict uploads with
    allowed namespaces and, if you can, protected refs only.
 
-8. **Anyone who can read the database and the key reads every secret.** There is
-   one key, with no rotation. Protect the two separately. See
-   [the secret key](configuration.md#the-secret-key).
+8. **The database plus the key reveal every secret.** There is one key and
+   no rotation. Keep the two apart, see [the secret key](configuration.md#the-secret-key).
 
-9. **The raw report is kept as uploaded for a while.** It can contain whatever
-   Trivy wrote, such as file paths and package names. Trivy masks secret values
-   in it. Retention clears it 30 days after the scan stops being current, and
-   `scanopsis admin export-report` writes it out for checks; each export is
-   recorded in the audit log. See [original reports](operations.md#original-reports).
+9. **The original report is kept for a while.** It holds whatever Trivy
+   wrote, such as file paths and package names (Trivy masks secret values).
+   Retention empties it 30 days after the scan stops being current.
+   `scanopsis admin export-report` writes it out, and each export is audited.
 
-10. **Until an administrator chooses a branch, the latest scanned branch is
-    shown.** A dashboard shows one branch of a service. An administrator
-    chooses it for each service on the Services page, and no scan of another
-    branch can change it. For a service where none is chosen, the dashboard
-    shows the branch with the most recent scan, so anyone who can upload a
-    scan from any branch can change what is shown (and with it the numbers on
-    the portfolio) until a branch is chosen. Choose the branch of every
-    service after its first upload, and use protected refs only to keep
-    unprotected branches from uploading at all. A change of the branch is
-    recorded in the audit log (`service.updated`, with the previous and the new
-    value).
+10. **Until an administrator chooses a dashboard branch, the latest scanned
+    branch is shown.** Anyone who can upload from any branch can then change
+    what a dashboard and the portfolio show. Choose the branch of every service
+    after its first upload, and use protected refs only to keep other branches
+    from uploading at all. Changes of the branch are audited.
 
 ## Hardening checklist
 
-Go through this list when you deploy, and again after each upgrade.
+Go through this when you deploy, and again after each upgrade.
 
-1. **Terminate TLS at a reverse proxy and use an `https` public URL.** Then the
-   cookie is `Secure`, the `__Host-` prefix applies and HSTS is sent. See
-   [deployment](deployment.md#reverse-proxy-and-tls).
-2. **Set `SCANOPSIS_TRUSTED_PROXIES` to the address of your proxy, and nothing
-   wider.** Without it, all users share the proxy's address and one rate limit.
-   With a range that is too wide, anyone in it can choose the client address.
-3. **Set file permissions on the secrets.** `deploy/compose/secrets` is mode 700
-   and the files are mode 644 (the container user must read them). Keep the
-   directory, `.env` and backups out of version control and readable only by the
+1. **End TLS at a reverse proxy and use an `https` public URL.** That makes
+   the cookie `Secure` with the `__Host-` prefix and turns on HSTS. See
+   [reverse proxy and TLS](deployment.md#reverse-proxy-and-tls).
+2. **Set `SCANOPSIS_TRUSTED_PROXIES` to your proxy's address and nothing
+   wider.** Without it, all users share one address and one rate limit. With a
+   range that is too wide, anyone in it can choose their address.
+3. **Lock down the secret files.** `deploy/compose/secrets` is mode 700 and
+   its files mode 644 (the container user must read them). Keep the
+   directory, `.env` and backups out of version control and readable only by
    operators.
-4. **Back up `SCANOPSIS_SECRET_KEY` separately from the database.** A backup
-   without the key is useless, and a key next to the backup protects nothing.
-5. **Encrypt backups at rest.** Keep the key apart from `SCANOPSIS_SECRET_KEY` and from
-   the backups. See [encrypt backups at rest](operations.md#encrypt-backups-at-rest).
-6. **After every restore, delete all sessions and check the users and the audit
-   log.** A restore brings back the sessions of the backup. See
-   [after a restore](operations.md#after-a-restore).
-7. **Restrict network paths.** Publish the port on the loopback interface only
-   (the Compose file does). Let only the reverse proxy reach it. Allow the
-   database port only from Scanopsis. Allow outgoing connections only to GitLab
-   and SonarQube.
-8. **Limit rates at the proxy, and restrict the SonarQube webhook (optional).**
-   Rate limits for sign-in, second factor and uploads add a layer in front of the
-   limits in Scanopsis. Let only the address of SonarQube call
-   `/api/v1/hooks/sonarqube`. You can also keep `/api/v1/version` (it shows the
-   version you run, to anyone) to your own networks. See
-   [limit rates and restrict the webhook](deployment.md#limit-rates-and-restrict-the-webhook-optional).
-9. **Limit who may upload.** Set the allowed namespaces. Consider protected refs
-   only.
-10. **Link services by key.** Set the SonarQube key on each service so that no
-    analysis can claim it.
+4. **Back up the secret key apart from the database.** A backup without the
+   key is useless; a key next to the backup protects nothing.
+5. **Encrypt backups**, with a key kept apart from both. See
+   [encrypt your backups](operations.md#encrypt-your-backups).
+6. **After every restore, delete all sessions and check users and the audit
+   log.** A restore brings old sessions back. See
+   [check everything after a restore](operations.md#check-everything-after-a-restore).
+7. **Restrict network paths.** Publish the port on loopback only (the Compose
+   file does) and let only the proxy reach it. Allow the database port only
+   from Scanopsis, and outgoing connections only to GitLab and SonarQube.
+8. **Add rate limits at the proxy and lock the SonarQube webhook to
+   SonarQube's address (optional).** You can also hide `/api/v1/version`,
+   which tells anyone your version. See
+   [add rate limits and lock down the webhook](deployment.md#add-rate-limits-and-lock-down-the-webhook-optional).
+9. **Limit who may upload.** Set the allowed namespaces; consider protected
+   refs only.
+10. **Link every service to its SonarQube project by key**, so no analysis
+    can claim it.
 11. **Use `https` for SonarQube.**
-12. **Rotate tokens.** Replace the SonarQube token and the webhook secret on a
-    schedule, and the GitLab application secret when someone with access leaves.
-    Change them on the Settings page. They apply to the next request.
-13. **Turn off local sign-in only when GitLab sign-in works**, and keep one
-    local administrator you can recover with the command line. Scanopsis refuses
-    to turn local sign-in off while GitLab sign-in is incomplete. See
+12. **Rotate tokens.** Replace the SonarQube token and webhook secret on a
+    schedule, and the GitLab application secret when someone with access
+    leaves. Change them on the Settings page; they apply to the next request.
+13. **Turn off local sign-in only once GitLab sign-in works**, and keep one
+    local administrator you can rescue from the command line. See
     [recovering access](operations.md#recovering-access-when-locked-out).
-14. **Set allowed groups** for GitLab sign-in. Empty allows every GitLab user.
-15. **Promote a GitLab user to administrator only after the user has enrolled
+14. **Set allowed groups** for GitLab sign-in. Empty lets every GitLab user in.
+15. **Make a GitLab user an administrator only after they enrolled
     two-factor authentication.** Until then, whoever first signs in as that
-    GitLab user chooses the authenticator. Check the user on the **Users** page.
-16. **Never point `gitlab.url` at another GitLab instance while GitLab users
-    exist.** Scanopsis identifies a GitLab user by the numeric user id, not by the
-    instance. Another instance can give the same id to a different person, who
-    then signs in as the existing user, administrators included. Remove the
-    GitLab users first, or start with a new database.
+    user chooses the authenticator. Check it on the **Users** page.
+16. **Plan before you change the GitLab URL.** Every GitLab user then starts
+    over as a new viewer, and the old accounts stay behind. If only the address
+    of the same GitLab changed, move the accounts first, see
+    [GitLab users and the GitLab URL](operations.md#gitlab-users-and-the-gitlab-url).
 17. **Read the audit log.** Look for failed sign-ins, `ingest.rejected`, role
     changes, `settings.changed` and `service.updated` by `sonarqube`.
 18. **Keep the setup token private** and finish the setup at once.
-19. **Limit who reads the container logs.** They hold client addresses, project
-    paths and, before the setup, the setup token.
-20. **Keep the resource and log limits.** `compose.yaml` sets a memory limit with
-    `GOMEMLIMIT`, process limits (`pids_limit`) and log rotation for both
-    services. Keep them when you edit the file, and set the same limits with
-    `docker run` or in Kubernetes. See [host settings](deployment.md#host-settings).
-21. **Alert on the disk of the database at 70% and 85%.** A full disk stops the
-    database. See [watch the disk of the database](operations.md#watch-the-disk-of-the-database).
-22. **Update.** Build the newest version branch and apply it. See
-    [versions and branches](versions.md#upgrade-to-a-newer-version) and
-    [upgrades](deployment.md#upgrades-and-rollback). Never deploy `main`.
+19. **Limit who reads container logs.** They hold client addresses, project
+    paths and, before setup, the setup token.
+20. **Keep the resource and log limits** of `compose.yaml` (memory with
+    `GOMEMLIMIT`, `pids_limit`, log rotation), and set the same with
+    `docker run` or Kubernetes. See [host settings](deployment.md#host-settings).
+21. **Alert on the database disk at 70% and 85%.** A full disk stops the
+    database. See [watch the database disk](operations.md#watch-the-database-disk).
+22. **Stay current.** Build the newest version branch, see
+    [upgrade to a newer version](versions.md#upgrade-to-a-newer-version).
+    Never deploy `main`.
 
-## How to report a vulnerability
+## Report a vulnerability
 
 Do not report vulnerabilities in public issues. Follow the
 [security policy](../SECURITY.md): use GitHub private vulnerability reporting
-or send an e-mail, and include the affected version, the steps to reproduce and
-the impact you expect.
+or send an e-mail, with the affected version, the steps to reproduce and the
+impact you expect.
+
+---
+
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
