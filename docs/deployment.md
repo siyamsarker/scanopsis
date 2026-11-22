@@ -1192,35 +1192,88 @@ a limit.
 
 ### Memory and CPU
 
-Scanopsis keeps nothing but small caches in memory. The container's memory,
-read from its control group:
+**Give the Scanopsis container a memory limit of 512 MiB.** The image sets
+`GOMEMLIMIT=400MiB`, which suits that limit. If you set another limit, set
+`GOMEMLIMIT` to about 80% of it (`docker run -e GOMEMLIMIT=...`, or `environment:`
+in Compose). Scanopsis also takes the memory it lets uploads use from it: two
+fifths of `GOMEMLIMIT`, 160 MiB with the default.
 
-| State | Memory |
-|---|---|
-| Idle, a minute after start | 11 to 14 MiB (`docker stats` shows 12 MiB) |
-| Peak during start (migrations, first requests) | 28 MiB |
-| One upload of a 20.3 MB report (uncompressed) | peak 34 MiB |
-| Four uploads of 20.3 MB reports at the same time | peak 73 MiB |
-| Eight uploads of 20.3 MB reports at the same time | peak 94 MiB |
+Scanopsis keeps nothing but small caches in memory, apart from the uploads in
+progress. An upload is kept compressed, is read twice from memory (the first
+time to check it and count the findings, the second time to write the findings
+into the database in batches), and so needs memory in proportion to its size
+and not to its number of findings. The measurements are of the largest report
+the default limits allow: 60 MiB of JSON with 200,000 findings, sent as gzip
+(10 MiB). They were made with the container image (Scanopsis `6eaa325` before,
+the current one after), a PostgreSQL 18.7 container, and the container's limit
+set with `docker run --memory`. The peak is the process's highest resident memory
+(`VmHWM` in `/proc/<pid>/status`). `docker stats` samples once a second and
+misses it.
 
-The 20.3 MB report is the fixture `internal/ingest/testdata/image-full.json`
-with its findings repeated 35 times, so it holds 4,830 findings. It is a
-synthetic report, sent without compression. A single 20 MB upload took 0.2 to 0.4
-seconds from request to the `201` answer. Scanopsis processes at most four
-uploads at a time, all addresses together. Others wait for a free slot, as long
-as their request lasts, and then get `503 busy` with `Retry-After: 5`. In the
-test with eight uploads at once, all eight were stored, and memory peaked at
-94 MiB.
+| State | Before | Now |
+|---|---|---|
+| Idle, a minute after start | 19.5 MiB (`docker stats` shows 10 to 12 MiB) | 19.5 MiB |
+| One maximum upload, peak | 280 MiB (killed at a limit of 256 MiB) | 81 MiB |
+| Eight maximum uploads at once, 512 MiB limit, peak | 1,050 MiB (4 at a time) | 256 MiB |
+| The same, after the burst | 885 MiB, for as long as the process runs | 27 MiB |
+| Eight uploads of the worst case for memory: 43 MiB of gzip that does not compress further (53 MiB of JSON), 512 MiB limit, peak | not measured | 220 MiB |
+| Eight maximum uploads without gzip (60 MiB each), 512 MiB limit, peak | not measured | 98 MiB, one at a time |
+| Eight maximum uploads, limit 256 MiB with `GOMEMLIMIT=200MiB`, peak | killed | 129 MiB (worst case: 207 MiB) |
+
+All eight uploads in each test were stored with `201`, and no container was
+killed. One maximum upload takes 3 s from request to answer (2.3 s before).
+Eight at once take 7 s with gzip, 15 s for the worst case, and 25 s without
+gzip, because uploads wait for memory (see below).
+
+What decides the memory of an upload:
+
+- **Admission by size.** An upload is estimated at twice its `Content-Length`
+  (the compressed body, and the copy the database driver makes to send it) plus
+  10 MiB for buffers; a request without a length counts as the largest. The
+  uploads being processed together may add up to the memory budget. An upload
+  that does not fit waits, in order of arrival, for up to 30 seconds and then gets
+  `503 busy` with `Retry-After: 5`. Many small reports run at once and a few large
+  ones do. With the default budget of 160 MiB, a 10 MiB gzip upload (30 MiB) runs
+  five at a time, and the worst case above (96 MiB) one at a time.
+- **Memory goes back.** The heap is returned to the operating system when the
+  last large upload (an estimated 16 MiB or more) is done and none is running, and
+  a database connection that sent a report of 4 MiB or more is closed afterwards
+  and replaced. Without these two, the process kept the garbage of a burst for
+  minutes and each pooled connection kept a buffer as big as the largest report.
+- **Reading is limited in time, not in slots.** An upload has 5 minutes to send
+  its whole body, counted from when it was admitted, and then 60 seconds to be
+  answered. The 30 and 60 seconds of the rest of the server do not apply to it. A
+  slow client holds the share of memory its own report needs, for at most that
+  time, and no other client waits for a slot. With 10 MiB of gzip sent at
+  200 KB/s (52 seconds), the upload was cut off at 30 seconds with `400` before and
+  was stored with `201` now.
+- **The number of findings.** A report may hold at most 200,000 findings. The
+  limit no longer protects memory, which does not grow with it, but the size of
+  the transaction: the largest report is stored in about 3 seconds.
 
 At 3,000 uploads a day, the average is two a minute, so memory stays close to
-the idle value. Give the Scanopsis container a limit of 256 MiB. The database
-container needs more: reserve 1 GiB or more of RAM for PostgreSQL, so that it can
-keep its working set in memory.
+the idle value. The database container needs more: reserve 1 GiB or more of RAM
+for PostgreSQL, so that it can keep its working set in memory.
 
-The rate limit for uploads is 60 at once per client address and then one a
-second. Runners behind one NAT address share it. A burst of more than 60
-pipelines that finish together from one address gets `429`; the script in the
-GitLab CI guide retries.
+The smallest limit that survived the same tests is 256 MiB with
+`GOMEMLIMIT=200MiB`. The worst case peaked at 207 MiB, which leaves little room
+for anything else, and the uploads of large reports are then processed two at a
+time at most. Use 512 MiB.
+
+Limits on uploads, from one client address and from one project:
+
+- The rate limit per client address is 60 uploads at once and then one a
+  second. Runners behind one NAT address share it. A burst of more than 60
+  pipelines that finish together from one address gets `429`.
+- The rate limit per GitLab project is 100 uploads at once and then one every 10
+  seconds (360 an hour), whatever the addresses of its runners. It is sized for
+  3,000 pipelines a day over 500 services, six a day for the average service: a
+  monorepo that scans 30 images uploads 31 reports per pipeline, so three can
+  finish together and 11 an hour can go on all day. A project above it gets `429`
+  with `project_rate_limited`. One job may also store at most 50 different
+  artifacts (`job_artifact_limit`). Both are described in the
+  [GitLab CI guide](integrations/gitlab-ci.md#retries-and-limits), whose script
+  retries a `429`.
 
 ### Database size
 
