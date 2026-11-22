@@ -61,13 +61,15 @@ export function VulnList({
                 </span>
                 <VersionLine vuln={v} className="mt-1" />
               </span>
-              <time
-                dateTime={v.first_seen_at}
-                title={`First seen ${formatExactTime(v.first_seen_at)}`}
-                className="hidden text-right text-small text-text-muted sm:block"
-              >
-                {relativeTime(v.first_seen_at)}
-              </time>
+              <span className="hidden text-right text-small text-text-muted sm:block">
+                <span className="block text-caption text-text-faint">First seen</span>
+                <time
+                  dateTime={v.first_seen_at}
+                  title={`First seen ${formatExactTime(v.first_seen_at)}`}
+                >
+                  {relativeTime(v.first_seen_at)}
+                </time>
+              </span>
             </button>
           </li>
         );
