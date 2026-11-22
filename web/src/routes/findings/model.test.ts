@@ -82,9 +82,28 @@ describe('upgradeCommand', () => {
       'go get golang.org/x/net@v0.23.0',
     );
     expect(upgradeCommand('pom', 'org.yaml:snakeyaml', '2.0')).toBe('org.yaml:snakeyaml:2.0');
-    expect(upgradeCommand('debian', 'evil;pkg', '1')).toBe(
-      "apt-get install --only-upgrade 'evil;pkg=1'",
-    );
+  });
+
+  it('has none when the name or version could mean something to a shell', () => {
+    const unsafe = [
+      'evil;pkg',
+      "x'; rm -rf ~; '",
+      '$(curl example.com)',
+      '`id`',
+      'a\nrm -rf ~',
+      'a"b',
+      'a b',
+      'a|b',
+      'a&b',
+      'a>b',
+      '-rf',
+      '~root',
+      '',
+    ];
+    for (const value of unsafe) {
+      expect(upgradeCommand('debian', value, '1.0')).toBeNull();
+      expect(upgradeCommand('npm', 'left-pad', value)).toBeNull();
+    }
   });
 
   it('has none for unknown ecosystems, the Go standard library or no version', () => {

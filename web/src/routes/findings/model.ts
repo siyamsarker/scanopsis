@@ -246,7 +246,11 @@ export function suggestedFix(installed: string, fixed: string): string {
   return all.find((v) => compareVersions(v, installed) > 0) ?? all[all.length - 1] ?? '';
 }
 
-const quote = (value: string) => (/^[A-Za-z0-9@._/:+=~-]+$/.test(value) ? value : `'${value}'`);
+// Package names and versions come from uploaded reports. Only names made of
+// these characters get a command: nothing in them means anything to a shell,
+// and neither starts like an option, so a copied command cannot run anything
+// but the package tool.
+const SAFE = /^[A-Za-z0-9@._][A-Za-z0-9@._/:+~-]*$/;
 
 const OS_APT = ['debian', 'ubuntu'];
 const OS_APK = ['alpine', 'wolfi', 'chainguard'];
@@ -258,43 +262,43 @@ const OS_DNF = ['redhat', 'centos', 'rocky', 'alma', 'amazon', 'oracle', 'fedora
  * scan; it is a hint to check, not something to run blindly.
  */
 export function upgradeCommand(pkgType: string, pkg: string, version: string): string | null {
-  if (!version || !pkg) return null;
+  if (!SAFE.test(pkg) || !SAFE.test(version)) return null;
   const type = pkgType.toLowerCase();
-  if (OS_APT.includes(type)) return `apt-get install --only-upgrade ${quote(`${pkg}=${version}`)}`;
-  if (OS_APK.includes(type)) return `apk add --upgrade ${quote(`${pkg}=${version}`)}`;
-  if (OS_DNF.includes(type)) return `dnf upgrade ${quote(`${pkg}-${version}`)}`;
+  if (OS_APT.includes(type)) return `apt-get install --only-upgrade ${pkg}=${version}`;
+  if (OS_APK.includes(type)) return `apk add --upgrade ${pkg}=${version}`;
+  if (OS_DNF.includes(type)) return `dnf upgrade ${pkg}-${version}`;
   switch (type) {
     case 'npm':
     case 'node-pkg':
-      return `npm install ${quote(`${pkg}@${version}`)}`;
+      return `npm install ${pkg}@${version}`;
     case 'yarn':
-      return `yarn add ${quote(`${pkg}@${version}`)}`;
+      return `yarn add ${pkg}@${version}`;
     case 'pnpm':
-      return `pnpm add ${quote(`${pkg}@${version}`)}`;
+      return `pnpm add ${pkg}@${version}`;
     case 'pip':
     case 'pipenv':
     case 'python-pkg':
     case 'uv':
-      return `pip install ${quote(`${pkg}==${version}`)}`;
+      return `pip install ${pkg}==${version}`;
     case 'poetry':
-      return `poetry add ${quote(`${pkg}@${version}`)}`;
+      return `poetry add ${pkg}@${version}`;
     case 'gomod':
     case 'gobinary':
       return pkg === 'stdlib'
         ? null
-        : `go get ${quote(`${pkg}@${version.startsWith('v') ? version : `v${version}`}`)}`;
+        : `go get ${pkg}@${version.startsWith('v') ? version : `v${version}`}`;
     case 'cargo':
     case 'rust-binary':
-      return `cargo update -p ${quote(pkg)} --precise ${quote(version)}`;
+      return `cargo update -p ${pkg} --precise ${version}`;
     case 'composer':
-      return `composer require ${quote(`${pkg}:${version}`)}`;
+      return `composer require ${pkg}:${version}`;
     case 'nuget':
     case 'dotnet-core':
     case 'packages-props':
-      return `dotnet add package ${quote(pkg)} --version ${quote(version)}`;
+      return `dotnet add package ${pkg} --version ${version}`;
     case 'gemspec':
     case 'bundler':
-      return `gem install ${quote(pkg)} -v ${quote(version)}`;
+      return `gem install ${pkg} -v ${version}`;
     case 'jar':
     case 'pom':
     case 'gradle':
