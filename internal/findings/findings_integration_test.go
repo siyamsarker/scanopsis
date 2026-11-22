@@ -290,7 +290,7 @@ func TestListScans(t *testing.T) {
 		t.Errorf("empty = %+v", none)
 	}
 
-	for _, q := range []string{"limit=0", "limit=201", "limit=x", "before=-1", "before=x", "ref=" + url.QueryEscape(strings.Repeat("r", 501))} {
+	for _, q := range []string{"limit=0", "limit=201", "limit=x", "before=-1", "before=x", "ref=" + url.QueryEscape(strings.Repeat("r", 1025))} {
 		wantError(t, mux, base+"?"+q, 400, "invalid_parameter")
 	}
 }

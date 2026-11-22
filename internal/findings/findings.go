@@ -32,7 +32,9 @@ import (
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
-const maxRefLen = 500
+// maxRefLen is the longest ref an upload stores (internal/ingest), so every
+// stored ref can be requested.
+const maxRefLen = 1024
 
 // SettingsSource gives the current settings (the GitLab URL for links).
 type SettingsSource interface{ Current() settings.Snapshot }
