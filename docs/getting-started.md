@@ -1,54 +1,49 @@
 # Getting started
 
-This guide takes you from nothing to a running Scanopsis with one
-administrator who signs in with two-factor authentication. It uses Docker
-Compose on a single host. It takes about 15 minutes.
+This guide takes you from nothing to a running Scanopsis with one administrator who signs in with two-factor authentication. It uses Docker Compose on one host and takes about 15 minutes.
 
-## Prerequisites
+**Audience:** Operators · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
 
-You need:
+---
+
+## What you need
 
 - A Linux or macOS host with Docker Engine and the Compose plugin
-  (`docker compose`). The steps in this guide were run with Docker 29.9.3 and
-  Compose 5.7.0.
+  (`docker compose`). These steps were run with Docker 29.9.3 and Compose
+  5.7.0.
 - Git, GNU Make and OpenSSL on the host where you build the image.
 - An authenticator app on your phone that supports time-based one-time
   passwords (TOTP), for example Aegis, 2FAS or Google Authenticator.
-- For a production deployment: a DNS name such as `scanopsis.example.com` and
-  a reverse proxy that terminates TLS. You can add the proxy after this guide.
+- For production: a DNS name such as `scanopsis.example.com` and a reverse
+  proxy that terminates TLS. You can add the proxy after this guide.
 
-Scanopsis listens on plain HTTP. Compose publishes it on `127.0.0.1:8080`
-only, so nothing outside the host can reach it until you add a reverse proxy.
-After the build, Scanopsis needs no outbound access except to your GitLab
-instance and, if you use it, your SonarQube.
+Scanopsis speaks plain HTTP. Compose publishes it on `127.0.0.1:8080` only, so
+nothing outside the host can reach it until you add a reverse proxy. Once the
+image is built, Scanopsis needs no outbound access except to your GitLab and,
+if you use it, your SonarQube.
 
 ## Step 1. Build the image
 
 Scanopsis publishes no container image, so you build one from a version
-branch. Deploy a version branch, not `main`: `main` is development code. See
-[versions and branches](versions.md) to find the newest version. This step is an
-example to adapt: use your own clone location.
+branch. Always deploy a version branch, never `main`: `main` is development
+code. Replace `X.Y.Z` with the newest version, for example `0.2.0` (see
+[find the newest version](versions.md#find-the-newest-version)).
 
-1. Clone the version branch and go to its root. Replace `X.Y.Z` with the
-   version:
+1. Clone the version branch:
 
    ```sh
    git clone --branch release/X.Y.Z --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    ```
 
-   Replace `X.Y.Z` with the newest version, for example `0.2.0`. See
-   [find the newest version](versions.md#find-the-newest-version).
-
-2. Build the image with a tag that names the version. Use the same
-   version as in step 1:
+2. Build the image with a tag that names the version:
 
    ```sh
    make image IMAGE=scanopsis:vX.Y.Z
    ```
 
-   The build downloads dependencies and takes a few minutes the first time.
-   The last lines look like this:
+   The first build downloads dependencies and takes a few minutes. The last
+   lines look like this:
 
    ```text
    #24 unpacking to docker.io/library/scanopsis:vX.Y.Z 0.0s done
@@ -61,19 +56,18 @@ example to adapt: use your own clone location.
    docker image ls scanopsis:vX.Y.Z
    ```
 
-   Expected result: one line with the repository `scanopsis` and the tag
-   `vX.Y.Z`. You use this tag in step 3.
+   You see one line with the repository `scanopsis` and the tag `vX.Y.Z`.
 
-If the build fails with `VERSION and COMMIT may only contain ...`, you passed
-a version string with unusual characters. Use a plain one, for example
-`make image IMAGE=scanopsis:v1.0.0 VERSION=1.0.0`. If it fails while downloading, check the host's
-network access and proxy settings for Docker.
+If the build fails with `VERSION and COMMIT may only contain ...`, the version
+string has unusual characters. Pass a plain one, for example
+`make image IMAGE=scanopsis:v1.0.0 VERSION=1.0.0`. If it fails while
+downloading, check the network access and proxy settings of Docker on the
+host.
 
 ## Step 2. Create the secrets
 
-Scanopsis reads its database URL and its encryption key from files, not from
-environment variables. Compose mounts them as Docker secrets. Run the
-following commands in `deploy/compose`:
+Scanopsis reads its database URL and its encryption key from files, which
+Compose mounts as Docker secrets. Run these commands in `deploy/compose`:
 
 ```sh
 cd deploy/compose
@@ -86,39 +80,36 @@ printf 'postgres://scanopsis:%s@db:5432/scanopsis?sslmode=disable' \
 chmod 644 secrets/*
 ```
 
-What each file holds:
-
-| File | Content |
-|---|---|
+| File | What it holds |
+| --- | --- |
 | `secrets/secret_key` | A random 32-byte key, base64 encoded. Scanopsis uses it to encrypt two-factor secrets and the secrets you enter on the Settings page. |
 | `secrets/postgres_password` | The password of the database user `scanopsis`. |
-| `secrets/database_url` | The connection string. It must contain the same password. Use `sslmode=disable` because the database is only reachable on the private Compose network. |
+| `secrets/database_url` | The connection string, with the same password. `sslmode=disable` is fine here, because the database is only reachable on the private Compose network. |
 
 The files are mode 644 because the container runs as user 65532 and Docker
 mounts each file with its host permissions. The directory is mode 700, so
-other users on the host cannot reach the files. `openssl rand -hex` is used
-for the password so that it needs no escaping inside the URL.
+other users on the host cannot reach the files. The password is hex, so it
+needs no escaping inside the URL.
 
-Verify:
+Check:
 
 ```sh
 ls -l secrets
 ```
 
-Expected result: three files, `database_url`, `postgres_password` and
-`secret_key`, each with a non-zero size.
+You see three files with a size above zero:
 
 ```text
--rw-r--r--  1 siyam  staff  103 Nov 19 09:56 database_url
--rw-r--r--  1 siyam  staff   49 Nov 19 09:56 postgres_password
--rw-r--r--  1 siyam  staff   45 Nov 19 09:56 secret_key
+-rw-r--r--  1 you  staff  103 Nov 22 11:11 database_url
+-rw-r--r--  1 you  staff   49 Nov 22 11:11 postgres_password
+-rw-r--r--  1 you  staff   45 Nov 22 11:11 secret_key
 ```
 
-Back up `secrets/secret_key` now, in a place that is separate from your
-database backups. If you lose it, the two-factor secrets and the saved
-GitLab secret become unreadable. See [the secret key](configuration.md#the-secret-key).
+Back up `secrets/secret_key` now, somewhere apart from your database
+backups. Without it, the two-factor secrets and the saved GitLab and
+SonarQube secrets cannot be read. See [the secret key](configuration.md#the-secret-key).
 
-Do not commit the `secrets` directory or the `.env` file to a repository.
+Never commit the `secrets` directory or the `.env` file.
 
 ## Step 3. Create the configuration file
 
@@ -128,38 +119,31 @@ Do not commit the `secrets` directory or the `.env` file to a repository.
    cp .env.example .env
    ```
 
-2. Open `.env` and set `SCANOPSIS_PUBLIC_URL` to the address users will type
-   in the browser, without a path. The address may include a port. For a trial
-   on your own machine, use `http://localhost:8080`. For a real deployment, use
-   the HTTPS address of your reverse proxy, for example
-   `https://scanopsis.example.com`, or `https://scanopsis.example.com:8443` if
-   the proxy listens on another port. Scanopsis must be served at the root of
-   its own host name: a sub-path such as `https://example.com/scanopsis/` is
-   not supported.
+2. In `.env`, set `SCANOPSIS_PUBLIC_URL` to the address users type in the
+   browser, without a path. For a trial on your own machine, use
+   `http://localhost:8080`. For a real deployment, use the HTTPS address of
+   your reverse proxy, for example `https://scanopsis.example.com` (a port such
+   as `:8443` is fine). Scanopsis must run at the root of its own host name;
+   a sub-path such as `https://example.com/scanopsis/` does not work.
 
-   The URL decides the cookie settings, so you must open Scanopsis in the
-   browser with exactly this host name. A mismatch makes sign-in fail.
+   The cookies are set for this address, so always open Scanopsis with exactly
+   this host name. Another name makes sign-in fail.
 
 3. Set `SCANOPSIS_IMAGE` to the image tag from step 1, for example
-   `SCANOPSIS_IMAGE=scanopsis:vX.Y.Z`. Compose runs exactly this image, and the
+   `SCANOPSIS_IMAGE=scanopsis:vX.Y.Z`. Compose runs exactly this image, and an
    [upgrade](versions.md#upgrade-to-a-newer-version) later changes only this
    line.
 
-Verify that Compose accepts the files:
+Check that Compose accepts the files:
 
 ```sh
 docker compose config --quiet && echo config-ok
 ```
 
-Expected result:
-
-```text
-config-ok
-```
-
-If Compose prints `env file ... not found`, you did not create `.env`. This
-check does not look at the files in `secrets`. A missing secret file shows up
-in the next step.
+You see `config-ok`. If Compose says
+`required variable SCANOPSIS_IMAGE is missing a value`, `.env` is missing or
+has no `SCANOPSIS_IMAGE` line. This check does not look into `secrets`; a
+missing secret file shows up in the next step.
 
 ## Step 4. Start Scanopsis
 
@@ -167,8 +151,8 @@ in the next step.
 docker compose up -d
 ```
 
-Compose starts the database first and waits until it is healthy, then starts
-Scanopsis. Expected result:
+Compose starts the database, waits until it is healthy, then starts
+Scanopsis:
 
 ```text
  Container scanopsis-db-1 Healthy
@@ -177,8 +161,8 @@ Scanopsis. Expected result:
 ```
 
 If Compose ends with `invalid mount config for type "bind": bind source path
-does not exist`, the path in the message is a secret file that you did not
-create. Create it as in step 2 and run `docker compose up -d` again.
+does not exist`, the path in the message is a secret file you did not create.
+Create it as in step 2 and run `docker compose up -d` again.
 
 ## Step 5. Check that it is healthy
 
@@ -188,8 +172,8 @@ create. Create it as in step 2 and run `docker compose up -d` again.
    docker compose ps
    ```
 
-   Expected result: both containers are `Up` and show `(healthy)`. The image
-   health check needs up to 20 seconds to start.
+   Both containers are `Up` and `(healthy)`. The image health check takes up
+   to 20 seconds to start.
 
    ```text
    NAME                    SERVICE     STATUS                    PORTS
@@ -203,11 +187,7 @@ create. Create it as in step 2 and run `docker compose up -d` again.
    curl -s http://127.0.0.1:8080/healthz
    ```
 
-   Expected result:
-
-   ```text
-   {"status":"ok"}
-   ```
+   You get `{"status":"ok"}`.
 
 3. Check that it can reach the database:
 
@@ -215,125 +195,117 @@ create. Create it as in step 2 and run `docker compose up -d` again.
    curl -s http://127.0.0.1:8080/readyz
    ```
 
-   Expected result:
-
-   ```text
-   {"status":"ready"}
-   ```
+   You get `{"status":"ready"}`.
 
 If this step fails:
 
-| Symptom | Likely cause and fix |
-|---|---|
-| `scanopsis-scanopsis-1` is `Restarting` | Run `docker compose logs scanopsis`. The server prints `configuration error:` followed by one line per problem, for example `SCANOPSIS_PUBLIC_URL is required`. Fix `.env` and run `docker compose up -d` again. |
-| The log says `SCANOPSIS_SECRET_KEY is not valid` | `secrets/secret_key` is not a base64 encoded 32-byte key. Create it again with the command in step 2. |
+| Symptom | Cause and fix |
+| --- | --- |
+| `scanopsis-scanopsis-1` is `Restarting` | Run `docker compose logs scanopsis`. The server prints `configuration error:` and one line per problem, for example `SCANOPSIS_PUBLIC_URL is required, for example https://scanopsis.example.com`. Fix `.env` and run `docker compose up -d` again. |
+| The log says `SCANOPSIS_SECRET_KEY is not valid` | `secrets/secret_key` is not a base64 encoded 32-byte key. Create it again as in step 2. |
 | `curl` cannot connect | The container is not running, or another program uses port 8080 on the host. Run `docker compose ps`. |
-| `/readyz` returns `503` | The database is not reachable. Check `docker compose logs db` and that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when the volume is created. If you changed `secrets/postgres_password` after the first start, run `docker compose down -v` to delete the database volume and start again. Do this only before the setup, because it deletes all data. |
+| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when the volume is first created. If you changed the password after the first start and have not finished the setup yet, run `docker compose down -v` to delete the database volume and start again. This deletes all data. |
 
 ## Step 6. Get the setup token
 
-While no administrator exists, Scanopsis creates a one-time setup token at
-every start and writes it to its log. Only someone with access to the log can
-create the first administrator.
+While no administrator exists, Scanopsis writes a one-time setup token to its
+log at every start. Only someone who can read the log can create the first
+administrator.
 
 ```sh
 docker compose logs scanopsis | grep setup_token
 ```
 
-Expected result: one line with the setup URL and the token.
+You see one line with the setup URL and the token:
 
 ```text
-scanopsis-1  | {"time":"2026-11-19T03:57:06.39732871Z","level":"WARN","msg":"no administrator exists yet: open Scanopsis in a browser to finish the setup","setup_url":"http://localhost:8080/setup","setup_token":"-wwBGkQ1w6f51nnvXGekSLporF2mi9Yd5DbrgV36kME"}
+scanopsis-1  | {"time":"2026-11-22T11:11:28.675727763Z","level":"WARN","msg":"no administrator exists yet: open Scanopsis in a browser to finish the setup","setup_url":"http://localhost:8080/setup","setup_token":"zkMcwZId2nNg2LvQdmhBJYosolvDMUAFJ3AjUYADDcw"}
 ```
 
 Copy the value of `setup_token`. If the container restarted, use the last
 line: only the token from the latest start works.
 
-If the command prints nothing, an administrator already exists and the setup
-is done. Go to [step 8](#step-8-sign-in-again) to sign in.
+If the command prints nothing, an administrator already exists. Go to
+[step 8](#step-8-sign-in-again).
 
 ## Step 7. Complete the setup in the browser
 
-1. Open the `setup_url` from the log. You see the page **Set up Scanopsis**.
+1. Open the `setup_url` from the log. You see **Set up Scanopsis**.
 2. Fill in the form:
    - **Setup token**: the token from step 6.
    - **Username**: for example `root`. This becomes a local account with the
      admin role.
    - **Password** and **Confirm password**: at least 12 characters, not the
      same as the username, and not one character repeated.
-3. Select **Create administrator**.
-
-   Expected result: the page **Set up two-factor sign-in** opens. You are
-   signed in, but you cannot use the application until you finish the
-   two-factor enrolment in the next steps.
-
-4. Open your authenticator app, add an account, and scan the QR code. If you
-   cannot scan it, enter the secret shown under the code. Select **Next**.
-5. Enter the 6-digit code that the app shows and select **Confirm**. A code
-   changes every 30 seconds, so enter it before it changes.
-
-   Expected result: the page **Save your recovery codes** shows 10 codes.
-
+3. Select **Create administrator**. The page **Set up two-factor sign-in**
+   opens. You are signed in, but you cannot use Scanopsis until you finish
+   the next steps.
+4. In your authenticator app, add an account and scan the QR code. If you
+   cannot scan it, type the secret shown under the code. Select **Next**.
+5. Enter the 6-digit code from the app and select **Confirm**. A code changes
+   every 30 seconds, so be quick. The page **Save your recovery codes** shows
+   10 codes.
 6. Store the recovery codes in a password manager or another safe place. Use
-   **Copy all** or **Download as text file**. Each code works once, in place
-   of an app code, and they are shown only now.
-7. Select **I have saved these codes**, then **Continue**.
-
-   Expected result: you land on the home page and see **Users** and
-   **Settings** in the navigation bar.
+   **Copy all** or **Download as text file**. Each code works once, in place of
+   an app code, and you see them only now.
+7. Select **I have saved these codes**, then **Continue**. You land on the home
+   page and see **Users** and **Settings** in the navigation bar.
 
 If this step fails:
 
-| Symptom | Likely cause and fix |
-|---|---|
-| The browser cannot open the setup URL | The host name in `SCANOPSIS_PUBLIC_URL` does not resolve, or the reverse proxy is not in place. For a trial, set `SCANOPSIS_PUBLIC_URL=http://localhost:8080` in `.env` and run `docker compose up -d`. Then read the new setup URL and token from the log. |
-| "The setup token is not correct" | You copied an old token, or part of it. Scanopsis creates a new token at every start. Copy the last `setup_token` from the log. |
-| "The password must be at least 12 characters long" or another password message | Choose a password that meets the rules in step 7. |
-| "Too many sign-in attempts. Wait N seconds" | The setup form allows 5 attempts at once, then one every 12 seconds, for each client address. Wait and try again. |
-| "That code is not correct" while confirming two-factor | The app code expired or the host clock is wrong. Wait for the next code. If it keeps failing, check the time on the host with `date` and on your phone. |
-| "Too many wrong codes. Ask an administrator to reset two-factor authentication." | Ten wrong codes in a row locked the account. Another administrator resets its two-factor authentication on the **Users** page, or you run `scanopsis admin reset-2fa local:<username>` on the host. See [operations](operations.md#reset-two-factor-authentication). |
-| You closed the browser before saving the recovery codes | Sign in again. Scanopsis asks you to enrol again only if you did not confirm a code. If you did confirm one, you can reset your own two-factor authentication on the **Users** page, or with the command in [operations](operations.md#reset-two-factor-authentication). |
+| Symptom | Cause and fix |
+| --- | --- |
+| The browser cannot open the setup URL | The host name in `SCANOPSIS_PUBLIC_URL` does not resolve, or the reverse proxy is not in place yet. For a trial, set `SCANOPSIS_PUBLIC_URL=http://localhost:8080` in `.env`, run `docker compose up -d`, and read the new setup URL and token from the log. |
+| "The setup token is not correct. Copy it again from the server log." | You copied an old token, or part of it. Scanopsis makes a new token at every start. Copy the last `setup_token` from the log. |
+| "The password must be at least 12 characters long." or another password message | Choose a password that meets the rules in item 2. |
+| "Too many sign-in attempts. Wait N seconds and try again." | The setup form allows 5 attempts at once, then one every 12 seconds, per client address. Wait and try again. |
+| "That code is not correct. Wait for a new one in the app and try again." | The code expired, or the clock on the host or the phone is wrong. Wait for the next code. If it keeps failing, compare the time on the host (`date`) with your phone. |
+| "Too many wrong codes. Ask an administrator to reset two-factor authentication." | Ten wrong codes in a row locked the account. Run `scanopsis admin reset-2fa local:<username>` on the host, as the [operations guide](operations.md) shows under "Reset two-factor authentication". |
+| You closed the browser before saving the recovery codes | Sign in again. If you had not confirmed a code yet, Scanopsis starts the enrolment again. If you had, reset your own two-factor authentication on the **Users** page or with the command above, then enrol again. |
 
-You can also complete the setup without a browser, which is useful for
-automation. The setup endpoint is `POST /api/v1/setup` with a JSON body that
-has `token`, `username` and `password`. It answers `204` and starts a session.
-The browser path above is the supported one.
+You can also finish the setup without a browser, for automation:
+`POST /api/v1/setup` with a JSON body that has `token`, `username` and
+`password` answers `204` and starts a session. The browser path is the
+supported one.
 
 ## Step 8. Sign in again
 
 1. Sign out with the button in the navigation bar.
-2. Open the sign-in page, enter your username and password, and select **Sign
-   in**.
-3. Enter the 6-digit code from the app on the page **Enter your code**.
+2. On the sign-in page, enter your username and password and select
+   **Sign in**.
+3. On **Enter your code**, enter the 6-digit code from the app.
 
-Expected result: you see the home page again.
+You are back on the home page.
 
-If you lost the phone, select **Use a recovery code** and enter one of the
-codes you saved. A recovery code works once.
+Lost your phone? Select **Use a recovery code** and enter one of the codes you
+saved. Each works once.
 
-Ten wrong codes in a row, authenticator or recovery codes together, lock
-two-factor sign-in for that account. Scanopsis then signs the account out
-everywhere and answers "Too many wrong codes. Ask an administrator to reset
-two-factor authentication." Even the correct code is refused until an
-administrator resets two-factor authentication on the **Users** page or with
-`scanopsis admin reset-2fa`. A password reset with `scanopsis admin
-reset-password` lifts the lock too. A correct code before the tenth wrong one
-sets the count back to zero.
+Ten wrong codes in a row (app and recovery codes together) lock two-factor
+sign-in for the account. Scanopsis signs the account out everywhere and
+refuses even the correct code until an administrator resets two-factor
+authentication on the **Users** page or with `scanopsis admin reset-2fa`.
+A password reset with `scanopsis admin reset-password` lifts the lock too.
+A correct code before the tenth wrong one sets the count back to zero.
 
-If sign-in fails, see [recovering access](operations.md#recovering-access-when-locked-out).
+If you are locked out, the [operations guide](operations.md) explains how to
+recover access.
 
 ## Next steps
 
 1. Put a reverse proxy with TLS in front of `127.0.0.1:8080` and set
-   `SCANOPSIS_PUBLIC_URL` to its HTTPS address. See
-   [reverse proxy and TLS](deployment.md#reverse-proxy-and-tls) and the
-   [host settings](deployment.md#host-settings) (restart after a reboot, log
-   rotation, time zone, limits).
-2. Let your colleagues sign in with GitLab. See the
+   `SCANOPSIS_PUBLIC_URL` to its HTTPS address. The
+   [deployment guide](deployment.md) has proxy examples and host settings
+   (restart after a reboot, log rotation, time zone, limits).
+2. Let pipelines upload their Trivy reports:
+   [upload Trivy reports from GitLab CI](integrations/gitlab-ci.md).
+3. Connect SonarQube: [SonarQube guide](integrations/sonarqube.md).
+4. Let your colleagues sign in with GitLab:
    [GitLab sign-in guide](integrations/gitlab-sso.md).
-3. Learn what every setting does in the
-   [configuration reference](configuration.md).
-4. Set up backups and learn the administration commands in
-   [operations](operations.md).
-5. Once services exist, choose the branch each dashboard shows. See
-   [choose the dashboard branch](operations.md#choose-the-dashboard-branch-of-a-service).
+5. Set up backups and learn the administration commands in the
+   [operations guide](operations.md). Once services exist, choose the branch
+   each dashboard shows there too.
+6. Look up any setting in the [configuration reference](configuration.md).
+
+---
+
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)

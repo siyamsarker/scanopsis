@@ -1,328 +1,340 @@
-# Configuration
+# Configuration reference
 
-This page describes every way to configure Scanopsis. It is the reference you
-use after the [getting started guide](getting-started.md).
+This page lists every setting of Scanopsis: what it does, its default, and how to change it. Use it after the [getting started guide](getting-started.md), whenever you need to look something up.
+
+**Audience:** Operators · **Back to:** [README](../README.md) · [All guides](../README.md#documentation)
+
+---
 
 ## Two kinds of settings
 
-Scanopsis has two kinds of settings.
+**Environment settings** configure the process: where it listens, which
+database it uses, how it logs. You set them as environment variables; in the
+Compose deployment they live in `.env` and in the secret files. Scanopsis
+reads them once at start, so restart the container after a change
+(`docker compose up -d`).
 
-**Environment-only settings** configure the process: where it listens, which
-database it uses, how it logs. You set them as environment variables. In the
-Compose deployment they live in `.env` and in the secret files. They are read
-once at start, so you restart the container to change them.
+**Runtime settings** configure what administrators change while the server
+runs: GitLab sign-in, local sign-in, session timeouts, scan uploads,
+SonarQube and data retention. You change them on the **Settings** page, which
+only administrators see. A change applies without a restart.
 
-**Runtime settings** configure behaviour that administrators change while the
-server runs: GitLab sign-in, local sign-in and session timeouts. You change
-them on the **Settings** page, which is visible to administrators only.
-Changes apply to the next request, without a restart.
+Every runtime setting also has an environment variable, but that variable
+only **seeds** it:
 
-Every runtime setting also has an environment variable. The variable only
-**seeds** the setting:
-
-1. At start, for each runtime setting that has an environment variable set and
-   no saved value, Scanopsis saves the environment value in the database.
-2. From then on, the saved value is the source of truth. Changing or removing
-   the environment variable has no effect on a setting that is already saved.
-3. If you change a setting on the Settings page, the new value replaces the
-   saved one.
-4. If you select **Reset to environment or default** and save, the saved value
-   is deleted. The setting then falls back to the environment variable if it
-   is set, and to the default otherwise.
+1. At start, Scanopsis saves the environment value of each runtime setting
+   that has no saved value yet.
+2. From then on, the saved value wins. Changing or removing the variable has
+   no effect on a setting that is already saved.
+3. A change on the Settings page replaces the saved value.
+4. **Reset to environment or default**, then save, deletes the saved value.
+   The setting falls back to the variable if it is set, else to the default.
 
 The Settings page shows where each value comes from:
 
-| Source label | Meaning |
-|---|---|
-| Default | No value is saved and no environment variable is set. The built-in default applies. |
-| Environment | The value came from the environment variable and nobody has changed it on the Settings page. |
-| Set here | An administrator saved the value on the Settings page. The page shows who changed it and when. |
+| Source | Meaning |
+| --- | --- |
+| Default | Nothing is saved and no variable is set. The built-in default applies. |
+| Environment | The value came from the variable and nobody changed it on the Settings page. |
+| Set here | An administrator saved it on the Settings page. The page shows who and when. |
 
-Use the environment to set up a new deployment from a file. Use the Settings
-page for everything after that.
+In short: use the environment to set up a new deployment from a file, and the
+Settings page for everything after that.
 
-## Environment-only settings
+## Environment settings
 
 All variables start with `SCANOPSIS_`. An empty value counts as not set.
 
-| Variable | Type | Default | Example | Effect and validation |
-|---|---|---|---|---|
-| `SCANOPSIS_DATABASE_URL` | secret | none, required | `postgres://scanopsis:pw@db:5432/scanopsis?sslmode=disable` | PostgreSQL connection URL. Scanopsis creates and updates its tables at start. Use `SCANOPSIS_DATABASE_URL_FILE` instead in the Compose deployment. |
-| `SCANOPSIS_LISTEN_ADDR` | `host:port` | `:8080` | `:8080` | Address the server listens on. The image health check reads the port from this variable. An address that cannot be bound stops the server at start. |
-| `SCANOPSIS_PUBLIC_URL` | URL | none, required | `https://scanopsis.example.com` | The address users and GitLab use to reach Scanopsis. Must be an absolute `http` or `https` URL with no path, query, fragment or credentials. A port is allowed (`https://scanopsis.example.com:8443`). A trailing slash is removed. Scanopsis must be served at the root of its own host name: sub-paths such as `https://example.com/scanopsis` are not supported. With `https`, session cookies get the `Secure` attribute and the server sends `Strict-Transport-Security`. The GitLab redirect URI is this URL plus `/api/v1/auth/gitlab/callback`. |
-| `SCANOPSIS_TRUSTED_PROXIES` | list | empty | `172.18.0.1,10.0.0.0/8` | Comma-separated IP addresses or CIDR ranges of reverse proxies. Scanopsis believes `X-Forwarded-For` only when the request comes from one of them. An entry that is not an address or range stops the server at start. See [reverse proxy and TLS](#reverse-proxy-and-tls). |
-| `SCANOPSIS_CA_FILE` | path | empty | `/etc/scanopsis/ca.pem` | A PEM file with certificate authorities to trust in addition to the system roots when Scanopsis connects to GitLab and to SonarQube (both use the same HTTP client). It does not apply to the database connection, see [use an existing PostgreSQL](deployment.md#use-an-existing-postgresql). The file must exist and contain at least one certificate, otherwise the server stops at start. |
-| `SCANOPSIS_LOG_LEVEL` | text | `info` | `debug` | Log verbosity: `debug`, `info`, `warn` or `error`. |
-| `SCANOPSIS_SECRET_KEY` | secret | none, required | output of `openssl rand -base64 32` | Base64 encoding of exactly 32 random bytes. Encrypts secrets in the database. Use `SCANOPSIS_SECRET_KEY_FILE` instead in the Compose deployment. See [the secret key](#the-secret-key). |
+| Variable | Default | Example | What it does |
+| --- | --- | --- | --- |
+| `SCANOPSIS_DATABASE_URL` | required | `postgres://scanopsis:pw@db:5432/scanopsis?sslmode=disable` | PostgreSQL connection URL. Scanopsis creates and updates its tables at start. Compose uses the file variant instead, see [file variants](#file-variants-and-docker-secrets). |
+| `SCANOPSIS_SECRET_KEY` | required | output of `openssl rand -base64 32` | Base64 of exactly 32 random bytes. Encrypts secrets in the database. Compose uses the file variant. See [the secret key](#the-secret-key). |
+| `SCANOPSIS_PUBLIC_URL` | required | `https://scanopsis.example.com` | The address users and pipelines use to reach Scanopsis. See the rules below. |
+| `SCANOPSIS_LISTEN_ADDR` | `:8080` | `:8080` | The address the server listens on. The image health check reads the port from it. |
+| `SCANOPSIS_TRUSTED_PROXIES` | empty | `172.18.0.1,10.0.0.0/8` | Reverse proxies whose `X-Forwarded-For` header Scanopsis believes: a comma-separated list of IP addresses or CIDR ranges. See [trust your reverse proxy](#trust-your-reverse-proxy). |
+| `SCANOPSIS_CA_FILE` | empty | `/etc/scanopsis/ca.pem` | A PEM file with extra certificate authorities to trust for GitLab and SonarQube. See [outgoing TLS connections](#outgoing-tls-connections). |
+| `SCANOPSIS_LOG_LEVEL` | `info` | `debug` | Log detail: `debug`, `info`, `warn` or `error`. |
 
-The database URL, the secret key, the GitLab client secret, the SonarQube
-token and the SonarQube webhook secret can also be given as files. See [file variants and Docker secrets](#file-variants-and-docker-secrets).
+`SCANOPSIS_PUBLIC_URL` must be an absolute `http` or `https` URL without a
+path, query, fragment or credentials. A port is fine
+(`https://scanopsis.example.com:8443`), and a trailing slash is removed.
+Scanopsis must run at the root of its own host name: a sub-path such as
+`https://example.com/scanopsis` does not work. With `https`, cookies get the
+`Secure` flag and the server sends `Strict-Transport-Security`. The GitLab
+redirect URI is this URL plus `/api/v1/auth/gitlab/callback`.
 
-### Database URL parameters
+The Compose deployment also reads `SCANOPSIS_IMAGE` (required: the image to
+run), `SCANOPSIS_BIND` and `SCANOPSIS_PORT` (where the port is published,
+default `127.0.0.1` and `8080`) and `TZ` (the time zone of log timestamps,
+default UTC) from `.env`. Scanopsis itself does not read them.
 
-Scanopsis sets three defaults for its connections to PostgreSQL. Put the
-parameter in the database URL to change one.
-
-| Parameter | Default | Example | Effect |
-|---|---|---|---|
-| `pool_max_conns` | `16` | `?pool_max_conns=32` | The most connections one Scanopsis process opens. It also limits how many API requests are served at once: further requests wait up to 3 seconds for a slot and are then answered `503 busy`. Raise it only with enough `max_connections` on the database (the process needs one more for the readiness probe; keep a few spare for backups and administration). |
-| `jit` | `off` | `?jit=on` | PostgreSQL's just-in-time compilation. Scanopsis turns it off: its statements are short, and the estimate for the vulnerability search made PostgreSQL spend 250 ms compiling a query that runs in 17 ms. |
-| `statement_timeout` | `30000` (30 seconds, in milliseconds) | `?statement_timeout=60000` | PostgreSQL cancels any statement that runs longer and the request fails with an error. `0` turns the limit off. An `options=-c statement_timeout=...` parameter also counts as a setting. |
-
-Example: `postgres://scanopsis:pw@db:5432/scanopsis?sslmode=disable&pool_max_conns=24`.
-
-Schema migrations ignore `statement_timeout` and the 30-second start-up limit.
-An upgrade can build indexes on large tables, which takes minutes on millions
-of findings. The index builds are concurrent, so scans keep arriving and the
-dashboards keep working while they run. The log shows when each migration
-starts and ends, with its duration. A migration that cannot get a table lock
-within 10 seconds stops the start; the next start continues where it stopped.
+### When a value is wrong
 
 If any variable is invalid, the server does not start. It prints
-`configuration error:` followed by one line for every problem, so you can fix
-them all at once. Example:
+`configuration error:` and one line per problem, so you can fix them all at
+once:
 
 ```text
 configuration error:
 SCANOPSIS_PUBLIC_URL must not contain a path, query, fragment or credentials, got "https://scanopsis.example.com/app"
+SCANOPSIS_TRUSTED_PROXIES contains "foo", which is not an IP address or CIDR range
+SCANOPSIS_SECRET_KEY is not valid (key must be 32 bytes, got 2); generate one with: openssl rand -base64 32
 ```
+
+Run `docker compose logs scanopsis` to see it.
+
+### Database URL parameters
+
+Scanopsis sets three defaults for its database connections. Add the parameter
+to the database URL to change one, for example
+`postgres://scanopsis:pw@db:5432/scanopsis?sslmode=disable&pool_max_conns=24`.
+
+| Parameter | Default | What it does |
+| --- | --- | --- |
+| `pool_max_conns` | `16` | The most connections one Scanopsis process opens. It also caps how many API requests run at once: more requests wait up to 3 seconds for a slot, then get `503 busy`. Raise it only if the database allows enough `max_connections`: Scanopsis needs one more for the readiness probe, and keep a few spare for backups and administration. |
+| `statement_timeout` | `30000` (milliseconds) | PostgreSQL cancels a statement that runs longer, and the request fails. `0` turns the limit off. An `options=-c statement_timeout=...` parameter counts too. |
+| `jit` | `off` | PostgreSQL's just-in-time compilation. Scanopsis turns it off because its statements are short: in one measurement, PostgreSQL spent 250 ms compiling a search query that runs in 17 ms. |
+
+Schema migrations ignore `statement_timeout` and the 30-second start-up limit,
+because an upgrade can build indexes on large tables. The index builds do
+not block writes, so scans keep arriving while they run. The log shows when
+each migration starts and ends. A migration that cannot get a table lock
+within 10 seconds stops the start; the next start continues where it stopped.
 
 ## Runtime settings
 
-The columns show the key as it appears on the Settings page, the variable that
-seeds it, the type, the default and the rules. The value is validated when you
-save it, and the whole change is rejected, with nothing saved, if any value is
-invalid. A saved change is recorded in the audit log as `settings.changed`,
-with the value before and after for each setting, or, for a secret, only that
-it changed.
+The key is the name on the Settings page. Every value is checked when you
+save, and if one is invalid, nothing is saved. Each saved change is recorded
+in the audit log as `settings.changed`, with the old and new value of each
+setting (for a secret, only that it changed).
 
-| Key | Seeding variable | Type | Default | Example | Effect and validation |
-|---|---|---|---|---|---|
-| `gitlab.url` | `SCANOPSIS_GITLAB_URL` | URL | empty | `https://gitlab.example.com` | Base URL of the GitLab instance. Also the OpenID Connect issuer and the issuer of CI job tokens: set it to accept scan uploads, even without GitLab sign-in. Same rules as the public URL: absolute `http` or `https`, no path, query, fragment or credentials. GitLab users are tied to this URL: after a change, GitLab users sign in as new viewers, see [GitLab users and the GitLab URL](operations.md#gitlab-users-and-the-gitlab-url). |
-| `gitlab.client_id` | `SCANOPSIS_GITLAB_CLIENT_ID` | text | empty | `d4c3...` | Application ID of the GitLab OAuth application. |
-| `gitlab.client_secret` | `SCANOPSIS_GITLAB_CLIENT_SECRET` | secret | not set | | Secret of the GitLab OAuth application. Stored encrypted and never shown again. It cannot be empty; reset it instead. |
-| `gitlab.allowed_groups` | `SCANOPSIS_GITLAB_ALLOWED_GROUPS` | list | empty | `platform,security/appsec` | GitLab groups, by full path, whose members may sign in. Empty allows every GitLab user. Each path must not be empty, must not start or end with `/` and must not contain spaces. In the environment, separate entries with commas. On the Settings page, write one entry per line. See the [GitLab sign-in guide](integrations/gitlab-sso.md#allowed-groups). |
-| `auth.local_login_enabled` | `SCANOPSIS_LOCAL_LOGIN_ENABLED` | boolean | `true` | `false` | Whether users can sign in with a local username and password. In the environment, use `true`, `false`, `1` or `0`. |
-| `session.idle_timeout` | `SCANOPSIS_SESSION_IDLE_TIMEOUT` | duration | `30m` | `15m` | How long a session may stay unused before the user must sign in again. At least `5m`. |
-| `session.absolute_timeout` | `SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT` | duration | `12h` | `8h` | Maximum lifetime of a session, however active. Not shorter than the idle timeout. |
-| `ingest.allowed_namespaces` | `SCANOPSIS_INGEST_ALLOWED_NAMESPACES` | list | empty | `platform,security` | GitLab groups, by full path, whose projects may upload scan reports; projects in subgroups are included. Empty accepts every project whose CI job token is valid. Same path rules as the allowed groups. See the [GitLab CI guide](integrations/gitlab-ci.md). |
-| `ingest.protected_refs_only` | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | boolean | `false` | `true` | Accept scan reports only from pipelines on protected branches and tags (the token's `ref_protected` claim). |
-| `sonar.url` | `SCANOPSIS_SONAR_URL` | URL | empty | `https://sonarqube.example.com` | Base URL of the SonarQube server. Same rules as the GitLab URL. Prefer `https`: the token is sent with every request. See the [SonarQube guide](integrations/sonarqube.md). |
-| `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | secret | not set | | Token of a SonarQube user with Browse permission on the projects. Stored encrypted and never shown again. |
-| `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | secret | not set | | Secret of the SonarQube webhook. Deliveries without a valid signature are rejected. Stored encrypted and never shown again. |
-| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | duration | `15m` | `5m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. |
-| `retention.days` | `SCANOPSIS_RETENTION_DAYS` | integer | `90` | `180` | How many days scan history, SonarQube analyses and SonarQube deliveries are kept. A whole number from `7` to `3650`. The latest scans of the branch a service's dashboards show and of protected branches and tags, and the latest analysis of every service, are kept however old they are. The latest scan of any other branch expires too. See [data retention](operations.md#data-retention). |
+### GitLab and sign-in
 
-Durations are written with units, such as `30m`, `8h` or `1h30m`. Integers are
-written as plain whole numbers, such as `90`; a value with a fraction, with
-units or outside the range is rejected.
+| Key | Seeding variable | Default | What it does |
+| --- | --- | --- | --- |
+| `gitlab.url` | `SCANOPSIS_GITLAB_URL` | empty | Base URL of your GitLab, for example `https://gitlab.example.com`. Scanopsis uses it to verify CI job tokens and for GitLab sign-in, so set it even if you only want scan uploads. Same URL rules as the public URL. GitLab users are tied to this URL: after a change, they sign in as new viewers. |
+| `gitlab.client_id` | `SCANOPSIS_GITLAB_CLIENT_ID` | empty | Application ID of the GitLab OAuth application. |
+| `gitlab.client_secret` | `SCANOPSIS_GITLAB_CLIENT_SECRET` | not set | Secret of the GitLab OAuth application. Stored encrypted and never shown again. It cannot be empty; reset it instead. |
+| `gitlab.allowed_groups` | `SCANOPSIS_GITLAB_ALLOWED_GROUPS` | empty | GitLab groups, by full path, whose members may sign in, for example `platform,security/appsec`. Empty lets every GitLab user in. |
+| `auth.local_login_enabled` | `SCANOPSIS_LOCAL_LOGIN_ENABLED` | `true` | Whether users can sign in with a local username and password. In the environment, write `true` or `false` (`1` and `0` work too). |
+| `session.idle_timeout` | `SCANOPSIS_SESSION_IDLE_TIMEOUT` | `30m` | How long a session may stay unused before the user signs in again. At least `5m`. |
+| `session.absolute_timeout` | `SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT` | `12h` | The longest a session lives, however active. Not shorter than the idle timeout. |
+
+The [GitLab sign-in guide](integrations/gitlab-sso.md) walks you through
+these settings.
+
+### Scan uploads
+
+| Key | Seeding variable | Default | What it does |
+| --- | --- | --- | --- |
+| `ingest.allowed_namespaces` | `SCANOPSIS_INGEST_ALLOWED_NAMESPACES` | empty | GitLab groups, by full path, whose projects may upload Trivy reports; subgroups are included. Empty accepts every project with a valid CI job token. |
+| `ingest.protected_refs_only` | `SCANOPSIS_INGEST_PROTECTED_REFS_ONLY` | `false` | Accept reports only from pipelines on protected branches and tags. |
+
+The [GitLab CI guide](integrations/gitlab-ci.md) shows the pipeline side.
+
+### SonarQube
+
+| Key | Seeding variable | Default | What it does |
+| --- | --- | --- | --- |
+| `sonar.url` | `SCANOPSIS_SONAR_URL` | empty | Base URL of your SonarQube server. Same URL rules as the GitLab URL. Prefer `https`: the token travels with every request. |
+| `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | not set | Token of a SonarQube user with Browse permission on the projects. Stored encrypted and never shown again. |
+| `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | not set | Secret of the SonarQube webhook. Deliveries without a valid signature are rejected. Stored encrypted and never shown again. |
+| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | `15m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. |
+
+The [SonarQube guide](integrations/sonarqube.md) shows how to connect it.
+
+### Data retention
+
+| Key | Seeding variable | Default | What it does |
+| --- | --- | --- | --- |
+| `retention.days` | `SCANOPSIS_RETENTION_DAYS` | `90` | How many days scan history, SonarQube analyses and SonarQube deliveries are kept: a whole number from `7` to `3650`. The latest scans of the branch a service's dashboards show and of protected branches and tags, and the latest analysis of every service, are kept however old they are. |
+
+The [operations guide](operations.md) explains data retention in full.
+
+### How to write values
+
+- **Durations** have units: `30m`, `8h`, `1h30m`.
+- **Whole numbers** are plain: `90`. A fraction, a unit or a value outside the
+  range is rejected.
+- **Lists** in the environment are comma-separated. On the Settings page, write
+  one entry per line. A group path must not be empty, must not start or end
+  with `/`, and must not contain spaces.
 
 ### Rules that span several settings
 
-Scanopsis checks these rules every time you save on the Settings page. At
-start it checks only the GitLab rule and the two session rules, and only for
-values that come from the environment. It does not check the local sign-in
-rule at start. See the warning below.
+The Settings page checks these rules every time you save, and shows the
+message next to the field:
 
-- The GitLab URL alone is valid: it is enough to accept scan uploads. GitLab
-  sign-in additionally needs the client ID and the client secret; if you set
-  one of these two, you must set the URL and the other one. Otherwise the page
-  shows "Required when other GitLab sign-in settings are set." next to the
-  missing field.
-- The SonarQube integration needs the URL and the token together; the
-  webhook secret needs both. Otherwise the page shows "Required when other
-  SonarQube settings are set." The sync interval is at least one minute
-  ("Must be at least 1m.").
-- When you change the GitLab URL while a client secret is stored, or the
-  SonarQube URL while a token is stored, enter the client secret or the token
-  again in the same save. Scanopsis sends these values to the URL, so it never
-  sends a stored one to a new address. Otherwise the page shows "Enter this
-  value again when you change the URL, so the stored one is never sent to a
-  new address." next to the secret.
-- Local sign-in cannot be disabled unless GitLab sign-in is fully configured.
-  The page shows "Local sign-in can be disabled only when GitLab sign-in is
-  fully configured." This rule prevents you from locking everyone out.
-- The idle timeout is at least five minutes. The page shows "Must be at least
-  5m."
-- The absolute timeout is not shorter than the idle timeout. The page shows
-  "Must not be shorter than the idle timeout."
-- The retention period is a whole number of days from 7 to 3650. The page
-  shows "Must be a whole number from 7 to 3650." In the environment, an invalid
-  `SCANOPSIS_RETENTION_DAYS` stops the server at start with the same range in
-  the message.
+| Rule | Message on the Settings page |
+| --- | --- |
+| The GitLab URL alone is enough for scan uploads. GitLab sign-in also needs the client ID and secret: set one of them and you must set the URL and the other one. | "Required when other GitLab sign-in settings are set." |
+| SonarQube needs the URL and the token together. The webhook secret needs both. | "Required when other SonarQube settings are set." |
+| The sync interval is at least one minute. | "Must be at least 1m." |
+| When you change the GitLab URL while a client secret is stored, or the SonarQube URL while a token is stored, type the secret again in the same save. Scanopsis never sends a stored secret to a new address. | "Enter this value again when you change the URL, so the stored one is never sent to a new address." |
+| Local sign-in can be off only while GitLab sign-in is fully set up, so nobody is locked out. | "Local sign-in can be disabled only when GitLab sign-in is fully configured." |
+| The idle timeout is at least five minutes. | "Must be at least 5m." |
+| The absolute timeout is not shorter than the idle timeout. | "Must not be shorter than the idle timeout." |
+| The retention period is a whole number of days from 7 to 3650. | "Must be a whole number from 7 to 3650." |
 
-If GitLab sign-in is not fully configured, Scanopsis does not offer it on the
-sign-in page and does not contact GitLab.
+At start, Scanopsis checks the environment values against the GitLab,
+SonarQube, session, retention and local sign-in rules, and refuses to start
+when one is broken. Until GitLab sign-in is fully set up, the sign-in page
+does not offer it and Scanopsis does not contact GitLab for sign-in.
 
-> **Note:** local sign-in can only be off while GitLab sign-in is fully
-> configured. If the settings at start would leave no way to sign in (for
-> example `SCANOPSIS_LOCAL_LOGIN_ENABLED=false` without GitLab sign-in), the
-> server does not start and its log names the fix:
+> **Do not lock yourself out.** If the settings at start would leave no way to
+> sign in, for example `SCANOPSIS_LOCAL_LOGIN_ENABLED=false` without GitLab
+> sign-in, the server does not start and its log names the fix:
 >
 > ```text
 > local sign-in is disabled but GitLab sign-in is not fully configured, so nobody could sign in: remove SCANOPSIS_LOCAL_LOGIN_ENABLED=false from the environment, or configure GitLab sign-in, then start again
 > ```
 >
-> If you turn local sign-in off and GitLab later stops working (GitLab is
-> down, or the client secret is wrong), nobody can sign in. To recover, see [recovering access](operations.md#recovering-access-when-locked-out).
+> If local sign-in is off and GitLab later stops working (GitLab is down, or
+> the client secret is wrong), nobody can sign in. The
+> [operations guide](operations.md) explains how to recover access.
 
-### When changes apply
+### When a change takes effect
 
-- GitLab settings and the local sign-in switch apply to the next request.
-- The idle timeout applies at the next request of every session, including
-  sessions that already exist.
-- The absolute timeout is fixed when a session starts. A change affects
-  sessions that start afterwards.
-- The retention period is read at the start of each cleanup run, so a change
-  applies from the next run. It does not start a run. See
-  [data retention](operations.md#data-retention).
+- GitLab settings and the local sign-in switch: at the next request.
+- The idle timeout: at the next request of every session, including existing
+  ones.
+- The absolute timeout: for sessions that start after the change. It is fixed
+  when a session starts.
+- The retention period: at the next cleanup run. Saving it does not start a
+  run.
 
-The defaults, 30 minutes idle and 12 hours in total, follow the session
-timeouts of OWASP ASVS level 2. The session cookie has no expiry date of its
-own: the browser deletes it when it closes, and the server ends the session
-after either timeout even if the browser stays open. In version 0.1.0 the
-defaults were 8 hours and 24 hours. A database that already stores a value
-for either setting (one saved on the Settings page or seeded from the
-environment on the first start) keeps it; reset the setting on the Settings
-page to use the new default.
+The session defaults, 30 minutes idle and 12 hours in total, follow OWASP ASVS
+level 2. The session cookie has no expiry date of its own: the browser deletes
+it when it closes, and the server ends the session after either timeout even
+if the browser stays open. Version 0.1.0 used 8 and 24 hours. A database that
+already stores a value for either setting keeps it; reset the setting on the
+Settings page to use the new default.
 
 ## File variants and Docker secrets
 
-Five variables accept a `_FILE` variant. The variant holds the path of a file
-whose content is the value:
+Five variables also accept a `_FILE` variant: the path of a file whose content
+is the value. This keeps secrets out of the environment, `docker inspect` and
+process listings.
 
 | Variable | File variant |
-|---|---|
+| --- | --- |
 | `SCANOPSIS_DATABASE_URL` | `SCANOPSIS_DATABASE_URL_FILE` |
 | `SCANOPSIS_SECRET_KEY` | `SCANOPSIS_SECRET_KEY_FILE` |
 | `SCANOPSIS_GITLAB_CLIENT_SECRET` | `SCANOPSIS_GITLAB_CLIENT_SECRET_FILE` |
 | `SCANOPSIS_SONAR_TOKEN` | `SCANOPSIS_SONAR_TOKEN_FILE` |
 | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | `SCANOPSIS_SONAR_WEBHOOK_SECRET_FILE` |
 
-Rules:
-
-- Set only one of the two. If both are set, the server stops with
-  `SCANOPSIS_DATABASE_URL and SCANOPSIS_DATABASE_URL_FILE are both set; set only one`
-  (and the same for the other two).
+- Set only one of the pair. With both, the server stops with, for example,
+  `SCANOPSIS_DATABASE_URL and SCANOPSIS_DATABASE_URL_FILE are both set; set only one`.
 - Line breaks at the end of the file are removed. Other whitespace is kept.
 - If the file cannot be read, the server stops with `cannot be read` and the
   reason.
 
-The Compose file uses this for the database URL and the secret key, with
-Docker secrets mounted under `/run/secrets`. Docker mounts each secret file
-read-only. The value never appears in `docker inspect`, in the environment or
-in process listings. To seed the GitLab client secret from a file, add a
-fourth secret to `compose.yaml` in the same way and set
-`SCANOPSIS_GITLAB_CLIENT_SECRET_FILE=/run/secrets/gitlab_client_secret`. It
-is simpler to type the secret on the Settings page, where it is stored
-encrypted in the database.
+The Compose file mounts the database URL and the secret key as Docker secrets
+under `/run/secrets`. You can add a secret for the GitLab client secret the
+same way and set
+`SCANOPSIS_GITLAB_CLIENT_SECRET_FILE=/run/secrets/gitlab_client_secret`, but
+typing it on the Settings page is simpler: it is stored encrypted there.
 
 ## The secret key
 
-`SCANOPSIS_SECRET_KEY` is a 32-byte key that Scanopsis uses to encrypt two
-kinds of data in the database:
+`SCANOPSIS_SECRET_KEY` is a 32-byte key that encrypts two kinds of data in the
+database:
 
 - The two-factor (TOTP) secret of every user.
 - The secret settings: the GitLab client secret, the SonarQube token and the
-  SonarQube webhook secret, whether they came from the environment or the
-  Settings page.
+  SonarQube webhook secret, wherever they came from.
 
-Everything else is stored as it is, and passwords are stored as Argon2id
-hashes that do not use the key.
+Passwords are stored as Argon2id hashes and do not use the key. Everything
+else is stored as it is.
 
-Create the key once with `openssl rand -base64 32`. Do not change it
-afterwards.
+Create the key once with `openssl rand -base64 32` and never change it.
 
 ### Back up the key
 
-Back up the key together with your database backups, but store it
-separately. A database backup alone cannot be read without the key. A key
-stored next to the backup protects nothing. Keep a copy in your password
-manager or secrets vault, and write down which backup it belongs to.
+Keep a copy of the key in your password manager or secrets vault, apart from
+your database backups. A database backup cannot be fully used without the
+key, and a key stored next to the backup protects nothing. Note which backup
+the key belongs to.
 
-### What happens if the key is lost or changed
+### If the key is lost or changed
 
-- If a secret setting is saved, the server refuses to start. It logs an error
-  that names the setting, and the container restarts in a loop:
+- If a secret setting is saved, the server refuses to start and restarts in a
+  loop. The log names the setting:
 
   ```text
   setting gitlab.client_secret cannot be decrypted: SCANOPSIS_SECRET_KEY changed or is wrong
   ```
 
-- If no secret setting is saved, the server starts, but every two-factor
-  code fails with a server error, because the stored secrets cannot be
-  decrypted. The log says `cannot decrypt TOTP secret; check SCANOPSIS_SECRET_KEY`.
+- If no secret setting is saved, the server starts, but every two-factor code
+  fails with a server error. The log says
+  `cannot decrypt TOTP secret; check SCANOPSIS_SECRET_KEY`.
 
-### Recovery
+### Recover
 
-1. **Restore the original key.** Put the backed-up key in `secrets/secret_key`
-   and run `docker compose up -d --force-recreate scanopsis`. This is the
-   only way that loses nothing.
-2. **If the key is gone for good,** you must discard the data it protected:
-   1. Delete the saved secret settings. The server cannot start while one of
-      them is unreadable, so remove them in the database:
+1. **Put the original key back.** Copy it into `secrets/secret_key` and run
+   `docker compose up -d --force-recreate scanopsis`. This is the only way
+   that loses nothing.
+2. **If the key is gone for good,** discard the data it protected:
+   1. Delete the saved secret settings, because the server cannot start while
+      one of them is unreadable:
 
       ```sh
       docker compose exec db psql -U scanopsis -d scanopsis \
         -c "DELETE FROM settings WHERE secret_enc IS NOT NULL"
       ```
 
-   2. Put the new key in `secrets/secret_key` and start the server with
+   2. Put a new key in `secrets/secret_key` and run
       `docker compose up -d --force-recreate scanopsis`.
-   3. Reset two-factor authentication for every local and GitLab user with
-      the [administration command](operations.md#reset-two-factor-authentication),
-      one account at a time. Each user enrols again at the next sign-in.
-   4. Sign in as the local administrator, enrol two-factor authentication
-      again, and enter the GitLab client secret, the SonarQube token and the
-      SonarQube webhook secret again on the Settings page. GitLab sign-in and
-      the SonarQube integration stay off until you do. If these values are
-      still set in the environment, the server seeds them again at start
-      instead.
+   3. Reset two-factor authentication for every user, one at a time, with
+      `scanopsis admin reset-2fa` (see the [operations guide](operations.md)).
+      Each user enrols again at the next sign-in.
+   4. Sign in as the local administrator, enrol again, and type the GitLab
+      client secret, the SonarQube token and the SonarQube webhook secret again
+      on the Settings page. GitLab sign-in and SonarQube stay off until you do.
+      If these values are still set in the environment, the server seeds them
+      again at start instead.
 
 ## Rate limits
 
-Scanopsis limits repeated attempts to make password and code guessing slow.
-A limit allows a burst of attempts and then one more attempt at a fixed
-interval. When you exceed it, the server answers `429` with the code
-`too_many_attempts` and a `Retry-After` header, and the page shows "Too many
-sign-in attempts. Wait N seconds and try again."
+Scanopsis slows down password and code guessing. Each limit allows a burst of
+attempts, then one more attempt at a fixed interval. Above the limit, the
+server answers `429` with the code `too_many_attempts` and a `Retry-After`
+header, and the page says "Too many sign-in attempts. Wait N seconds and try
+again."
 
-| Action | Counted for | Burst | Then |
-|---|---|---|---|
-| Local sign-in, every attempt | Client address | 10 | one every 12 seconds (5 per minute) |
-| Local sign-in, failed attempts | Username | 10 | one every 12 seconds |
-| First-run setup | Client address | 5 | one every 12 seconds |
-| Two-factor code and enrolment confirmation | User | 5 | one every 30 seconds |
-| Password change | User | 10 | one every 12 seconds |
+| Action | Counted per | Burst | Then |
+| --- | --- | --- | --- |
+| Local sign-in, every attempt | Client address | 10 | One every 12 seconds |
+| Local sign-in, failed attempts | Username | 10 | One every 12 seconds |
+| First-run setup | Client address | 5 | One every 12 seconds |
+| Two-factor code and enrolment confirmation | User | 5 | One every 30 seconds |
+| Password change | User | 10 | One every 12 seconds |
 
 For sign-in and setup, a client address is an IPv4 address or an IPv6 `/48`
 range, because one client often holds many `/64` ranges. Scan uploads count
-an IPv6 client by its `/64`. The limits are kept in memory, so a restart
-clears them. Each limit keeps at most 10,000 keys with budget left, dropping
-the least recently used one to make room, and sets up to 10,000 keys whose
-budget is spent aside where no flood of other keys can push them out, so
-sending many made-up user names does not give a real one a fresh budget.
+an IPv6 client by its `/64`. The limits live in memory, so a restart clears
+them. Flooding the server with made-up user names does not reset the budget
+of a real one.
 
-Behind a reverse proxy, Scanopsis can tell clients apart only if you set
-`SCANOPSIS_TRUSTED_PROXIES`. Without it, all users share the proxy's address
-and share one limit.
+Behind a reverse proxy, Scanopsis tells clients apart only when you set
+`SCANOPSIS_TRUSTED_PROXIES`. Without it, every user shares the proxy's address
+and one limit.
 
-Two further limits are fixed:
+Two more limits are fixed:
 
 - After a failed attempt to reach GitLab, Scanopsis waits 10 seconds before it
   tries again.
-- The state of a GitLab sign-in is kept in a cookie for 10 minutes. A user who
-  takes longer sees `login_expired`.
+- A GitLab sign-in must finish within 10 minutes. A user who takes longer
+  sees `login_expired`.
 
 ## Outgoing TLS connections
 
-Scanopsis checks the certificate of every server it connects to, which today
-is GitLab. There is no option to turn this check off.
+Scanopsis checks the certificate of GitLab and SonarQube on every connection.
+You cannot turn this check off. If one of them uses a certificate from an
+internal certificate authority:
 
-If your GitLab uses a certificate from an internal certificate authority:
-
-1. Put the CA certificate, in PEM format, in a file, for example `ca.pem` in
-   `deploy/compose`.
+1. Save the CA certificate in PEM format as `ca.pem` in `deploy/compose`.
 2. Add a `compose.override.yaml` next to `compose.yaml`. Compose reads it
    automatically:
 
@@ -336,91 +348,63 @@ If your GitLab uses a certificate from an internal certificate authority:
 3. Set `SCANOPSIS_CA_FILE=/etc/scanopsis/ca.pem` in `.env` and run
    `docker compose up -d`.
 
-The startup log line `scanopsis starting` then shows `"custom_ca":true`. If
-the file is missing, the server stops with `read SCANOPSIS_CA_FILE:` followed
-by the reason. If it holds no certificate, the server stops with
+The log line `scanopsis starting` now shows `"custom_ca":true`. If the file is
+missing, the server stops with `read SCANOPSIS_CA_FILE:` and the reason. If it
+holds no certificate, it stops with
 `SCANOPSIS_CA_FILE /etc/scanopsis/ca.pem contains no PEM certificates`.
 
-## Reverse proxy and TLS
+The CA file does not apply to the database connection. The
+[deployment guide](deployment.md) covers TLS to an existing PostgreSQL.
 
-Scanopsis speaks plain HTTP. In production, put a reverse proxy in front of
-it that terminates TLS, and set `SCANOPSIS_PUBLIC_URL` to the HTTPS address of
-the proxy. Then Scanopsis marks its cookies `Secure` and sends
-`Strict-Transport-Security`.
+## Trust your reverse proxy
 
-The proxy must:
+In production, a reverse proxy in front of Scanopsis terminates TLS. The
+[deployment guide](deployment.md) has tested proxy examples. The proxy must
+pass the `Host` header unchanged and set `X-Forwarded-For` to the client's
+address. Then tell Scanopsis which proxy to believe:
 
-- Forward requests for `https://scanopsis.example.com` to `127.0.0.1:8080` on
-  the Docker host.
-- Set the `X-Forwarded-For` header to the address of the client.
-- Pass the `Host` header and the request path and query unchanged.
+1. Find the address the proxy connects from. With the port that Compose
+   publishes, that is the gateway of the Compose network. Send a request from
+   the Docker host and read the log:
 
-The following nginx server block is an example to adapt. It was not run for
-this guide, and the certificate paths are placeholders.
+   ```sh
+   curl -s http://127.0.0.1:8080/healthz
+   docker compose logs scanopsis | tail -1
+   ```
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name scanopsis.example.com;
-    ssl_certificate     /etc/ssl/scanopsis.example.com.pem;
-    ssl_certificate_key /etc/ssl/scanopsis.example.com.key;
+   Read `client_ip` in the last line, for example `"client_ip":"172.18.0.1"`.
+   Ignore lines with `"client_ip":"127.0.0.1"`: they come from the
+   container's own health check.
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $remote_addr;
-    }
-}
-```
+2. Set it in `.env` and apply it:
 
-### Tell Scanopsis which proxy to trust
+   ```text
+   SCANOPSIS_TRUSTED_PROXIES=172.18.0.1
+   ```
 
-Scanopsis sees the address the proxy connects from, which is not always the
-address of the proxy host. With the published port in this Compose file, the
-connection arrives from the gateway of the Compose network. Find the address by sending a request from the Docker host and reading the
-log:
+   ```sh
+   docker compose up -d
+   ```
 
-```sh
-curl -s http://127.0.0.1:8080/healthz
-docker compose logs scanopsis | tail -1
-```
+   The log line `scanopsis starting` shows `"trusted_proxies":1`.
 
-Read `client_ip` in the last line, for example:
+3. Check with a forwarded address:
 
-```text
-scanopsis-1  | {"time":"2026-11-19T04:08:24.795750469Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.18.0.1"}
-```
+   ```sh
+   curl -s -H 'X-Forwarded-For: 203.0.113.9' http://127.0.0.1:8080/healthz
+   docker compose logs scanopsis | tail -1
+   ```
 
-Lines with `"client_ip":"127.0.0.1"` come from the container's own health check,
-so ignore them. Set the address you found in `.env`:
+   The last log line shows `"client_ip":"203.0.113.9"`. If it still shows the
+   gateway, the address in `SCANOPSIS_TRUSTED_PROXIES` is wrong, or you did
+   not run `docker compose up -d` after editing `.env`.
 
-```text
-SCANOPSIS_TRUSTED_PROXIES=172.18.0.1
-```
+Scanopsis reads `X-Forwarded-For` from right to left and stops at the first
+address that is not a trusted proxy. Entries further left are ignored, because
+clients can forge them. Never trust a range that includes hosts you do not
+control: anyone in it can choose the client address that Scanopsis logs and
+rate-limits.
 
-Run `docker compose up -d`. Scanopsis then reads the client address from
-`X-Forwarded-For` for requests that come from that address. For each
-`X-Forwarded-For` it reads the entries from right to left and stops at the
-first address that is not a trusted proxy. Entries further left are ignored,
-because clients can forge them.
+---
 
-Verify with a request that carries a forwarded address:
-
-```sh
-curl -s -H 'X-Forwarded-For: 203.0.113.9' http://127.0.0.1:8080/healthz
-docker compose logs scanopsis | tail -1
-```
-
-Expected result: the last log line shows `"client_ip":"203.0.113.9"`.
-
-```text
-scanopsis-1  | {"time":"2026-11-19T04:08:30.23870043Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"203.0.113.9"}
-```
-
-If the address is still the gateway, the value in `SCANOPSIS_TRUSTED_PROXIES`
-is wrong, or you did not run `docker compose up -d` after editing `.env`.
-The startup line `scanopsis starting` shows `"trusted_proxies":1` when one
-entry was read.
-
-Do not trust a range that includes untrusted hosts. Anyone in a trusted range
-can choose the client address that Scanopsis logs and rate-limits.
+[Back to the README](../README.md) · [All guides](../README.md#documentation) · Found a mistake? [Open an issue](https://github.com/siyamsarker/scanopsis/issues)
