@@ -1261,13 +1261,17 @@ Type: object
 |---|---|---|---|
 | `base` | [ScanSummary](#scansummary) or null | yes | The scan compared with, as in previous_scan_id. |
 | `fixed` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings, the most severe first. |
+| `fixed_counts` | [SeverityCounts](#severitycounts) | yes | Every fixed finding by its severity in the base scan, listed or not. |
 | `fixed_total` | integer | yes | Number of fixed findings, including any not listed in fixed. |
 | `new` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings, the most severe first. |
+| `new_counts` | [SeverityCounts](#severitycounts) | yes | Every new finding by severity, listed or not. |
 | `new_total` | integer | yes | Number of new findings, including any not listed in new. |
 | `previous_scan_id` | integer or null (int64) | yes | The scan compared with: the base asked for, else the previous scan of the same ref. null when there is none. |
 | `scan_id` | integer (int64) | yes |  |
-| `truncated` | boolean | yes | True when new or fixed lists fewer findings than new_total or fixed_total. |
+| `truncated` | boolean | yes | True when new, fixed or unchanged_items lists fewer findings than new_total, fixed_total or unchanged. |
 | `unchanged` | integer | yes |  |
+| `unchanged_counts` | [SeverityCounts](#severitycounts) | yes | Every unchanged finding by its severity in this scan. |
+| `unchanged_items` | array of [Vulnerability](#vulnerability) | yes | At most 500 findings present in both scans, the most severe first, as reported in this scan. |
 
 ### ScanPage
 
