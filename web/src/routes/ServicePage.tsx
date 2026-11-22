@@ -9,7 +9,7 @@ import { EmptyState, Skeleton } from '../components/states';
 import type { GateState } from '../viz';
 import { useFirstView } from './firstView';
 import { FixFirst } from './service/FixFirst';
-import { previousPipeline } from './service/model';
+import { compareBase } from './service/model';
 import { OpenFindings } from './service/OpenFindings';
 import { SectionError } from './service/parts';
 import { DAY_OPTIONS, PipelinesSection, type Days, type Lanes } from './service/PipelinesSection';
@@ -87,6 +87,11 @@ function BandSkeleton() {
   );
 }
 
+function baseOf(overview: Overview, points: Parameters<typeof compareBase>[1]) {
+  const base = compareBase(overview, points);
+  return { sincePipeline: base.pipeline, firstScan: base.firstScan };
+}
+
 function gateOf(status: string | undefined): GateState | undefined {
   if (status === undefined) return undefined;
   if (status === 'OK') return 'pass';
@@ -147,7 +152,7 @@ function Dashboard({ id }: { id: number }) {
             counts: scanned ? o.counts : null,
             newFindings: o?.new_since_previous ?? 0,
             fixed: o?.fixed_since_previous ?? 0,
-            sincePipeline: o && trends.data ? previousPipeline(o, trends.data.points) : undefined,
+            ...(o && trends.data ? baseOf(o, trends.data.points) : {}),
           }}
         />
       )}

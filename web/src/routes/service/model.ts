@@ -183,9 +183,12 @@ export interface VerdictInput {
   fixed: number;
   /** The pipeline the changes are counted against, when known. */
   sincePipeline?: number;
+  /** Every current image scan is the first of its artifact: nothing to compare with. */
+  firstScan?: boolean;
 }
 
 function changePhrase(input: VerdictInput) {
+  if (input.firstScan) return 'first scan on this branch';
   const since =
     input.sincePipeline !== undefined
       ? `since pipeline #${input.sincePipeline}`
@@ -229,25 +232,37 @@ export function verdictTone(input: Pick<VerdictInput, 'gate' | 'counts'>): Verdi
   return 'ok';
 }
 
+export interface CompareBase {
+  /** The pipeline of the previous scan of the newest image, when the window holds it. */
+  pipeline?: number;
+  /** Every current image scan is the first of its artifact on this branch. */
+  firstScan: boolean;
+}
+
 /**
- * The pipeline the overview's "new since previous" compares against: the
- * pipeline of the previous scan of the newest image artifact, when the
- * trend window still holds it.
+ * What the overview's "new since previous" compares against: the pipeline
+ * of the previous scan of the newest image artifact, or nothing when every
+ * current image scan is the first of its artifact (then every finding is
+ * "new", which says nothing about change).
  */
-export function previousPipeline(
+export function compareBase(
   overview: Pick<Overview, 'artifacts'>,
   trends: TrendPoint[],
-): number | undefined {
+): CompareBase {
   const images = overview.artifacts.filter((a) => a.kind === 'image');
+  const points = images.map((a) => trends.find((p) => p.scan_id === a.id));
+  const firstScan =
+    images.length > 0 && points.every((p) => p !== undefined && p.previous_scan_id === null);
   const newest = images.reduce<(typeof images)[number] | undefined>(
     (best, a) => (!best || a.scanned_at > best.scanned_at ? a : best),
     undefined,
   );
-  if (!newest) return undefined;
-  const point = trends.find((p) => p.scan_id === newest.id);
-  if (!point || point.previous_scan_id == null) return undefined;
-  const previous = trends.find((p) => p.scan_id === point.previous_scan_id);
-  return previous?.gitlab_pipeline_id;
+  const point = newest ? trends.find((p) => p.scan_id === newest.id) : undefined;
+  const previous =
+    point && point.previous_scan_id !== null
+      ? trends.find((p) => p.scan_id === point.previous_scan_id)
+      : undefined;
+  return { pipeline: previous?.gitlab_pipeline_id, firstScan };
 }
 
 /* ---------------------------------------------------------- SonarQube */

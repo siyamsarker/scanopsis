@@ -8,7 +8,7 @@ import {
   measureDelta,
   pipelineKey,
   pipelinePoints,
-  previousPipeline,
+  compareBase,
   scopeOf,
   verdictSentence,
   verdictTone,
@@ -197,10 +197,26 @@ describe('verdict', () => {
         { id: 3, kind: 'image', scanned_at: '2026-11-13T10:00:00Z' },
         { id: 9, kind: 'secret-fs', scanned_at: '2026-11-14T10:00:00Z' },
       ],
-    } as Parameters<typeof previousPipeline>[0];
-    expect(previousPipeline(overview, [point(1), point(2), point(3)])).toBe(802);
-    expect(previousPipeline(overview, [point(3)])).toBeUndefined();
-    expect(previousPipeline({ artifacts: [] }, [point(3)])).toBeUndefined();
+    } as Parameters<typeof compareBase>[0];
+    expect(compareBase(overview, [point(1), point(2), point(3)])).toEqual({
+      pipeline: 802,
+      firstScan: false,
+    });
+    expect(compareBase(overview, [point(3)])).toEqual({ pipeline: undefined, firstScan: false });
+    expect(compareBase({ artifacts: [] }, [point(3)])).toEqual({
+      pipeline: undefined,
+      firstScan: false,
+    });
+    expect(compareBase(overview, [point(3, { previous_scan_id: null })])).toEqual({
+      pipeline: undefined,
+      firstScan: true,
+    });
+  });
+
+  it('says a first scan is the first, not that everything is new', () => {
+    expect(
+      verdictSentence({ counts: counts(2), newFindings: 138, fixed: 0, firstScan: true }),
+    ).toBe('2 critical; first scan on this branch.');
   });
 });
 
