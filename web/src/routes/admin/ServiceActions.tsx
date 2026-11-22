@@ -1,8 +1,8 @@
 // Copyright 2026 The Scanopsis Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { CircleAlert } from 'lucide-react';
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Archive, ArchiveRestore, GitBranch, Pencil, Trash2 } from 'lucide-react';
+import { useId, useRef, useState, type FormEvent } from 'react';
 import {
   useDeleteService,
   useUpdateService,
@@ -10,244 +10,341 @@ import {
   type ServiceUpdate,
 } from '../../api/admin';
 import { describeError } from '../../api/errors';
-import { ConfirmDialog } from '../../components/ConfirmDialog';
-import { inputClass, monoInputClass, secondaryButtonClass } from '../../ui';
+import { ConfirmDialog, Spinner } from '../../components/ConfirmDialog';
+import { Dialog } from '../../components/Dialog';
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from '../../components/Menu';
+import { toast } from '../../components/Toast';
+import { buttonClass, iconButtonClass, inputClass, monoInputClass } from '../../ui';
+import { MoreHorizontal } from 'lucide-react';
+import { Problem } from './kit';
 
 type Mode = 'edit' | 'archive' | 'delete' | null;
 
-const small = `${secondaryButtonClass} min-h-8 px-3 text-sm`;
+const iconProps = { size: 16, strokeWidth: 1.75, 'aria-hidden': true } as const;
 
-function Problem({ children }: { children: ReactNode }) {
-  return (
-    <p role="alert" className="mt-3 flex items-start gap-2 text-text">
-      <CircleAlert
-        size={16}
-        strokeWidth={1.5}
-        aria-hidden="true"
-        className="mt-1 shrink-0 text-fail"
-      />
-      <span>{children}</span>
-    </p>
-  );
-}
-
-/** Edit, archive or unarchive, and delete for one service. */
+/**
+ * The row menu of one service: edit, choose the dashboard branch, archive or
+ * unarchive, and delete. Each action confirms with a toast in the button's words.
+ */
 export function ServiceActions({
   service,
-  onNotice,
+  onChooseBranch,
 }: {
   service: Service;
-  onNotice: (message: string) => void;
+  /** Opens the dashboard branch editor of the row. */
+  onChooseBranch: () => void;
 }) {
   const update = useUpdateService();
-  const remove = useDeleteService();
   const [mode, setMode] = useState<Mode>(null);
-  const [name, setName] = useState(service.name);
-  const [sonar, setSonar] = useState(service.sonar_project_key ?? '');
-  const [typed, setTyped] = useState('');
   const [problem, setProblem] = useState('');
   const trigger = useRef<HTMLButtonElement>(null);
-  const ids = useId();
-
-  function open(next: Mode, button: HTMLButtonElement) {
-    trigger.current = button;
-    setName(service.name);
-    setSonar(service.sonar_project_key ?? '');
-    setTyped('');
-    setProblem('');
-    update.reset();
-    remove.reset();
-    setMode(next);
-  }
+  // Set while the menu closes towards the branch editor, so focus goes there.
+  const toBranch = useRef(false);
 
   function close() {
     setMode(null);
     setProblem('');
   }
 
-  function patch(body: ServiceUpdate, done: string) {
+  function patch(body: ServiceUpdate, title: string, description: string) {
     update.mutate(
       { id: service.id, body },
       {
         onSuccess: () => {
           close();
-          onNotice(done);
+          toast.success(title, { description });
         },
         onError: (error) => {
-          setProblem(describeError(error));
-          onNotice(describeError(error));
+          if (mode) setProblem(describeError(error));
+          else
+            toast.error(`${service.name} could not be changed`, {
+              description: describeError(error),
+            });
         },
       },
     );
   }
 
-  function save() {
-    if (!name.trim()) {
-      setProblem('Enter a name for the service.');
-      return;
-    }
-    // An empty key unlinks the SonarQube project.
-    patch(
-      { name: name.trim(), sonar_project_key: sonar.trim() === '' ? null : sonar.trim() },
-      `Saved ${name.trim()}.`,
-    );
+  function open(next: Mode) {
+    update.reset();
+    setProblem('');
+    setMode(next);
   }
 
-  function confirmDelete() {
-    if (typed !== service.gitlab_project_path) {
+  return (
+    <>
+      <Menu>
+        <MenuTrigger
+          ref={trigger}
+          className={iconButtonClass('ghost', 'sm')}
+          aria-label={`Actions for ${service.name}`}
+        >
+          <MoreHorizontal size={18} strokeWidth={1.75} aria-hidden="true" />
+        </MenuTrigger>
+        <MenuContent
+          onCloseAutoFocus={(event) => {
+            if (toBranch.current) {
+              event.preventDefault();
+              toBranch.current = false;
+            }
+          }}
+        >
+          <MenuItem icon={<Pencil {...iconProps} />} onSelect={() => open('edit')}>
+            Edit
+          </MenuItem>
+          <MenuItem
+            icon={<GitBranch {...iconProps} />}
+            onSelect={() => {
+              toBranch.current = true;
+              onChooseBranch();
+            }}
+          >
+            Choose dashboard branch
+          </MenuItem>
+          <MenuSeparator />
+          {service.archived ? (
+            <MenuItem
+              icon={<ArchiveRestore {...iconProps} />}
+              onSelect={() =>
+                patch(
+                  { archived: false },
+                  'Service unarchived',
+                  `${service.name} accepts uploads again and is back on the portfolio.`,
+                )
+              }
+            >
+              Unarchive
+            </MenuItem>
+          ) : (
+            <MenuItem icon={<Archive {...iconProps} />} onSelect={() => open('archive')}>
+              Archive
+            </MenuItem>
+          )}
+          <MenuItem tone="danger" icon={<Trash2 {...iconProps} />} onSelect={() => open('delete')}>
+            Delete
+          </MenuItem>
+        </MenuContent>
+      </Menu>
+
+      {mode === 'edit' ? (
+        <EditDialog
+          service={service}
+          pending={update.isPending}
+          problem={problem}
+          onCancel={close}
+          onSave={(body) =>
+            patch(body, 'Changes saved', `${body.name ?? service.name} is up to date.`)
+          }
+        />
+      ) : null}
+
+      {mode === 'archive' ? (
+        <ConfirmDialog
+          title={`Archive ${service.name}?`}
+          confirmLabel="Archive service"
+          tone="danger"
+          pending={update.isPending}
+          onConfirm={() =>
+            patch(
+              { archived: true },
+              'Service archived',
+              `${service.name} is off the portfolio and refuses new uploads.`,
+            )
+          }
+          onCancel={close}
+          returnFocusTo={trigger}
+        >
+          <p>
+            {service.name} leaves the portfolio and its pipeline uploads are refused from now on.
+            Its scans and analyses are kept, and you can unarchive it at any time.
+          </p>
+          {problem ? <Problem>{problem}</Problem> : null}
+        </ConfirmDialog>
+      ) : null}
+
+      {mode === 'delete' ? (
+        <DeleteDialog service={service} onDone={close} returnFocusTo={trigger} />
+      ) : null}
+    </>
+  );
+}
+
+function EditDialog({
+  service,
+  pending,
+  problem,
+  onCancel,
+  onSave,
+}: {
+  service: Service;
+  pending: boolean;
+  problem: string;
+  onCancel: () => void;
+  onSave: (body: ServiceUpdate) => void;
+}) {
+  const ids = useId();
+  const [name, setName] = useState(service.name);
+  const [sonar, setSonar] = useState(service.sonar_project_key ?? '');
+  const [nameError, setNameError] = useState('');
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!name.trim()) {
+      setNameError('Enter a name for the service.');
+      return;
+    }
+    setNameError('');
+    // An empty key unlinks the SonarQube project.
+    onSave({ name: name.trim(), sonar_project_key: sonar.trim() === '' ? null : sonar.trim() });
+  }
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !pending) onCancel();
+      }}
+      title={`Edit ${service.name}`}
+      description={
+        <span className="font-mono text-small break-all">{service.gitlab_project_path}</span>
+      }
+      modalStrict
+      footer={
+        <>
+          <button
+            type="button"
+            className={buttonClass('secondary')}
+            onClick={onCancel}
+            disabled={pending}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form={`${ids}-form`}
+            className={buttonClass('primary')}
+            disabled={pending}
+            aria-busy={pending || undefined}
+          >
+            {pending ? <Spinner /> : null}
+            Save changes
+          </button>
+        </>
+      }
+    >
+      <form id={`${ids}-form`} onSubmit={submit} noValidate className="flex flex-col gap-4">
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`${ids}-name`} className="text-body-s font-medium text-text">
+            Name
+          </label>
+          <input
+            id={`${ids}-name`}
+            className={inputClass}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoComplete="off"
+            aria-invalid={nameError ? true : undefined}
+            aria-describedby={nameError ? `${ids}-name-error` : undefined}
+          />
+          {nameError ? <Problem id={`${ids}-name-error`}>{nameError}</Problem> : null}
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={`${ids}-sonar`} className="text-body-s font-medium text-text">
+            SonarQube project key
+          </label>
+          <input
+            id={`${ids}-sonar`}
+            className={monoInputClass}
+            value={sonar}
+            onChange={(e) => setSonar(e.target.value)}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="group:project"
+            aria-describedby={`${ids}-sonar-hint`}
+          />
+          <p id={`${ids}-sonar-hint`} className="text-caption text-text-muted">
+            The key of the project in SonarQube. Leave it empty to unlink.
+          </p>
+        </div>
+        {problem ? <Problem>{problem}</Problem> : null}
+      </form>
+    </Dialog>
+  );
+}
+
+function DeleteDialog({
+  service,
+  onDone,
+  returnFocusTo,
+}: {
+  service: Service;
+  onDone: () => void;
+  returnFocusTo: React.RefObject<HTMLElement | null>;
+}) {
+  const remove = useDeleteService();
+  const ids = useId();
+  const [typed, setTyped] = useState('');
+  const [problem, setProblem] = useState('');
+  const matches = typed.trim() === service.gitlab_project_path;
+
+  function confirm() {
+    if (!matches) {
       setProblem('Type the project path exactly as shown to confirm.');
       return;
     }
     remove.mutate(service.id, {
       onSuccess: () => {
-        close();
-        onNotice(`Deleted ${service.name} and all its scans and analyses.`);
+        onDone();
+        toast.success('Service deleted', {
+          description: `${service.name} and all its scans and analyses are gone.`,
+        });
       },
-      onError: (error) => {
-        setProblem(describeError(error));
-        onNotice(describeError(error));
-      },
+      onError: (error) => setProblem(describeError(error)),
     });
   }
 
-  function onEnter(event: KeyboardEvent) {
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      save();
-    }
-  }
-
   return (
-    <div className="flex flex-wrap gap-2">
-      <button
-        type="button"
-        aria-label={`Edit ${service.name}`}
-        className={small}
-        onClick={(e) => open('edit', e.currentTarget)}
-      >
-        Edit
-      </button>
-      {service.archived ? (
-        <button
-          type="button"
-          aria-label={`Unarchive ${service.name}`}
-          className={small}
-          disabled={update.isPending}
-          onClick={() => patch({ archived: false }, `Unarchived ${service.name}.`)}
-        >
-          Unarchive
-        </button>
-      ) : (
-        <button
-          type="button"
-          aria-label={`Archive ${service.name}`}
-          className={small}
-          onClick={(e) => open('archive', e.currentTarget)}
-        >
-          Archive
-        </button>
-      )}
-      <button
-        type="button"
-        aria-label={`Delete ${service.name}`}
-        className={small}
-        onClick={(e) => open('delete', e.currentTarget)}
-      >
-        Delete
-      </button>
-
-      {mode === 'edit' && (
-        <ConfirmDialog
-          title={`Edit ${service.name}`}
-          confirmLabel="Save"
-          pending={update.isPending}
-          onConfirm={save}
-          onCancel={close}
-          returnFocusTo={trigger}
-        >
-          <div className="flex flex-col gap-4" onKeyDown={onEnter}>
-            <div className="flex flex-col gap-1">
-              <label htmlFor={`${ids}-name`} className="font-medium text-text">
-                Name
-              </label>
-              <input
-                id={`${ids}-name`}
-                className={inputClass}
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoComplete="off"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label htmlFor={`${ids}-sonar`} className="font-medium text-text">
-                SonarQube project key
-              </label>
-              <input
-                id={`${ids}-sonar`}
-                className={monoInputClass}
-                value={sonar}
-                onChange={(e) => setSonar(e.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-                aria-describedby={`${ids}-sonar-hint`}
-              />
-              <p id={`${ids}-sonar-hint`} className="text-sm">
-                Leave empty to unlink the SonarQube project.
-              </p>
-            </div>
-          </div>
-          {problem && <Problem>{problem}</Problem>}
-        </ConfirmDialog>
-      )}
-
-      {mode === 'archive' && (
-        <ConfirmDialog
-          title={`Archive ${service.name}?`}
-          confirmLabel="Archive"
-          pending={update.isPending}
-          onConfirm={() => patch({ archived: true }, `Archived ${service.name}.`)}
-          onCancel={close}
-          returnFocusTo={trigger}
-        >
-          <p>
-            Archived services are hidden from the portfolio and receive no new uploads. Their data
-            is kept, and you can unarchive the service at any time.
-          </p>
-          {problem && <Problem>{problem}</Problem>}
-        </ConfirmDialog>
-      )}
-
-      {mode === 'delete' && (
-        <ConfirmDialog
-          title={`Delete ${service.name}?`}
-          confirmLabel="Delete service"
-          tone="danger"
-          pending={remove.isPending}
-          onConfirm={confirmDelete}
-          onCancel={close}
-          returnFocusTo={trigger}
-        >
-          <p>
-            This deletes all scans and analyses of this service and cannot be undone. To confirm,
-            type the project path{' '}
-            <span className="font-mono text-text">{service.gitlab_project_path}</span>.
-          </p>
-          <div className="mt-4 flex flex-col gap-1">
-            <label htmlFor={`${ids}-confirm`} className="font-medium text-text">
-              Project path
-            </label>
-            <input
-              id={`${ids}-confirm`}
-              className={monoInputClass}
-              value={typed}
-              onChange={(e) => setTyped(e.target.value)}
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </div>
-          {problem && <Problem>{problem}</Problem>}
-        </ConfirmDialog>
-      )}
-    </div>
+    <ConfirmDialog
+      title={`Delete ${service.name}?`}
+      confirmLabel="Delete service"
+      tone="danger"
+      pending={remove.isPending}
+      onConfirm={confirm}
+      onCancel={onDone}
+      returnFocusTo={returnFocusTo}
+    >
+      <p>
+        This deletes every scan and analysis of {service.name} and cannot be undone. Archive the
+        service instead to keep its history.
+      </p>
+      <div className="mt-4 flex flex-col gap-1.5">
+        <label htmlFor={`${ids}-confirm`} className="text-body-s text-text-muted">
+          Type <span className="font-mono text-text">{service.gitlab_project_path}</span> to confirm
+        </label>
+        <input
+          id={`${ids}-confirm`}
+          className={monoInputClass}
+          value={typed}
+          onChange={(e) => {
+            setTyped(e.target.value);
+            setProblem('');
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              confirm();
+            }
+          }}
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={problem ? true : undefined}
+        />
+      </div>
+      {problem ? (
+        <div className="mt-3">
+          <Problem>{problem}</Problem>
+        </div>
+      ) : null}
+    </ConfirmDialog>
   );
 }
