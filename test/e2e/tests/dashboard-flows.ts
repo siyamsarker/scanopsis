@@ -23,6 +23,7 @@ import {
   type Report,
   type Uploaded,
 } from '../fixtures/trivy';
+import { account, choose as chooseOption, select } from '../fixtures/ui';
 
 export interface Session {
   root: () => Page;
@@ -183,10 +184,10 @@ export function registerDashboardFlows(session: Session): void {
     // Sorting by name is alphabetical; by freshness the service whose newest
     // report is newest comes first (the secret scan of payments-api).
     const names = page.getByRole('heading', { level: 3 });
-    await page.getByLabel('Sort by', { exact: true }).selectOption('name');
+    await chooseOption(page, 'Sort by', 'Sort by name');
     await expect(page).toHaveURL(/sort=name/);
     await expect(names).toHaveText(['billing-worker', 'payments-api']);
-    await page.getByLabel('Sort by', { exact: true }).selectOption('freshness');
+    await chooseOption(page, 'Sort by', 'Sort by freshness');
     await expect(page).toHaveURL(/sort=freshness/);
     const newestReport = (r: Report) => r.createdAt;
     const paymentsFirst = Math.max(newestReport(current), newestReport(secretFs)) > newestReport(imageFull);
@@ -424,7 +425,7 @@ export function registerDashboardFlows(session: Session): void {
 
     // The audit log keeps it.
     await page.goto('/admin/audit');
-    await page.getByLabel('Action', { exact: true }).selectOption('ingest.rejected');
+    await chooseOption(page, 'Action', /\(ingest\.rejected\)$/);
     const audit = m.getByRole('table', { name: 'Audit log' });
     await expect(audit.getByRole('row')).toHaveCount(2);
     await expect(audit).toContainText('ingest.rejected');
@@ -469,12 +470,11 @@ export function registerDashboardFlows(session: Session): void {
 
     // The account was promoted in flow 6; make it a viewer again.
     await admin.goto('/admin/users');
-    const role = admin.getByLabel('Role for alice');
-    await role.selectOption('viewer');
+    await chooseOption(admin, 'Role for alice', 'Viewer');
     await expect(admin.getByText('Role changed to Viewer.')).toBeVisible();
 
     await viewer.goto('/');
-    await expect(viewer.getByRole('banner').getByText('Viewer')).toBeVisible();
+    await expect(account(viewer).getByText('Viewer')).toBeVisible();
     await expect(viewer.getByRole('heading', { name: 'Portfolio' })).toBeVisible();
     await expect(summaryTile(viewer, 'Services')).toContainText(/Services\s*2(?!\d)/);
     await expect(viewer.getByRole('listitem').filter({ hasText: 'platform/payments-api' })).toContainText(summary(current.counts));
@@ -542,7 +542,7 @@ export function registerDashboardFlows(session: Session): void {
     await expect(page.getByTestId('ref-source')).toHaveText('Showing feature/login · dashboard branch');
     await expect(m).toContainText('Current state of feature/login, latest scan per artifact');
     await expect(m).toContainText(summary(imageFull.counts));
-    await expect(page.getByLabel('Git ref')).toHaveValue('feature/login');
+    await expect(select(page, 'Git ref')).toHaveText('feature/login');
     await page.getByRole('link', { name: 'Explore findings' }).click();
     await expect(m.getByText(`${sum(imageFull.counts)} vulnerabilities, ${imageFull.fixable} fixable`)).toBeVisible();
 
@@ -573,7 +573,7 @@ export function registerDashboardFlows(session: Session): void {
 
     // Every change is in the audit log with the old and the new branch.
     await page.goto('/admin/audit');
-    await page.getByLabel('Action', { exact: true }).selectOption('service.updated');
+    await chooseOption(page, 'Action', /\(service\.updated\)$/);
     const audit = m.getByRole('table', { name: 'Audit log' });
     // The details are stored as JSON, which lists the shorter key first.
     await expect(audit).toContainText('{"to":"feature/login","from":null}');

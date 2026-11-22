@@ -4,6 +4,15 @@
 import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
 import { resetPasswordWithCli } from '../fixtures/stack';
 import { freshCode } from '../fixtures/totp';
+import {
+  account,
+  accountMenu,
+  choose,
+  cspViolations,
+  select,
+  signOut,
+  watchCsp,
+} from '../fixtures/ui';
 import { registerDashboardFlows } from './dashboard-flows';
 
 // The flows share one database and run in order; each one starts from the
@@ -23,7 +32,7 @@ let alice: Page;
 let aliceSecret = '';
 
 async function newUser(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
-  const context = await browser.newContext();
+  const context = watchCsp(await browser.newContext());
   return { context, page: await context.newPage() };
 }
 
@@ -41,11 +50,6 @@ async function signInLocal(page: Page, user: string, password: string): Promise<
 async function enterCode(page: Page, secret: string): Promise<void> {
   await page.getByLabel('6-digit code').fill(await freshCode(secret));
   await page.getByRole('button', { name: 'Verify' }).click();
-}
-
-async function signOut(page: Page): Promise<void> {
-  await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page).toHaveURL(/\/login$/);
 }
 
 // Walks the enrolment screens and returns the secret that was shown.
@@ -71,16 +75,17 @@ async function signInWithGitLab(page: Page, user: string): Promise<void> {
   await page.getByRole('link', { name: user, exact: true }).click();
 }
 
-function header(page: Page) {
-  return page.getByRole('banner');
-}
-
 test.afterAll(async () => {
   await rootContext?.close();
 });
 
+// No page may break the Content Security Policy (inline styles or scripts).
+test.afterAll(() => {
+  expect(cspViolations).toEqual([]);
+});
+
 test('1. setup creates the administrator and enrols two-factor', async ({ browser }) => {
-  rootContext = await browser.newContext();
+  rootContext = watchCsp(await browser.newContext());
   root = await rootContext.newPage();
 
   await root.goto('/');
@@ -123,7 +128,7 @@ test('1. setup creates the administrator and enrols two-factor', async ({ browse
   await proceed.click();
 
   await expect(root).toHaveURL(/\/$/);
-  await expect(header(root).getByText('root')).toBeVisible();
+  await expect(account(root).getByText('root')).toBeVisible();
   await expect(root.getByRole('heading', { name: 'Services' })).toBeVisible();
 });
 
@@ -154,7 +159,7 @@ test('3. sign-in asks for the second factor; recovery codes work once', async ()
 
   await enterCode(root, rootSecret);
   await expect(root).toHaveURL(/\/$/);
-  await expect(header(root).getByText('root')).toBeVisible();
+  await expect(account(root).getByText('root')).toBeVisible();
 
   // A recovery code in place of an app code.
   await signOut(root);
@@ -163,7 +168,7 @@ test('3. sign-in asks for the second factor; recovery codes work once', async ()
   await root.getByLabel('Recovery code').fill(recoveryCode);
   await root.getByRole('button', { name: 'Verify' }).click();
   await expect(root).toHaveURL(/\/$/);
-  await expect(header(root).getByText('root')).toBeVisible();
+  await expect(account(root).getByText('root')).toBeVisible();
 
   // The same code a second time is refused.
   await signOut(root);
@@ -226,8 +231,8 @@ test('5. a GitLab user enrols two-factor and lands as a viewer', async ({ browse
   await signInWithGitLab(alice, 'alice');
   aliceSecret = await enrol(alice);
 
-  await expect(header(alice).getByText('Alice Example')).toBeVisible();
-  await expect(header(alice).getByText('Viewer')).toBeVisible();
+  await expect(account(alice).getByText('Alice Example')).toBeVisible();
+  await expect(account(alice).getByText('Viewer')).toBeVisible();
   const nav = alice.getByRole('navigation', { name: 'Main' });
   await expect(nav.getByRole('link', { name: 'Portfolio' })).toBeVisible();
   await expect(nav.getByRole('link', { name: 'Integrations' })).toHaveCount(0);
@@ -243,13 +248,12 @@ test('5. a GitLab user enrols two-factor and lands as a viewer', async ({ browse
 
 test('6. an administrator promotes a viewer', async () => {
   await root.goto('/admin/users');
-  const role = root.getByLabel('Role for alice');
-  await expect(role).toHaveValue('viewer');
-  await role.selectOption('admin');
+  await expect(select(root, 'Role for alice')).toHaveText('Viewer');
+  await choose(root, 'Role for alice', 'Admin');
   await expect(root.getByText('Role changed to Admin.')).toBeVisible();
 
   await alice.goto('/');
-  await expect(header(alice).getByText('Admin', { exact: true })).toBeVisible();
+  await expect(account(alice).getByText('Admin', { exact: true })).toBeVisible();
   await expect(
     alice.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Users' }),
   ).toBeVisible();
@@ -297,7 +301,7 @@ test('8. resetting two-factor ends the sessions and forces a new enrolment', asy
   const secret = await enrol(alice);
   expect(secret).not.toBe(aliceSecret);
   aliceSecret = secret;
-  await expect(header(alice).getByText('Alice Example')).toBeVisible();
+  await expect(account(alice).getByText('Alice Example')).toBeVisible();
 });
 
 test('9. a CLI password reset ends the session and forces a new password', async ({
@@ -326,7 +330,7 @@ test('9. a CLI password reset ends the session and forces a new password', async
 
   await change(newPassword);
   await expect(root).toHaveURL(/\/$/);
-  await expect(header(root).getByText('root')).toBeVisible();
+  await expect(account(root).getByText('root')).toBeVisible();
 
   // The password in use before the reset no longer works.
   const other = await newUser(browser);
@@ -337,15 +341,27 @@ test('9. a CLI password reset ends the session and forces a new password', async
 
 test('10. the theme choice is applied and kept', async () => {
   const html = root.locator('html');
-  await root.getByRole('button', { name: 'Light' }).click();
+  await account(root).click();
+  await root.getByRole('menuitemradio', { name: 'Light' }).click();
   await expect(html).toHaveAttribute('data-theme', 'light');
 
   await root.reload();
   await expect(html).toHaveAttribute('data-theme', 'light');
-  await expect(root.getByRole('button', { name: 'Light' })).toHaveAttribute('aria-pressed', 'true');
-
-  await root.getByRole('button', { name: 'System' }).click();
+  await account(root).click();
+  await expect(root.getByRole('menuitemradio', { name: 'Light' })).toHaveAttribute(
+    'aria-checked',
+    'true',
+  );
+  await root.getByRole('menuitemradio', { name: 'System' }).click();
   await expect(html).not.toHaveAttribute('data-theme', /.*/);
+
+  // The command palette switches it too.
+  await root.keyboard.press('ControlOrMeta+k');
+  const palette = root.getByRole('dialog', { name: 'Command palette' });
+  await palette.getByRole('combobox').fill('dark theme');
+  await palette.getByRole('option', { name: 'Use the dark theme' }).click();
+  await expect(html).toHaveAttribute('data-theme', 'dark');
+  await expect(palette).toHaveCount(0);
 });
 
 test('11. security headers are set', async () => {
@@ -395,7 +411,7 @@ test('23. the account page lists sessions and ends other ones', async ({ browser
   await enterCode(laptop.page, rootSecret);
   await expect(laptop.page).toHaveURL(/\/$/);
 
-  await header(root).getByRole('link', { name: /^Your account/ }).click();
+  await accountMenu(root, 'Your account');
   await expect(root).toHaveURL(/\/account$/);
   const list = root.getByRole('list', { name: 'Sessions' });
   await expect(list.getByRole('listitem')).toHaveCount(2);
@@ -454,7 +470,7 @@ test('24. an administrator disables, enables and deletes users', async () => {
   await signInWithGitLab(alice, 'alice');
   await enterCode(alice, aliceSecret);
   await expect(alice).toHaveURL(/\/$/);
-  await expect(header(alice).getByText('Alice Example')).toBeVisible();
+  await expect(account(alice).getByText('Alice Example')).toBeVisible();
 
   // Deleting removes carol from the list.
   await root.getByRole('button', { name: 'Delete carol' }).click();
@@ -475,7 +491,7 @@ test('25. a settings change is audited with the values before and after', async 
   await expect(root.getByText('Settings saved. Changes apply now.')).toBeVisible();
 
   await root.goto('/admin/audit');
-  await root.getByLabel('Action', { exact: true }).selectOption('settings.changed');
+  await choose(root, 'Action', /\(settings\.changed\)$/);
   const audit = root.getByRole('main').getByRole('table', { name: 'Audit log' });
   // The details are stored as JSON, which lists the shorter key first.
   await expect(audit).toContainText('[{"to":"45m","key":"session.idle_timeout","from":"30m"}]');
