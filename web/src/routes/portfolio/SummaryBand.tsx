@@ -74,7 +74,7 @@ function SignalRow({
         <span className="flex justify-center">{signal.mark}</span>
         <span className="text-h3 font-semibold tracking-tight text-text tabular-nums">
           {formatInt(signal.count)}
-        </span>
+        </span>{' '}
         <span className="text-body-s text-text-muted group-hover:text-text">{signal.text}</span>
         <ChevronRight
           size={16}

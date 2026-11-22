@@ -41,7 +41,7 @@ export function CountsLine({ counts }: { counts: PortfolioItem['counts'] }) {
           <span className="sr-only">
             {' '}
             {SEVERITY_NAME[s].toLowerCase()}
-            {i < present.length - 1 ? ',' : ''}
+            {i < present.length - 1 ? ', ' : ''}
           </span>
         </span>
       ))}
