@@ -137,7 +137,8 @@ export function ScanPage() {
         serviceName={service.data?.name ?? (service.isError ? `Service ${data.service_id}` : '…')}
       />
       <Posture scan={data} />
-      <DiffSection key={data.id} scan={data} />
+      {/* Diffs compare vulnerabilities; a secret scan has none to compare. */}
+      {data.kind === 'image' ? <DiffSection key={data.id} scan={data} /> : null}
     </div>
   );
 }

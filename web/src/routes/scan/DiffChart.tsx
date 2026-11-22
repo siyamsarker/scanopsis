@@ -92,9 +92,13 @@ export function DiffChart({
         aria-hidden="true"
       >
         <span className="text-text-muted">Total</span>
-        <span className="text-right font-semibold text-text">−{formatInt(sum(fixed))}</span>
+        <span className="text-right font-semibold text-text">
+          {sum(fixed) ? `−${formatInt(sum(fixed))}` : '0'}
+        </span>
         <span />
-        <span className="font-semibold text-text">+{formatInt(sum(added))}</span>
+        <span className="font-semibold text-text">
+          {sum(added) ? `+${formatInt(sum(added))}` : '0'}
+        </span>
       </div>
       <SrTable
         caption="New and fixed findings by severity"

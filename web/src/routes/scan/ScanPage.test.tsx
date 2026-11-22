@@ -188,6 +188,8 @@ describe('scan detail', () => {
     // A secret scan states its secrets, not a risk number, and has no picker.
     expect(screen.getByText('secrets found in the source tree')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Compare with/ })).toBeNull();
+    // Diffs compare vulnerabilities, which a secret scan does not have.
+    expect(screen.queryByRole('region', { name: 'What changed' })).toBeNull();
   });
 
   it('links every posture number to the findings explorer with the exact query', async () => {
