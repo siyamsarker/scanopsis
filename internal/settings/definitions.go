@@ -104,7 +104,7 @@ var Definitions = []Definition{
 	{Key: KeyIngestProtectedRefsOnly, EnvVar: "SCANOPSIS_INGEST_PROTECTED_REFS_ONLY", Type: TypeBoolean, Default: false,
 		Description: "Accept scan reports only from pipelines on protected branches and tags."},
 	{Key: KeyRetentionDays, EnvVar: "SCANOPSIS_RETENTION_DAYS", Type: TypeInteger, Default: DefaultRetentionDays, Min: MinRetentionDays, Max: MaxRetentionDays,
-		Description: "How many days scan history is kept, from 7 to 3650. The latest scan of every service, ref, artifact and kind is always kept, however old."},
+		Description: "How many days scan history is kept, from 7 to 3650. The latest scans of the branch a dashboard shows and of protected branches and tags are always kept, however old."},
 }
 
 var definitionByKey = func() map[string]Definition {

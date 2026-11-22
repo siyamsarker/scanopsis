@@ -89,7 +89,7 @@ invalid.
 | `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | secret | not set | | Token of a SonarQube user with Browse permission on the projects. Stored encrypted and never shown again. |
 | `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | secret | not set | | Secret of the SonarQube webhook. Deliveries without a valid signature are rejected. Stored encrypted and never shown again. |
 | `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | duration | `15m` | `5m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. |
-| `retention.days` | `SCANOPSIS_RETENTION_DAYS` | integer | `90` | `180` | How many days scan history, SonarQube analyses and SonarQube deliveries are kept. A whole number from `7` to `3650`. The latest scan of every service, ref, artifact and kind, and the latest analysis of every service, are kept however old they are. See [data retention](operations.md#data-retention). |
+| `retention.days` | `SCANOPSIS_RETENTION_DAYS` | integer | `90` | `180` | How many days scan history, SonarQube analyses and SonarQube deliveries are kept. A whole number from `7` to `3650`. The latest scans of the branch a service's dashboards show and of protected branches and tags, and the latest analysis of every service, are kept however old they are. The latest scan of any other branch expires too. See [data retention](operations.md#data-retention). |
 
 Durations are written with units, such as `30m`, `8h` or `1h30m`. Integers are
 written as plain whole numbers, such as `90`; a value with a fraction, with

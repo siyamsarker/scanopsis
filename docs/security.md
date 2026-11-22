@@ -198,8 +198,11 @@ mitigation.
    one key, with no rotation. Protect the two separately. See
    [the secret key](configuration.md#the-secret-key).
 
-9. **The raw report is kept as uploaded.** It can contain whatever Trivy wrote,
-   such as file paths and package names. Trivy masks secret values in it.
+9. **The raw report is kept as uploaded for a while.** It can contain whatever
+   Trivy wrote, such as file paths and package names. Trivy masks secret values
+   in it. Retention clears it 30 days after the scan stops being current, and
+   `scanopsis admin export-report` writes it out for checks; each export is
+   recorded in the audit log. See [original reports](operations.md#original-reports).
 
 10. **Until an administrator chooses a branch, the latest scanned branch is
     shown.** A dashboard shows one branch of a service. An administrator

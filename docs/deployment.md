@@ -1280,9 +1280,10 @@ of pipelines; the figures above. That makes 270,000 pipelines.
 | 30 | 54 KiB | 14.8 GB |
 | 138 (like the fixture, an old image) | 182 KiB | about 50 GB |
 
-Retention also keeps the latest scan of every service, ref, artifact and kind
-beyond the period. For 500 services with a few refs each, that adds well under
-1 GB.
+Retention also keeps, beyond the period, the latest scans of the branch each
+dashboard shows and of protected branches and tags. Scans of other short-lived
+branches expire like the rest. For 500 services with a few protected refs
+each, that adds well under 1 GB.
 
 Size the disk for the estimate plus 50% for index growth, write-ahead log and
 vacuum, and reserve the same space again for backups. Shorten `retention.days` if
