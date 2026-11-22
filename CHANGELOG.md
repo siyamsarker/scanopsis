@@ -7,28 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `scanopsis admin export-report <scan-id>` writes the original Trivy report of a scan to standard output, for checking a stored scan with `trivy convert`. It works in the container without a shell: `docker compose exec scanopsis /scanopsis admin export-report 42 > report.json`. A successful export is recorded in the audit log as `report.exported`; a report cleared by data retention fails with a clear message.
+- Rejected SonarQube webhooks (wrong signature, oversized or invalid body) are recorded in the audit log as `webhook.rejected` with the reason and client address, at most 10 per address and then one per minute.
+- An **Account** page, opened from your name in the header, lists your sessions: when each started, when it was last used, the client address and the browser. You can end any other session, or all of them at once. The API is `GET` and `DELETE /api/v1/me/sessions` and `DELETE /api/v1/me/sessions/{id}`, and ending sessions is recorded in the audit log as `session.revoked`.
+- Administrators can disable a user, which refuses every sign-in (local and GitLab) and ends all sessions of the user, enable the user again, and delete a user. The **Users** page has **Disable**, **Enable** and **Delete** with a confirmation, the API accepts `disabled` in `PATCH /api/v1/users/{id}` and has `DELETE /api/v1/users/{id}`, and the administration commands `disable-user`, `enable-user` and `delete-user` do the same. Nobody can disable or delete their own account or the last enabled administrator. The audit log records `user.disabled`, `user.enabled` and `user.deleted`. Users have a new `disabled_at` field.
+- Upload limits per GitLab project (100 reports at once, then one every 10 seconds) and per CI job (50 artifacts), answered with `429` and a `Retry-After` header.
+- Deployment guide sections for an existing or managed PostgreSQL (with a tested Compose override and certificate-verified TLS), plain `docker run`, Podman and Kubernetes, and proxy examples with compression and optional rate limits.
+- The Compose file sets a memory limit with a matching `GOMEMLIMIT`, a process limit, log rotation, a stop grace period, a read-only file system for PostgreSQL, and variables for the bind address and port.
+
 ### Changed
 
 - SonarQube webhook deliveries are processed by four workers that run apart from the periodic sync, so a slow SonarQube or a burst of webhooks no longer delays the other. The queue holds 500 deliveries, and a delivery that still finds it full stays pending and is read by the next sync instead of being marked failed.
 - A SonarQube sync stops early when the version call fails or after three calls in a row get no answer, holds no pooled database connection while it waits for SonarQube, and logs one summary warning per sync instead of one per project.
 - Data retention now keeps the latest scan of a ref forever only when the ref is the service's dashboard branch, was protected, or is the ref the dashboards show when no branch is chosen. The latest scan of any other unprotected branch expires after the retention period, so storage no longer grows with short-lived branches.
 - Data retention empties the stored original report of scans that are not current after 30 days (fixed). The report was never read and was most of the database and of every backup.
-
-### Added
-
-- `scanopsis admin export-report <scan-id>` writes the original Trivy report of a scan to standard output, for checking a stored scan with `trivy convert`. It works in the container without a shell: `docker compose exec scanopsis /scanopsis admin export-report 42 > report.json`. A successful export is recorded in the audit log as `report.exported`; a report cleared by data retention fails with a clear message.
-- Rejected SonarQube webhooks (wrong signature, oversized or invalid body) are recorded in the audit log as `webhook.rejected` with the reason and client address, at most 10 per address and then one per minute.
-
-### Added
-
-- An **Account** page, opened from your name in the header, lists your sessions: when each started, when it was last used, the client address and the browser. You can end any other session, or all of them at once. The API is `GET` and `DELETE /api/v1/me/sessions` and `DELETE /api/v1/me/sessions/{id}`, and ending sessions is recorded in the audit log as `session.revoked`.
-- Administrators can disable a user, which refuses every sign-in (local and GitLab) and ends all sessions of the user, enable the user again, and delete a user. The **Users** page has **Disable**, **Enable** and **Delete** with a confirmation, the API accepts `disabled` in `PATCH /api/v1/users/{id}` and has `DELETE /api/v1/users/{id}`, and the administration commands `disable-user`, `enable-user` and `delete-user` do the same. Nobody can disable or delete their own account or the last enabled administrator. The audit log records `user.disabled`, `user.enabled` and `user.deleted`. Users have a new `disabled_at` field.
-
-### Changed
-
 - The `settings.changed` audit event records, besides the keys, the value before and after for each changed setting (`changes`), and for a secret only that it changed, so the audit log shows what a change did.
 - Demoting an administrator is refused when no other enabled administrator would remain; a disabled administrator no longer counts.
 - Sessions now end after 30 minutes without use (was 8 hours) and 12 hours after sign-in at the latest (was 24 hours), as OWASP ASVS level 2 asks. Values stored in the database before the upgrade are kept. The session cookie is now a browser-session cookie without an expiry date, so closing the browser ends it; the server still enforces both timeouts.
+- Pages stay fast with 90 days of history at 500 services: new indexes and queries bring the portfolio, findings page, scan comparison and search to well under 150 ms at that volume, and the performance tests now seed that volume. Search results and scan comparisons are capped, most severe first, and report the true totals.
+- The database pool has 16 connections and statements end after 30 seconds by default; both can be set in the database URL. Migrations no longer run under the start-up timeout, build their indexes without blocking writes, and log each step.
+- Uploads stream findings into the database and are admitted by an estimate of the memory they need, so one maximum report peaks at about 80 MiB instead of about 280 MiB, and memory returns to idle after a burst. The image sets `GOMEMLIMIT=400MiB` for the recommended 512 MiB container.
+- An upload may take 5 minutes to arrive and is answered `408` when the body is late; a database outage is answered `503` with `Retry-After` instead of `500`. The CI script retries these answers for about four minutes.
 
 ### Security
 
@@ -36,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - GitLab users are identified by the GitLab URL and the user id there, instead of the user id alone, so a sign-in through another GitLab instance never takes over an existing account. Existing GitLab users are assigned to the GitLab URL stored in the settings. After a change of the GitLab URL, GitLab users sign in as new viewers (see the operations guide). The administration commands refuse a `gitlab:<name>` that matches accounts of several instances and accept `gitlab-id:<n>` and `id:<n>`.
 - New recovery codes have 20 characters in four groups of five (about 99 bits, was about 50) and are stored as an HMAC-SHA-256 over the user id and the code, keyed from `SCANOPSIS_SECRET_KEY`, instead of a plain SHA-256. Codes issued before keep working until they are used or replaced by a new enrolment.
 - GitLab sign-in no longer redirects to another site when `return_to` hides a backslash behind a dot segment, such as `/./%5Cevil.example`. The value is now cleaned before it is checked, any backslash or control character (raw or percent-encoded) is refused, and the redirect is built from the path and query only. The web interface applies the same rule.
+- Upload tokens whose `nbf` or `iat` lie in the future are refused, and forged tokens no longer make Scanopsis fetch GitLab's signing keys again and again.
+- A service created by an upload is recorded in the audit log.
 
 ## [0.1.0] - 2026-11-22
 
@@ -70,7 +73,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Failed sign-ins for a username that matches no account no longer record the typed name.
 - Changing the GitLab or SonarQube URL requires entering the matching secret again, so a stored secret is never sent to a new address.
 - Rejected uploads that need no allowed project are recorded in the audit log at most a few times per client address, and rate-limited uploads are not recorded.
-- At most four uploads are processed at once, and the server warns at start when every project of the GitLab instance may upload.
+- The server warns at start when every project of the GitLab instance may upload.
 - Upload error responses no longer contain the GitLab URL or upstream error text.
 - npm dependencies are installed without running their install scripts.
 

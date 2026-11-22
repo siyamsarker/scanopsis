@@ -603,10 +603,18 @@ If a step fails, see [troubleshooting](troubleshooting.md#reverse-proxy-and-tls)
 ### Timeouts
 
 Scanopsis reads a request within 30 seconds and writes a response within 60
-seconds. A report that takes longer to upload is cut off. A 20 MB report
-uploads in well under a second on a local network. Slow links are the only
-cause. Set the proxy's read timeout above these values (nginx:
-`proxy_read_timeout`).
+seconds. A Trivy upload is the exception: it may take 5 minutes to arrive, may
+wait up to 30 seconds for memory, and is answered `408` when the body is late.
+A 20 MB report uploads in well under a second on a local network, so only slow
+links come near these limits.
+
+- nginx reads the whole request body before it passes the request on
+  (`proxy_request_buffering on`, the default), so a slow client never holds
+  Scanopsis. Keep `client_body_timeout` (60 seconds between two reads by
+  default) and set `proxy_read_timeout` above the time an upload is stored,
+  90 seconds as in the example.
+- Caddy passes the body on while it arrives and sets no timeout of its own by
+  default, so the 5 minutes in Scanopsis apply.
 
 ## Internal certificate authority
 
