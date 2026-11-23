@@ -205,6 +205,7 @@ func TestDefaults(t *testing.T) {
 	want := Snapshot{
 		GitLabAllowedGroups: []string{}, LocalLoginEnabled: true,
 		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 12 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
+		BackupScheduleTimes: []string{"02:00"}, BackupTimeZone: "UTC", BackupKeepDays: 7,
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -257,6 +258,7 @@ func TestSeedingFillsOnlyMissingKeys(t *testing.T) {
 		GitLabURL: "https://gitlab.example.com", GitLabClientID: "from-ui", GitLabClientSecret: "s3cret-value",
 		GitLabAllowedGroups: []string{"platform", "sec/appsec"}, LocalLoginEnabled: true,
 		SessionIdleTimeout: 30 * time.Minute, SessionAbsoluteTimeout: 12 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
+		BackupScheduleTimes: []string{"02:00"}, BackupTimeZone: "UTC", BackupKeepDays: 7,
 	}
 	if got := e.svc.Current(); !reflect.DeepEqual(got, want) {
 		t.Errorf("Current = %+v, want %+v", got, want)
@@ -336,6 +338,7 @@ func TestUpdateAppliesAndAudits(t *testing.T) {
 		GitLabURL: "https://gitlab.example.com", GitLabClientID: "cid", GitLabClientSecret: "topsecret-xyz",
 		GitLabAllowedGroups: []string{"a", "b/c"}, LocalLoginEnabled: false,
 		SessionIdleTimeout: 90 * time.Minute, SessionAbsoluteTimeout: 36 * time.Hour, SonarSyncInterval: 15 * time.Minute, IngestAllowedNamespaces: []string{}, RetentionDays: 90,
+		BackupScheduleTimes: []string{"02:00"}, BackupTimeZone: "UTC", BackupKeepDays: 7,
 	}
 	if cur := e.svc.Current(); !reflect.DeepEqual(cur, want) {
 		t.Errorf("Current = %+v", cur)
@@ -632,11 +635,18 @@ func TestFormatDuration(t *testing.T) {
 
 func TestDefinitions(t *testing.T) {
 	want := []string{"gitlab.url", "gitlab.client_id", "gitlab.client_secret", "gitlab.allowed_groups", "auth.local_login_enabled", "session.idle_timeout", "session.absolute_timeout",
-		"sonar.url", "sonar.token", "sonar.webhook_secret", "sonar.sync_interval", "ingest.allowed_namespaces", "ingest.protected_refs_only", "retention.days"}
+		"sonar.url", "sonar.token", "sonar.webhook_secret", "sonar.sync_interval", "ingest.allowed_namespaces", "ingest.protected_refs_only", "retention.days",
+		"backup.schedule_enabled", "backup.schedule_times", "backup.time_zone", "backup.keep_days"}
 	var got []string
 	for _, d := range Definitions {
 		got = append(got, d.Key)
-		if d.Description == "" || !strings.HasPrefix(d.EnvVar, "SCANOPSIS_") || !strings.HasSuffix(d.Description, ".") {
+		// The backup settings are edited on the Backups page only and have
+		// no environment variable.
+		envOK := strings.HasPrefix(d.EnvVar, "SCANOPSIS_")
+		if strings.HasPrefix(d.Key, "backup.") {
+			envOK = d.EnvVar == ""
+		}
+		if d.Description == "" || !envOK || !strings.HasSuffix(d.Description, ".") {
 			t.Errorf("bad definition %+v", d)
 		}
 		if _, err := coerce(d, d.Default); err != nil && !d.Secret {
@@ -914,5 +924,143 @@ func TestSessionDefaultsMatchConfig(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("%s default %v, config %v", key, d.Default, want)
 		}
+	}
+}
+
+func TestBackupSettingsDefaults(t *testing.T) {
+	e := newEnv(t, nil)
+	snap := e.svc.Current()
+	if snap.BackupScheduleEnabled || !reflect.DeepEqual(snap.BackupScheduleTimes, []string{"02:00"}) || snap.BackupTimeZone != "UTC" || snap.BackupKeepDays != 7 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	items := e.items(t)
+	for key, typ := range map[string]string{
+		"backup.schedule_enabled": "boolean", "backup.schedule_times": "string_list", "backup.time_zone": "string", "backup.keep_days": "integer",
+	} {
+		if it := items[key]; it["type"] != typ || it["source"] != "default" || it["env_var"] != "" {
+			t.Errorf("%s = %v", key, it)
+		}
+	}
+}
+
+func TestBackupSettingsValid(t *testing.T) {
+	e := newEnv(t, nil)
+	body := `{"backup.schedule_enabled":true,"backup.schedule_times":["23:30"," 00:00","12:05"],"backup.time_zone":"Europe/Berlin","backup.keep_days":365}`
+	if code, resp := e.patch(t, body); code != 200 {
+		t.Fatalf("status = %d, body %v", code, resp)
+	}
+	snap := e.svc.Current()
+	if !snap.BackupScheduleEnabled || !reflect.DeepEqual(snap.BackupScheduleTimes, []string{"00:00", "12:05", "23:30"}) ||
+		snap.BackupTimeZone != "Europe/Berlin" || snap.BackupKeepDays != 365 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	all := make([]string, 0, 24)
+	for h := range 24 {
+		all = append(all, fmt.Sprintf("%q", fmt.Sprintf("%02d:00", h)))
+	}
+	if code, resp := e.patch(t, `{"backup.schedule_times":[`+strings.Join(all, ",")+`],"backup.time_zone":"Asia/Dhaka","backup.keep_days":1}`); code != 200 {
+		t.Fatalf("24 times: status = %d, body %v", code, resp)
+	}
+}
+
+func TestBackupSettingsValidation(t *testing.T) {
+	const (
+		timesMsg = "Each time must be a 24-hour time such as 02:00."
+		zoneMsg  = "Must be a time zone name such as UTC or Europe/Berlin."
+		keepMsg  = "Must be a whole number from 1 to 365."
+	)
+	var times25 []string
+	for i := range 25 {
+		times25 = append(times25, fmt.Sprintf("%q", fmt.Sprintf("%02d:%02d", i%24, i/24)))
+	}
+	for name, tc := range map[string]struct{ body, key, msg string }{
+		"hour 25":        {`{"backup.schedule_times":["25:00"]}`, "backup.schedule_times", timesMsg},
+		"minute 60":      {`{"backup.schedule_times":["02:60"]}`, "backup.schedule_times", timesMsg},
+		"no leading 0":   {`{"backup.schedule_times":["2:00"]}`, "backup.schedule_times", timesMsg},
+		"seconds":        {`{"backup.schedule_times":["02:00:00"]}`, "backup.schedule_times", timesMsg},
+		"12-hour":        {`{"backup.schedule_times":["02:00 PM"]}`, "backup.schedule_times", timesMsg},
+		"empty item":     {`{"backup.schedule_times":[""]}`, "backup.schedule_times", timesMsg},
+		"duplicates":     {`{"backup.schedule_times":["02:00","03:00","02:00"]}`, "backup.schedule_times", `The time 02:00 is listed twice.`},
+		"none":           {`{"backup.schedule_times":[]}`, "backup.schedule_times", "Must list from 1 to 24 times."},
+		"25 entries":     {`{"backup.schedule_times":[` + strings.Join(times25, ",") + `]}`, "backup.schedule_times", "Must list from 1 to 24 times."},
+		"not a list":     {`{"backup.schedule_times":"02:00"}`, "backup.schedule_times", "Must be a list of strings."},
+		"unknown zone":   {`{"backup.time_zone":"Mars/Phobos"}`, "backup.time_zone", zoneMsg},
+		"empty zone":     {`{"backup.time_zone":""}`, "backup.time_zone", zoneMsg},
+		"local zone":     {`{"backup.time_zone":"Local"}`, "backup.time_zone", zoneMsg},
+		"zone path":      {`{"backup.time_zone":"../etc/passwd"}`, "backup.time_zone", zoneMsg},
+		"keep 0":         {`{"backup.keep_days":0}`, "backup.keep_days", keepMsg},
+		"keep 366":       {`{"backup.keep_days":366}`, "backup.keep_days", keepMsg},
+		"enabled string": {`{"backup.schedule_enabled":"yes"}`, "backup.schedule_enabled", "Must be true or false."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, nil)
+			before := e.svc.Current()
+			code, resp := e.patch(t, tc.body)
+			if code != 400 {
+				t.Fatalf("status = %d, body %v", code, resp)
+			}
+			fields := resp["error"].(map[string]any)["fields"].(map[string]any)
+			if fields[tc.key] != tc.msg || len(fields) != 1 {
+				t.Errorf("fields = %v, want %s: %s", fields, tc.key, tc.msg)
+			}
+			if !reflect.DeepEqual(e.svc.Current(), before) {
+				t.Error("an invalid update changed the settings")
+			}
+		})
+	}
+}
+
+func TestReload(t *testing.T) {
+	e := newEnv(t, map[string]any{"retention.days": 30})
+	var got []Snapshot
+	e.svc.OnChange(func(s Snapshot) { got = append(got, s) })
+
+	// The rows change behind the service's back, as a restore does.
+	e.st.rows["backup.keep_days"] = store.Setting{Key: "backup.keep_days", Value: []byte(`14`), Source: "ui", UpdatedBy: "local:bob"}
+	e.st.rows["retention.days"] = store.Setting{Key: "retention.days", Value: []byte(`45`), Source: "ui", UpdatedBy: "local:bob"}
+	if err := e.svc.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if snap := e.svc.Current(); snap.BackupKeepDays != 14 || snap.RetentionDays != 45 {
+		t.Fatalf("after reload %+v", snap)
+	}
+	if len(got) != 1 || got[0].BackupKeepDays != 14 {
+		t.Fatalf("OnChange calls = %+v", got)
+	}
+	if it := e.items(t)["backup.keep_days"]; it["source"] != "ui" || it["updated_by"] != "local:bob" {
+		t.Errorf("item = %v", it)
+	}
+
+	// A row deleted falls back to the environment seed, which is not
+	// written again.
+	delete(e.st.rows, "retention.days")
+	if err := e.svc.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if snap := e.svc.Current(); snap.RetentionDays != 30 {
+		t.Fatalf("after second reload RetentionDays = %d, want the seed 30", snap.RetentionDays)
+	}
+	if _, ok := e.st.rows["retention.days"]; ok {
+		t.Error("Reload wrote a seed row")
+	}
+
+	// A failure keeps the current settings and calls nobody.
+	e.st.failOn = "list"
+	if err := e.svc.Reload(context.Background()); err == nil {
+		t.Fatal("Reload succeeded with a failing store")
+	}
+	if snap := e.svc.Current(); snap.BackupKeepDays != 14 || len(got) != 2 {
+		t.Errorf("after failed reload %+v, calls %d", snap, len(got))
+	}
+}
+
+func TestReloadRefusesInvalidRow(t *testing.T) {
+	e := newEnv(t, nil)
+	e.st.rows["backup.time_zone"] = store.Setting{Key: "backup.time_zone", Value: []byte(`"Mars/Phobos"`), Source: "ui", UpdatedBy: "local:bob"}
+	if err := e.svc.Reload(context.Background()); err == nil || !strings.Contains(err.Error(), "backup.time_zone") {
+		t.Fatalf("err = %v", err)
+	}
+	if e.svc.Current().BackupTimeZone != "UTC" {
+		t.Error("an invalid row was applied")
 	}
 }

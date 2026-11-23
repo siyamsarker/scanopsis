@@ -48,6 +48,16 @@ type Snapshot struct {
 
 	// RetentionDays is how many days scan history is kept.
 	RetentionDays int
+
+	// BackupScheduleEnabled turns scheduled backups on.
+	BackupScheduleEnabled bool
+	// BackupScheduleTimes are the times of day of scheduled backups, sorted
+	// 24-hour "HH:MM" values in BackupTimeZone.
+	BackupScheduleTimes []string
+	// BackupTimeZone is the IANA name of the zone of BackupScheduleTimes.
+	BackupTimeZone string
+	// BackupKeepDays is how many days scheduled backups are kept.
+	BackupKeepDays int
 }
 
 // SonarEnabled reports whether SonarQube results can be read (URL and token set).
@@ -263,6 +273,11 @@ func snapshotOf(e map[string]entry) Snapshot {
 		IngestAllowedNamespaces: e[KeyIngestAllowedNamespaces].value.([]string),
 		IngestProtectedRefsOnly: e[KeyIngestProtectedRefsOnly].value.(bool),
 		RetentionDays:           e[KeyRetentionDays].value.(int),
+
+		BackupScheduleEnabled: e[KeyBackupScheduleEnabled].value.(bool),
+		BackupScheduleTimes:   e[KeyBackupScheduleTimes].value.([]string),
+		BackupTimeZone:        e[KeyBackupTimeZone].value.(string),
+		BackupKeepDays:        e[KeyBackupKeepDays].value.(int),
 	}
 }
 
@@ -291,6 +306,35 @@ func (s *Service) OnChange(fn func(Snapshot)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.callbacks = append(s.callbacks, fn)
+}
+
+// Reload reads the settings from the database again, as after a restore
+// replaced the rows, and calls the OnChange functions with the new
+// snapshot. Environment values apply to keys without a row, as at start,
+// but are not written. On an error the current settings stay.
+func (s *Service) Reload(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.st.ListSettings(ctx)
+	if err != nil {
+		return fmt.Errorf("reload settings: %w", err)
+	}
+	stored, err := s.decodeAll(rows)
+	if err != nil {
+		return fmt.Errorf("reload settings: %w", err)
+	}
+	next := s.build(stored)
+	if err := signInPossible(next); err != nil {
+		// The data came from a backup of a working installation, or was
+		// changed by hand; serving it is still better than keeping
+		// settings that no longer match the database.
+		s.log.WarnContext(ctx, "the reloaded settings leave no way to sign in", "error", err)
+	}
+	s.cur.Store(next)
+	for _, fn := range s.callbacks {
+		fn(next.snap)
+	}
+	return nil
 }
 
 // validate checks the rules that span several settings and adds one message
