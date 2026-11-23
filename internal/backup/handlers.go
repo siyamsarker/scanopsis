@@ -609,8 +609,12 @@ func (a *API) previewOf(ctx context.Context, path string) (Preview, error) {
 }
 
 // lasting reports whether a failed preview fails the same way for as long
-// as the file stays the same.
+// as the file stays the same. A read that failed, such as an error of the
+// disk, may pass the next time.
 func lasting(err error) bool {
+	if errors.Is(err, errUnreadable) {
+		return false
+	}
 	return errors.Is(err, ErrNotBackup) || errors.Is(err, ErrCorrupt) || errors.Is(err, ErrFormat) ||
 		errors.Is(err, ErrSignature) || errors.Is(err, os.ErrNotExist)
 }

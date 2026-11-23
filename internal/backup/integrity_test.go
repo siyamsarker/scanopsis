@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -227,5 +228,33 @@ func TestListCheckGivesWayToAnUploadCheck(t *testing.T) {
 			t.Fatalf("the list check was not tried again (%d calls)", calls.Load())
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A read error of the disk says nothing lasting about the file: it is not
+// marked damaged, and the file is checked again at a later listing.
+func TestListCheckRetriesAReadError(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	name := writeBackup(t, e.dir, goodArchive(t))
+	var calls atomic.Int32
+	e.svc.verifyFile = func(context.Context, string) error {
+		calls.Add(1)
+		return damaged(&os.PathError{Op: "read", Path: "x", Err: syscall.EIO})
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for calls.Load() < 2 {
+		if b := e.listed(name); b["readable"] != true || b["problem"] != nil {
+			t.Fatalf("after a read error the backup is listed as %v", b)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("checked %d times, want it checked again", calls.Load())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	e.dir.mu.Lock()
+	_, marked := e.dir.checks[name]
+	e.dir.mu.Unlock()
+	if marked {
+		t.Error("a read error was kept as the outcome of the check")
 	}
 }

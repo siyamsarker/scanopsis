@@ -828,7 +828,8 @@ func (s *Service) recordCheck(ctx context.Context, name string, check func(conte
 
 // markOutcome keeps the outcome err of a check of the whole backup called
 // name, as the file fi was before the check, when it lasts: a pass, or a
-// file that is damaged, not a backup or not signed with this key.
+// file whose content is damaged, not a backup or not signed with this key.
+// A read that failed, such as an error of the disk, is checked again later.
 func (s *Service) markOutcome(ctx context.Context, name string, fi os.FileInfo, err error) {
 	switch {
 	case err == nil:

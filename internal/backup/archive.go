@@ -365,7 +365,26 @@ func damaged(err error) error {
 	if errors.As(err, &flateErr) {
 		return fmt.Errorf("%w: the compressed data is broken", ErrCorrupt)
 	}
-	return fmt.Errorf("%w: the file could not be read", ErrCorrupt)
+	return &unreadableError{err: err}
+}
+
+// errUnreadable marks a read that failed for another reason than the
+// content of the file, such as an error of the disk: it may pass, so it
+// says nothing lasting about the file.
+var errUnreadable = errors.New("the file could not be read")
+
+// unreadableError refuses a file that could not be read as damaged
+// (ErrCorrupt) with a fixed sentence, and keeps the read error for the log.
+type unreadableError struct{ err error }
+
+func (e *unreadableError) Error() string {
+	return fmt.Sprintf("%v: %v", ErrCorrupt, errUnreadable)
+}
+
+func (e *unreadableError) Unwrap() error { return e.err }
+
+func (e *unreadableError) Is(target error) bool {
+	return target == ErrCorrupt || target == errUnreadable
 }
 
 func corruptf(format string, args ...any) error {
