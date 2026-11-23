@@ -184,4 +184,66 @@ describe('upload a backup, leaving early', () => {
       calls.some((c) => c.method === 'DELETE' && c.path === '/api/v1/admin/backup-uploads/u1'),
     ).toBe(true);
   });
+
+  it('leaves a fully sent upload to its check when the page goes away', async () => {
+    const { calls } = mockFetch(
+      api((call) => {
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+          return json(200, {
+            id: 'u1',
+            file_name: 'from-staging.tar.gz',
+            size: 10,
+            chunk_size: 4,
+            received: 10,
+            state: 'checking',
+          });
+        }
+        if (call.method === 'DELETE') return new Response(null, { status: 204 });
+        return undefined;
+      }),
+    );
+    const { unmount } = renderApp('/admin/backups');
+    const open = await screen.findByRole('button', { name: 'Upload a backup' });
+    await waitFor(() => expect(open).toBeEnabled());
+    fireEvent.click(open);
+    const dialog = await screen.findByRole('dialog', { name: 'Upload a backup' });
+    fireEvent.change(within(dialog).getByLabelText('Backup file'), {
+      target: { files: [new File(['1234567890'], 'from-staging.tar.gz')] },
+    });
+    await within(dialog).findByText(/Checking the backup/);
+    unmount();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+});
+
+describe('upload a backup, check stopped', () => {
+  it('offers to resume when the server stopped the check, as after a restart', async () => {
+    let asked = 0;
+    mockFetch(
+      api((call) => {
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+          asked += 1;
+          return json(200, {
+            id: 'u1',
+            file_name: 'from-staging.tar.gz',
+            size: 10,
+            chunk_size: 4,
+            received: 10,
+            state: asked === 1 ? 'uploading' : asked === 2 ? 'uploading' : 'ready',
+            ...(asked > 2 ? { backup: uploaded } : {}),
+          });
+        }
+        return undefined;
+      }),
+    );
+    const dialog = await chooseFile();
+    expect(
+      await within(dialog).findByText(
+        'The check of the file stopped before it ended, for example because Scanopsis restarted. Resume the upload to check the file again.',
+      ),
+    ).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Resume upload' }));
+    expect(await screen.findByText('Backup uploaded')).toBeInTheDocument();
+  });
 });

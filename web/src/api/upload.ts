@@ -57,23 +57,39 @@ export interface UploadOptions {
 }
 
 /**
- * The connection failed more often than the upload retries. The server keeps
- * the parts it has (for an hour without a new one), so passing `id` as
- * `resumeId` continues where it stopped.
+ * The connection failed more often than the upload retries, or the server
+ * stopped the check of the complete file before it ended (`checkStopped`,
+ * for example when it restarted). The server keeps the parts it has (for an
+ * hour without a new one), so passing `id` as `resumeId` continues where it
+ * stopped, and completes the upload again, which starts a new check.
  */
 export class UploadInterruptedError extends Error {
   readonly id: string;
   readonly received: number;
   readonly size: number;
+  readonly checkStopped: boolean;
 
-  constructor(id: string, received: number, size: number) {
-    super('The connection to the server was lost during the upload.');
+  constructor(id: string, received: number, size: number, checkStopped = false) {
+    super(
+      checkStopped
+        ? 'The check of the file stopped before it ended, for example because Scanopsis restarted.'
+        : 'The connection to the server was lost during the upload.',
+    );
     this.name = 'UploadInterruptedError';
     this.id = id;
     this.received = received;
     this.size = size;
+    this.checkStopped = checkStopped;
   }
 }
+
+/**
+ * The reason to abort an upload with when its page goes away rather than
+ * when someone cancels it: an upload whose every byte was sent is then left
+ * to its check on the server, which keeps the outcome. Any other abort
+ * cancels the upload on the server.
+ */
+export const PAGE_LEFT = 'page-left';
 
 const RETRY_DELAYS_MS = [1000, 3000, 9000];
 export const BUSY_DELAY_MS = 2000;
@@ -158,6 +174,96 @@ function outcome<R>(endpoints: UploadEndpoints<R>, status: UploadStatus): R {
   return endpoints.result(status);
 }
 
+interface CheckOptions {
+  delays: number[];
+  busyDelay: number;
+  pollMs: number;
+}
+
+function checkOptions(options: UploadOptions): CheckOptions {
+  return {
+    delays: options.retryDelaysMs ?? RETRY_DELAYS_MS,
+    busyDelay: options.busyDelayMs ?? BUSY_DELAY_MS,
+    pollMs: options.pollMs ?? CHECK_POLL_MS,
+  };
+}
+
+/**
+ * Asks for the outcome of the check of the upload `id` of `size` bytes until
+ * it has ended, starting from `status`. A server that holds the file again
+ * as received (its check stopped) throws a resumable UploadInterruptedError.
+ */
+async function awaitCheck<R>(
+  endpoints: UploadEndpoints<R>,
+  id: string,
+  size: number,
+  status: UploadStatus,
+  signal: AbortSignal,
+  { delays, busyDelay, pollMs }: CheckOptions,
+): Promise<UploadResult<R>> {
+  let failures = 0;
+  // A small file is checked at once: the first question comes sooner.
+  let next = Math.min(FIRST_POLL_MS, pollMs);
+  while (status.state === 'checking') {
+    await wait(failures > 0 ? delays[failures - 1] : next, signal);
+    next = pollMs;
+    try {
+      status = await patiently(() => endpoints.status(id, signal), signal, busyDelay);
+      failures = 0;
+    } catch (err) {
+      if (signal.aborted) throw abortError();
+      if (!isTransient(err)) throw err;
+      failures += 1;
+      if (failures > delays.length) throw new UploadInterruptedError(id, size, size);
+    }
+  }
+  if (status.state === 'uploading') {
+    throw new UploadInterruptedError(id, status.received, size, status.received >= size);
+  }
+  return { id, result: outcome(endpoints, status) };
+}
+
+/** Whether an aborted upload is to be cancelled on the server: not when its page went away after every byte was sent. */
+function cancelOnAbort(signal: AbortSignal, received: number, size: number) {
+  return !(signal.reason === PAGE_LEFT && received >= size);
+}
+
+/**
+ * Follows an upload of `size` bytes that was sent in full earlier, such as
+ * before the page was reloaded: asks for the outcome of its check until it
+ * has ended. An upload the server holds only in part, or whose check stopped,
+ * throws an UploadInterruptedError; resuming it needs the file. Aborting
+ * `signal` stops the check on the server, unless the reason is PAGE_LEFT.
+ */
+export async function followUpload<R>(
+  id: string,
+  size: number,
+  endpoints: UploadEndpoints<R>,
+  signal: AbortSignal,
+  options: UploadOptions = {},
+): Promise<UploadResult<R>> {
+  const check = checkOptions(options);
+  try {
+    let first: UploadStatus;
+    try {
+      first = await patiently(() => endpoints.status(id, signal), signal, check.busyDelay);
+    } catch (err) {
+      if (!signal.aborted && isTransient(err)) throw new UploadInterruptedError(id, size, size);
+      throw err;
+    }
+    if (first.state === 'uploading') {
+      throw new UploadInterruptedError(id, first.received, size, first.received >= size);
+    }
+    return await awaitCheck(endpoints, id, size, first, signal, check);
+  } catch (err) {
+    if (signal.aborted && cancelOnAbort(signal, size, size)) {
+      await cancelUpload(endpoints, id, check.busyDelay);
+    }
+    if (signal.aborted) throw abortError();
+    throw err;
+  }
+}
+
 /**
  * Uploads `file` in parts of the server's chunk size and completes it. Reports
  * the bytes the server holds after each part. After a network error it asks
@@ -167,7 +273,8 @@ function outcome<R>(endpoints: UploadEndpoints<R>, status: UploadStatus): R {
  * the server checks the file, it asks for the outcome every few seconds, with
  * the same retries; a refused file throws an ApiError with the reason's code.
  * Aborting `signal` cancels the upload on the server (which stops a check)
- * and throws an AbortError.
+ * and throws an AbortError; aborting it with the reason PAGE_LEFT once every
+ * byte was sent leaves the upload to its check.
  */
 export async function uploadInChunks<R>(
   file: File,
@@ -176,32 +283,10 @@ export async function uploadInChunks<R>(
   signal: AbortSignal,
   options: UploadOptions = {},
 ): Promise<UploadResult<R>> {
-  const delays = options.retryDelaysMs ?? RETRY_DELAYS_MS;
-  const busyDelay = options.busyDelayMs ?? BUSY_DELAY_MS;
-  const pollMs = options.pollMs ?? CHECK_POLL_MS;
+  const check = checkOptions(options);
+  const { delays, busyDelay } = check;
   let id = options.resumeId;
   let received = 0;
-
-  /** Asks for the outcome of the check until it has ended. */
-  async function awaitCheck(status: UploadStatus): Promise<UploadResult<R>> {
-    let failures = 0;
-    // A small file is checked at once: the first question comes sooner.
-    let next = Math.min(FIRST_POLL_MS, pollMs);
-    while (status.state === 'checking') {
-      await wait(failures > 0 ? delays[failures - 1] : next, signal);
-      next = pollMs;
-      try {
-        status = await patiently(() => endpoints.status(id!, signal), signal, busyDelay);
-        failures = 0;
-      } catch (err) {
-        if (signal.aborted) throw abortError();
-        if (!isTransient(err)) throw err;
-        failures += 1;
-        if (failures > delays.length) throw new UploadInterruptedError(id!, file.size, file.size);
-      }
-    }
-    return { id: id!, result: outcome(endpoints, status) };
-  }
 
   try {
     let first: UploadStatus;
@@ -224,7 +309,9 @@ export async function uploadInChunks<R>(
     const chunk = first.chunk_size;
     onProgress(received, file.size);
     // A resumed upload may have been completed already.
-    if (first.state !== 'uploading') return await awaitCheck(first);
+    if (first.state !== 'uploading') {
+      return await awaitCheck(endpoints, id, file.size, first, signal, check);
+    }
 
     let failures = 0;
     let resends = 0;
@@ -288,10 +375,12 @@ export async function uploadInChunks<R>(
         }
         throw err;
       }
-      return await awaitCheck(checking);
+      return await awaitCheck(endpoints, id!, file.size, checking, signal, check);
     }
   } catch (err) {
-    if (signal.aborted && id) await cancelUpload(endpoints, id, busyDelay);
+    if (signal.aborted && id && cancelOnAbort(signal, received, file.size)) {
+      await cancelUpload(endpoints, id, busyDelay);
+    }
     if (signal.aborted) throw abortError();
     throw err;
   }

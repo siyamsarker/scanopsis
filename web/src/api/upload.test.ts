@@ -5,6 +5,8 @@ import type { BackupInfo } from './backups';
 import { ApiError } from './client';
 import {
   cancelUpload,
+  followUpload,
+  PAGE_LEFT,
   readyPart,
   restUploadEndpoints,
   uploadInChunks,
@@ -382,6 +384,122 @@ describe('uploadInChunks', () => {
     expect(error).toBeInstanceOf(DOMException);
     expect((error as DOMException).name).toBe('AbortError');
     expect(server.endpoints.cancel).toHaveBeenCalledWith('u1');
+  });
+
+  it('leaves a fully received upload to its check when the page is left', async () => {
+    const server = fakeServer(4);
+    server.check.left = 1000;
+    const controller = new AbortController();
+    vi.mocked(server.endpoints.status).mockImplementation(async () => {
+      controller.abort(PAGE_LEFT);
+      return { ...server.state };
+    });
+    const error = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      controller.signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect((error as DOMException).name).toBe('AbortError');
+    expect(server.endpoints.cancel).not.toHaveBeenCalled();
+  });
+
+  it('cancels a partly sent upload when the page is left', async () => {
+    const server = fakeServer(8);
+    const controller = new AbortController();
+    vi.mocked(server.endpoints.put).mockImplementationOnce(async () => {
+      controller.abort(PAGE_LEFT);
+      throw new DOMException('Aborted', 'AbortError');
+    });
+    const error = await uploadInChunks(
+      file('abcdefgh'),
+      server.endpoints,
+      () => {},
+      controller.signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect((error as DOMException).name).toBe('AbortError');
+    expect(server.endpoints.cancel).toHaveBeenCalledWith('u1');
+  });
+
+  it('stays resumable when the check stopped, as after a restart of the server', async () => {
+    const server = fakeServer(4);
+    vi.mocked(server.endpoints.status).mockImplementationOnce(async () => {
+      // The server stopped the check and holds the file as received.
+      server.state.state = 'uploading';
+      return { ...server.state };
+    });
+    const error = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      new AbortController().signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UploadInterruptedError);
+    expect(error).toMatchObject({ id: 'u1', received: 4, size: 4, checkStopped: true });
+    expect((error as Error).message).toBe(
+      'The check of the file stopped before it ended, for example because Scanopsis restarted.',
+    );
+
+    // Resuming completes the upload again, which starts a new check.
+    const result = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      new AbortController().signal,
+      { ...fast, resumeId: 'u1' },
+    );
+    expect(result.result).toEqual({ name: 'scanopsis-backup.tar.gz' });
+    expect(server.endpoints.complete).toHaveBeenCalledTimes(2);
+    expect(server.endpoints.put).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('followUpload', () => {
+  it('asks for the outcome of an upload the server checks', async () => {
+    const server = fakeServer(4);
+    server.state.received = 4;
+    server.state.state = 'checking';
+    server.check.left = 2;
+    const result = await followUpload(
+      'u1',
+      4,
+      server.endpoints,
+      new AbortController().signal,
+      fast,
+    );
+    expect(result).toEqual({ id: 'u1', result: { name: 'scanopsis-backup.tar.gz' } });
+    expect(server.endpoints.status).toHaveBeenCalledTimes(3);
+    expect(server.endpoints.put).not.toHaveBeenCalled();
+    expect(server.endpoints.complete).not.toHaveBeenCalled();
+  });
+
+  it('gives the outcome of an upload that was checked meanwhile', async () => {
+    const server = fakeServer(4);
+    Object.assign(server.state, {
+      received: 4,
+      state: 'refused',
+      reason: { code: 'invalid_backup', message: 'Damaged.' },
+    });
+    await expect(
+      followUpload('u1', 4, server.endpoints, new AbortController().signal, fast),
+    ).rejects.toMatchObject({ status: 422, code: 'invalid_backup' });
+  });
+
+  it('cannot continue an upload the server holds only in part', async () => {
+    const server = fakeServer(8);
+    server.state.received = 4;
+    const error = await followUpload(
+      'u1',
+      8,
+      server.endpoints,
+      new AbortController().signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UploadInterruptedError);
+    expect(error).toMatchObject({ id: 'u1', received: 4, size: 8 });
   });
 });
 

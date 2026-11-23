@@ -126,7 +126,12 @@ export function BackupFileDrop({
                 minutes for a large one.
               </p>
             ) : null}
-            {phase.kind === 'interrupted' ? (
+            {phase.kind === 'interrupted' && phase.checkStopped ? (
+              <Problem>
+                The check of the file stopped before it ended, for example because Scanopsis
+                restarted. Resume the upload to check the file again.
+              </Problem>
+            ) : phase.kind === 'interrupted' ? (
               <Problem>
                 The connection was lost at {formatBytes(phase.sent)} of{' '}
                 {formatBytes(phase.file.size)}. Check your connection, then resume the upload. The
