@@ -130,10 +130,19 @@ func uploadForSetup(t *testing.T, c *client, token string, data []byte) string {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("upload = %d", resp.StatusCode)
 	}
-	if code, body := c.do("POST", "/api/v1/setup/restore/uploads/"+id+"/complete", map[string]any{"token": token}); code != http.StatusCreated {
-		t.Fatalf("complete = %d %v", code, body)
+	// The server checks the file in the background; completing again answers
+	// 202 until the check has ended, then 200 with the outcome.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		code, body := c.do("POST", "/api/v1/setup/restore/uploads/"+id+"/complete", map[string]any{"token": token})
+		switch {
+		case code == http.StatusOK && body["state"] == "ready":
+			return id
+		case code != http.StatusAccepted || time.Now().After(deadline):
+			t.Fatalf("complete = %d %v", code, body)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	return id
 }
 
 func countRows(t *testing.T, pool *pgxpool.Pool, q string) int {
