@@ -48,6 +48,32 @@ func humanBytes(n uint64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
+// dumpSettings apply to the transaction of a dump. The pool limits every
+// statement to a few seconds (store.DefaultStatementTimeout), which is right
+// for the server's queries but not for copying a table of millions of rows,
+// so the dump lifts the limit for its own transaction only. The others fix
+// how values are written, so the file is the same whatever the server or
+// the database role configures: dates in ISO form and in UTC, floating-point
+// numbers with every digit, binary data in hex.
+var dumpSettings = []string{
+	`SET LOCAL statement_timeout = 0`,
+	`SET LOCAL TimeZone = 'UTC'`,
+	`SET LOCAL DateStyle = 'ISO, YMD'`,
+	`SET LOCAL IntervalStyle = 'postgres'`,
+	`SET LOCAL extra_float_digits = 3`,
+	`SET LOCAL bytea_output = 'hex'`,
+}
+
+// setLocal runs the SET LOCAL statements in tx.
+func setLocal(ctx context.Context, tx pgx.Tx, stmts []string) error {
+	for _, q := range stmts {
+		if _, err := tx.Exec(ctx, q); err != nil {
+			return fmt.Errorf("%s: %w", q, err)
+		}
+	}
+	return nil
+}
+
 // Dumper takes backups of the database into a Dir.
 type Dumper struct {
 	Pool           *pgxpool.Pool
@@ -75,6 +101,9 @@ func (d *Dumper) Dump(ctx context.Context, kind Kind, actor string, progress fun
 		defer cancel()
 		_ = tx.Rollback(rctx)
 	}()
+	if err := setLocal(ctx, tx, dumpSettings); err != nil {
+		return Info{}, fmt.Errorf("take backup: %w", err)
+	}
 
 	tables, err := Tables(ctx, tx)
 	if err != nil {

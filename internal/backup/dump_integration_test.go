@@ -10,6 +10,8 @@ import (
 	"encoding/csv"
 	"errors"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -20,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/siyamsarker/scanopsis/internal/store"
@@ -450,5 +453,153 @@ func TestDumpPartialRemovedOnPanic(t *testing.T) {
 	}
 	if _, err := d.Dump(context.Background(), KindManual, "alice", nil); err != nil {
 		t.Errorf("dump after panic: %v", err)
+	}
+}
+
+// shortTimeoutPool opens a second pool on the database of pool with
+// store.Open, as the server does, but with every statement limited to 200
+// milliseconds by the database URL.
+func shortTimeoutPool(t *testing.T, pool *pgxpool.Pool) *pgxpool.Pool {
+	t.Helper()
+	c := pool.Config().ConnConfig
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(c.User, c.Password),
+		Host:     net.JoinHostPort(c.Host, strconv.Itoa(int(c.Port))),
+		Path:     "/" + c.Database,
+		RawQuery: "sslmode=disable&statement_timeout=200",
+	}
+	short, err := store.Open(context.Background(), u.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(short.Close)
+	return short
+}
+
+// seedLarge fills vulnerabilities with enough rows that copying the table
+// takes longer than the 200 milliseconds of shortTimeoutPool, and checks
+// that it does: a plain COPY of the table on that pool is cancelled.
+func seedLarge(t *testing.T, pool, short *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual')`,
+		`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+SELECT 1, 'image', 'app', g, g, 'main', false, 'c', 2, now(), '\x1f8b' FROM generate_series(1, 2000) g`,
+		`INSERT INTO vulnerabilities (scan_id, target, class, pkg_name, vuln_id, severity, title)
+SELECT s.id, 't', 'os-pkgs', 'pkg', 'CVE-' || s.id || '-' || g, 'HIGH', repeat(md5(g::text), 4) FROM scans s, generate_series(1, 200) g`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conn, err := short.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	_, err = conn.Conn().PgConn().CopyTo(ctx, io.Discard, `COPY vulnerabilities TO STDOUT (FORMAT csv)`)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "57014" { // query_canceled
+		t.Fatalf("a plain COPY of the table under the 200 ms limit: %v; want it cancelled, or the table is too small to prove anything", err)
+	}
+}
+
+// TestDumpOutlastsStatementTimeout checks that a dump of a table that takes
+// longer to copy than the statement timeout of the pool still succeeds: the
+// timeout protects the server's short queries, not a backup.
+func TestDumpOutlastsStatementTimeout(t *testing.T) {
+	d, pool := newDumper(t)
+	short := shortTimeoutPool(t, pool)
+	seedLarge(t, pool, short)
+	d.Pool = short
+	info, err := d.Dump(context.Background(), KindManual, "alice", nil)
+	if err != nil {
+		t.Fatalf("dump on a pool with a 200 ms statement timeout: %v", err)
+	}
+	p, _ := d.Dir.Path(info.Name)
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	_, tr, err := Verify(f, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.Tables["vulnerabilities"].Rows; got != 400000 {
+		t.Errorf("vulnerabilities in the backup: %d rows, want 400000", got)
+	}
+}
+
+// TestDumpIndependentOfSessionSettings dumps through connections configured
+// with other date, time zone, number and binary formats than the defaults,
+// and checks that the file holds values in the fixed forms a restore reads:
+// ISO dates in UTC, floating-point numbers with every digit, hex binary data.
+func TestDumpIndependentOfSessionSettings(t *testing.T) {
+	d, pool := newDumper(t)
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual')`,
+		`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, '2026-03-04 05:06:07.123456+00', '\x1f8b00')`,
+		`INSERT INTO sonar_analyses (service_id, task_id, analysed_at, coverage) VALUES (1, 'task-1', '2026-03-04 05:06:07+00', 0.1::float8 + 0.2::float8)`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := pool.Config().Copy()
+	for k, v := range map[string]string{
+		"DateStyle": "SQL, DMY", "TimeZone": "Asia/Dhaka", "extra_float_digits": "-15", "bytea_output": "escape",
+	} {
+		cfg.ConnConfig.RuntimeParams[k] = v
+	}
+	odd, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer odd.Close()
+	d.Pool = odd
+	info, err := d.Dump(ctx, KindManual, "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := d.Dir.Path(info.Name)
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	got := map[string]string{}
+	_, err = ReadTables(f, func(tb TableSpec, data io.Reader) (int64, error) {
+		r := csv.NewReader(data)
+		var n int64
+		for {
+			rec, err := r.Read()
+			if err == io.EOF {
+				return n, nil
+			}
+			if err != nil {
+				return n, err
+			}
+			n++
+			for i, c := range tb.Columns {
+				got[tb.Name+"."+c] = rec[i]
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{
+		"scans.scanned_at":        "2026-03-04 05:06:07.123456+00",
+		"scans.raw_report":        `\x1f8b00`,
+		"sonar_analyses.coverage": "0.30000000000000004",
+	} {
+		if got[k] != want {
+			t.Errorf("%s in the backup = %q, want %q", k, got[k], want)
+		}
 	}
 }
