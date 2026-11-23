@@ -2,7 +2,7 @@
 # Copyright 2026 Siyam Sarker
 # SPDX-License-Identifier: Apache-2.0
 #
-# Exercise check-headers.sh and check-dco.sh against a throwaway repository.
+# Exercise check-headers.sh and check-dco.sh and check-commits.sh against a throwaway repository.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -80,5 +80,46 @@ git reset -q --hard HEAD~1
 expect fail "dco: empty range" bash "$here/check-dco.sh" HEAD HEAD
 expect fail "dco: unknown revision" bash "$here/check-dco.sh" "$base" does-not-exist
 expect fail "dco: empty argument" bash "$here/check-dco.sh" "" HEAD
+
+# Commit subject checks use their own commits on top of the signed history.
+git reset -q --hard "$base"
+echo c1 >c1
+git add c1
+git commit -q -s -m "feat(web): add a conventional subject"
+expect pass "commits: conventional subject passes" bash "$here/check-commits.sh" "$base" HEAD
+
+git reset -q --hard "$base"
+echo c2 >c2
+git add c2
+git commit -q -s -m "feat(web): $(printf 'x%.0s' $(seq 1 70))"
+expect fail "commits: subject over 72 characters fails" bash "$here/check-commits.sh" "$base" HEAD
+
+git reset -q --hard "$base"
+echo c3 >c3
+git add c3
+git commit -q -s -m "add a subject without a type"
+expect fail "commits: missing type fails" bash "$here/check-commits.sh" "$base" HEAD
+
+git reset -q --hard "$base"
+echo c4 >c4
+git add c4
+git commit -q -s -m "fix: Start with an uppercase letter"
+expect fail "commits: uppercase description fails" bash "$here/check-commits.sh" "$base" HEAD
+
+git reset -q --hard "$base"
+git checkout -q -b side
+echo c5 >c5
+git add c5
+git commit -q -s -m "feat: a side commit"
+git checkout -q -
+echo c6 >c6
+git add c6
+git commit -q -s -m "fix: a main commit"
+git merge -q --no-ff -m "Merge branch 'side'" side
+expect pass "commits: merge commits are skipped" bash "$here/check-commits.sh" "$base" HEAD
+
+expect fail "commits: empty range" bash "$here/check-commits.sh" HEAD HEAD
+expect fail "commits: unknown revision" bash "$here/check-commits.sh" "$base" does-not-exist
+expect fail "commits: empty argument" bash "$here/check-commits.sh" "" HEAD
 
 exit "$fails"

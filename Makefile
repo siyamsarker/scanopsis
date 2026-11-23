@@ -22,7 +22,7 @@ COMMIT  ?= $(shell (git rev-parse --short HEAD 2>/dev/null || echo unknown) | $(
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 IMAGE   ?= scanopsis:dev
 
-.PHONY: generate generate-check test-integration help check fmt fmt-check lint test vuln build web-install web-lint web-test web-audit web-build web image image-scan clean headers test-scripts licenses dco
+.PHONY: generate generate-check test-integration help check fmt fmt-check lint test vuln build web-install web-lint web-test web-audit web-build web image image-scan clean headers test-scripts licenses dco commits
 
 help: ## List available targets
 	@grep -E '^[a-z0-9-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
@@ -98,6 +98,9 @@ licenses: web-install ## Enforce the licence policy for Go and runtime npm depen
 DCO_BASE ?= origin/main
 dco: ## Fail if a commit after DCO_BASE (default origin/main) lacks a matching Signed-off-by
 	bash scripts/check-dco.sh '$(DCO_BASE)' HEAD
+
+commits: ## Fail if a commit subject after DCO_BASE (default origin/main) is malformed
+	bash scripts/check-commits.sh '$(DCO_BASE)' HEAD
 
 clean: ## Remove build output
 	rm -rf bin web/dist/app

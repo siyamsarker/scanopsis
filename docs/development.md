@@ -362,7 +362,9 @@ When you add a fixture, write down here how you made it.
 - **Commits:** use Conventional Commits and sign off every commit with `git
   commit -s`. `make dco` checks the sign-offs of every commit after
   `origin/main`. Set `DCO_BASE` to check another range, for example `make dco
-  DCO_BASE=HEAD~3`. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+  DCO_BASE=HEAD~3`. `make commits` checks the subjects of the same range: a
+  Conventional Commits type, a lowercase description and at most 72
+  characters. See [CONTRIBUTING.md](../CONTRIBUTING.md).
 - **Licence headers:** every source file starts with the SPDX header shown in
   CONTRIBUTING.md. `make headers` checks it.
 - **Pinned dependencies:** dependencies have exact versions (`go.mod`, and

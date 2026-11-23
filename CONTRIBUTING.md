@@ -55,6 +55,7 @@ The slower checks need Docker. Run the ones that cover your change:
 | `make generate-check` | Generated code and `docs/api.md` are up to date. |
 | `make image-scan` | Builds the image and scans it with Trivy. |
 | `make dco` | Every commit is signed off. |
+| `make commits` | Every commit subject follows Conventional Commits and is at most 72 characters. |
 
 ## Write commit messages
 
@@ -68,6 +69,10 @@ fix(web): keep severity order in trend chart
 
 After a blank line, add a body that says what changed and why, when the
 reason is not obvious.
+
+Keep the subject at 72 characters or fewer and start the description with a
+lowercase letter or a digit. `make commits` checks every commit after
+`origin/main`.
 
 ## Sign off your commits
 
