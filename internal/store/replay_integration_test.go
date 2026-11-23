@@ -425,9 +425,9 @@ func databaseWithRole(t *testing.T, name string) (owner, role *pgxpool.Pool) {
 // on the public schema of a database it does not own, as "Use an existing
 // PostgreSQL" in docs/deployment.md allows: goose migrates, then dropping
 // the tables and replaying the migrations succeed in one transaction, leave
-// the same schema, and keep a table of another role. While an object of
-// another role depends on a Scanopsis table, the drop is refused and
-// nothing changes.
+// the same schema, and keep a table of another role and a table of another
+// application that the role owns. While an object of another role depends
+// on a Scanopsis table, the drop is refused and nothing changes.
 func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -458,6 +458,11 @@ func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 		t.Fatalf("migrate as the narrow role: %v", err)
 	}
 	if _, err := narrow.Exec(ctx, `INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'shop/payments-api', 'manual')`); err != nil {
+		t.Fatal(err)
+	}
+	// A table of another application that the same role owns: it is not a
+	// Scanopsis table, so the drop must leave it alone too.
+	if _, err := narrow.Exec(ctx, `CREATE TABLE other_app_data (note text); INSERT INTO other_app_data VALUES ('also kept')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -525,6 +530,9 @@ func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 	var note string
 	if err := narrow.QueryRow(ctx, `SELECT note FROM other_app`).Scan(&note); err != nil || note != "kept" {
 		t.Errorf("table of another role after the drop: %q, %v", note, err)
+	}
+	if err := narrow.QueryRow(ctx, `SELECT note FROM other_app_data`).Scan(&note); err != nil || note != "also kept" {
+		t.Errorf("table of another application owned by the role after the drop: %q, %v", note, err)
 	}
 	gooseAppliesNothing(t, narrow)
 }

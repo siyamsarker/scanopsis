@@ -170,24 +170,26 @@ func RecordGooseVersions(ctx context.Context, tx pgx.Tx, upTo int64) error {
 	return nil
 }
 
-// ownTables selects the oid, schema and name of every table that the current
-// role owns in the current schema.
+// ownTables selects the oid, schema and name of every Scanopsis table (the
+// names in $1) that the current role owns in the current schema.
 const ownTables = `
 	SELECT c.oid, n.nspname, c.relname FROM pg_class c
 	JOIN pg_namespace n ON n.oid = c.relnamespace
-	WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
+	WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p') AND c.relname = ANY($1)
 	  AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)`
 
-// DropApplicationTables drops, in tx, every table that the current role owns
-// in the schema the migrations create their tables in (current_schema():
-// public unless the database URL sets another search_path), goose's version
-// table included. Tables of other roles in that schema are left alone.
+// DropApplicationTables drops, in tx, the Scanopsis tables in the schema the
+// migrations create their tables in (current_schema(): public unless the
+// database URL sets another search_path). Scanopsis tables are those that
+// any embedded migration creates, and goose's version table; the ones that
+// exist are dropped, the others are skipped. No other table is touched,
+// whoever owns it.
 //
 // It drops nothing and returns an error when a Scanopsis table there belongs
-// to another role (the replay would then fail on it), or when an object
-// outside these tables, such as another application's view or foreign key,
-// depends on one of them: the tables are dropped without CASCADE, so such an
-// object is never removed with them.
+// to another role than the connected one (the replay would then fail on
+// it), or when an object outside these tables, such as another
+// application's view or foreign key, depends on one of them: the tables are
+// dropped without CASCADE, so such an object is never removed with them.
 func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 	names, err := applicationTables()
 	if err != nil {
@@ -226,7 +228,7 @@ func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 		        WHEN 'pg_policy'::regclass THEN (SELECT polrelid FROM pg_policy WHERE oid = d.objid)
 		        WHEN 'pg_class'::regclass THEN coalesce((SELECT indrelid FROM pg_index WHERE indexrelid = d.objid), d.objid)
 		      END) IN (SELECT oid FROM own), false)
-		ORDER BY 1, 2 LIMIT 1`).Scan(&table, &object)
+		ORDER BY 1, 2 LIMIT 1`, names).Scan(&table, &object)
 	switch {
 	case err == nil:
 		return fmt.Errorf("another database object depends on Scanopsis table %s (%s); remove it or restore into a database used only by Scanopsis",
@@ -235,7 +237,7 @@ func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 		return fmt.Errorf("check objects that depend on the tables: %w", err)
 	}
 
-	rows, err := tx.Query(ctx, ownTables+` ORDER BY c.relname`)
+	rows, err := tx.Query(ctx, ownTables+` ORDER BY c.relname`, names)
 	if err != nil {
 		return fmt.Errorf("list tables to drop: %w", err)
 	}
