@@ -4,7 +4,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { ArchiveRestore, UserPlus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { useNavigate } from 'react-router';
+import { useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { setupKey } from '../api/hooks';
 import { AuthShell } from '../components/AuthShell';
@@ -141,14 +141,25 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
 
 type Choice = 'choose' | 'new' | 'restore';
 
+/** The choice is part of the address, so the browser's Back button returns to the two choices. */
+function useChoice(): [Choice, (choice: Choice, replace?: boolean) => void] {
+  const [params, setParams] = useSearchParams();
+  const start = params.get('start');
+  const choice: Choice = start === 'new' || start === 'restore' ? start : 'choose';
+  return [
+    choice,
+    (next, replace = false) => setParams(next === 'choose' ? {} : { start: next }, { replace }),
+  ];
+}
+
 const choiceClass =
   'flex w-full items-start gap-3 rounded-inner border border-line bg-surface p-4 text-left transition-colors hover:border-line-strong hover:bg-sunken';
 
 /** The start of a new server: a fresh installation, or one moved over from a backup. */
 export function SetupPage() {
-  const [choice, setChoice] = useState<Choice>('choose');
-  if (choice === 'new') return <NewInstallation onBack={() => setChoice('choose')} />;
-  if (choice === 'restore') return <RestoreFromBackup onBack={() => setChoice('choose')} />;
+  const [choice, setChoice] = useChoice();
+  if (choice === 'new') return <NewInstallation onBack={() => setChoice('choose', true)} />;
+  if (choice === 'restore') return <RestoreFromBackup onBack={() => setChoice('choose', true)} />;
   return (
     <AuthShell
       title="Welcome to Scanopsis"

@@ -7,7 +7,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { fetchRestoreStatus } from '../api/backups';
 import { ApiError, type Me } from '../api/client';
-import { meKey, setupKey } from '../api/hooks';
+import { meKey, setupKey, setupQuery } from '../api/hooks';
 import { hideRestoreOverlay } from '../api/restoreMode';
 import { overlayView, type OverlayView } from '../routes/admin/backups/model';
 import { buttonClass } from '../ui';
@@ -225,9 +225,15 @@ export function RestoreOverlayHost() {
     <RestoreOverlay
       backLabel={onSetup ? 'Back to setup' : isAdmin ? 'Back to Backups' : 'Back to the portfolio'}
       onSignIn={() => {
-        hideRestoreOverlay();
-        queryClient.clear();
-        void navigate('/login', { replace: true });
+        void (async () => {
+          queryClient.clear();
+          // After a restore on the setup screen the gate must know an administrator exists
+          // before it sees the sign-in page, or it shows setup again for a moment.
+          if (onSetup)
+            await queryClient.fetchQuery({ ...setupQuery, staleTime: 0 }).catch(() => undefined);
+          hideRestoreOverlay();
+          void navigate('/login', { replace: true });
+        })();
       }}
       onBack={() => {
         hideRestoreOverlay();

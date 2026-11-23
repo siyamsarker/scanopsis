@@ -10,12 +10,15 @@ const usersKey = ['users'] as const;
 
 export const setupKey = ['setup'] as const;
 
+/** The setup status query: whether the first administrator still has to be created. */
+export const setupQuery = {
+  queryKey: setupKey,
+  queryFn: async () => unwrap(await api.GET('/api/v1/setup')),
+};
+
 /** Whether the first administrator still has to be created. */
 export function useSetupStatus() {
-  return useQuery({
-    queryKey: setupKey,
-    queryFn: async () => unwrap(await api.GET('/api/v1/setup')),
-  });
+  return useQuery(setupQuery);
 }
 
 /** The signed-in user and session state, or null when there is no session (401 is not an error). */

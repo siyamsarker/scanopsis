@@ -70,7 +70,7 @@ export class UploadInterruptedError extends Error {
 }
 
 const RETRY_DELAYS_MS = [1000, 3000, 9000];
-const BUSY_DELAY_MS = 2000;
+export const BUSY_DELAY_MS = 2000;
 /** How often a busy server is asked again before the upload gives up. */
 const BUSY_TRIES = 15;
 
@@ -122,7 +122,7 @@ function isTransient(err: unknown): boolean {
 }
 
 /** Runs a request, asking again while the server answers that it is busy. */
-async function patiently<T>(
+export async function patiently<T>(
   request: () => Promise<T>,
   signal: AbortSignal,
   busyDelayMs: number,

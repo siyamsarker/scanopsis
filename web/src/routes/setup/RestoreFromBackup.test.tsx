@@ -35,6 +35,7 @@ const upload = { id: 'u1', file_name: 'old-host.tar.gz', size: 10, chunk_size: 4
 
 interface World {
   required: boolean;
+  token?: Handler;
   start?: Handler;
   complete?: Handler;
   restore?: Handler;
@@ -48,6 +49,9 @@ function api(world: World): Handler {
     }
     if (call.path === '/api/v1/me') return apiError(401, 'unauthenticated', 'Sign in first.');
     if (call.path === '/api/v1/auth/methods') return json(200, { gitlab: false, local: true });
+    if (call.path === '/api/v1/setup/restore/token') {
+      return world.token ? world.token(call) : new Response(null, { status: 204 });
+    }
     if (call.path === '/api/v1/setup/restore/uploads' && call.method === 'POST') {
       return world.start ? world.start(call) : json(201, { ...upload, received: 0 });
     }
@@ -109,50 +113,57 @@ describe('restore from the setup screen', () => {
     );
   });
 
-  it('sends the token with every upload request and goes back to it when it is wrong', async () => {
+  it('checks the token first and stays on it when it is wrong', async () => {
     const { calls } = mockFetch(
       api({
         required: true,
-        start: () => apiError(403, 'invalid_setup_token', 'Wrong token.'),
+        token: () => apiError(403, 'invalid_setup_token', 'Wrong token.'),
       }),
     );
     renderApp('/setup');
     await openRestore();
     enterToken('nope');
-    await sendFile();
     expect(
       await screen.findByText('The setup token is not correct. Copy it again from the server log.'),
     ).toBeVisible();
     expect(screen.getByLabelText('Setup token')).toHaveValue('nope');
+    expect(screen.queryByRole('heading', { name: 'Choose the backup file' })).toBeNull();
+    expect(calls.find((c) => c.path === '/api/v1/setup/restore/token')?.body).toEqual({
+      token: 'nope',
+    });
+  });
+
+  it('sends the token with every upload request', async () => {
+    const { calls } = mockFetch(api({ required: true }));
+    renderApp('/setup');
+    await openRestore();
+    enterToken('tok-123');
+    await sendFile();
+    await screen.findByRole('heading', { name: 'Review the backup' });
     const start = calls.find((c) => c.path === '/api/v1/setup/restore/uploads');
-    expect(start?.body).toEqual({ token: 'nope', file_name: 'old-host.tar.gz', size: 10 });
+    expect(start?.body).toEqual({ token: 'tok-123', file_name: 'old-host.tar.gz', size: 10 });
+    const complete = calls.find((c) => c.path.endsWith('/complete'));
+    expect(complete?.body).toEqual({ token: 'tok-123' });
   });
 
   it('says how long to wait after too many wrong tokens', async () => {
     mockFetch(
       api({
         required: true,
-        start: () => apiError(429, 'too_many_attempts', 'Slow down.', { 'Retry-After': '30' }),
+        token: () => apiError(429, 'too_many_attempts', 'Slow down.', { 'Retry-After': '30' }),
       }),
     );
     renderApp('/setup');
     await openRestore();
     enterToken();
-    await sendFile();
     expect(await screen.findByText('Too many attempts. Try again in 30 seconds.')).toBeVisible();
   });
 
-  it('blocks a backup made with another secret key', async () => {
+  it('blocks a backup made with another secret key and leads back to the token', async () => {
     mockFetch(
       api({
         required: true,
-        complete: () =>
-          json(201, {
-            ...preview,
-            key_matches: false,
-            scans_removed_by_retention: 0,
-            info: { ...preview.info, key_matches: false },
-          }),
+        complete: () => apiError(422, 'key_mismatch', 'Another SCANOPSIS_SECRET_KEY.'),
       }),
     );
     renderApp('/setup');
@@ -164,22 +175,19 @@ describe('restore from the setup screen', () => {
         'This backup was made with another secret key. Copy secrets/secret_key from the old installation and restart Scanopsis.',
       ),
     ).toBeVisible();
+    expect(
+      screen.getByText('After the restart, Scanopsis prints a new setup token in its log.'),
+    ).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Restore backup' })).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(/Type RESTORE/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/scans? older than/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/0 scans/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Enter the new setup token' }));
+    expect(await screen.findByLabelText('Setup token')).toHaveValue('');
   });
 
   it('blocks a backup from a newer version and says to install it', async () => {
     mockFetch(
       api({
         required: true,
-        complete: () =>
-          json(201, {
-            ...preview,
-            schema_ok: false,
-            info: { ...preview.info, app_version: '0.9.0' },
-          }),
+        complete: () => apiError(422, 'newer_schema', 'Newer.'),
       }),
     );
     renderApp('/setup');
@@ -188,8 +196,11 @@ describe('restore from the setup screen', () => {
     await sendFile();
     expect(
       await screen.findByText(
-        'This backup was made by a newer version of Scanopsis (0.9.0). Install that version first, then restore it.',
+        'This backup was made by a newer version of Scanopsis. Install that version first, then restore it.',
       ),
+    ).toBeVisible();
+    expect(
+      screen.getByText('After the restart, Scanopsis prints a new setup token in its log.'),
     ).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Restore backup' })).not.toBeInTheDocument();
   });
@@ -252,22 +263,27 @@ describe('restore from the setup screen', () => {
       upload_id: 'u1',
       confirm: 'RESTORE',
     });
+    const setupReads = () =>
+      calls.filter((c) => c.path === '/api/v1/setup' && c.method === 'GET').length;
+    const before = setupReads();
     fireEvent.click(await within(overlay).findByRole('button', { name: 'Go to sign-in' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeVisible();
+    // The gate was told the new answer before the sign-in page showed.
+    expect(setupReads()).toBeGreaterThan(before);
+    expect(screen.queryByRole('heading', { name: 'Welcome to Scanopsis' })).toBeNull();
   });
 
   it('points to sign-in when an administrator exists by now', async () => {
     mockFetch(
       api({
         required: true,
-        start: () => apiError(409, 'setup_done', 'Setup is done.'),
+        token: () => apiError(409, 'setup_done', 'Setup is done.'),
       }),
     );
     renderApp('/setup');
     await openRestore();
     enterToken();
-    await sendFile();
     expect(
       await screen.findByText('This installation is already set up. Sign in instead.'),
     ).toBeVisible();
@@ -281,5 +297,54 @@ describe('restore from the setup screen', () => {
     await openRestore();
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(await screen.findByRole('button', { name: /Set up a new installation/ })).toBeVisible();
+  });
+
+  it('mentions the earlier file when another one is chosen after the review', async () => {
+    mockFetch(api({ required: true }));
+    renderApp('/setup');
+    await openRestore();
+    enterToken();
+    await sendFile();
+    await screen.findByRole('heading', { name: 'Review the backup' });
+    fireEvent.click(screen.getByRole('button', { name: 'Choose another file' }));
+    expect(await screen.findByText('The earlier file stays in the backup folder.')).toBeVisible();
+  });
+
+  it('keeps the choice in the address, so a reload or the Back button returns to it', async () => {
+    mockFetch(api({ required: true }));
+    renderApp('/setup');
+    await openRestore();
+    expect(screen.getByTestId('location')).toHaveTextContent('/setup?start=restore');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await screen.findByRole('button', { name: /Set up a new installation/ })).toBeVisible();
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/setup$/);
+  });
+
+  it('opens straight on the restore when the address says so', async () => {
+    mockFetch(api({ required: true }));
+    renderApp('/setup?start=restore');
+    expect(await screen.findByRole('heading', { name: 'Restore from a backup' })).toBeVisible();
+  });
+
+  it('moves focus to the progress when an upload starts', async () => {
+    mockFetch(api({ required: true, complete: () => new Promise<Response>(() => undefined) }));
+    renderApp('/setup');
+    await openRestore();
+    enterToken();
+    await sendFile();
+    const bar = await screen.findByRole('progressbar', { name: 'Upload progress' });
+    await waitFor(() => expect(bar.closest('[tabindex="-1"]')).toHaveFocus());
+  });
+
+  it('marks the drop zone while a file is dragged over it', async () => {
+    mockFetch(api({ required: true }));
+    renderApp('/setup');
+    await openRestore();
+    enterToken();
+    const zone = (await screen.findByText('Drop the backup file here, or')).parentElement!;
+    fireEvent.dragOver(zone);
+    expect(zone).toHaveAttribute('data-over');
+    fireEvent.dragLeave(zone);
+    expect(zone).not.toHaveAttribute('data-over');
   });
 });
