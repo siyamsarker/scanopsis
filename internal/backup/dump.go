@@ -80,21 +80,25 @@ func (d *Dumper) Dump(ctx context.Context, kind Kind, actor string, progress fun
 	if err != nil {
 		return Info{}, fmt.Errorf("take backup: %w", err)
 	}
-	schema, err := store.SchemaVersion(ctx, tx)
+	version, err := store.SchemaVersion(ctx, tx)
 	if err != nil {
 		return Info{}, fmt.Errorf("take backup: %w", err)
 	}
-	if err := d.checkSpace(ctx, tx, tables); err != nil {
+	var schema string
+	if err := tx.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return Info{}, fmt.Errorf("take backup: %w", err)
+	}
+	if err := d.checkSpace(ctx, tx, schema, tables); err != nil {
 		return Info{}, err
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
 	m := Manifest{
-		AppVersion: d.App, AppCommit: d.Commit, Schema: schema, CreatedAt: now, Kind: kind,
+		AppVersion: d.App, AppCommit: d.Commit, Schema: version, CreatedAt: now, Kind: kind,
 		CreatedBy: actor, KeyFingerprint: d.KeyFingerprint, Tables: tables,
 	}
 	name := d.Dir.NewName(kind, now)
-	if err := d.write(ctx, tx, name, m, progress); err != nil {
+	if err := d.write(ctx, tx, schema, name, m, progress); err != nil {
 		return Info{}, err
 	}
 	fi, err := os.Stat(filepath.Join(d.Dir.path, name))
@@ -104,13 +108,13 @@ func (d *Dumper) Dump(ctx context.Context, kind Kind, actor string, progress fun
 	return d.Dir.info(name, fi), nil
 }
 
-func (d *Dumper) checkSpace(ctx context.Context, tx pgx.Tx, tables []TableSpec) error {
+func (d *Dumper) checkSpace(ctx context.Context, tx pgx.Tx, schema string, tables []TableSpec) error {
 	names := make([]string, len(tables))
 	for i, t := range tables {
-		names[i] = pgx.Identifier{t.Name}.Sanitize()
+		names[i] = t.Name
 	}
 	var size int64
-	err := tx.QueryRow(ctx, `SELECT coalesce(sum(pg_table_size(n::regclass)), 0)::bigint FROM unnest($1::text[]) n`, names).Scan(&size)
+	err := tx.QueryRow(ctx, `SELECT coalesce(sum(pg_table_size(format('%I.%I', $1::text, n)::regclass)), 0)::bigint FROM unnest($2::text[]) n`, schema, names).Scan(&size)
 	if err != nil {
 		return fmt.Errorf("take backup: estimate size: %w", err)
 	}
@@ -125,48 +129,76 @@ func (d *Dumper) checkSpace(ctx context.Context, tx pgx.Tx, tables []TableSpec) 
 	return nil
 }
 
-func (d *Dumper) write(ctx context.Context, tx pgx.Tx, name string, m Manifest, progress func(Progress)) (err error) {
+// folderError reports a failure to write into the backup folder.
+func (d *Dir) folderError(err error) error {
+	return fmt.Errorf("take backup: %w: %s could not be written (%w); make sure it is writable for the user the server runs as (uid 65532 in the container image) and has free space", ErrFolder, d.path, err)
+}
+
+// errWriter remembers the first error of the file it writes to, so a failure
+// of the folder can be told from a failure of the database.
+type errWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (e *errWriter) Write(p []byte) (int, error) {
+	n, err := e.w.Write(p)
+	if err != nil && e.err == nil {
+		e.err = err
+	}
+	return n, err
+}
+
+func (d *Dumper) write(ctx context.Context, tx pgx.Tx, schema, name string, m Manifest, progress func(Progress)) error {
 	final := filepath.Join(d.Dir.path, name)
 	tmp := final + partial
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // name comes from NewName
 	if err != nil {
-		return fmt.Errorf("take backup: %w", err)
+		return d.Dir.folderError(err)
 	}
+	// Whatever happens, including a panic in the progress callback, the
+	// partial file goes unless the backup was completed.
+	complete := false
 	defer func() {
-		if err != nil {
+		if !complete {
 			_ = f.Close()
 			_ = os.Remove(tmp)
 		}
 	}()
-	bw := bufio.NewWriterSize(f, 256<<10)
+	ew := &errWriter{w: f}
+	bw := bufio.NewWriterSize(ew, 256<<10)
 	pc := tx.Conn().PgConn()
 	copyTable := func(ctx context.Context, t TableSpec, w io.Writer) (int64, error) {
 		cols := make([]string, len(t.Columns))
 		for i, c := range t.Columns {
 			cols[i] = pgx.Identifier{c}.Sanitize()
 		}
-		sql := fmt.Sprintf("COPY (SELECT %s FROM %s) TO STDOUT (FORMAT csv)", strings.Join(cols, ", "), pgx.Identifier{t.Name}.Sanitize())
+		sql := fmt.Sprintf("COPY (SELECT %s FROM %s) TO STDOUT (FORMAT csv)", strings.Join(cols, ", "), pgx.Identifier{schema, t.Name}.Sanitize())
 		tag, err := pc.CopyTo(ctx, w, sql)
 		if err != nil {
 			return 0, err
 		}
 		return tag.RowsAffected(), nil
 	}
-	if _, err = WriteArchive(ctx, bw, m, copyTable, progress); err != nil {
+	if _, err := WriteArchive(ctx, bw, m, copyTable, progress); err != nil {
+		if ew.err != nil {
+			return d.Dir.folderError(ew.err)
+		}
 		return fmt.Errorf("take backup: %w", err)
 	}
-	if err = bw.Flush(); err != nil {
-		return fmt.Errorf("take backup: %w", err)
+	if err := bw.Flush(); err != nil {
+		return d.Dir.folderError(err)
 	}
-	if err = f.Sync(); err != nil {
-		return fmt.Errorf("take backup: %w", err)
+	if err := f.Sync(); err != nil {
+		return d.Dir.folderError(err)
 	}
-	if err = f.Close(); err != nil {
-		return fmt.Errorf("take backup: %w", err)
+	if err := f.Close(); err != nil {
+		return d.Dir.folderError(err)
 	}
-	if err = os.Rename(tmp, final); err != nil {
-		return fmt.Errorf("take backup: %w", err)
+	if err := os.Rename(tmp, final); err != nil {
+		return d.Dir.folderError(err)
 	}
+	complete = true
 	// Without a synced folder the rename may be lost after a crash, so the
 	// backup is not reported as taken; take the file back out.
 	dir, derr := os.Open(d.Dir.path)
@@ -176,7 +208,7 @@ func (d *Dumper) write(ctx context.Context, tx pgx.Tx, name string, m Manifest, 
 	}
 	if derr != nil {
 		_ = os.Remove(final)
-		return fmt.Errorf("take backup: sync folder: %w", derr)
+		return d.Dir.folderError(derr)
 	}
 	return nil
 }

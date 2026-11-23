@@ -270,6 +270,18 @@ func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 // table name.
 var createTable = regexp.MustCompile(`(?i)^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\b`)
 
+// ApplicationTables returns, sorted, the names of the tables the embedded
+// migrations create, and goose's version table: the tables that belong to
+// Scanopsis. Backups and restores touch these and no others.
+func ApplicationTables() []string {
+	names, err := applicationTables()
+	if err != nil {
+		// The migrations are part of the binary and parsed by the tests.
+		panic("store: " + err.Error())
+	}
+	return names
+}
+
 // applicationTables returns, sorted, the names of the tables the embedded
 // migrations create, and goose's version table.
 func applicationTables() ([]string, error) {

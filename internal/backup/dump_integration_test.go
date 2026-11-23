@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -55,27 +56,68 @@ func TestTablesCoverSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	have := map[string]bool{}
+	inBackup := map[string]bool{}
 	for _, tb := range tables {
-		have[tb.Name] = true
+		inBackup[tb.Name] = true
 	}
-	for _, n := range Excluded {
-		have[n] = true
+	app := map[string]bool{}
+	for _, n := range store.ApplicationTables() {
+		app[n] = true
 	}
+	exists := map[string]bool{}
 	for _, n := range allTables(t, pool) {
-		if !have[n] {
+		exists[n] = true
+		if !app[n] {
+			t.Errorf("table %q exists after migrating but store.ApplicationTables() does not list it", n)
+		}
+	}
+	for n := range app {
+		if exists[n] && !inBackup[n] && !slices.Contains(Excluded, n) {
 			t.Errorf("table %q is neither in the backup nor in Excluded: add it to one of them", n)
 		}
-		delete(have, n)
 	}
-	for n := range have {
-		t.Errorf("table %q is listed but does not exist", n)
+	for n := range inBackup {
+		if !app[n] || !exists[n] || slices.Contains(Excluded, n) {
+			t.Errorf("table %q is in the backup list but should not be", n)
+		}
 	}
-	for _, n := range Excluded {
-		for _, tb := range tables {
-			if tb.Name == n {
-				t.Errorf("excluded table %q is in the list", n)
-			}
+}
+
+func TestTablesIgnoreOtherApplications(t *testing.T) {
+	d, pool := newDumper(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `CREATE TABLE other_app_data (id int PRIMARY KEY, note text)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO other_app_data VALUES (1, 'not ours')`); err != nil {
+		t.Fatal(err)
+	}
+	tables, err := Tables(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range tables {
+		if tb.Name == "other_app_data" {
+			t.Fatal("a table of another application is in the backup list")
+		}
+	}
+	info, err := d.Dump(ctx, KindManual, "alice", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, _ := d.Dir.Path(info.Name)
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	m, err := ReadManifest(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tb := range m.Tables {
+		if tb.Name == "other_app_data" {
+			t.Error("a table of another application is in the archive")
 		}
 	}
 }
@@ -202,6 +244,7 @@ SELECT $1, 't', 'os-pkgs', 'pkg' || g, 'CVE-2024-' || g, 'HIGH' FROM generate_se
 		}
 	}
 	stop := make(chan struct{})
+	var committed atomic.Int64
 	var wg sync.WaitGroup
 	var werr error
 	wg.Add(1)
@@ -217,21 +260,28 @@ SELECT $1, 't', 'os-pkgs', 'pkg' || g, 'CVE-2024-' || g, 'HIGH' FROM generate_se
 				werr = err
 				return
 			}
+			committed.Add(1)
 		}
 	}()
 	var infos []Info
-	for i := 0; i < 5; i++ {
+	before := committed.Load()
+	for i := 0; i < 20 && (i < 5 || committed.Load() == before); i++ {
 		info, err := d.Dump(ctx, KindManual, "alice", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		infos = append(infos, info)
 	}
+	during := committed.Load() - before
 	close(stop)
 	wg.Wait()
 	if werr != nil {
 		t.Fatalf("writer: %v", werr)
 	}
+	if during == 0 {
+		t.Fatal("the writer committed nothing while the dumps ran, so the test proves nothing")
+	}
+	t.Logf("%d inserts committed while %d dumps ran", during, len(infos))
 	for _, info := range infos {
 		checkConsistent(t, d, info.Name, perScan)
 	}
@@ -353,5 +403,52 @@ func TestDumpRejectsKind(t *testing.T) {
 	d, _ := newDumper(t)
 	if _, err := d.Dump(context.Background(), Kind("bogus"), "alice", nil); err == nil {
 		t.Error("unknown kind accepted")
+	}
+}
+
+func TestDumpFolderGone(t *testing.T) {
+	d, _ := newDumper(t)
+	root := d.Dir.path
+	if err := os.RemoveAll(root); err != nil {
+		t.Fatal(err)
+	}
+	_, err := d.Dump(context.Background(), KindManual, "alice", nil)
+	if !errors.Is(err, ErrFolder) || !strings.Contains(err.Error(), root) {
+		t.Errorf("err = %v, want ErrFolder naming %s", err, root)
+	}
+}
+
+func TestDumpFolderReadOnly(t *testing.T) {
+	d, _ := newDumper(t)
+	root := d.Dir.path
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(root, 0o700) }()
+	if f, err := os.CreateTemp(root, "x"); err == nil { // running as root
+		_ = f.Close()
+		t.Skip("folder permissions do not apply to this user")
+	}
+	_, err := d.Dump(context.Background(), KindManual, "alice", nil)
+	if !errors.Is(err, ErrFolder) || !strings.Contains(err.Error(), root) || !strings.Contains(err.Error(), "writable") {
+		t.Errorf("err = %v, want ErrFolder naming %s with the fix", err, root)
+	}
+}
+
+func TestDumpPartialRemovedOnPanic(t *testing.T) {
+	d, _ := newDumper(t)
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic was swallowed")
+			}
+		}()
+		_, _ = d.Dump(context.Background(), KindManual, "alice", func(Progress) { panic("boom") })
+	}()
+	if m := partials(t, d.Dir.path); len(m) != 0 {
+		t.Errorf("partial files left: %v", m)
+	}
+	if _, err := d.Dump(context.Background(), KindManual, "alice", nil); err != nil {
+		t.Errorf("dump after panic: %v", err)
 	}
 }

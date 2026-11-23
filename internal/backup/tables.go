@@ -6,6 +6,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/siyamsarker/scanopsis/internal/store"
@@ -16,21 +17,29 @@ import (
 // version in the manifest.
 var Excluded = []string{"goose_db_version", "sessions"}
 
-// Tables returns the tables a backup holds: every ordinary table in the
-// public schema except Excluded, ordered so that a table a foreign key refers
+// Tables returns the tables a backup holds: the Scanopsis tables
+// (store.ApplicationTables) that exist in the current schema, except
+// Excluded, and never a table of another application that shares the
+// schema. They are ordered so that a table a foreign key refers
 // to comes before the tables that refer to it. Columns are in the order of the
 // table; dropped and generated columns are left out. Within these rules
 // tables are sorted by name, so the result is the same every time.
 func Tables(ctx context.Context, db store.DBTX) ([]TableSpec, error) {
+	var backed []string
+	for _, n := range store.ApplicationTables() {
+		if !slices.Contains(Excluded, n) {
+			backed = append(backed, n)
+		}
+	}
 	rows, err := db.Query(ctx, `
 SELECT c.relname, a.attname
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_attribute a ON a.attrelid = c.oid
-WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relispartition
+WHERE n.nspname = current_schema() AND c.relkind = 'r' AND NOT c.relispartition
   AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
-  AND c.relname <> ALL ($1)
-ORDER BY c.relname, a.attnum`, Excluded)
+  AND c.relname = ANY ($1)
+ORDER BY c.relname, a.attnum`, backed)
 	if err != nil {
 		return nil, fmt.Errorf("list tables: %w", err)
 	}
@@ -62,7 +71,7 @@ FROM pg_constraint k
 JOIN pg_class r ON r.oid = k.conrelid
 JOIN pg_class p ON p.oid = k.confrelid
 JOIN pg_namespace n ON n.oid = r.relnamespace
-WHERE k.contype = 'f' AND n.nspname = 'public' AND r.oid <> p.oid`)
+WHERE k.contype = 'f' AND n.nspname = current_schema() AND r.oid <> p.oid`)
 	if err != nil {
 		return nil, fmt.Errorf("list foreign keys: %w", err)
 	}

@@ -83,7 +83,7 @@ func OpenDir(path string, keyFingerprint string) (*Dir, error) {
 	}
 	probe, err := os.CreateTemp(path, ".write-test-*")
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s is not writable; make it writable for the user the server runs as (uid 65532 in the container image)", ErrFolder, path)
+		return nil, fmt.Errorf("%w: %s is not writable (%w); make it writable for the user the server runs as (uid 65532 in the container image) and check that the disk has free space and is not read-only", ErrFolder, path, err)
 	}
 	_ = probe.Close()
 	_ = os.Remove(probe.Name())
@@ -160,7 +160,7 @@ func (d *Dir) FreeBytes() (uint64, error) { return d.freeBytes() }
 func statfsFree(path string) (uint64, error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {
-		return 0, fmt.Errorf("read free space of %s: %w", path, err)
+		return 0, fmt.Errorf("%w: read free space of %s: %w; make sure the folder exists and is mounted", ErrFolder, path, err)
 	}
 	return uint64(st.Bavail) * uint64(st.Bsize), nil //nolint:unconvert // field types differ between platforms
 }
