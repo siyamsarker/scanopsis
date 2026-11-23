@@ -7,6 +7,7 @@ import type {
   JobStatus,
   RestorePreview,
   RestoreStatus,
+  ScheduleStatus,
 } from '../../../api/backups';
 import type { SelectOption } from '../../../components/inputs';
 import { countOf, formatBytes, formatExactTime, formatInt, NO_VALUE } from '../../../format';
@@ -127,21 +128,49 @@ export function timeZoneOptions(current: string, browser: string): SelectOption[
 
 // ---- Restore ----
 
+/** What the list says about a backup that cannot be restored here. */
+export type BlockedReason = 'newer' | 'unreadable' | 'key';
+
+/** Why the backup cannot be restored, from the list alone, or null when nothing stops it. */
+export function blockedReason(info: BackupInfo): BlockedReason | null {
+  if (info.newer_version) return 'newer';
+  if (!info.readable) return 'unreadable';
+  if (!info.key_matches) return 'key';
+  return null;
+}
+
+/** The short label of a blocked backup in the list. */
+export const blockedLabels: Record<BlockedReason, string> = {
+  newer: 'Made by a newer version of Scanopsis',
+  unreadable: 'Cannot be read',
+  key: 'Made with another secret key',
+};
+
+/** The words of the menu of a blocked backup, under its disabled Restore item. */
+export const blockedHints: Record<BlockedReason, string> = {
+  newer: 'Only that version of Scanopsis or a later one can restore it.',
+  unreadable: 'Only a readable backup can be restored.',
+  key: 'Only an installation with the same secret key can restore it.',
+};
+
+/** The sentence for a backup made with another secret key. */
+export const KEY_MISMATCH =
+  'This backup was made with another secret key and cannot be restored into this installation. To use it, set up a new installation with that secret key and restore the backup on its setup screen. Never change the secret key of an installation in use.';
+
 /**
  * Why the backup cannot be restored, or null when it can. The preview, once
  * loaded, has the final word on the key and the version.
  */
 export function restoreBlocker(info: BackupInfo, preview?: RestorePreview): string | null {
+  if (info.newer_version || (preview && !preview.schema_ok)) {
+    const version = info.readable && info.app_version ? ` (${info.app_version})` : '';
+    return `This backup was made by a newer version of Scanopsis${version}. Upgrade Scanopsis to that version or later, then restore it.`;
+  }
   if (!info.readable) {
     return 'This backup cannot be read, so it cannot be restored. Delete it, or download it to look into it.';
   }
   if (!info.key_matches || (preview && !preview.key_matches)) {
-    return preview
-      ? 'This backup was made with another secret key, so this installation cannot read its encrypted settings and two-factor secrets. A restore needs the same secret key file (secrets/secret_key, or SCANOPSIS_SECRET_KEY) as the installation that made it.'
-      : 'Made with another secret key';
-  }
-  if (preview && !preview.schema_ok) {
-    return `This backup was made by a newer version of Scanopsis (${info.app_version}). Upgrade Scanopsis to that version or later, then restore it.`;
+    return preview ? KEY_MISMATCH : blockedLabels.key;
   }
   return null;
 }
@@ -207,6 +236,15 @@ export function folderProblem(error: string | undefined): string {
   if (!text) return 'Scanopsis cannot write to it. Check that it exists and is writable.';
   const sentence = text.charAt(0).toUpperCase() + text.slice(1);
   return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
+}
+
+/**
+ * Whether the banner about a failed scheduled backup shows: only while the
+ * schedule is on, and until an administrator dismisses it or a later
+ * scheduled backup succeeds.
+ */
+export function scheduleAlertShown(schedule: ScheduleStatus | undefined): boolean {
+  return Boolean(schedule?.enabled && schedule.last_run_at && !schedule.ok && !schedule.dismissed);
 }
 
 /** The banner text for a scheduled backup that failed. */

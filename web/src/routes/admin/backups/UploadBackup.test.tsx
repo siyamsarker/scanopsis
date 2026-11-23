@@ -17,6 +17,7 @@ const uploaded: BackupInfo = {
   schema: 12,
   key_matches: true,
   readable: true,
+  newer_version: false,
   uploaded_at: '2026-11-23T12:00:00Z',
   original_name: 'from-staging.tar.gz',
 };
@@ -38,12 +39,18 @@ function api(extra?: Handler): Handler {
           started_at: null,
           finished_at: null,
         },
-        schedule: { last_run_at: null, ok: true, error: '' },
+        schedule: { last_run_at: null, ok: true, error: '', dismissed: false, enabled: false },
         disk: { free_bytes: 1024 ** 3, used_bytes: 0 },
         folder: { path: '/var/lib/scanopsis/backups', ok: true },
       });
     }
-    const status = { id: 'u1', file_name: 'from-staging.tar.gz', size: 10, chunk_size: 4 };
+    const status = {
+      id: 'u1',
+      file_name: 'from-staging.tar.gz',
+      size: 10,
+      chunk_size: 4,
+      state: 'uploading',
+    };
     if (call.path === '/api/v1/admin/backup-uploads' && call.method === 'POST') {
       return json(201, { ...status, received: 0 });
     }
@@ -51,7 +58,13 @@ function api(extra?: Handler): Handler {
     if (part && call.method === 'PUT') {
       return json(200, { ...status, received: Math.min(10, Number(part[1]) + 4) });
     }
-    if (call.path === '/api/v1/admin/backup-uploads/u1/complete') return json(201, uploaded);
+    // The server checks the file in the background and is asked for the outcome.
+    if (call.path === '/api/v1/admin/backup-uploads/u1/complete') {
+      return json(202, { ...status, received: 10, state: 'checking' });
+    }
+    if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+      return json(200, { ...status, received: 10, state: 'ready', backup: uploaded });
+    }
     return undefined;
   };
 }
@@ -75,6 +88,12 @@ describe('upload a backup', () => {
     const { calls } = mockFetch(api());
     await chooseFile();
     expect(await screen.findByText('Backup uploaded')).toBeInTheDocument();
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(
+      expect.arrayContaining([
+        'POST /api/v1/admin/backup-uploads/u1/complete',
+        'GET /api/v1/admin/backup-uploads/u1',
+      ]),
+    );
     expect(calls.filter((c) => c.method === 'PUT').map((c) => c.path)).toEqual([
       '/api/v1/admin/backup-uploads/u1?offset=0',
       '/api/v1/admin/backup-uploads/u1?offset=4',
@@ -90,15 +109,21 @@ describe('upload a backup', () => {
   it('says why a file was refused', async () => {
     mockFetch(
       api((call) =>
-        call.path.endsWith('/complete')
-          ? apiError(422, 'key_mismatch', 'This backup was made with another SCANOPSIS_SECRET_KEY.')
+        call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET'
+          ? json(200, {
+              id: 'u1',
+              file_name: 'from-staging.tar.gz',
+              size: 10,
+              chunk_size: 4,
+              received: 10,
+              state: 'refused',
+              reason: { code: 'key_mismatch', message: 'This backup was made with another key.' },
+            })
           : undefined,
       ),
     );
     const dialog = await chooseFile();
-    expect(
-      await within(dialog).findByText('This backup was made with another SCANOPSIS_SECRET_KEY.'),
-    ).toBeVisible();
+    expect(await within(dialog).findByText('This backup was made with another key.')).toBeVisible();
     expect(within(dialog).getByRole('button', { name: 'Choose another file' })).toBeVisible();
   });
 });
@@ -108,14 +133,14 @@ describe('upload a backup, leaving early', () => {
     const { calls } = mockFetch(
       api((call) =>
         call.path.endsWith('/complete')
-          ? apiError(507, 'no_space', 'The backup folder has too little free space.')
+          ? apiError(409, 'upload_incomplete', 'The server has 4 of 10 bytes.')
           : call.method === 'DELETE'
             ? new Response(null, { status: 204 })
             : undefined,
       ),
     );
     const dialog = await chooseFile();
-    await within(dialog).findByText('The backup folder has too little free space.');
+    await within(dialog).findByText('The server has 4 of 10 bytes.');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     await waitFor(() =>
       expect(
@@ -127,10 +152,15 @@ describe('upload a backup, leaving early', () => {
   it('reloads the list once when cancelled while the server checks the file', async () => {
     const { calls } = mockFetch(
       api((call) => {
-        if (call.path.endsWith('/complete')) {
-          return new Promise<Response>((resolve) =>
-            setTimeout(() => resolve(apiError(409, 'upload_busy', 'Busy.')), 200),
-          );
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+          return json(200, {
+            id: 'u1',
+            file_name: 'from-staging.tar.gz',
+            size: 10,
+            chunk_size: 4,
+            received: 10,
+            state: 'checking',
+          });
         }
         if (call.method === 'DELETE') return new Response(null, { status: 204 });
         return undefined;
@@ -143,11 +173,15 @@ describe('upload a backup, leaving early', () => {
     expect(await screen.findByText('Upload cancelled')).toBeInTheDocument();
     expect(
       screen.getByText(
-        'The server was already checking the file, so it may still appear in the list.',
+        'The check of the file was stopped. If it had already finished, the backup stays in the list.',
       ),
     ).toBeInTheDocument();
     await waitFor(() =>
       expect(calls.filter((c) => c.path === '/api/v1/admin/backups').length).toBe(listed + 1),
     );
+    // Cancelling stops the check on the server.
+    expect(
+      calls.some((c) => c.method === 'DELETE' && c.path === '/api/v1/admin/backup-uploads/u1'),
+    ).toBe(true);
   });
 });

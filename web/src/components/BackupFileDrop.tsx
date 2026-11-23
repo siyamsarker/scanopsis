@@ -122,7 +122,8 @@ export function BackupFileDrop({
           <div aria-live="polite">
             {checking ? (
               <p className="flex items-center gap-2 text-body-s text-text-muted">
-                <Spinner /> Checking the backup. This reads the whole file.
+                <Spinner /> Checking the backup. This reads the whole file, which takes several
+                minutes for a large one.
               </p>
             ) : null}
             {phase.kind === 'interrupted' ? (

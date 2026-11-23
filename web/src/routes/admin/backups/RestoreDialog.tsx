@@ -3,7 +3,7 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import { TriangleAlert } from 'lucide-react';
-import { useId, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { useId, useRef, useState, type FormEvent, type ReactNode, type RefObject } from 'react';
 import { useRestoreBackup, useRestorePreview, type BackupInfo } from '../../../api/backups';
 import { describeError } from '../../../api/errors';
 import { meKey } from '../../../api/hooks';
@@ -18,17 +18,28 @@ import {
   canRestore,
   cleanCode,
   CONFIRM_PHRASE,
+  madeBy,
   restoreBlocker,
   retentionWarning,
 } from './model';
 
 const labelClass = 'text-body-s font-medium text-text';
 
+function Fact({ term, children }: { term: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5 sm:flex-row sm:gap-4">
+      <dt className="text-body-s text-text-muted sm:w-36 sm:shrink-0">{term}</dt>
+      <dd className="min-w-0 text-body-s break-words text-text">{children}</dd>
+    </div>
+  );
+}
+
 /**
  * Asks before a restore replaces everything. The server first reads the whole
- * backup (the preview) to say what the restore would do; the restore button
- * waits for the confirmation phrase and a current two-factor code. A started
- * restore hands over to the full-screen restore screen.
+ * backup (the preview) to say what the restore would do, in the background:
+ * the dialog says it is checking and asks again until it is done. The
+ * restore button waits for the confirmation phrase and a current two-factor
+ * code. A started restore hands over to the full-screen restore screen.
  */
 export function RestoreDialog({
   backup,
@@ -50,9 +61,12 @@ export function RestoreDialog({
   const cancel = useRef<HTMLButtonElement>(null);
   const id = useId();
   const date = backupDate(backup);
-  const blocker = restoreBlocker(backup, preview.data);
-  const warning = preview.data ? retentionWarning(preview.data) : null;
-  const ready = preview.isSuccess && !blocker && canRestore(phrase, code);
+  const checked = preview.data?.state === 'ready' ? preview.data.preview : undefined;
+  const checking = preview.isPending || preview.data?.state === 'checking';
+  const blocker = restoreBlocker(backup, checked);
+  const warning = checked ? retentionWarning(checked) : null;
+  const info = checked?.info ?? backup;
+  const ready = Boolean(checked) && !blocker && canRestore(phrase, code);
   const pending = restore.isPending;
 
   function submit(event: FormEvent) {
@@ -134,20 +148,30 @@ export function RestoreDialog({
         </>
       }
     >
-      {preview.isPending ? (
+      {preview.isError ? (
+        <Problem>{describeError(preview.error)}</Problem>
+      ) : checking ? (
         <div role="status" aria-live="polite">
-          <p className="mb-3 text-body-s text-text-muted">
-            Checking the backup. Scanopsis reads the whole file first, which takes a moment for a
-            large one.
+          <p className="flex items-center gap-2 text-body-s font-medium text-text">
+            <Spinner />
+            Checking the backup…
+          </p>
+          <p className="mt-1 mb-3 text-body-s text-text-muted">
+            Scanopsis reads the whole file before it says what the restore would do. For a large
+            backup this takes several minutes.
           </p>
           <SkeletonText lines={4} />
         </div>
-      ) : preview.isError ? (
-        <Problem>{describeError(preview.error)}</Problem>
       ) : blocker ? (
         <Problem>{blocker}</Problem>
       ) : (
         <form id={formId} onSubmit={submit} noValidate className="flex flex-col gap-5">
+          <dl className="flex flex-col gap-2 rounded-inner border border-line bg-sunken px-3.5 py-3">
+            <Fact term="Scanopsis version">
+              <span className="font-mono">{info.app_version}</span>
+            </Fact>
+            <Fact term="Made by">{madeBy(info.created_by)}</Fact>
+          </dl>
           <ul className="flex list-disc flex-col gap-1.5 pl-5 text-body-s text-text-muted marker:text-text-faint">
             <li>
               Everything in Scanopsis is replaced by this backup: users, settings, services, scans
@@ -174,8 +198,10 @@ export function RestoreDialog({
             </p>
           ) : null}
           <div className="flex flex-col gap-2">
-            <p className="text-body-s text-text-muted">
-              Before the restore, Scanopsis backs up the current state, so you can go back.
+            <p className="text-body-s text-text-muted" aria-live="polite">
+              {skipSafety
+                ? 'Without this backup, the restore cannot be undone.'
+                : 'Before the restore, Scanopsis backs up the current state, so you can go back.'}
             </p>
             <label className="flex cursor-pointer items-start gap-3 text-body-s text-text">
               <input

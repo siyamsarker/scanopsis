@@ -64,14 +64,15 @@ describe('RestoreOverlay', () => {
     serve({
       state: 'failed',
       percent: 30,
-      message: 'The restore failed and nothing was changed. The server log has the reason.',
+      message:
+        'The restore failed and nothing was changed. Admins see the reason on the Backups page.',
       finished_at: '2026-11-23T12:00:00Z',
     });
     const onBack = vi.fn();
     render(<RestoreOverlay onSignIn={vi.fn()} onBack={onBack} pollMs={20} />);
     const overlay = await screen.findByRole('alertdialog', { name: 'The restore did not finish' });
     expect(overlay).toHaveTextContent(
-      'The restore failed and nothing was changed. The server log has the reason.',
+      'The restore failed and nothing was changed. Admins see the reason on the Backups page.',
     );
     // Said once, in the server's words.
     expect(within(overlay).queryByText('Nothing was changed.')).toBeNull();
@@ -126,7 +127,8 @@ describe('RestoreOverlay', () => {
   ] as const)('leads a failed restore back by role (%s)', async (role, label, path) => {
     serve({
       state: 'failed',
-      message: 'The restore failed and nothing was changed. The server log has the reason.',
+      message:
+        'The restore failed and nothing was changed. Admins see the reason on the Backups page.',
     });
     const client = createQueryClient();
     if (role === 'setup') client.setQueryData(setupKey, { required: true });

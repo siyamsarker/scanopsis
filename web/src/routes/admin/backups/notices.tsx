@@ -3,10 +3,13 @@
 
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
-import type { BackupList } from '../../../api/backups';
+import { useDismissScheduleAlert, type ScheduleStatus } from '../../../api/backups';
+import { describeError } from '../../../api/errors';
+import { Spinner } from '../../../components/ConfirmDialog';
 import { StatusMark, type StatusKind } from '../../../components/SeverityMark';
-import { linkClass } from '../../../ui';
-import { scheduleFailure } from './model';
+import { toast } from '../../../components/Toast';
+import { buttonClass, linkClass } from '../../../ui';
+import { scheduleAlertShown, scheduleFailure } from './model';
 
 const tones: Record<StatusKind, string> = {
   ok: 'tone-ok',
@@ -49,28 +52,53 @@ export function Notice({
   );
 }
 
-/** "The scheduled backup at ... failed: ..." when the last scheduled backup failed, else nothing. */
+/**
+ * "The scheduled backup at ... failed: ..." while the schedule is on and the
+ * last scheduled backup failed, until an administrator dismisses it; else
+ * nothing. Dismissing lasts until the next scheduled run.
+ */
 export function ScheduleFailedNotice({
   schedule,
   link = false,
 }: {
-  schedule: BackupList['schedule'] | undefined;
+  schedule: ScheduleStatus | undefined;
   /** Offer a link to the Backups page (from other pages). */
   link?: boolean;
 }) {
-  if (!schedule?.last_run_at || schedule.ok) return null;
+  const dismiss = useDismissScheduleAlert();
+  if (!schedule?.last_run_at || !scheduleAlertShown(schedule)) return null;
   return (
     <Notice
       label="Scheduled backup failed"
       action={
-        link ? (
-          <Link to="/admin/backups" className={`${linkClass} text-body-s whitespace-nowrap`}>
-            Open Backups
-          </Link>
-        ) : undefined
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {link ? (
+            <Link to="/admin/backups" className={`${linkClass} text-body-s whitespace-nowrap`}>
+              Open Backups
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            className={buttonClass('secondary', 'sm')}
+            disabled={dismiss.isPending}
+            aria-busy={dismiss.isPending || undefined}
+            onClick={() =>
+              dismiss.mutate(undefined, {
+                onError: (err) =>
+                  toast.error('Could not dismiss the notice', { description: describeError(err) }),
+              })
+            }
+          >
+            {dismiss.isPending ? <Spinner /> : null}
+            Dismiss
+          </button>
+        </div>
       }
     >
       <p className="break-words">{scheduleFailure(schedule.last_run_at, schedule.error)}</p>
+      <p className="mt-1 text-small text-text-muted">
+        Dismissing hides this until the next scheduled backup.
+      </p>
     </Notice>
   );
 }

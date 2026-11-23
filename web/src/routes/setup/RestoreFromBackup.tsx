@@ -9,7 +9,7 @@ import type { RestorePreview } from '../../api/backups';
 import { api, ApiError, unwrap } from '../../api/client';
 import { setupKey } from '../../api/hooks';
 import { showRestoreOverlay } from '../../api/restoreMode';
-import { BUSY_DELAY_MS, patiently, restUploadEndpoints } from '../../api/upload';
+import { BUSY_DELAY_MS, patiently, readyPart, restUploadEndpoints } from '../../api/upload';
 import { useChunkedUpload } from '../../api/useChunkedUpload';
 import { AuthShell } from '../../components/AuthShell';
 import { BackupFileDrop } from '../../components/BackupFileDrop';
@@ -63,6 +63,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
     headers: { 'X-Setup-Token': cleanToken },
     startBody: (file) => ({ token: cleanToken, file_name: file.name, size: file.size }),
     completeBody: { token: cleanToken },
+    result: readyPart('preview'),
   });
 
   /** An answer that ends the restore path: a wrong token, or a setup finished meanwhile. */

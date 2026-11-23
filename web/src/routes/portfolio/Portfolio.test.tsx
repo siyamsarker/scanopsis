@@ -259,7 +259,13 @@ describe('PortfolioPage', () => {
             started_at: null,
             finished_at: null,
           },
-          schedule: { last_run_at: '2026-11-19T02:00:00Z', ok: false, error: 'disk full' },
+          schedule: {
+            last_run_at: '2026-11-19T02:00:00Z',
+            ok: false,
+            error: 'disk full',
+            dismissed: false,
+            enabled: true,
+          },
           disk: { free_bytes: 0, used_bytes: 0 },
           folder: { path: '/var/lib/scanopsis/backups', ok: true },
         });
@@ -272,6 +278,37 @@ describe('PortfolioPage', () => {
       'href',
       '/admin/backups',
     );
+    expect(within(banner).getByRole('button', { name: 'Dismiss' })).toBeVisible();
+  });
+
+  it('says nothing about a failed scheduled backup once it was dismissed', async () => {
+    renderPage('/', portfolio, (path) => {
+      if (path === '/api/v1/me') return json(200, makeUser({ role: 'admin' }));
+      if (path === '/api/v1/admin/backups') {
+        return json(200, {
+          backups: [],
+          job: {
+            state: 'idle',
+            progress: { table: '', tables_done: 0, tables_total: 0, bytes: 0 },
+            percent: 0,
+            started_at: null,
+            finished_at: null,
+          },
+          schedule: {
+            last_run_at: '2026-11-19T02:00:00Z',
+            ok: false,
+            error: 'disk full',
+            dismissed: true,
+            enabled: true,
+          },
+          disk: { free_bytes: 0, used_bytes: 0 },
+          folder: { path: '/var/lib/scanopsis/backups', ok: true },
+        });
+      }
+      return undefined;
+    });
+    await screen.findByRole('list', { name: 'Services' });
+    expect(screen.queryByRole('region', { name: 'Scheduled backup failed' })).toBeNull();
   });
 
   it('does not ask viewers about backups', async () => {

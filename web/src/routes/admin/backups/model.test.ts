@@ -3,6 +3,7 @@
 
 import type { BackupInfo, JobStatus, RestorePreview, RestoreStatus } from '../../../api/backups';
 import {
+  blockedReason,
   canRestore,
   folderProblem,
   scheduleFailure,
@@ -15,6 +16,7 @@ import {
   overlayView,
   restoreBlocker,
   retentionWarning,
+  scheduleAlertShown,
   scheduleProblems,
   timeZoneOptions,
 } from './model';
@@ -29,6 +31,7 @@ const info: BackupInfo = {
   schema: 12,
   key_matches: true,
   readable: true,
+  newer_version: false,
   uploaded_at: null,
   original_name: '',
 };
@@ -153,11 +156,27 @@ describe('restore', () => {
   it('says why a backup cannot be restored', () => {
     expect(restoreBlocker(info, preview)).toBeNull();
     expect(restoreBlocker({ ...info, key_matches: false })).toMatch(/another secret key/);
-    expect(restoreBlocker(info, { ...preview, key_matches: false })).toMatch(
-      /same secret key file/,
+    const mismatch = restoreBlocker(info, { ...preview, key_matches: false });
+    expect(mismatch).toBe(
+      'This backup was made with another secret key and cannot be restored into this installation. To use it, set up a new installation with that secret key and restore the backup on its setup screen. Never change the secret key of an installation in use.',
     );
+    expect(mismatch).not.toMatch(/SCANOPSIS_SECRET_KEY|secrets\/secret_key/);
     expect(restoreBlocker({ ...info, readable: false })).toMatch(/cannot be read/);
     expect(restoreBlocker(info, { ...preview, schema_ok: false })).toMatch(/newer version/);
+    expect(restoreBlocker({ ...info, readable: false, newer_version: true })).toBe(
+      'This backup was made by a newer version of Scanopsis. Upgrade Scanopsis to that version or later, then restore it.',
+    );
+    expect(restoreBlocker({ ...info, schema: 99, newer_version: true })).toMatch(
+      /newer version of Scanopsis \(0\.4\.0\)/,
+    );
+  });
+
+  it('tells a newer backup from an unreadable one in the list', () => {
+    expect(blockedReason(info)).toBeNull();
+    expect(blockedReason({ ...info, readable: false, newer_version: true })).toBe('newer');
+    expect(blockedReason({ ...info, newer_version: true })).toBe('newer');
+    expect(blockedReason({ ...info, readable: false })).toBe('unreadable');
+    expect(blockedReason({ ...info, key_matches: false })).toBe('key');
   });
 
   it('enables the restore only for RESTORE and a 6-digit code', () => {
@@ -211,6 +230,22 @@ describe('folder and schedule notices', () => {
     ).toBe('/srv/b does not exist; create it, or mount a volume there.');
     expect(folderProblem('disk is read-only.')).toBe('Disk is read-only.');
     expect(folderProblem(undefined)).toMatch(/cannot write to it/);
+  });
+
+  it('shows a failed scheduled backup only while the schedule is on and until dismissed', () => {
+    const failed = {
+      last_run_at: '2026-11-23T02:00:00Z',
+      ok: false,
+      error: 'disk full',
+      dismissed: false,
+      enabled: true,
+    };
+    expect(scheduleAlertShown(failed)).toBe(true);
+    expect(scheduleAlertShown({ ...failed, enabled: false })).toBe(false);
+    expect(scheduleAlertShown({ ...failed, dismissed: true })).toBe(false);
+    expect(scheduleAlertShown({ ...failed, ok: true })).toBe(false);
+    expect(scheduleAlertShown({ ...failed, last_run_at: null })).toBe(false);
+    expect(scheduleAlertShown(undefined)).toBe(false);
   });
 
   it('names the time and the reason of a failed scheduled backup', () => {

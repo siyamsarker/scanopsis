@@ -6,6 +6,7 @@ import { useMe } from '../api/hooks';
 import { usePortfolio } from '../api/portfolio';
 import { PageHeader } from '../components/layout';
 import { ErrorState, Skeleton } from '../components/states';
+import { scheduleAlertShown } from './admin/backups/model';
 import { ScheduleFailedNotice } from './admin/backups/notices';
 import { PortfolioView } from './portfolio/PortfolioView';
 import { SkeletonCard } from './portfolio/ServiceCard';
@@ -67,9 +68,7 @@ export function PortfolioPage({ now }: { now?: Date } = {}) {
       data={query.data}
       now={now}
       notice={
-        schedule?.last_run_at && !schedule.ok ? (
-          <ScheduleFailedNotice schedule={schedule} link />
-        ) : undefined
+        scheduleAlertShown(schedule) ? <ScheduleFailedNotice schedule={schedule} link /> : undefined
       }
     />
   );

@@ -20,7 +20,7 @@ import { toast } from '../../../components/Toast';
 import { formatBytes, NO_VALUE, relativeTime } from '../../../format';
 import { iconButtonClass } from '../../../ui';
 import { FlatTable, td, th } from '../kit';
-import { backupDate, kindLabel, madeBy, restoreBlocker } from './model';
+import { backupDate, blockedHints, blockedLabels, blockedReason, kindLabel, madeBy } from './model';
 import { RestoreDialog } from './RestoreDialog';
 
 const iconProps = { size: 16, strokeWidth: 1.75, 'aria-hidden': true } as const;
@@ -30,7 +30,7 @@ function BackupRow({ backup, busy }: { backup: BackupInfo; busy: boolean }) {
   const [confirm, setConfirm] = useState<'delete' | 'restore' | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const date = backupDate(backup);
-  const blocker = restoreBlocker(backup);
+  const blocked = blockedReason(backup);
 
   function deleteBackup() {
     remove.mutate(backup.name, {
@@ -68,9 +68,9 @@ function BackupRow({ backup, busy }: { backup: BackupInfo; busy: boolean }) {
             {backup.original_name}
           </p>
         ) : null}
-        {blocker ? (
-          <StatusPill status={backup.readable ? 'warn' : 'fail'} className="mt-1.5">
-            {backup.readable ? 'Made with another secret key' : 'Cannot be read'}
+        {blocked ? (
+          <StatusPill status={blocked === 'unreadable' ? 'fail' : 'warn'} className="mt-1.5">
+            {blockedLabels[blocked]}
           </StatusPill>
         ) : null}
         <p className="mt-1 text-small text-text-muted sm:hidden">
@@ -110,18 +110,12 @@ function BackupRow({ backup, busy }: { backup: BackupInfo; busy: boolean }) {
             </MenuLinkItem>
             <MenuItem
               icon={<History {...iconProps} />}
-              disabled={Boolean(blocker) || busy}
+              disabled={Boolean(blocked) || busy}
               onSelect={() => setConfirm('restore')}
             >
               Restore
             </MenuItem>
-            {blocker ? (
-              <MenuLabel>
-                {backup.readable
-                  ? 'Only a server with the same secret key can restore it.'
-                  : 'Only a readable backup can be restored.'}
-              </MenuLabel>
-            ) : null}
+            {blocked ? <MenuLabel>{blockedHints[blocked]}</MenuLabel> : null}
             <MenuSeparator />
             <MenuItem
               icon={<Trash2 {...iconProps} />}

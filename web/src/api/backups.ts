@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, unwrap, type ApiError } from './client';
 import { isRestoreOverlayShown } from './restoreMode';
 import type { components } from './schema.gen';
-import { restUploadEndpoints, type UploadEndpoints } from './upload';
+import { readyPart, restUploadEndpoints, type UploadEndpoints } from './upload';
 
 export type BackupInfo = components['schemas']['BackupInfo'];
 export type BackupKind = components['schemas']['BackupKind'];
@@ -13,12 +13,16 @@ export type BackupList = components['schemas']['BackupList'];
 export type JobStatus = components['schemas']['JobStatus'];
 export type RestorePreview = components['schemas']['RestorePreview'];
 export type RestoreStatus = components['schemas']['RestoreStatus'];
+export type ScheduleStatus = components['schemas']['ScheduleStatus'];
 
 export const backupsKey = ['admin', 'backups'] as const;
 
 /** How often the list reloads while a backup runs, and otherwise. */
 export const JOB_POLL_MS = 1000;
 export const IDLE_POLL_MS = 30_000;
+/** How often the server is asked about a backup it checks for a restore, and the first time. */
+export const PREVIEW_POLL_MS = 2000;
+const FIRST_PREVIEW_POLL_MS = 500;
 
 const running = (job: JobStatus | undefined) =>
   job?.state === 'backing_up' || job?.state === 'restoring';
@@ -65,14 +69,49 @@ export function useDeleteBackup() {
   });
 }
 
-/** What restoring the backup would do; the server reads the whole file for it. */
+/** The preview of a restore: still being worked out, or ready. */
+export type PreviewState = { state: 'checking' } | { state: 'ready'; preview: RestorePreview };
+
+/**
+ * What restoring the backup would do. The server reads the whole file for
+ * it in the background, which takes a while for a large one: until it is
+ * done the state is checking, and the server is asked again, after half a
+ * second the first time and then every two seconds.
+ */
 export function useRestorePreview(name: string) {
   return useQuery({
     queryKey: [...backupsKey, 'preview', name],
     staleTime: 0,
     gcTime: 0,
-    queryFn: async () =>
-      unwrap(await api.GET('/api/v1/admin/backups/{name}/preview', { params: { path: { name } } })),
+    refetchInterval: (query) => {
+      if (query.state.data?.state !== 'checking' || isRestoreOverlayShown()) return false;
+      // A small backup is checked at once: the first question comes sooner.
+      return query.state.dataUpdateCount <= 1 ? FIRST_PREVIEW_POLL_MS : PREVIEW_POLL_MS;
+    },
+    queryFn: async (): Promise<PreviewState> => {
+      const result = await api.GET('/api/v1/admin/backups/{name}/preview', {
+        params: { path: { name } },
+      });
+      const data = unwrap(result);
+      if (result.response.status === 202 || 'state' in data) return { state: 'checking' };
+      return { state: 'ready', preview: data };
+    },
+  });
+}
+
+/** Hides the banner about a failed scheduled backup until the next scheduled run. */
+export function useDismissScheduleAlert() {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, void>({
+    mutationFn: async () => {
+      unwrap(await api.POST('/api/v1/admin/backups/schedule-status/dismiss'));
+    },
+    onSuccess: () => {
+      queryClient.setQueryData<BackupList>(backupsKey, (old) =>
+        old ? { ...old, schedule: { ...old.schedule, dismissed: true } } : old,
+      );
+      return queryClient.invalidateQueries({ queryKey: backupsKey });
+    },
   });
 }
 
@@ -102,6 +141,7 @@ export function backupDownloadUrl(name: string) {
 /** The admin upload routes: an upload completes as a backup of kind uploaded. */
 export const adminUploadEndpoints: UploadEndpoints<BackupInfo> = restUploadEndpoints<BackupInfo>({
   base: '/api/v1/admin/backup-uploads',
+  result: readyPart('backup'),
 });
 
 /** The public restore status; answered while every other request is turned away. */

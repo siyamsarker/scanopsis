@@ -74,4 +74,5 @@ export const auditActions: Record<string, string> = {
   'backup.restored': 'Backup restored',
   'backup.restore_failed': 'Restore failed',
   'backup.restore_incomplete': 'Restore needs a restart',
+  'backup.schedule_alert_dismissed': 'Backup alert dismissed',
 };

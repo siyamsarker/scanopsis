@@ -1,9 +1,11 @@
 // Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
+import type { BackupInfo } from './backups';
 import { ApiError } from './client';
 import {
   cancelUpload,
+  readyPart,
   restUploadEndpoints,
   uploadInChunks,
   UploadInterruptedError,
@@ -11,9 +13,28 @@ import {
   type UploadStatus,
 } from './upload';
 
-const fast = { retryDelaysMs: [0, 0, 0], busyDelayMs: 0 };
+const fast = { retryDelaysMs: [0, 0, 0], busyDelayMs: 0, pollMs: 0 };
 
-/** A server that stores parts in memory and can be told to fail. */
+const backupInfo = (name: string): BackupInfo => ({
+  name,
+  kind: 'uploaded',
+  size: 10,
+  created_at: '2026-11-01T02:00:00Z',
+  created_by: 'scheduler',
+  app_version: '0.4.0',
+  schema: 12,
+  key_matches: true,
+  readable: true,
+  newer_version: false,
+  uploaded_at: '2026-11-23T12:00:00Z',
+  original_name: 'backup.tar.gz',
+});
+
+/**
+ * A server that stores parts in memory and can be told to fail. Once
+ * completed, it answers `checks` questions with the state checking, then
+ * with `outcome` (a ready upload by default).
+ */
 function fakeServer(size: number, chunk = 4) {
   const stored: { offset: number; text: string }[] = [];
   const state: UploadStatus = {
@@ -22,11 +43,25 @@ function fakeServer(size: number, chunk = 4) {
     size,
     chunk_size: chunk,
     received: 0,
+    state: 'uploading',
+  };
+  const check = {
+    left: 1,
+    outcome: {
+      state: 'ready',
+      backup: backupInfo('scanopsis-backup.tar.gz'),
+    } as Partial<UploadStatus>,
   };
   const failures: (() => never | void)[] = [];
   const endpoints: UploadEndpoints<{ name: string }> = {
     start: vi.fn(async () => ({ ...state })),
-    status: vi.fn(async () => ({ ...state })),
+    status: vi.fn(async () => {
+      if (state.state === 'checking') {
+        if (check.left > 0) check.left -= 1;
+        else Object.assign(state, check.outcome);
+      }
+      return { ...state };
+    }),
     put: vi.fn(async (_id: string, offset: number, part: Blob) => {
       failures.shift()?.();
       if (offset !== state.received) {
@@ -38,10 +73,14 @@ function fakeServer(size: number, chunk = 4) {
       state.received += part.size;
       return { ...state };
     }),
-    complete: vi.fn(async () => ({ name: 'scanopsis-backup.tar.gz' })),
+    complete: vi.fn(async () => {
+      if (state.state === 'uploading') state.state = 'checking';
+      return { ...state };
+    }),
     cancel: vi.fn(async () => {}),
+    result: (status) => ({ name: status.backup!.name }),
   };
-  return { state, stored, endpoints, failures };
+  return { state, stored, endpoints, failures, check };
 }
 
 const file = (text: string) => new File([text], 'backup.tar.gz');
@@ -199,7 +238,12 @@ describe('uploadInChunks', () => {
     vi.mocked(server.endpoints.complete)
       .mockRejectedValueOnce(busy)
       .mockRejectedValueOnce(new ApiError(409, 'upload_busy', 'Still writing.'))
-      .mockResolvedValueOnce({ name: 'done' });
+      .mockResolvedValueOnce({
+        ...server.state,
+        received: 4,
+        state: 'ready',
+        backup: backupInfo('done'),
+      });
     const result = await uploadInChunks(
       file('abcd'),
       server.endpoints,
@@ -240,6 +284,87 @@ describe('uploadInChunks', () => {
     ).rejects.toMatchObject({ status: 422, code: 'invalid_backup' });
   });
 
+  it('asks for the outcome while the server checks the file', async () => {
+    const server = fakeServer(4);
+    server.check.left = 3;
+    const result = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      new AbortController().signal,
+      fast,
+    );
+    expect(result).toEqual({ id: 'u1', result: { name: 'scanopsis-backup.tar.gz' } });
+    expect(server.endpoints.complete).toHaveBeenCalledTimes(1);
+    expect(server.endpoints.status).toHaveBeenCalledTimes(4);
+  });
+
+  it('turns a refused file into an ApiError with the reason', async () => {
+    const server = fakeServer(4);
+    server.check.outcome = {
+      state: 'refused',
+      reason: { code: 'key_mismatch', message: 'Made with another secret key.' },
+    };
+    await expect(
+      uploadInChunks(file('abcd'), server.endpoints, () => {}, new AbortController().signal, fast),
+    ).rejects.toMatchObject({
+      status: 422,
+      code: 'key_mismatch',
+      message: 'Made with another secret key.',
+    });
+  });
+
+  it('stays resumable when the connection drops during the check', async () => {
+    const server = fakeServer(4);
+    const offline = new TypeError('Failed to fetch');
+    vi.mocked(server.endpoints.status)
+      .mockRejectedValueOnce(offline)
+      .mockRejectedValueOnce(offline)
+      .mockRejectedValueOnce(offline)
+      .mockRejectedValueOnce(offline);
+    const error = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      new AbortController().signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UploadInterruptedError);
+    expect(error).toMatchObject({ id: 'u1', received: 4, size: 4 });
+
+    // Resuming asks for the outcome; nothing is sent or completed again.
+    const result = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      new AbortController().signal,
+      { ...fast, resumeId: 'u1' },
+    );
+    expect(result.result).toEqual({ name: 'scanopsis-backup.tar.gz' });
+    expect(server.endpoints.put).toHaveBeenCalledTimes(1);
+    expect(server.endpoints.complete).toHaveBeenCalledTimes(1);
+    expect(server.endpoints.start).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops the check on the server when it is aborted while checking', async () => {
+    const server = fakeServer(4);
+    server.check.left = 1000;
+    const controller = new AbortController();
+    vi.mocked(server.endpoints.status).mockImplementation(async () => {
+      controller.abort();
+      return { ...server.state };
+    });
+    const error = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      controller.signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect((error as DOMException).name).toBe('AbortError');
+    expect(server.endpoints.cancel).toHaveBeenCalledWith('u1');
+  });
+
   it('cancels the upload on the server when it is aborted', async () => {
     const server = fakeServer(8);
     const controller = new AbortController();
@@ -272,25 +397,33 @@ describe('restUploadEndpoints', () => {
           body: await request.text(),
           token: request.headers.get('X-Setup-Token'),
         });
-        const status = { id: 'abc', file_name: 'b.tar.gz', size: 3, chunk_size: 8, received: 3 };
+        const status = {
+          id: 'abc',
+          file_name: 'b.tar.gz',
+          size: 3,
+          chunk_size: 8,
+          received: 3,
+          state: 'uploading',
+        };
         if (request.method === 'DELETE') return new Response(null, { status: 204 });
         if (request.url.endsWith('/complete')) {
-          return new Response(JSON.stringify({ name: 'n' }), { status: 201 });
+          return new Response(JSON.stringify({ ...status, state: 'checking' }), { status: 202 });
         }
         return new Response(JSON.stringify(status), { status: 200 });
       }),
     );
-    const endpoints = restUploadEndpoints<{ name: string }>({
+    const endpoints = restUploadEndpoints({
       base: '/api/v1/setup/restore/uploads',
       headers: { 'X-Setup-Token': 'tok' },
       startBody: (f) => ({ token: 'tok', file_name: f.name, size: f.size }),
       completeBody: { token: 'tok' },
+      result: readyPart('preview'),
     });
     const signal = new AbortController().signal;
     await endpoints.start(file('abc'), signal);
     await endpoints.put('abc', 0, new Blob(['abc']), signal);
     await endpoints.status('abc', signal);
-    expect(await endpoints.complete('abc', signal)).toEqual({ name: 'n' });
+    expect(await endpoints.complete('abc', signal)).toMatchObject({ id: 'abc', state: 'checking' });
     await endpoints.cancel('abc');
     expect(seen).toEqual([
       {
@@ -329,11 +462,30 @@ describe('restUploadEndpoints', () => {
           ),
       ),
     );
-    const endpoints = restUploadEndpoints({ base: '/api/v1/admin/backup-uploads' });
+    const endpoints = restUploadEndpoints({
+      base: '/api/v1/admin/backup-uploads',
+      result: readyPart('backup'),
+    });
     const error = await endpoints
       .put('abc', 8, new Blob(['x']), new AbortController().signal)
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ status: 409, code: 'offset_mismatch', received: 16 });
+  });
+});
+
+describe('readyPart', () => {
+  it('reads the backup or the preview of a ready upload', () => {
+    const status: UploadStatus = {
+      id: 'u1',
+      file_name: 'b.tar.gz',
+      size: 3,
+      chunk_size: 8,
+      received: 3,
+      state: 'ready',
+      backup: backupInfo('n'),
+    };
+    expect(readyPart('backup')(status).name).toBe('n');
+    expect(() => readyPart('preview')(status)).toThrow(/no preview/);
   });
 });

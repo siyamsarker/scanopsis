@@ -2,32 +2,36 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ApiError, toApiError } from './client';
+import type { components } from './schema.gen';
 
 /*
  * Uploads a large file (a backup) in parts the server stores one after the
  * other. Only one part is read from the file at a time, so a file of many
  * gigabytes never sits in memory. A dropped connection does not start over:
  * the server says how much it holds, and the upload continues from there.
+ * Once every part has arrived, the server checks the whole file in the
+ * background, which can take minutes for a large one; the upload asks for the
+ * outcome until the check has ended.
  */
 
-/** What the server knows of an open upload. */
-export interface UploadStatus {
-  id: string;
-  file_name: string;
-  size: number;
-  /** The largest part the server takes. */
-  chunk_size: number;
-  /** Bytes stored so far: where the next part starts. */
-  received: number;
-}
+/**
+ * What the server knows of an upload: how much it holds (`received`, where
+ * the next part starts; `chunk_size` is the largest part it takes) and, once
+ * completed, the check of the file (`state`, with `reason`, `backup` or
+ * `preview` once it has ended).
+ */
+export type UploadStatus = components['schemas']['UploadStatus'];
 
 /** The requests of one upload API (the admin one or the setup screen's). */
 export interface UploadEndpoints<R> {
   start(file: File, signal: AbortSignal): Promise<UploadStatus>;
   status(id: string, signal: AbortSignal): Promise<UploadStatus>;
   put(id: string, offset: number, part: Blob, signal: AbortSignal): Promise<UploadStatus>;
-  complete(id: string, signal: AbortSignal): Promise<R>;
+  /** Starts the check of a fully received upload; answers while it runs. */
+  complete(id: string, signal: AbortSignal): Promise<UploadStatus>;
   cancel(id: string): Promise<void>;
+  /** What a ready upload gives the caller (the new backup, or a preview). */
+  result(status: UploadStatus): R;
 }
 
 export interface UploadResult<R> {
@@ -48,6 +52,8 @@ export interface UploadOptions {
   retryDelaysMs?: number[];
   /** Wait before asking a busy server again when it names no wait itself. */
   busyDelayMs?: number;
+  /** Wait between two questions about a file being checked. */
+  pollMs?: number;
 }
 
 /**
@@ -71,6 +77,9 @@ export class UploadInterruptedError extends Error {
 
 const RETRY_DELAYS_MS = [1000, 3000, 9000];
 export const BUSY_DELAY_MS = 2000;
+/** How often the server is asked about a file it checks, and the first time. */
+export const CHECK_POLL_MS = 2000;
+const FIRST_POLL_MS = 500;
 /** How often a busy server is asked again before the upload gives up. */
 const BUSY_TRIES = 15;
 
@@ -137,13 +146,28 @@ export async function patiently<T>(
   }
 }
 
+/** A check that ended: the result of a ready upload, or the refusal as an ApiError. */
+function outcome<R>(endpoints: UploadEndpoints<R>, status: UploadStatus): R {
+  if (status.state === 'refused') {
+    throw new ApiError(
+      422,
+      status.reason?.code ?? 'invalid_backup',
+      status.reason?.message ?? 'The server refused the file.',
+    );
+  }
+  return endpoints.result(status);
+}
+
 /**
  * Uploads `file` in parts of the server's chunk size and completes it. Reports
  * the bytes the server holds after each part. After a network error it asks
  * the server how much arrived and continues from there, up to three times in a
  * row with growing waits; then it throws an UploadInterruptedError that can be
- * resumed. A busy server is asked again without counting as a failure.
- * Aborting `signal` cancels the upload on the server and throws an AbortError.
+ * resumed. A busy server is asked again without counting as a failure. Once
+ * the server checks the file, it asks for the outcome every few seconds, with
+ * the same retries; a refused file throws an ApiError with the reason's code.
+ * Aborting `signal` cancels the upload on the server (which stops a check)
+ * and throws an AbortError.
  */
 export async function uploadInChunks<R>(
   file: File,
@@ -154,8 +178,30 @@ export async function uploadInChunks<R>(
 ): Promise<UploadResult<R>> {
   const delays = options.retryDelaysMs ?? RETRY_DELAYS_MS;
   const busyDelay = options.busyDelayMs ?? BUSY_DELAY_MS;
+  const pollMs = options.pollMs ?? CHECK_POLL_MS;
   let id = options.resumeId;
   let received = 0;
+
+  /** Asks for the outcome of the check until it has ended. */
+  async function awaitCheck(status: UploadStatus): Promise<UploadResult<R>> {
+    let failures = 0;
+    // A small file is checked at once: the first question comes sooner.
+    let next = Math.min(FIRST_POLL_MS, pollMs);
+    while (status.state === 'checking') {
+      await wait(failures > 0 ? delays[failures - 1] : next, signal);
+      next = pollMs;
+      try {
+        status = await patiently(() => endpoints.status(id!, signal), signal, busyDelay);
+        failures = 0;
+      } catch (err) {
+        if (signal.aborted) throw abortError();
+        if (!isTransient(err)) throw err;
+        failures += 1;
+        if (failures > delays.length) throw new UploadInterruptedError(id!, file.size, file.size);
+      }
+    }
+    return { id: id!, result: outcome(endpoints, status) };
+  }
 
   try {
     let first: UploadStatus;
@@ -177,6 +223,8 @@ export async function uploadInChunks<R>(
     received = first.received;
     const chunk = first.chunk_size;
     onProgress(received, file.size);
+    // A resumed upload may have been completed already.
+    if (first.state !== 'uploading') return await awaitCheck(first);
 
     let failures = 0;
     let resends = 0;
@@ -219,9 +267,9 @@ export async function uploadInChunks<R>(
           }
         }
       }
+      let checking: UploadStatus;
       try {
-        const result = await patiently(() => endpoints.complete(id!, signal), signal, busyDelay);
-        return { id: id!, result };
+        checking = await patiently(() => endpoints.complete(id!, signal), signal, busyDelay);
       } catch (err) {
         // The server is missing bytes (a part was lost after it answered): send them.
         if (
@@ -240,6 +288,7 @@ export async function uploadInChunks<R>(
         }
         throw err;
       }
+      return await awaitCheck(checking);
     }
   } catch (err) {
     if (signal.aborted && id) await cancelUpload(endpoints, id, busyDelay);
@@ -249,8 +298,9 @@ export async function uploadInChunks<R>(
 }
 
 /**
- * Cancels an open upload, asking a busy server again. Best effort: an upload
- * nobody completes is dropped after an hour anyway, so a failure is ignored.
+ * Cancels an open upload, or stops the check of a completed one, asking a
+ * busy server again. Best effort: an upload nobody completes is dropped after
+ * an hour anyway, so a failure is ignored.
  */
 export async function cancelUpload<R>(
   endpoints: UploadEndpoints<R>,
@@ -272,8 +322,21 @@ export interface RestUploadOptions {
   completeBody?: Record<string, unknown>;
 }
 
+/** Reads what a ready upload gives the caller; throws when the server sent none. */
+export function readyPart<K extends 'backup' | 'preview'>(
+  key: K,
+): (status: UploadStatus) => NonNullable<UploadStatus[K]> {
+  return (status) => {
+    const part = status[key];
+    if (!part) throw new Error(`The server did not describe the checked file (no ${key}).`);
+    return part as NonNullable<UploadStatus[K]>;
+  };
+}
+
 /** The endpoints of an upload API that follows the backup upload routes. */
-export function restUploadEndpoints<R>(options: RestUploadOptions): UploadEndpoints<R> {
+export function restUploadEndpoints<R>(
+  options: RestUploadOptions & { result: (status: UploadStatus) => R },
+): UploadEndpoints<R> {
   const origin = globalThis.location?.origin ?? '';
   const headers = options.headers ?? {};
 
@@ -330,5 +393,6 @@ export function restUploadEndpoints<R>(options: RestUploadOptions): UploadEndpoi
     cancel: async (id) => {
       await send('DELETE', one(id));
     },
+    result: options.result,
   };
 }

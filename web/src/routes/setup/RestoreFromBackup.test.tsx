@@ -21,6 +21,7 @@ const preview: RestorePreview = {
     schema: 12,
     key_matches: true,
     readable: true,
+    newer_version: false,
     uploaded_at: '2026-11-23T12:00:00Z',
     original_name: 'old-host.tar.gz',
   },
@@ -31,13 +32,36 @@ const preview: RestorePreview = {
   retention_days: 90,
 };
 
-const upload = { id: 'u1', file_name: 'old-host.tar.gz', size: 10, chunk_size: 4 };
+const upload = {
+  id: 'u1',
+  file_name: 'old-host.tar.gz',
+  size: 10,
+  chunk_size: 4,
+  state: 'uploading',
+};
+
+/** The outcome of the check of the upload, as the server reports it. */
+const ready = (pv: RestorePreview = preview) => ({
+  ...upload,
+  received: 10,
+  state: 'ready',
+  backup: pv.info,
+  preview: pv,
+});
+const refused = (code: string, message: string) => ({
+  ...upload,
+  received: 10,
+  state: 'refused',
+  reason: { code, message },
+});
 
 interface World {
   required: boolean;
   token?: Handler;
   start?: Handler;
   complete?: Handler;
+  /** The outcome of the check; a ready upload with the preview by default. */
+  outcome?: () => object;
   restore?: Handler;
   restoreStatus?: Handler;
 }
@@ -60,7 +84,12 @@ function api(world: World): Handler {
       return json(200, { ...upload, received: Math.min(10, Number(part[1]) + 4) });
     }
     if (call.path === '/api/v1/setup/restore/uploads/u1/complete') {
-      return world.complete ? world.complete(call) : json(201, preview);
+      return world.complete
+        ? world.complete(call)
+        : json(202, { ...upload, received: 10, state: 'checking' });
+    }
+    if (call.path === '/api/v1/setup/restore/uploads/u1' && call.method === 'GET') {
+      return json(200, world.outcome ? world.outcome() : ready());
     }
     if (call.path === '/api/v1/setup/restore' && call.method === 'POST') {
       return world.restore?.(call) ?? json(202, status('restoring'));
@@ -144,6 +173,29 @@ describe('restore from the setup screen', () => {
     expect(start?.body).toEqual({ token: 'tok-123', file_name: 'old-host.tar.gz', size: 10 });
     const complete = calls.find((c) => c.path.endsWith('/complete'));
     expect(complete?.body).toEqual({ token: 'tok-123' });
+    // The outcome of the check is asked for, not waited on in one request.
+    expect(
+      calls.some((c) => c.method === 'GET' && c.path === '/api/v1/setup/restore/uploads/u1'),
+    ).toBe(true);
+  });
+
+  it('says it checks the file while the server reads it', async () => {
+    let asked = 0;
+    mockFetch(
+      api({
+        required: true,
+        outcome: () => (++asked > 1 ? ready() : { ...upload, received: 10, state: 'checking' }),
+      }),
+    );
+    renderApp('/setup');
+    await openRestore();
+    enterToken();
+    await sendFile();
+    expect(await screen.findByText(/Checking the backup/)).toBeVisible();
+    expect(
+      await screen.findByRole('heading', { name: 'Review the backup' }, { timeout: 10_000 }),
+    ).toBeVisible();
+    expect(asked).toBe(2);
   });
 
   it('says how long to wait after too many wrong tokens', async () => {
@@ -163,7 +215,7 @@ describe('restore from the setup screen', () => {
     mockFetch(
       api({
         required: true,
-        complete: () => apiError(422, 'key_mismatch', 'Another SCANOPSIS_SECRET_KEY.'),
+        outcome: () => refused('key_mismatch', 'Another secret key.'),
       }),
     );
     renderApp('/setup');
@@ -187,7 +239,7 @@ describe('restore from the setup screen', () => {
     mockFetch(
       api({
         required: true,
-        complete: () => apiError(422, 'newer_schema', 'Newer.'),
+        outcome: () => refused('newer_schema', 'Newer.'),
       }),
     );
     renderApp('/setup');
@@ -209,7 +261,7 @@ describe('restore from the setup screen', () => {
     mockFetch(
       api({
         required: true,
-        complete: () => json(201, { ...preview, scans_removed_by_retention: 12 }),
+        outcome: () => ready({ ...preview, scans_removed_by_retention: 12 }),
       }),
     );
     renderApp('/setup');

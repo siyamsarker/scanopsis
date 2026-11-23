@@ -39,6 +39,7 @@ function backup(overrides: Partial<BackupInfo>): BackupInfo {
     schema: 12,
     key_matches: true,
     readable: true,
+    newer_version: false,
     uploaded_at: null,
     original_name: '',
     ...overrides,
@@ -72,7 +73,13 @@ function list(overrides: Partial<BackupList> = {}): BackupList {
   return {
     backups: [scheduled, manual, foreign, safety],
     job: idle,
-    schedule: { last_run_at: '2026-11-22T02:00:00Z', ok: true, error: '' },
+    schedule: {
+      last_run_at: '2026-11-22T02:00:00Z',
+      ok: true,
+      error: '',
+      dismissed: false,
+      enabled: true,
+    },
     disk: { free_bytes: 12.5 * 1024 ** 3, used_bytes: 20 * 1024 * 1024 },
     folder: { path: '/var/lib/scanopsis/backups', ok: true },
     ...overrides,
@@ -225,7 +232,13 @@ describe('backups page', () => {
           ? json(
               200,
               list({
-                schedule: { last_run_at: '2026-11-23T02:00:00Z', ok: false, error: 'disk full' },
+                schedule: {
+                  last_run_at: '2026-11-23T02:00:00Z',
+                  ok: false,
+                  error: 'disk full',
+                  dismissed: false,
+                  enabled: true,
+                },
               }),
             )
           : undefined,
@@ -237,6 +250,94 @@ describe('backups page', () => {
         /^The scheduled backup at 23 Nov 2026, \d\d:\d\d .+ failed: disk full$/,
       ),
     ).toBeVisible();
+  });
+
+  it('dismisses the failed scheduled backup until the next run', async () => {
+    let dismissed = false;
+    const { calls } = mockFetch(
+      api((call) => {
+        if (call.path === '/api/v1/admin/backups/schedule-status/dismiss') {
+          dismissed = true;
+          return noContent();
+        }
+        if (call.path === '/api/v1/admin/backups') {
+          return json(
+            200,
+            list({
+              schedule: {
+                last_run_at: '2026-11-23T02:00:00Z',
+                ok: false,
+                error: 'disk full',
+                dismissed,
+                enabled: true,
+              },
+            }),
+          );
+        }
+        return undefined;
+      }),
+    );
+    renderApp('/admin/backups');
+    const notice = await screen.findByRole('region', { name: 'Scheduled backup failed' });
+    expect(notice).toHaveTextContent('Dismissing hides this until the next scheduled backup.');
+    fireEvent.click(within(notice).getByRole('button', { name: 'Dismiss' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Scheduled backup failed' })).toBeNull(),
+    );
+    expect(
+      calls.some(
+        (c) => c.method === 'POST' && c.path === '/api/v1/admin/backups/schedule-status/dismiss',
+      ),
+    ).toBe(true);
+  });
+
+  it('hides the failed scheduled backup while the schedule is off', async () => {
+    mockFetch(
+      api((call) =>
+        call.path === '/api/v1/admin/backups'
+          ? json(
+              200,
+              list({
+                schedule: {
+                  last_run_at: '2026-11-23T02:00:00Z',
+                  ok: false,
+                  error: 'disk full',
+                  dismissed: false,
+                  enabled: false,
+                },
+              }),
+            )
+          : undefined,
+      ),
+    );
+    renderApp('/admin/backups');
+    await screen.findByRole('table', { name: 'Backups' });
+    expect(screen.queryByRole('region', { name: 'Scheduled backup failed' })).toBeNull();
+  });
+
+  it('marks a backup made by a newer version and does not offer to restore it', async () => {
+    const newer = backup({
+      name: 'scanopsis-backup-20261118T100000Z-uploaded-mno345.tar.gz',
+      kind: 'uploaded',
+      created_at: '2026-11-18T10:00:00Z',
+      readable: false,
+      newer_version: true,
+    });
+    mockFetch(
+      api((call) =>
+        call.path === '/api/v1/admin/backups' ? json(200, list({ backups: [newer] })) : undefined,
+      ),
+    );
+    renderApp('/admin/backups');
+    const table = await screen.findByRole('table', { name: 'Backups' });
+    expect(within(table).getByText('Made by a newer version of Scanopsis')).toBeInTheDocument();
+    expect(within(table).queryByText('Cannot be read')).toBeNull();
+    const menu = await openMenu(/Actions for the backup from 18 Nov 2026/);
+    expect(within(menu).getByRole('menuitem', { name: 'Restore' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(menu).toHaveTextContent('Only that version of Scanopsis or a later one can restore it.');
   });
 
   it('reports a failed restore of a scheduled backup', async () => {
@@ -473,12 +574,17 @@ describe('scheduled backups', () => {
 });
 
 describe('restore', () => {
-  async function openRestore(previewBody: RestorePreview, extra?: Handler) {
+  async function openRestore(previewBody: RestorePreview, extra?: Handler, checks = 0) {
+    let left = checks;
     const fetch = mockFetch(
       api(async (call) => {
         const custom = await extra?.(call);
         if (custom) return custom;
         if (call.path === `/api/v1/admin/backups/${manual.name}/preview`) {
+          if (left > 0) {
+            left -= 1;
+            return json(202, { state: 'checking' });
+          }
           return json(200, previewBody);
         }
         return undefined;
@@ -506,6 +612,15 @@ describe('restore', () => {
       'Before the restore, Scanopsis backs up the current state, so you can go back.',
     );
     expect(dialog).not.toHaveTextContent('daily clean-up');
+    // The backup's version and who made it.
+    const facts = within(dialog).getByText('Scanopsis version').closest('dl')!;
+    expect(facts).toHaveTextContent('Scanopsis version0.4.0');
+    expect(facts).toHaveTextContent('Made byalice');
+    // Without the backup of the current state there is no way back.
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Skip the backup/ }));
+    expect(dialog).toHaveTextContent('Without this backup, the restore cannot be undone.');
+    expect(dialog).not.toHaveTextContent('so you can go back');
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: /Skip the backup/ }));
     const button = within(dialog).getByRole('button', { name: 'Restore backup' });
     const phrase = within(dialog).getByRole('textbox', { name: 'Type RESTORE to confirm' });
     const code = within(dialog).getByRole('textbox', { name: 'Two-factor code' });
@@ -518,6 +633,19 @@ describe('restore', () => {
     expect(button).toBeDisabled();
     fireEvent.change(code, { target: { value: '123456' } });
     expect(button).toBeEnabled();
+  });
+
+  it('says it checks the backup while the server reads it, then shows the preview', async () => {
+    const { dialog, calls } = await openRestore(preview(), undefined, 2);
+    const status = await within(dialog).findByRole('status');
+    expect(status).toHaveTextContent('Checking the backup…');
+    expect(within(dialog).getByRole('button', { name: 'Restore backup' })).toBeDisabled();
+    await within(dialog).findByText(
+      'Everything in Scanopsis is replaced by this backup: users, settings, services, scans and the audit log.',
+      undefined,
+      { timeout: 10_000 },
+    );
+    expect(calls.filter((c) => c.path.endsWith('/preview')).length).toBe(3);
   });
 
   it('warns about scans the clean-up removes when there are some', async () => {
@@ -533,7 +661,11 @@ describe('restore', () => {
     const { dialog } = await openRestore(
       preview({ key_matches: false, scans_removed_by_retention: 0 }),
     );
-    expect(await within(dialog).findByText(/same secret key file/)).toBeVisible();
+    expect(
+      await within(dialog).findByText(
+        'This backup was made with another secret key and cannot be restored into this installation. To use it, set up a new installation with that secret key and restore the backup on its setup screen. Never change the secret key of an installation in use.',
+      ),
+    ).toBeVisible();
     expect(dialog).not.toHaveTextContent('scans older than');
     const phrase = within(dialog).queryByRole('textbox', { name: 'Type RESTORE to confirm' });
     if (phrase) fireEvent.change(phrase, { target: { value: 'RESTORE' } });

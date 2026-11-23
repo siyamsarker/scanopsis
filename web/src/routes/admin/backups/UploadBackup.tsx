@@ -27,7 +27,7 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
       });
       refresh();
     },
-    // Cancelled while the server checked the file: it may still have added it.
+    // Cancelled while the server checked the file: the check may have ended first.
     onCancelledWhileChecking: refresh,
   });
   const { phase } = upload;
@@ -36,7 +36,7 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
     if (upload.cancel()) {
       toast.info('Upload cancelled', {
         description:
-          'The server was already checking the file, so it may still appear in the list.',
+          'The check of the file was stopped. If it had already finished, the backup stays in the list.',
       });
     }
     setOpen(false);
