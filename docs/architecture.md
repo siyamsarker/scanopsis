@@ -278,7 +278,9 @@ preview of a restore, and the check of a file that appeared in the folder
 without being written or checked by Scanopsis, so the list can mark a damaged
 one. They run in the background too, one at a time, and are stopped when
 Scanopsis shuts down. When several wait, the check of an upload goes first,
-then a preview, then the check for the list. The outcome of every check of a
+then a preview, then the check for the list. A check for the list that is
+running stops when an upload check or a preview starts to wait, and is tried
+again at a later listing. The outcome of every check of a
 whole file is kept in `.checked.json` in the backup folder, by name, size and
 modification time. The API answers `202` with the state `checking` and
 the page asks again every few seconds, so no request waits while a large file

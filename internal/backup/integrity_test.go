@@ -6,6 +6,7 @@ package backup
 import (
 	"context"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -168,5 +169,63 @@ func TestUploadOfAListedBackup(t *testing.T) {
 	}
 	if left := uploadFiles(t, e.dir); len(left) != 0 {
 		t.Errorf("upload folder = %v", left)
+	}
+}
+
+// A list check of a large hand-copied file gives way to an upload check
+// that waits, and is tried again afterwards; one file is read at a time.
+func TestListCheckGivesWayToAnUploadCheck(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	copied := writeBackup(t, e.dir, goodArchive(t))
+	entered := make(chan struct{}, 4)
+	var calls atomic.Int32
+	real := e.svc.verifyFile
+	e.svc.verifyFile = func(ctx context.Context, path string) error {
+		if calls.Add(1) == 1 {
+			entered <- struct{}{}
+			<-ctx.Done() // a file that takes long to read
+			return ctx.Err()
+		}
+		return real(ctx, path)
+	}
+	e.listed(copied)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the list check did not start")
+	}
+
+	data := uploadArchive(t, apiFingerprint, testSigningKey, 3)
+	id := e.startUpload("other.tar.gz", len(data))
+	e.send(id, data, 0, len(data))
+	done := make(chan map[string]any, 1)
+	go func() { done <- e.complete(adminUploads+"/"+id, "admin", nil) }()
+	select {
+	case st := <-done:
+		if st["state"] != "ready" {
+			t.Fatalf("upload = %v", st)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the upload check waited for the list check")
+	}
+
+	// The interrupted check is tried again at a later listing and finishes.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		e.listed(copied)
+		if p, _ := e.dir.Path(copied); p != "" {
+			if fi, err := os.Stat(p); err == nil {
+				e.dir.mu.Lock()
+				mark, ok := e.dir.checks[copied]
+				e.dir.mu.Unlock()
+				if ok && mark.of(fi) && mark.Problem == "" {
+					break
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the list check was not tried again (%d calls)", calls.Load())
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

@@ -276,27 +276,41 @@ const (
 )
 
 // checkSlot lets one background check run at a time. When it frees up, the
-// check waiting longest with the highest priority goes next.
+// check waiting longest with the highest priority goes next. A check for
+// the list, which nobody waits for, is stopped when an upload check or a
+// preview starts to wait (see take).
 type checkSlot struct {
 	mu      sync.Mutex
 	busy    bool
 	waiting [checkPriorities][]chan struct{}
+	// yield stops the running check when it is one that gives way, else
+	// nil.
+	yield context.CancelFunc
 }
 
 // take waits for the slot and reports whether it got it; false means ctx
-// ended first.
-func (c *checkSlot) take(ctx context.Context, p checkPriority) bool {
+// ended first. yield, if not nil, stops the check that takes the slot: it
+// is called when a check of a higher priority than checkListed waits.
+func (c *checkSlot) take(ctx context.Context, p checkPriority, yield context.CancelFunc) bool {
 	c.mu.Lock()
 	if !c.busy {
-		c.busy = true
+		c.busy, c.yield = true, yield
 		c.mu.Unlock()
 		return true
+	}
+	if p < checkListed && c.yield != nil {
+		// Someone waits for this check; the list check is tried again later.
+		c.yield()
+		c.yield = nil
 	}
 	turn := make(chan struct{})
 	c.waiting[p] = append(c.waiting[p], turn)
 	c.mu.Unlock()
 	select {
 	case <-turn:
+		c.mu.Lock()
+		c.yield = yield
+		c.mu.Unlock()
 		return true
 	case <-ctx.Done():
 	}
@@ -318,6 +332,7 @@ func (c *checkSlot) take(ctx context.Context, p checkPriority) bool {
 func (c *checkSlot) give() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.yield = nil
 	for p := range c.waiting {
 		if len(c.waiting[p]) > 0 {
 			turn := c.waiting[p][0]
@@ -337,6 +352,12 @@ func (c *checkSlot) give() {
 // service closes; Close waits for fn to return. A panic in fn is logged; fn
 // should turn its own failures into an outcome.
 func (s *Service) background(ctx context.Context, p checkPriority, fn func()) error {
+	return s.backgroundYielding(ctx, p, nil, fn)
+}
+
+// backgroundYielding is background for a check that gives way: yield stops
+// it, and ctx should end with it.
+func (s *Service) backgroundYielding(ctx context.Context, p checkPriority, yield context.CancelFunc, fn func()) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctx.Err() != nil {
@@ -345,7 +366,7 @@ func (s *Service) background(ctx context.Context, p checkPriority, fn func()) er
 	s.checking.Add(1)
 	go func() {
 		defer s.checking.Done()
-		if s.checks.take(ctx, p) {
+		if s.checks.take(ctx, p, yield) {
 			defer s.checks.give()
 		}
 		_ = s.guard(ctx, "a background check stopped with a panic", func() error { fn(); return nil })
@@ -771,14 +792,19 @@ func (s *Service) checkListed(list []Info) {
 			delete(s.listedChecks, name)
 			s.listedMu.Unlock()
 		}
-		err := s.background(s.ctx, checkListed, func() {
+		// The check gives way to an upload check or a preview that waits,
+		// and is tried again at a later listing.
+		ctx, stop := context.WithCancel(s.ctx)
+		err := s.backgroundYielding(ctx, checkListed, stop, func() {
+			defer stop()
 			defer done()
-			if s.ctx.Err() != nil {
+			if ctx.Err() != nil {
 				return
 			}
-			s.recordCheck(s.ctx, name, s.verifyFile)
+			s.recordCheck(ctx, name, s.verifyFile)
 		})
 		if err != nil {
+			stop()
 			done()
 		}
 	}
