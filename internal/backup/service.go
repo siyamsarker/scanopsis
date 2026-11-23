@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -176,7 +177,7 @@ type Service struct {
 	jobs   sync.WaitGroup
 	// checks runs one background check (an upload, a preview) at a time;
 	// checking counts the checks that were started or wait for their turn.
-	checks   chan struct{}
+	checks   checkSlot
 	checking sync.WaitGroup
 
 	restoring atomic.Bool
@@ -207,7 +208,6 @@ func NewService(o ServiceOptions) *Service {
 		newTimer: func(d time.Duration) timer { return realTimer{time.NewTimer(d)} },
 		restore:  Restore,
 		status:   JobStatus{State: JobIdle},
-		checks:   make(chan struct{}, 1),
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -239,13 +239,80 @@ func (s *Service) Close() {
 	s.checking.Wait()
 }
 
+// checkPriority orders the background checks that wait for their turn.
+type checkPriority int
+
+const (
+	// checkUpload checks an upload: someone waits to use the file.
+	checkUpload checkPriority = iota
+	// checkPreview computes the preview of a backup in the folder, which
+	// only informs a decision; it waits while an upload check waits.
+	checkPreview
+	checkPriorities
+)
+
+// checkSlot lets one background check run at a time. When it frees up, the
+// check waiting longest with the highest priority goes next.
+type checkSlot struct {
+	mu      sync.Mutex
+	busy    bool
+	waiting [checkPriorities][]chan struct{}
+}
+
+// take waits for the slot and reports whether it got it; false means ctx
+// ended first.
+func (c *checkSlot) take(ctx context.Context, p checkPriority) bool {
+	c.mu.Lock()
+	if !c.busy {
+		c.busy = true
+		c.mu.Unlock()
+		return true
+	}
+	turn := make(chan struct{})
+	c.waiting[p] = append(c.waiting[p], turn)
+	c.mu.Unlock()
+	select {
+	case <-turn:
+		return true
+	case <-ctx.Done():
+	}
+	c.mu.Lock()
+	for i, w := range c.waiting[p] {
+		if w == turn {
+			c.waiting[p] = slices.Delete(c.waiting[p], i, i+1)
+			c.mu.Unlock()
+			return false
+		}
+	}
+	c.mu.Unlock()
+	// The turn came as ctx ended: pass it on.
+	c.give()
+	return false
+}
+
+// give hands the slot to the next waiting check, or frees it.
+func (c *checkSlot) give() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for p := range c.waiting {
+		if len(c.waiting[p]) > 0 {
+			turn := c.waiting[p][0]
+			c.waiting[p] = c.waiting[p][1:]
+			close(turn)
+			return
+		}
+	}
+	c.busy = false
+}
+
 // background runs fn in the background once no other check runs, so the
-// server reads at most one backup at a time for a check. ctx ends the wait
-// for that turn; fn is then still called, and is expected to see ctx ended
-// and return at once. It refuses, with errClosed, once the service closes;
-// Close waits for fn to return. A panic in fn is logged; fn should turn its
-// own failures into an outcome.
-func (s *Service) background(ctx context.Context, fn func()) error {
+// server reads at most one backup at a time for a check; when the slot
+// frees up, an upload check that waits goes before a preview (p). ctx ends
+// the wait for that turn; fn is then still called, and is expected to see
+// ctx ended and return at once. It refuses, with errClosed, once the
+// service closes; Close waits for fn to return. A panic in fn is logged; fn
+// should turn its own failures into an outcome.
+func (s *Service) background(ctx context.Context, p checkPriority, fn func()) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ctx.Err() != nil {
@@ -254,10 +321,8 @@ func (s *Service) background(ctx context.Context, fn func()) error {
 	s.checking.Add(1)
 	go func() {
 		defer s.checking.Done()
-		select {
-		case s.checks <- struct{}{}:
-			defer func() { <-s.checks }()
-		case <-ctx.Done():
+		if s.checks.take(ctx, p) {
+			defer s.checks.give()
 		}
 		_ = s.guard(ctx, "a background check stopped with a panic", func() error { fn(); return nil })
 	}()

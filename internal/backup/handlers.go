@@ -58,6 +58,9 @@ const (
 	previewKeep = time.Hour
 	// maxPreviews bounds the finished previews kept in memory.
 	maxPreviews = 16
+	// previewAbandon is how long a preview is computed without a request
+	// asking for it before it is stopped: the dialog asks every few seconds.
+	previewAbandon = 60 * time.Second
 )
 
 // APIOptions configure the HTTP API of the backups.
@@ -100,6 +103,9 @@ type API struct {
 	// folder; tests replace them.
 	verify         func(ctx context.Context, up *upload, scope uploadScope) (Preview, error)
 	computePreview func(ctx context.Context, path string) (Preview, error)
+	// previewAbandon is how long a preview being computed is kept without
+	// a request for it.
+	previewAbandon time.Duration
 }
 
 // previewKey names a backup file as it is now, and the retention period a
@@ -117,6 +123,10 @@ type previewEntry struct {
 	pv   Preview
 	err  error
 	at   time.Time
+	// asked is when a request last asked for the preview being computed;
+	// stop stops computing it.
+	asked time.Time
+	stop  context.CancelFunc
 }
 
 // NewAPI returns the API.
@@ -133,7 +143,7 @@ func NewAPI(o APIOptions) *API {
 	if o.RetentionDays == nil {
 		o.RetentionDays = func() int { return 0 }
 	}
-	a := &API{o: o, svc: o.Service, previews: map[previewKey]*previewEntry{}}
+	a := &API{o: o, svc: o.Service, previews: map[previewKey]*previewEntry{}, previewAbandon: previewAbandon}
 	a.verify, a.computePreview = a.verifyUpload, a.previewOf
 	return a
 }
@@ -653,20 +663,34 @@ func (a *API) preview(w http.ResponseWriter, r *http.Request) {
 		a.pruneLocked(now)
 		e = &previewEntry{}
 		a.previews[key] = e
-		ctx := a.svc.baseContext()
-		err := a.svc.background(ctx, func() {
-			pv, err := a.computePreview(ctx, p)
-			a.pmu.Lock()
-			e.done, e.pv, e.err, e.at = true, pv, err, a.o.Now()
-			a.pmu.Unlock()
+		ctx, stop := context.WithCancel(a.svc.baseContext())
+		e.stop = stop
+		err := a.svc.background(ctx, checkPreview, func() {
+			// A panic ends the check as a failure too, which the next
+			// request sees once before the file is checked again.
+			pv, err := Preview{}, errInternal
+			defer func() {
+				stop()
+				a.pmu.Lock()
+				e.done, e.pv, e.err, e.at = true, pv, err, a.o.Now()
+				a.pmu.Unlock()
+			}()
+			if ctx.Err() != nil {
+				err = ctx.Err() // abandoned while it waited for its turn
+				return
+			}
+			pv, err = a.computePreview(ctx, p)
 		})
 		if err != nil {
+			stop()
 			delete(a.previews, key)
 			a.pmu.Unlock()
 			a.jobError(w, err)
 			return
 		}
+		go a.abandonPreview(ctx, key, e)
 	}
+	e.asked = now
 	if !e.done {
 		a.pmu.Unlock()
 		httpapi.WriteJSON(w, http.StatusAccepted, checkingJSON{State: UploadChecking})
@@ -685,6 +709,30 @@ func (a *API) preview(w http.ResponseWriter, r *http.Request) {
 	}
 	pv.Info = a.dir().info(fi.Name(), fi)
 	httpapi.WriteJSON(w, http.StatusOK, pv)
+}
+
+// abandonPreview stops computing the preview e of key, and forgets it, once
+// no request has asked for it for previewAbandon (the dialog that wanted it
+// was closed), so that it does not hold up the checks after it. It returns
+// when the preview has ended.
+func (a *API) abandonPreview(ctx context.Context, key previewKey, e *previewEntry) {
+	tick := time.NewTicker(max(a.previewAbandon/4, time.Millisecond))
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		a.pmu.Lock()
+		if !e.done && a.o.Now().Sub(e.asked) > a.previewAbandon {
+			e.stop()
+			if a.previews[key] == e {
+				delete(a.previews, key)
+			}
+		}
+		a.pmu.Unlock()
+	}
 }
 
 // checkingJSON is the answer while a backup is being checked.
@@ -1028,7 +1076,7 @@ func (a *API) completeUpload(w http.ResponseWriter, r *http.Request, scope uploa
 		}
 		// The audit entry and the log keep the request's values, not its end.
 		logCtx := context.WithoutCancel(r.Context())
-		if err := a.svc.background(ctx, func() { a.checkUpload(logCtx, ctx, up, scope, who) }); err != nil {
+		if err := a.svc.background(ctx, checkUpload, func() { a.checkUpload(logCtx, ctx, up, scope, who) }); err != nil {
 			a.up.settle(up, a.o.Now(), func(u *upload) { u.state = UploadUploading })
 			a.jobError(w, err)
 			return

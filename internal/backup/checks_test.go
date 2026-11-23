@@ -546,3 +546,184 @@ func csvArchive(t *testing.T) []byte {
 	}
 	return buf.Bytes()
 }
+
+// pollPreview asks for the preview of name until the answer is not 202.
+func (e *apiEnv) pollPreview(name string) response {
+	e.t.Helper()
+	path := "/api/v1/admin/backups/" + name + "/preview"
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		r := e.call("GET", path, "admin", nil)
+		if r.status != http.StatusAccepted {
+			return r
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatal("the preview did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// A preview that panics ends as an error, and the next request checks the
+// file again instead of waiting for ever.
+func TestPreviewPanic(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	name := writeBackup(t, e.dir, csvArchive(t))
+	real := e.api.previewOf
+	var calls atomic.Int32
+	e.api.computePreview = func(ctx context.Context, path string) (Preview, error) {
+		if calls.Add(1) == 1 {
+			panic("boom")
+		}
+		return real(ctx, path)
+	}
+	if r := e.pollPreview(name); r.status != http.StatusInternalServerError {
+		t.Fatalf("preview that panicked = %d %s, want 500", r.status, r.body)
+	}
+	if r := e.pollPreview(name); r.status != http.StatusOK || calls.Load() != 2 {
+		t.Errorf("preview after the panic = %d %s, %d computations", r.status, r.body, calls.Load())
+	}
+}
+
+// A preview nobody asks about any more is stopped and forgotten, so it
+// does not keep the server reading a file for nobody.
+func TestPreviewAbandoned(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	e.api.previewAbandon = 100 * time.Millisecond
+	name := writeBackup(t, e.dir, csvArchive(t))
+	stopped := make(chan struct{})
+	e.api.computePreview = func(ctx context.Context, _ string) (Preview, error) {
+		<-ctx.Done()
+		close(stopped)
+		return Preview{}, ctx.Err()
+	}
+	path := "/api/v1/admin/backups/" + name + "/preview"
+	if r := e.call("GET", path, "admin", nil); r.status != http.StatusAccepted {
+		t.Fatalf("preview = %d %s", r.status, r.body)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("an abandoned preview kept running")
+	}
+	e.api.pmu.Lock()
+	left := len(e.api.previews)
+	e.api.pmu.Unlock()
+	if left != 0 {
+		t.Errorf("%d previews kept, want none", left)
+	}
+
+	// One that is asked about keeps running.
+	release := make(chan struct{})
+	var cancelled atomic.Bool
+	e.api.computePreview = func(ctx context.Context, _ string) (Preview, error) {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			cancelled.Store(true)
+			return Preview{}, ctx.Err()
+		}
+		return Preview{SchemaOK: true, KeyMatches: true}, nil
+	}
+	for end := time.Now().Add(400 * time.Millisecond); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
+		if r := e.call("GET", path, "admin", nil); r.status != http.StatusAccepted {
+			t.Fatalf("preview while asked about = %d %s", r.status, r.body)
+		}
+	}
+	close(release)
+	if r := e.pollPreview(name); r.status != http.StatusOK || cancelled.Load() {
+		t.Errorf("preview = %d %s, cancelled %v", r.status, r.body, cancelled.Load())
+	}
+}
+
+// A preview that waits for its turn and is abandoned meanwhile never reads
+// the file.
+func TestPreviewAbandonedWhileWaiting(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	e.api.previewAbandon = 100 * time.Millisecond
+	g := gateVerify(e)
+	data := goodArchive(t)
+	id := e.startUpload("a.tar.gz", len(data))
+	e.send(id, data, 0, len(data))
+	if r := e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil); r.status != http.StatusAccepted {
+		t.Fatalf("complete = %d %s", r.status, r.body)
+	}
+	<-g.entered
+	name := writeBackup(t, e.dir, csvArchive(t))
+	var calls atomic.Int32
+	e.api.computePreview = func(context.Context, string) (Preview, error) {
+		calls.Add(1)
+		return Preview{}, nil
+	}
+	if r := e.call("GET", "/api/v1/admin/backups/"+name+"/preview", "admin", nil); r.status != http.StatusAccepted {
+		t.Fatalf("preview = %d %s", r.status, r.body)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		e.api.pmu.Lock()
+		left := len(e.api.previews)
+		e.api.pmu.Unlock()
+		if left == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the abandoned preview was kept")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(g.release)
+	e.waitState(adminUploads+"/"+id, "admin", "ready")
+	time.Sleep(50 * time.Millisecond)
+	if calls.Load() != 0 {
+		t.Errorf("an abandoned preview read the file %d times", calls.Load())
+	}
+}
+
+// When the check slot frees up, an upload that waits goes before a
+// preview that waits, so a preview never holds up an upload for long.
+func TestUploadChecksGoBeforePreviews(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	g := gateVerify(e)
+	a, b := goodArchive(t), goodArchive(t)
+	ida, idb := e.startUpload("a.tar.gz", len(a)), e.startUpload("b.tar.gz", len(b))
+	e.send(ida, a, 0, len(a))
+	e.send(idb, b, 0, len(b))
+	if r := e.call("POST", adminUploads+"/"+ida+"/complete", "admin", nil); r.status != http.StatusAccepted {
+		t.Fatalf("complete = %d %s", r.status, r.body)
+	}
+	<-g.entered
+	var mu sync.Mutex
+	var order []string
+	name := writeBackup(t, e.dir, csvArchive(t))
+	e.api.computePreview = func(context.Context, string) (Preview, error) {
+		mu.Lock()
+		order = append(order, "preview")
+		mu.Unlock()
+		return Preview{SchemaOK: true, KeyMatches: true}, nil
+	}
+	if r := e.call("GET", "/api/v1/admin/backups/"+name+"/preview", "admin", nil); r.status != http.StatusAccepted {
+		t.Fatalf("preview = %d %s", r.status, r.body)
+	}
+	time.Sleep(50 * time.Millisecond) // the preview waits first
+	if r := e.call("POST", adminUploads+"/"+idb+"/complete", "admin", nil); r.status != http.StatusAccepted {
+		t.Fatalf("complete = %d %s", r.status, r.body)
+	}
+	time.Sleep(50 * time.Millisecond)
+	go func() {
+		for id := range g.entered {
+			mu.Lock()
+			order = append(order, id)
+			mu.Unlock()
+		}
+	}()
+	close(g.release)
+	e.waitState(adminUploads+"/"+idb, "admin", "ready")
+	if r := e.pollPreview(name); r.status != http.StatusOK {
+		t.Fatalf("preview = %d %s", r.status, r.body)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(order) != 2 || order[0] != idb || order[1] != "preview" {
+		t.Errorf("order after the first check = %v, want [%s preview]", order, idb)
+	}
+}
