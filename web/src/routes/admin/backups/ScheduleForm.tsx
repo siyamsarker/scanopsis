@@ -2,7 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { Plus, X } from 'lucide-react';
-import { useId, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react';
 import type { BackupList } from '../../../api/backups';
 import { describeError } from '../../../api/errors';
 import { SettingsValidationError, useSettings, useUpdateSettings } from '../../../api/hooks';
@@ -52,7 +60,16 @@ function ScheduleFields({
 }) {
   const update = useUpdateSettings();
   const id = useId();
-  const [draft, setDraft] = useState<Schedule>(saved);
+  // Changes not saved yet come back when the page is opened again in this tab.
+  const [restored] = useState(() => {
+    const kept = readDraft();
+    return kept && !sameSchedule(kept, saved) ? kept : null;
+  });
+  const [draft, setDraft] = useState<Schedule>(restored ?? saved);
+  const changed = !sameSchedule(draft, saved);
+  useEffect(() => writeDraft(changed ? draft : null), [changed, draft]);
+  const timeInput = useRef<HTMLInputElement>(null);
+  const keepInput = useRef<HTMLInputElement>(null);
   const [newTime, setNewTime] = useState('');
   const [timeProblem, setTimeProblem] = useState<string>();
   const [problems, setProblems] = useState<Partial<Record<Field, string>>>({});
@@ -75,12 +92,18 @@ function ScheduleFields({
     if (first) change({ zone: first.value });
   }
 
-  const dirty =
-    draft.enabled !== saved.enabled ||
-    draft.zone !== saved.zone ||
-    draft.keepDays !== saved.keepDays ||
-    draft.times.join() !== saved.times.join() ||
-    newTime.trim() !== '';
+  const dirty = changed || newTime.trim() !== '';
+
+  // A reload or a closed tab would lose the changes: the browser asks first.
+  useEffect(() => {
+    if (!dirty) return;
+    function ask(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+    window.addEventListener('beforeunload', ask);
+    return () => window.removeEventListener('beforeunload', ask);
+  }, [dirty]);
 
   const serverProblems: Partial<Record<Field, string>> = {};
   if (update.error instanceof SettingsValidationError) {
@@ -121,19 +144,23 @@ function ScheduleFields({
     // A time typed but not added yet is meant to be saved too.
     let times = draft.times;
     const typed = newTime.trim();
+    let typedProblem: string | undefined;
     if (typed) {
       const problem = newTimeProblem(typed, times);
       if (problem) {
-        setTimeProblem(problem);
-        return;
+        typedProblem = `${problem} Correct or clear this time to save the schedule.`;
+      } else {
+        times = [...times, typed].sort();
+        setDraft((prev) => ({ ...prev, times }));
+        setNewTime('');
       }
-      times = [...times, typed].sort();
-      setDraft((prev) => ({ ...prev, times }));
-      setNewTime('');
     }
-    const found = scheduleProblems({ ...draft, times });
-    if (Object.keys(found).length > 0) {
+    // Every problem shows at once, and the first one takes the focus.
+    const found = scheduleProblems({ ...draft, times: typedProblem ? [typed] : times });
+    if (typedProblem || Object.keys(found).length > 0) {
+      setTimeProblem(typedProblem);
       setProblems(found);
+      (typedProblem ? timeInput : found.keepDays ? keepInput : null)?.current?.focus();
       return;
     }
     update.mutate(
@@ -220,6 +247,7 @@ function ScheduleFields({
               Add a time
             </label>
             <input
+              ref={timeInput}
               id={`${id}-time`}
               type="text"
               inputMode="numeric"
@@ -303,6 +331,7 @@ function ScheduleFields({
         </label>
         <span className="flex items-center gap-2">
           <input
+            ref={keepInput}
             id={`${id}-keep`}
             type="number"
             inputMode="numeric"
@@ -328,6 +357,11 @@ function ScheduleFields({
         <Problem>{`The schedule was not saved. ${describeError(update.error)}`}</Problem>
       ) : null}
 
+      {restored && changed ? (
+        <p className="text-small text-text-muted">
+          Your unsaved changes are back. Save the schedule or undo them.
+        </p>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2 border-t border-line pt-5">
         <button
           type="submit"
@@ -355,6 +389,56 @@ function ScheduleFields({
       </div>
     </form>
   );
+}
+
+const DRAFT_KEY = 'scanopsis.backup-schedule-draft';
+
+function sameSchedule(a: Schedule, b: Schedule): boolean {
+  return (
+    a.enabled === b.enabled &&
+    a.zone === b.zone &&
+    a.keepDays === b.keepDays &&
+    a.times.join() === b.times.join()
+  );
+}
+
+/** The unsaved schedule kept for this tab, or null; storage may be unavailable. */
+function readDraft(): Schedule | null {
+  try {
+    const kept: unknown = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? 'null');
+    if (
+      kept &&
+      typeof kept === 'object' &&
+      'enabled' in kept &&
+      typeof kept.enabled === 'boolean' &&
+      'times' in kept &&
+      Array.isArray(kept.times) &&
+      kept.times.every((t) => typeof t === 'string') &&
+      'zone' in kept &&
+      typeof kept.zone === 'string' &&
+      'keepDays' in kept &&
+      typeof kept.keepDays === 'string'
+    ) {
+      return {
+        enabled: kept.enabled,
+        times: kept.times as string[],
+        zone: kept.zone,
+        keepDays: kept.keepDays,
+      };
+    }
+  } catch {
+    // Unreadable or unavailable: start from the saved schedule.
+  }
+  return null;
+}
+
+function writeDraft(draft: Schedule | null) {
+  try {
+    if (draft) sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    else sessionStorage.removeItem(DRAFT_KEY);
+  } catch {
+    // Without storage, unsaved changes are not kept.
+  }
 }
 
 function readSchedule(items: { key: string; value: unknown }[]): Schedule {

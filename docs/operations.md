@@ -547,7 +547,9 @@ Scheduled backups are off by default. In the panel **Scheduled backups**:
    choose the time zone: type a city in the filter and press Enter to take
    the first match, or pick one from the list. The default is `02:00` in UTC.
 3. Set how many days to keep scheduled backups, from 1 to 365 (default 7).
-4. Select **Save schedule**.
+4. Select **Save schedule**. Changes you have not saved stay in the form when
+   you open another page and come back in the same browser tab; the browser
+   asks before a reload or a closed tab loses them.
 
 After a scheduled backup succeeds, Scanopsis deletes the scheduled backups
 older than the keep period. It never deletes the newest scheduled backup, and

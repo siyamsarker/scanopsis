@@ -19,7 +19,11 @@ import {
 
 configure({ asyncUtilTimeout: 5000 });
 
-afterEach(() => hideRestoreOverlay());
+afterEach(() => {
+  hideRestoreOverlay();
+  // The schedule form keeps unsaved changes for the tab.
+  sessionStorage.clear();
+});
 
 const idle: JobStatus = {
   state: 'idle',
@@ -638,7 +642,11 @@ describe('scheduled backups', () => {
     const time = await within(form).findByRole('textbox', { name: 'Add a time' });
     fireEvent.change(time, { target: { value: '7:5' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Save schedule' }));
-    expect(within(form).getByText('Use a 24-hour time such as 02:00.')).toBeVisible();
+    expect(
+      within(form).getByText(
+        'Use a 24-hour time such as 02:00. Correct or clear this time to save the schedule.',
+      ),
+    ).toBeVisible();
     expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
     fireEvent.change(time, { target: { value: '07:05' } });
     fireEvent.click(within(form).getByRole('button', { name: 'Save schedule' }));
@@ -646,6 +654,55 @@ describe('scheduled backups', () => {
     expect(calls.find((c) => c.method === 'PATCH')?.body).toMatchObject({
       'backup.schedule_times': ['02:00', '07:05'],
     });
+  });
+
+  it('shows every problem when a typed time keeps the schedule from saving', async () => {
+    const { calls } = mockFetch(api());
+    renderApp('/admin/backups');
+    const form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    const time = await within(form).findByRole('textbox', { name: 'Add a time' });
+    fireEvent.change(time, { target: { value: '0730' } });
+    const keep = within(form).getByRole('spinbutton', { name: 'Keep scheduled backups for' });
+    fireEvent.change(keep, { target: { value: '0' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Save schedule' }));
+    expect(
+      within(form).getByText(
+        'Use a 24-hour time such as 02:00. Correct or clear this time to save the schedule.',
+      ),
+    ).toBeVisible();
+    expect(within(form).getByText('Use a whole number from 1 to 365.')).toBeVisible();
+    expect(time).toHaveFocus();
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+  });
+
+  it('keeps unsaved changes of the schedule when the page is left and opened again', async () => {
+    mockFetch(api());
+    renderApp('/admin/backups');
+    let form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    const keep = await within(form).findByRole('spinbutton', {
+      name: 'Keep scheduled backups for',
+    });
+    fireEvent.change(keep, { target: { value: '9' } });
+    const leaving = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(leaving);
+    expect(leaving.defaultPrevented).toBe(true);
+
+    fireEvent.click(screen.getAllByRole('link', { name: 'Portfolio' })[0]);
+    await waitFor(() =>
+      expect(screen.queryByRole('region', { name: 'Scheduled backups' })).toBeNull(),
+    );
+    fireEvent.click(screen.getAllByRole('link', { name: 'Backups' })[0]);
+    form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    expect(
+      await within(form).findByRole('spinbutton', { name: 'Keep scheduled backups for' }),
+    ).toHaveValue(9);
+    expect(
+      within(form).getByText('Your unsaved changes are back. Save the schedule or undo them.'),
+    ).toBeVisible();
+    fireEvent.click(within(form).getByRole('button', { name: 'Undo changes' }));
+    expect(
+      within(form).getByRole('spinbutton', { name: 'Keep scheduled backups for' }),
+    ).toHaveValue(7);
   });
 
   it('narrows the time zones as a filter is typed, and keeps Enter from saving', async () => {
