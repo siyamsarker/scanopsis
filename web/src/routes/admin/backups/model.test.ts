@@ -4,6 +4,7 @@
 import type { BackupInfo, JobStatus, RestorePreview, RestoreStatus } from '../../../api/backups';
 import {
   asSentence,
+  currentZoneName,
   blockedReason,
   canRestore,
   folderProblem,
@@ -165,6 +166,41 @@ describe('schedule validation', () => {
     // The saved zone stays listed, so the field still shows it.
     expect(values('nothing like this')).toEqual(['UTC']);
     expect(values('')).toEqual(timeZoneOptions('UTC', 'Europe/Berlin').map((o) => o.value));
+  });
+
+  it('lists zones by their current names and finds them by former ones too', () => {
+    const values = (filter: string) =>
+      timeZoneOptions('Europe/Berlin', 'Europe/Berlin', filter).map((o) => o.value);
+    for (const [filter, zone] of [
+      ['kolkata', 'Asia/Kolkata'],
+      ['calcutta', 'Asia/Kolkata'],
+      ['kyiv', 'Europe/Kyiv'],
+      ['kiev', 'Europe/Kyiv'],
+      ['ho chi minh', 'Asia/Ho_Chi_Minh'],
+      ['saigon', 'Asia/Ho_Chi_Minh'],
+      ['kathmandu', 'Asia/Kathmandu'],
+      ['katmandu', 'Asia/Kathmandu'],
+      ['nuuk', 'America/Nuuk'],
+      ['gmt', 'UTC'],
+    ]) {
+      expect(values(filter), filter).toContain(zone);
+    }
+    const all = timeZoneOptions('UTC', 'UTC').map((o) => o.value);
+    expect(all).toContain('Asia/Kolkata');
+    expect(all).not.toContain('Asia/Calcutta');
+    expect(all).not.toContain('Europe/Kiev');
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('gives the current name of a zone known by a former one', () => {
+    expect(currentZoneName('Asia/Calcutta')).toBe('Asia/Kolkata');
+    expect(currentZoneName('Europe/Kiev')).toBe('Europe/Kyiv');
+    expect(currentZoneName('Europe/Berlin')).toBe('Europe/Berlin');
+    expect(timeZoneOptions('UTC', 'Asia/Calcutta')[0]).toMatchObject({
+      value: 'Asia/Kolkata',
+      label: 'Asia/Kolkata',
+      hint: 'Your time zone',
+    });
   });
 });
 

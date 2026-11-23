@@ -97,10 +97,47 @@ export function scheduleProblems(draft: { times: string[]; keepDays: string }): 
   return problems;
 }
 
-/** The browser's time zone, or UTC when it does not say. */
+/**
+ * The current IANA names of zones that browsers still list by a former name
+ * (Chromium and Node give "Asia/Calcutta" for Asia/Kolkata). The server
+ * accepts both names; the page shows and saves the current one.
+ */
+const CURRENT_ZONE_NAMES: Record<string, string> = {
+  'Africa/Asmera': 'Africa/Asmara',
+  'America/Buenos_Aires': 'America/Argentina/Buenos_Aires',
+  'America/Catamarca': 'America/Argentina/Catamarca',
+  'America/Cordoba': 'America/Argentina/Cordoba',
+  'America/Godthab': 'America/Nuuk',
+  'America/Indianapolis': 'America/Indiana/Indianapolis',
+  'America/Jujuy': 'America/Argentina/Jujuy',
+  'America/Louisville': 'America/Kentucky/Louisville',
+  'America/Mendoza': 'America/Argentina/Mendoza',
+  'Asia/Calcutta': 'Asia/Kolkata',
+  'Asia/Katmandu': 'Asia/Kathmandu',
+  'Asia/Rangoon': 'Asia/Yangon',
+  'Asia/Saigon': 'Asia/Ho_Chi_Minh',
+  'Atlantic/Faeroe': 'Atlantic/Faroe',
+  'Europe/Kiev': 'Europe/Kyiv',
+  'Pacific/Enderbury': 'Pacific/Kanton',
+  'Pacific/Ponape': 'Pacific/Pohnpei',
+  'Pacific/Truk': 'Pacific/Chuuk',
+};
+
+/** Other names a zone is found by: its former name, and GMT for UTC. */
+const OTHER_ZONE_NAMES: Record<string, string[]> = { UTC: ['GMT', 'Etc/UTC'] };
+for (const [former, current] of Object.entries(CURRENT_ZONE_NAMES)) {
+  (OTHER_ZONE_NAMES[current] ??= []).push(former);
+}
+
+/** The current name of a zone the browser may know by a former one ("Asia/Calcutta" gives "Asia/Kolkata"). */
+export function currentZoneName(zone: string): string {
+  return CURRENT_ZONE_NAMES[zone] ?? zone;
+}
+
+/** The browser's time zone by its current name, or UTC when it does not say. */
 export function browserTimeZone(): string {
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    return currentZoneName(Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   } catch {
     return 'UTC';
   }
@@ -108,7 +145,7 @@ export function browserTimeZone(): string {
 
 function knownZones(): string[] {
   try {
-    return Intl.supportedValuesOf('timeZone');
+    return Intl.supportedValuesOf('timeZone').map(currentZoneName);
   } catch {
     return [];
   }
@@ -119,10 +156,16 @@ function filterWords(filter: string): string[] {
   return filter.toLowerCase().replace(/_/g, ' ').split(/\s+/).filter(Boolean);
 }
 
-/** Whether `zone` holds every word of the filter ("new york" finds America/New_York). */
+/**
+ * Whether `zone`, or one of its other names, holds every word of the filter
+ * ("new york" finds America/New_York, "calcutta" finds Asia/Kolkata).
+ */
 export function zoneMatches(zone: string, filter: string): boolean {
-  const name = zone.toLowerCase().replace(/_/g, ' ');
-  return filterWords(filter).every((word) => name.includes(word));
+  const words = filterWords(filter);
+  return [zone, ...(OTHER_ZONE_NAMES[zone] ?? [])].some((other) => {
+    const name = other.toLowerCase().replace(/_/g, ' ');
+    return words.every((word) => name.includes(word));
+  });
 }
 
 /**
@@ -132,6 +175,8 @@ export function zoneMatches(zone: string, filter: string): boolean {
  * or the filter does not match it, so the field can still show it.
  */
 export function timeZoneOptions(current: string, browser: string, filter = ''): SelectOption[] {
+  current = currentZoneName(current);
+  browser = currentZoneName(browser);
   const zones = new Set([...knownZones(), current, browser]);
   zones.delete('');
   const rest = [...zones]

@@ -18,6 +18,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	_ "time/tzdata" // the zone names the server knows, whatever the host has
 
 	"github.com/siyamsarker/scanopsis/internal/config"
 
@@ -960,6 +961,26 @@ func TestBackupSettingsValid(t *testing.T) {
 	}
 	if code, resp := e.patch(t, `{"backup.schedule_times":[`+strings.Join(all, ",")+`],"backup.time_zone":"Asia/Dhaka","backup.keep_days":1}`); code != 200 {
 		t.Fatalf("24 times: status = %d, body %v", code, resp)
+	}
+}
+
+// TestBackupTimeZoneNames checks that a zone is accepted by its current
+// name and by the former one browsers still give, as the time zone database
+// knows both.
+func TestBackupTimeZoneNames(t *testing.T) {
+	e := newEnv(t, nil)
+	for _, zone := range []string{
+		"Asia/Kolkata", "Asia/Calcutta", "Europe/Kyiv", "Europe/Kiev",
+		"Asia/Ho_Chi_Minh", "Asia/Saigon", "Asia/Kathmandu", "Asia/Katmandu",
+		"America/Nuuk", "America/Godthab", "Pacific/Kanton", "Pacific/Enderbury",
+	} {
+		if code, resp := e.patch(t, `{"backup.time_zone":"`+zone+`"}`); code != 200 {
+			t.Errorf("%s: status = %d, body %v", zone, code, resp)
+			continue
+		}
+		if got := e.svc.Current().BackupTimeZone; got != zone {
+			t.Errorf("%s: saved as %q", zone, got)
+		}
 	}
 }
 

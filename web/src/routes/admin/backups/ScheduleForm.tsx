@@ -15,6 +15,7 @@ import { buttonClass, monoInputClass } from '../../../ui';
 import { Problem, When } from '../kit';
 import {
   browserTimeZone,
+  currentZoneName,
   KEEP_DAYS_MAX,
   KEEP_DAYS_MIN,
   newTimeProblem,
@@ -344,7 +345,8 @@ function readSchedule(items: { key: string; value: unknown }[]): Schedule {
   return {
     enabled: value(KEYS.enabled) === true,
     times: Array.isArray(times) ? times.map(String) : ['02:00'],
-    zone: typeof zone === 'string' && zone ? zone : 'UTC',
+    // A zone saved by a former name shows, and is saved again, by its current one.
+    zone: typeof zone === 'string' && zone ? currentZoneName(zone) : 'UTC',
     keepDays: typeof keep === 'number' ? String(keep) : '7',
   };
 }
