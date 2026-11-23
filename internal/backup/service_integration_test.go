@@ -1009,14 +1009,27 @@ func TestServiceJobPanic(t *testing.T) {
 // could not be finished.
 const restartMessageWant = "The backup was restored, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
 
+// uncertainMessageWant is the job message after a restore whose commit
+// PostgreSQL did not confirm.
+const uncertainMessageWant = "The restore may have finished, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
+
 // checkIncomplete checks the state after a restore that committed and then
 // failed: restore mode stays on, the job says to restart, and the failure
 // is audited as backup.restore_incomplete, never as backup.restore_failed.
 func checkIncomplete(t *testing.T, e *svcEnv, name, errText string) {
 	t.Helper()
+	checkIncompleteSays(t, e, name, errText, restartMessageWant)
+}
+
+// checkIncompleteSays is checkIncomplete with the job message want.
+func checkIncompleteSays(t *testing.T, e *svcEnv, name, errText, want string) {
+	t.Helper()
 	st := e.wait(t)
-	if st.State != JobFailed || st.Message != restartMessageWant || st.Name != name {
-		t.Errorf("status = %+v", st)
+	if st.State != JobFailed || st.Message != want || st.Name != name {
+		t.Errorf("status = %+v, want the message %q", st, want)
+	}
+	if pub := e.svc.RestoreStatus(); pub.Message != want || !pub.RestartRequired {
+		t.Errorf("public status = %+v, want %q with restart_required", pub, want)
 	}
 	if !e.svc.Restoring() {
 		t.Error("restore mode ended although the server still runs with the state from before the restore")
@@ -1081,10 +1094,7 @@ func TestServiceCommitUncertain(t *testing.T) {
 	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
 		t.Fatal(err)
 	}
-	checkIncomplete(t, e, name, "unexpected EOF")
-	if st := e.svc.RestoreStatus(); !st.RestartRequired || strings.Contains(st.Message, "nothing was changed") {
-		t.Errorf("public status = %+v", st)
-	}
+	checkIncompleteSays(t, e, name, "unexpected EOF", uncertainMessageWant)
 	if e.after.Load() != 0 {
 		t.Error("AfterRestore ran after an uncertain commit")
 	}

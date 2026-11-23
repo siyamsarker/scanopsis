@@ -964,12 +964,18 @@ func TestPublicRestoreMessages(t *testing.T) {
 		{JobStatus{State: JobDone, Type: JobTypeRestore, Message: "saved as x.tar.gz"}, false, JobDone, restoreDoneMessage},
 		{JobStatus{State: JobFailed, Type: JobTypeRestore, Message: "/var/lib/x failed"}, false, JobFailed, restoreFailedMessage},
 		{JobStatus{State: JobFailed, Type: JobTypeRestore, Message: "anything"}, true, JobFailed, restartMessage},
+		{JobStatus{State: JobFailed, Type: JobTypeRestore, Message: restartMessage}, true, JobFailed, restartMessage},
+		// A commit that may not have happened does not claim the restore.
+		{JobStatus{State: JobFailed, Type: JobTypeRestore, Message: uncertainRestartMessage}, true, JobFailed, uncertainRestartMessage},
 	} {
 		if c.message == restoreFailedMessage && c.message != "The restore failed and nothing was changed. Admins see the reason on the Backups page." {
 			t.Errorf("the public failure message is %q", c.message)
 		}
+		if c.message == uncertainRestartMessage && c.message != "The restore may have finished, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis." {
+			t.Errorf("the public message of an uncertain commit is %q", c.message)
+		}
 		got := publicRestore(c.st, c.needRestart)
-		if got.State != c.state || got.Message != c.message || got.RestartRequired != (c.message == restartMessage) {
+		if got.State != c.state || got.Message != c.message || got.RestartRequired != c.needRestart {
 			t.Errorf("publicRestore(%+v, %v) = %+v, want %s %q", c.st, c.needRestart, got, c.state, c.message)
 		}
 	}

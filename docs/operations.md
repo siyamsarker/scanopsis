@@ -633,10 +633,11 @@ sign in again with an account from the backup. The backup schedule keeps the
 values this server had before the restore.
 
 A restore can commit and still not finish, for example when a step after the
-commit fails. When the commit itself fails, Scanopsis cannot tell whether
-PostgreSQL saved the restore, and handles it the same way. The page then says
-that Scanopsis must restart, and the server stays in restore mode until it
-does:
+commit fails. The page then says that the backup was restored but Scanopsis
+must restart. When the commit itself fails, Scanopsis cannot tell whether
+PostgreSQL saved the restore, and handles it the same way, but the page says
+that the restore may have finished. In both cases the server stays in restore
+mode until it restarts:
 
 ```sh
 docker compose restart scanopsis

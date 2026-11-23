@@ -47,6 +47,11 @@ const defaultLockWait = 2 * time.Minute
 // may have committed, but could not finish.
 const restartMessage = "The backup was restored, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
 
+// uncertainRestartMessage replaces restartMessage when PostgreSQL did not
+// confirm the commit (ErrCommitUncertain): the restore may not have been
+// saved, but the server must restart all the same.
+const uncertainRestartMessage = "The restore may have finished, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
+
 // closeTimeout bounds the closing of the lock connection.
 const closeTimeout = 5 * time.Second
 
@@ -402,6 +407,8 @@ func publicRestore(st JobStatus, needRestart bool) RestoreStatus {
 		out.Message = restoreRunningMessage
 	case st.State == JobDone:
 		out.Message = restoreDoneMessage
+	case needRestart && st.Message == uncertainRestartMessage:
+		out.Message, out.RestartRequired = uncertainRestartMessage, true
 	case needRestart:
 		out.Message, out.RestartRequired = restartMessage, true
 	default:
@@ -820,11 +827,15 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 // database.
 func (s *Service) incomplete(ctx context.Context, name string, kind Kind, actor string, err error) {
 	s.needRestart.Store(true)
-	s.o.Log.ErrorContext(ctx, "the backup was restored, but Scanopsis must restart to finish", "name", name, "actor", actor, "error", err)
+	msg := restartMessage
+	if errors.Is(err, ErrCommitUncertain) {
+		msg = uncertainRestartMessage
+	}
+	s.o.Log.ErrorContext(ctx, "the restore must be finished by a restart of Scanopsis", "name", name, "actor", actor, "error", err)
 	s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupRestoreIncomplete, map[string]any{"name": name, "error": err.Error()})
 	s.finish(func(st *JobStatus) {
 		st.Kind, st.Name = kind, name
-		st.State, st.Message = JobFailed, restartMessage
+		st.State, st.Message = JobFailed, msg
 	})
 }
 

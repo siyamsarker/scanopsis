@@ -2066,7 +2066,7 @@ components:
         percent: { type: integer, minimum: 0, maximum: 100 }
         message: { type: string, description: "What happens, in a sentence; names no backup or account." }
         finished_at: { type: [string, "null"], format: date-time }
-        restart_required: { type: boolean, description: "True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart." }
+        restart_required: { type: boolean, description: "True only when the restore replaced the data, or may have (PostgreSQL did not confirm the commit), and Scanopsis must restart to finish it (state failed). The message says which. The API stays in restore mode until the restart." }
     UploadStart:
       type: object
       required: [file_name, size]
