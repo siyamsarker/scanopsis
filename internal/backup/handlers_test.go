@@ -657,8 +657,18 @@ func TestUploadCancel(t *testing.T) {
 	if left := uploadFiles(t, e.dir); len(left) != 0 {
 		t.Errorf("cancel left %v", left)
 	}
-	if r := e.call("GET", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNotFound {
-		t.Errorf("cancelled upload = %d", r.status)
+	if r := e.call("GET", adminUploads+"/"+id, "admin", nil); r.status != http.StatusOK || r.json(t)["state"] != "cancelled" {
+		t.Errorf("cancelled upload = %d %s", r.status, r.body)
+	}
+	// A page still sending parts learns that the upload was cancelled.
+	if r := e.put(id, 5000, data[5000:6000]); r.status != http.StatusConflict || r.errorCode(t) != "upload_cancelled" {
+		t.Errorf("part of a cancelled upload = %d %s", r.status, r.body)
+	}
+	if r := e.call("DELETE", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNoContent {
+		t.Errorf("second cancel = %d %s", r.status, r.body)
+	}
+	if r := e.call("GET", "/api/v1/admin/backups", "admin", nil); len(r.json(t)["uploads"].([]any)) != 0 {
+		t.Errorf("a cancelled upload is listed as open: %s", r.body)
 	}
 }
 

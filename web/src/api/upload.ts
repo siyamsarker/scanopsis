@@ -84,6 +84,25 @@ export class UploadInterruptedError extends Error {
 }
 
 /**
+ * Someone cancelled the upload elsewhere, for example under Unfinished
+ * uploads on the Backups page or in another tab; the server says so rather
+ * than forgetting it.
+ */
+export class UploadCancelledError extends Error {
+  constructor() {
+    super(
+      'This upload was cancelled elsewhere, for example in another tab or under Unfinished uploads.',
+    );
+    this.name = 'UploadCancelledError';
+  }
+}
+
+/** Whether a request was refused because the upload was cancelled. */
+function isCancelled(err: unknown): boolean {
+  return err instanceof ApiError && err.code === 'upload_cancelled';
+}
+
+/**
  * The reason to abort an upload with when its page goes away rather than
  * when someone cancels it: an upload whose every byte was sent is then left
  * to its check on the server, which keeps the outcome. Any other abort
@@ -224,6 +243,7 @@ async function awaitCheck<R>(
       if (failures > delays.length) throw new UploadInterruptedError(id, size, size);
     }
   }
+  if (status.state === 'cancelled') throw new UploadCancelledError();
   if (status.state === 'uploading') {
     throw new UploadInterruptedError(id, status.received, size, status.received >= size);
   }
@@ -336,6 +356,7 @@ export async function uploadInChunks<R>(
           onProgress(received, file.size);
         } catch (err) {
           if (signal.aborted) throw abortError();
+          if (isCancelled(err)) throw new UploadCancelledError();
           if (
             err instanceof ApiError &&
             err.code === 'offset_mismatch' &&

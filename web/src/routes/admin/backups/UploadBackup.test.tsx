@@ -342,6 +342,29 @@ describe('upload a backup, the page and the dialog', () => {
     expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
   });
 
+  it('ends quietly when the upload is cancelled elsewhere while the dialog is closed', async () => {
+    let asked = 0;
+    mockFetch(
+      api((call) => {
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+          asked += 1;
+          return json(200, asked < 3 ? checking : { ...checking, state: 'cancelled' });
+        }
+        return undefined;
+      }),
+    );
+    const dialog = await chooseFile();
+    await within(dialog).findByText(/Checking the backup/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close and keep checking' }));
+    await waitFor(() => expect(asked).toBeGreaterThanOrEqual(3));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(screen.queryByText(/restarted/)).toBeNull();
+    expect(screen.queryByText('The uploaded file was not added')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Upload a backup' }));
+    const again = await screen.findByRole('dialog', { name: 'Upload a backup' });
+    expect(within(again).getByRole('button', { name: 'Choose a file' })).toBeVisible();
+  });
+
   it('keeps an interrupted upload when the dialog is closed, to resume it later', async () => {
     let asked = 0;
     const { calls } = mockFetch(

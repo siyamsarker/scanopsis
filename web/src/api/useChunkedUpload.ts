@@ -8,6 +8,7 @@ import {
   followUpload,
   PAGE_LEFT,
   uploadInChunks,
+  UploadCancelledError,
   UploadInterruptedError,
   type UploadEndpoints,
   type UploadResult,
@@ -39,6 +40,11 @@ export interface ChunkedUploadOptions<R> {
   onChecking?: (id: string, file: UploadFile) => void;
   /** The upload was cancelled after every byte was sent: the server may still have accepted it. */
   onCancelledWhileChecking?: () => void;
+  /**
+   * Someone cancelled the upload elsewhere (Unfinished uploads, another tab).
+   * Return true to end quietly; otherwise it shows as a failed upload.
+   */
+  onCancelledElsewhere?: () => boolean;
 }
 
 /**
@@ -99,6 +105,14 @@ export function useChunkedUpload<R>(
       if (abort.signal.aborted) {
         if (abort.signal.reason === PAGE_LEFT) return;
         if (progress.sentAll) latest.current.options.onCancelledWhileChecking?.();
+        return;
+      }
+      if (err instanceof UploadCancelledError) {
+        if (latest.current.options.onCancelledElsewhere?.()) {
+          setPhase({ kind: 'idle' });
+          return;
+        }
+        setPhase({ kind: 'failed', file, message: err.message });
         return;
       }
       if (err instanceof UploadInterruptedError && file instanceof File) {

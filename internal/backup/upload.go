@@ -56,13 +56,17 @@ const (
 	UploadChecking  UploadState = "checking"
 	UploadReady     UploadState = "ready"
 	UploadRefused   UploadState = "refused"
+	// UploadCancelled is an upload someone cancelled, so a page that still
+	// follows it learns that, not that the server lost it.
+	UploadCancelled UploadState = "cancelled"
 )
 
 var (
-	errNoUpload       = errors.New("no upload with this id is in progress")
-	errTooManyUploads = errors.New("two uploads are already in progress; finish or cancel one first")
-	errUploadBusy     = errors.New("another part of this upload is still being received; try again in a moment")
-	errUploadChecking = fmt.Errorf("%w: the file is complete and being checked", errUploadBusy)
+	errNoUpload        = errors.New("no upload with this id is in progress")
+	errTooManyUploads  = errors.New("two uploads are already in progress; finish or cancel one first")
+	errUploadBusy      = errors.New("another part of this upload is still being received; try again in a moment")
+	errUploadChecking  = fmt.Errorf("%w: the file is complete and being checked", errUploadBusy)
+	errUploadCancelled = errors.New("the upload was cancelled, for example from Unfinished uploads on the Backups page or in another tab")
 )
 
 // tooManyUploadsError is errTooManyUploads with the time until a new
@@ -324,14 +328,29 @@ func (u *uploads) openOf(scope uploadScope, now time.Time) []OpenUpload {
 	return out
 }
 
-// lookupLocked returns the open upload id of scope. The caller holds mu.
+// lookupLocked returns the open upload id of scope; one that was cancelled
+// gives errUploadCancelled. The caller holds mu.
 func (u *uploads) lookupLocked(scope uploadScope, id string, now time.Time) (*upload, error) {
 	u.expireLocked(now)
 	up := u.open[id]
 	if up == nil || up.scope != scope {
+		if d := u.done[id]; d != nil && d.scope == scope && d.state == UploadCancelled {
+			return nil, errUploadCancelled
+		}
 		return nil, errNoUpload
 	}
 	return up, nil
+}
+
+// cancelledLocked keeps up as cancelled among the outcomes, so a page that
+// still follows it learns that. The caller holds mu.
+func (u *uploads) cancelledLocked(up *upload, now time.Time) {
+	delete(u.open, up.id)
+	up.state, up.touched, up.stopCheck = UploadCancelled, now, nil
+	if u.done == nil {
+		u.done = map[string]*upload{}
+	}
+	u.done[up.id] = up
 }
 
 // status returns the state of an open upload, or the outcome of a checked one.
@@ -453,6 +472,9 @@ func (u *uploads) cancel(scope uploadScope, id string, now time.Time) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	up, err := u.lookupLocked(scope, id, now)
+	if errors.Is(err, errUploadCancelled) {
+		return nil // cancelled already
+	}
 	if err != nil {
 		return err
 	}
@@ -460,13 +482,13 @@ func (u *uploads) cancel(scope uploadScope, id string, now time.Time) error {
 		if up.stopCheck != nil {
 			up.stopCheck()
 		}
-		delete(u.open, id)
+		u.cancelledLocked(up, now)
 		return nil
 	}
 	if up.busy {
 		return errUploadBusy
 	}
 	_ = os.Remove(up.path) //nolint:gosec // the name is a random id
-	delete(u.open, id)
+	u.cancelledLocked(up, now)
 	return nil
 }

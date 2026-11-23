@@ -169,7 +169,8 @@ func TestUploadCancelWhileChecking(t *testing.T) {
 	if r := e.call("DELETE", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNoContent {
 		t.Fatalf("cancel while checking = %d %s", r.status, r.body)
 	}
-	if r := e.call("GET", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNotFound {
+	// A page that still follows the check learns it was cancelled, not lost.
+	if r := e.call("GET", adminUploads+"/"+id, "admin", nil); r.status != http.StatusOK || r.json(t)["state"] != "cancelled" {
 		t.Errorf("a cancelled upload = %d %s", r.status, r.body)
 	}
 	deadline := time.Now().Add(10 * time.Second)

@@ -143,7 +143,7 @@ Responses:
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
 | 408 | The part did not arrive within 5 minutes (code request_timeout). | `application/json` [Error](#error) |
-| 409 | offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). | `application/json` [UploadError](#uploaderror) |
+| 409 | offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy), or the upload was cancelled (code upload_cancelled). | `application/json` [UploadError](#uploaderror) |
 | 413 | The part is larger than chunk_size (code payload_too_large). | `application/json` [Error](#error) |
 | 503 | Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring). | `application/json` [Error](#error) |
 | 507 | The backup folder is full (code no_space). | `application/json` [Error](#error) |
@@ -1342,7 +1342,7 @@ Responses:
 | 403 | Wrong setup token (code invalid_setup_token). | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
 | 408 | The part did not arrive within 5 minutes (code request_timeout). | `application/json` [Error](#error) |
-| 409 | Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). | `application/json` [UploadError](#uploaderror) |
+| 409 | Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy), or the upload was cancelled (code upload_cancelled). | `application/json` [UploadError](#uploaderror) |
 | 413 | The part is larger than chunk_size (code payload_too_large). | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
 | 503 | Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring). | `application/json` [Error](#error) |
@@ -2367,7 +2367,7 @@ Type: object
 | `reason` | object | no | Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space, or already_listed for a copy of a backup the list holds already, on the admin panel). |
 | `received` | integer (int64) | yes | Bytes stored so far; the next part starts here. |
 | `size` | integer (int64) | yes |  |
-| `state` | string (one of `uploading`, `checking`, `ready`, `refused`) | yes | uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted. |
+| `state` | string (one of `uploading`, `checking`, `ready`, `refused`, `cancelled`) | yes | uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted; cancelled when someone cancelled it (from any page), so a page that still follows it can tell it apart from an upload the server no longer knows, as after a restart (404). |
 
 Properties of `reason`:
 

@@ -885,6 +885,8 @@ func (a *API) uploadError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusConflict, "too_many_uploads", sentence(err.Error()))
 	case errors.Is(err, errUploadBusy):
 		writeError(w, http.StatusConflict, "upload_busy", sentence(err.Error()))
+	case errors.Is(err, errUploadCancelled):
+		writeError(w, http.StatusConflict, "upload_cancelled", sentence(err.Error()))
 	case errors.Is(err, ErrNoSpace):
 		writeError(w, http.StatusInsufficientStorage, "no_space", sentence(err.Error()))
 	default:

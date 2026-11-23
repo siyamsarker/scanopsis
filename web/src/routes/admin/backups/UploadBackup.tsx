@@ -37,6 +37,12 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
     },
     // Cancelled while the server checked the file: the check may have ended first.
     onCancelledWhileChecking: refresh,
+    // Cancelled elsewhere (Unfinished uploads, another tab): whoever did it
+    // was told; a closed dialog says nothing more.
+    onCancelledElsewhere: () => {
+      refresh();
+      return !openRef.current;
+    },
   });
   const { phase } = upload;
 

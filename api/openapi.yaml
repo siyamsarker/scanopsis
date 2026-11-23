@@ -1049,7 +1049,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "408": { description: The part did not arrive within 5 minutes (code request_timeout)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "409": { description: "offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
+        "409": { description: "offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy), or the upload was cancelled (code upload_cancelled).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
         "413": { description: The part is larger than chunk_size (code payload_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { description: "Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "507": { description: The backup folder is full (code no_space)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1159,7 +1159,7 @@ paths:
         "403": { $ref: "#/components/responses/InvalidSetupToken" }
         "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "408": { description: The part did not arrive within 5 minutes (code request_timeout)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "409": { description: "Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
+        "409": { description: "Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy), or the upload was cancelled (code upload_cancelled).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
         "413": { description: The part is larger than chunk_size (code payload_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/TooManyAttempts" }
         "503": { description: "Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -2129,8 +2129,8 @@ components:
         received: { type: integer, format: int64, description: Bytes stored so far; the next part starts here. }
         state:
           type: string
-          enum: [uploading, checking, ready, refused]
-          description: "uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted."
+          enum: [uploading, checking, ready, refused, cancelled]
+          description: "uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted; cancelled when someone cancelled it (from any page), so a page that still follows it can tell it apart from an upload the server no longer knows, as after a restart (404)."
         reason:
           type: object
           description: Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space, or already_listed for a copy of a backup the list holds already, on the admin panel).

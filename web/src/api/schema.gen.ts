@@ -2037,10 +2037,10 @@ export interface components {
              */
             received: number;
             /**
-             * @description uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted.
+             * @description uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted; cancelled when someone cancelled it (from any page), so a page that still follows it can tell it apart from an upload the server no longer knows, as after a restart (404).
              * @enum {string}
              */
-            state: "uploading" | "checking" | "ready" | "refused";
+            state: "uploading" | "checking" | "ready" | "refused" | "cancelled";
             /** @description Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space, or already_listed for a copy of a backup the list holds already, on the admin panel). */
             reason?: {
                 /** @example invalid_backup */
@@ -4480,7 +4480,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). */
+            /** @description offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy), or the upload was cancelled (code upload_cancelled). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4789,7 +4789,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). */
+            /** @description Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy), or the upload was cancelled (code upload_cancelled). */
             409: {
                 headers: {
                     [name: string]: unknown;

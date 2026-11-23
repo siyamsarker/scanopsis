@@ -10,6 +10,7 @@ import {
   readyPart,
   restUploadEndpoints,
   uploadInChunks,
+  UploadCancelledError,
   UploadInterruptedError,
   type UploadEndpoints,
   type UploadStatus,
@@ -454,6 +455,23 @@ describe('uploadInChunks', () => {
     expect(result.result).toEqual({ name: 'scanopsis-backup.tar.gz' });
     expect(server.endpoints.complete).toHaveBeenCalledTimes(2);
     expect(server.endpoints.put).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells a cancelled upload from a lost one while it is checked', async () => {
+    const server = fakeServer(4);
+    vi.mocked(server.endpoints.status).mockImplementationOnce(async () => ({
+      ...server.state,
+      state: 'cancelled',
+    }));
+    const error = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      new AbortController().signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UploadCancelledError);
+    expect(server.endpoints.cancel).not.toHaveBeenCalled();
   });
 
   it('says Scanopsis restarted when the upload is gone while it is checked', async () => {
