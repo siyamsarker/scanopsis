@@ -620,7 +620,8 @@ moment. You need an administrator account with two-factor authentication.
    made it, and says that:
    - everything is replaced by the backup, and everything that changed after
      its date is lost;
-   - everyone is signed out, including you;
+   - everyone is signed out, including you; for two hours afterwards the
+     sign-in page says that a restore signed everyone out;
    - pipeline uploads are turned away while the restore runs, and scans
      uploaded in that time are not kept.
 2. If the backup holds scans older than the retention period, the dialog also

@@ -319,3 +319,39 @@ describe('local sign-in cache', () => {
     expect(client.getQueryData(['users'])).toBeUndefined();
   });
 });
+
+describe('login page after a restore', () => {
+  const status = (finishedMinutesAgo: number, state = 'done') => ({
+    state,
+    percent: 100,
+    message: 'Restore finished. Sign in with an account from the backup.',
+    finished_at: new Date(Date.now() - finishedMinutesAgo * 60 * 1000).toISOString(),
+    restart_required: false,
+  });
+
+  it('says that a recent restore signed everyone out', async () => {
+    mockFetch(
+      anonymous(undefined, (call) =>
+        call.path === '/api/v1/restore/status' ? json(200, status(5)) : undefined,
+      ),
+    );
+    renderApp('/login');
+    expect(
+      await screen.findByText(
+        'A backup was restored 5 minutes ago, which signed everyone out. Sign in again with an account from the backup.',
+      ),
+    ).toBeVisible();
+  });
+
+  it('says nothing about an old restore or none', async () => {
+    mockFetch(
+      anonymous(undefined, (call) =>
+        call.path === '/api/v1/restore/status' ? json(200, status(300)) : undefined,
+      ),
+    );
+    renderApp('/login');
+    await screen.findByRole('link', { name: 'Sign in with GitLab' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByText(/signed everyone out/)).toBeNull();
+  });
+});

@@ -1,9 +1,10 @@
 // Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type FormEvent } from 'react';
 import { Navigate, useNavigate, useSearchParams } from 'react-router';
+import { fetchRestoreStatus } from '../api/backups';
 import { api, ApiError, unwrap } from '../api/client';
 import { describeError } from '../api/errors';
 import { useAuthMethods, useMe } from '../api/hooks';
@@ -11,6 +12,7 @@ import { safeReturnTo } from '../auth/returnTo';
 import { AuthShell } from '../components/AuthShell';
 import { Spinner } from '../components/ConfirmDialog';
 import { Skeleton } from '../components/states';
+import { relativeTime } from '../format';
 import { buttonClass } from '../ui';
 import { GitLabGlyph, Problem } from './admin/kit';
 import { AuthField, OrDivider, PasswordField } from './auth/fields';
@@ -24,6 +26,35 @@ const errorMessages: Record<string, string> = {
   login_failed:
     'Sign-in with GitLab failed. Try again, and contact an administrator if it keeps failing.',
 };
+
+/** How long after a restore the sign-in page says that it signed everyone out. */
+const RESTORE_NOTICE_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * "A backup was restored ..." when a restore finished in the last two hours:
+ * it ended every session, so whoever lands here wonders why. The restore
+ * status is public and names no backup or account.
+ */
+function RestoredNotice() {
+  const status = useQuery({
+    queryKey: ['restore-status', 'sign-in'],
+    queryFn: async ({ signal }) => {
+      const restore = await fetchRestoreStatus(signal);
+      const at = restore.state === 'done' ? restore.finished_at : null;
+      return at && Date.now() - Date.parse(at) <= RESTORE_NOTICE_MS ? at : null;
+    },
+    retry: false,
+    staleTime: 60 * 1000,
+  });
+  const finished = status.data;
+  if (!finished) return null;
+  return (
+    <p className="tone-neutral rounded-inner border border-[color-mix(in_srgb,var(--tone)_35%,var(--line))] bg-[color-mix(in_srgb,var(--tone)_8%,var(--surface))] px-4 py-3 text-body-s text-text">
+      A backup was restored {relativeTime(finished)}, which signed everyone out. Sign in again with
+      an account from the backup.
+    </p>
+  );
+}
 
 function localLoginMessage(err: unknown): string {
   if (err instanceof ApiError && err.status === 401) return 'Wrong username or password.';
@@ -152,6 +183,7 @@ export function LoginPage() {
           <Problem>{urlError}</Problem>
         </div>
       ) : null}
+      <RestoredNotice />
       <div className="min-h-24">{body}</div>
     </AuthShell>
   );
