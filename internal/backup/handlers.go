@@ -26,9 +26,10 @@ import (
 )
 
 const (
-	actionUploaded   = audit.ActionBackupUploaded
-	actionDownloaded = audit.ActionBackupDownloaded
-	actionDeleted    = audit.ActionBackupDeleted
+	actionUploaded          = audit.ActionBackupUploaded
+	actionDownloaded        = audit.ActionBackupDownloaded
+	actionDeleted           = audit.ActionBackupDeleted
+	actionScheduleDismissed = audit.ActionBackupScheduleAlertDismissed
 
 	// setupActor is the actor of an upload and a restore on the setup
 	// screen, where no account exists yet.
@@ -44,8 +45,8 @@ const (
 	// partTimeout is how long one part of an upload may take to arrive.
 	partTimeout = 5 * time.Minute
 	// writeGrace is how long the server waits for a client to take more of
-	// an answer: a download, or the answer to a request that reads a whole
-	// backup first, gets this much time again whenever it moves on.
+	// a download, or for the answer to a part; a download gets this much
+	// time again whenever it moves on.
 	writeGrace = 60 * time.Second
 	// deadlineStep is how much of a download may be written before the
 	// write deadline is moved on; it is also moved on every few seconds.
@@ -53,6 +54,10 @@ const (
 	// tooManyRetryAfter is the Retry-After, in seconds, of a code or token
 	// refused for too many attempts.
 	tooManyRetryAfter = 30
+	// previewKeep is how long a finished preview is served from memory.
+	previewKeep = time.Hour
+	// maxPreviews bounds the finished previews kept in memory.
+	maxPreviews = 16
 )
 
 // APIOptions configure the HTTP API of the backups.
@@ -87,6 +92,31 @@ type API struct {
 	o   APIOptions
 	svc *Service
 	up  uploads
+
+	// previews holds the previews being computed or computed, by file.
+	pmu      sync.Mutex
+	previews map[previewKey]*previewEntry
+	// verify checks a complete upload and computePreview a backup in the
+	// folder; tests replace them.
+	verify         func(ctx context.Context, up *upload, scope uploadScope) (Preview, error)
+	computePreview func(ctx context.Context, path string) (Preview, error)
+}
+
+// previewKey names a backup file as it is now, and the retention period a
+// preview of it counts with: a changed file or setting is a new preview.
+type previewKey struct {
+	name  string
+	size  int64
+	mtime int64
+	days  int
+}
+
+// previewEntry is a preview being computed (done false) or its outcome.
+type previewEntry struct {
+	done bool
+	pv   Preview
+	err  error
+	at   time.Time
 }
 
 // NewAPI returns the API.
@@ -103,7 +133,9 @@ func NewAPI(o APIOptions) *API {
 	if o.RetentionDays == nil {
 		o.RetentionDays = func() int { return 0 }
 	}
-	return &API{o: o, svc: o.Service}
+	a := &API{o: o, svc: o.Service, previews: map[previewKey]*previewEntry{}}
+	a.verify, a.computePreview = a.verifyUpload, a.previewOf
+	return a
 }
 
 // Handlers returns the handlers by OpenAPI operation ID. The router checks
@@ -136,6 +168,7 @@ func (a *API) Handlers() map[string]http.Handler {
 		"checkSetupRestoreToken":     http.HandlerFunc(a.checkSetupToken),
 		"restoreSetupBackup":         http.HandlerFunc(a.setupRestore),
 		"getRestoreStatus":           http.HandlerFunc(a.restoreStatus),
+		"dismissBackupScheduleAlert": http.HandlerFunc(a.dismissSchedule),
 	}
 }
 
@@ -551,55 +584,100 @@ func (a *API) delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// keepAnswering lets a request that reads a whole backup before it answers
-// take as long as that takes: the read deadline is lifted (its end would
-// cancel the request) and the write deadline is moved on until the
-// returned function is called.
-func keepAnswering(w http.ResponseWriter) (stop func()) {
-	rc := http.NewResponseController(w)
-	_ = rc.SetReadDeadline(time.Time{})
-	_ = rc.SetWriteDeadline(time.Now().Add(writeGrace))
-	done, exited := make(chan struct{}), make(chan struct{})
-	go func() {
-		defer close(exited)
-		t := time.NewTicker(writeGrace / 4)
-		defer t.Stop()
-		for {
-			select {
-			case <-t.C:
-				_ = rc.SetWriteDeadline(time.Now().Add(writeGrace))
-			case <-done:
-				return
-			}
-		}
-	}()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			close(done)
-			<-exited
-			_ = rc.SetWriteDeadline(time.Now().Add(writeGrace))
-		})
-	}
-}
-
 func (a *API) previewOf(ctx context.Context, path string) (Preview, error) {
 	return PreviewRestore(ctx, path, a.svc.o.KeyFingerprint, a.svc.o.Dumper.SigningKey, a.o.RetentionDays(), a.o.Now())
 }
 
+// lasting reports whether a failed preview fails the same way for as long
+// as the file stays the same.
+func lasting(err error) bool {
+	return errors.Is(err, ErrNotBackup) || errors.Is(err, ErrCorrupt) || errors.Is(err, ErrFormat) ||
+		errors.Is(err, ErrSignature) || errors.Is(err, os.ErrNotExist)
+}
+
+// pruneLocked drops old finished previews and keeps at most maxPreviews of
+// them. The caller holds pmu.
+func (a *API) pruneLocked(now time.Time) {
+	var oldest previewKey
+	var oldestAt time.Time
+	finished := 0
+	for k, e := range a.previews {
+		if !e.done {
+			continue
+		}
+		if now.Sub(e.at) > previewKeep {
+			delete(a.previews, k)
+			continue
+		}
+		finished++
+		if oldestAt.IsZero() || e.at.Before(oldestAt) {
+			oldest, oldestAt = k, e.at
+		}
+	}
+	if finished >= maxPreviews {
+		delete(a.previews, oldest)
+	}
+}
+
+// cachedPreviewError returns the lasting error of a finished preview of the
+// backup at path as it is now, or nil.
+func (a *API) cachedPreviewError(fi os.FileInfo) error {
+	key := previewKey{fi.Name(), fi.Size(), fi.ModTime().UnixNano(), a.o.RetentionDays()}
+	a.pmu.Lock()
+	defer a.pmu.Unlock()
+	if e := a.previews[key]; e != nil && e.done && lasting(e.err) {
+		return e.err
+	}
+	return nil
+}
+
+// preview answers the preview of a backup. Reading a large backup in full
+// takes longer than a proxy waits for an answer, so the preview is
+// computed in the background, one check at a time, and kept while the file
+// stays the same: the answer is 202 with the state checking until it is
+// ready, then 200 with the preview.
 func (a *API) preview(w http.ResponseWriter, r *http.Request) {
 	p, fi, ok := a.backupPath(w, r)
 	if !ok {
 		return
 	}
-	stop := keepAnswering(w)
-	defer stop()
-	pv, err := a.previewOf(r.Context(), p)
-	stop()
-	if err != nil {
-		if r.Context().Err() != nil {
+	key := previewKey{fi.Name(), fi.Size(), fi.ModTime().UnixNano(), a.o.RetentionDays()}
+	now := a.o.Now()
+	a.pmu.Lock()
+	e := a.previews[key]
+	if e != nil && e.done && now.Sub(e.at) > previewKeep {
+		delete(a.previews, key)
+		e = nil
+	}
+	if e == nil {
+		a.pruneLocked(now)
+		e = &previewEntry{}
+		a.previews[key] = e
+		ctx := a.svc.baseContext()
+		err := a.svc.background(ctx, func() {
+			pv, err := a.computePreview(ctx, p)
+			a.pmu.Lock()
+			e.done, e.pv, e.err, e.at = true, pv, err, a.o.Now()
+			a.pmu.Unlock()
+		})
+		if err != nil {
+			delete(a.previews, key)
+			a.pmu.Unlock()
+			a.jobError(w, err)
 			return
 		}
+	}
+	if !e.done {
+		a.pmu.Unlock()
+		httpapi.WriteJSON(w, http.StatusAccepted, checkingJSON{State: UploadChecking})
+		return
+	}
+	pv, err := e.pv, e.err
+	if err != nil && !lasting(err) {
+		delete(a.previews, key) // the next request tries again
+	}
+	a.pmu.Unlock()
+	if err != nil {
 		if !a.jobError(w, err) {
 			a.internalError(w, r, "cannot check a backup", err)
 		}
@@ -607,6 +685,11 @@ func (a *API) preview(w http.ResponseWriter, r *http.Request) {
 	}
 	pv.Info = a.dir().info(fi.Name(), fi)
 	httpapi.WriteJSON(w, http.StatusOK, pv)
+}
+
+// checkingJSON is the answer while a backup is being checked.
+type checkingJSON struct {
+	State UploadState `json:"state"`
 }
 
 // checkCode answers a refused two-factor code itself.
@@ -654,6 +737,18 @@ func (a *API) restore(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Everything that can refuse the restore is checked before the code,
+	// so a refused restore does not use up a code.
+	err := a.svc.CheckRestore(fi.Name())
+	if err == nil {
+		err = a.cachedPreviewError(fi)
+	}
+	if err != nil {
+		if !a.jobError(w, err) {
+			a.internalError(w, r, "cannot start a restore", err)
+		}
+		return
+	}
 	p, who := actor(r)
 	if !a.checkCode(w, r, p, body.Code) {
 		return
@@ -670,6 +765,17 @@ func (a *API) restore(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) restoreStatus(w http.ResponseWriter, _ *http.Request) {
 	httpapi.WriteJSON(w, http.StatusOK, a.svc.RestoreStatus())
+}
+
+// dismissSchedule hides the banner about a failed scheduled backup until
+// the next scheduled run. Audited when there was a failure to dismiss.
+func (a *API) dismissSchedule(w http.ResponseWriter, r *http.Request) {
+	st, changed := a.svc.DismissScheduleFailure()
+	if changed {
+		_, who := actor(r)
+		a.o.Audit.Record(r.Context(), who, actionScheduleDismissed, map[string]any{"last_run_at": st.LastRunAt.UTC().Format(time.RFC3339), "error": st.Error})
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // setupAllowed checks the setup token of a request of the setup screen and
@@ -885,20 +991,11 @@ func (a *API) partError(w http.ResponseWriter, r *http.Request, writeErr, err er
 	}
 }
 
-// checkUpload reads the manifest of an upload and refuses a backup of
-// another key or a newer version with the error the restore would give.
-func (a *API) checkUpload(ctx context.Context, f *os.File) error {
-	m, err := ReadManifest(ctxReader{ctx, f})
-	if err != nil {
-		return err
-	}
-	if err := checkManifest(m, a.svc.o.KeyFingerprint); err != nil {
-		return err
-	}
-	_, err = f.Seek(0, io.SeekStart)
-	return err
-}
-
+// completeUpload starts the check of a fully received upload and answers
+// 202 with the state checking; the client asks GET for the outcome. Reading
+// a large file takes longer than a proxy waits for an answer, so the check
+// runs in the background, one at a time. Completing again while it runs
+// answers 202 again, and after it ended 200 with the outcome.
 func (a *API) completeUpload(w http.ResponseWriter, r *http.Request, scope uploadScope) {
 	var body struct {
 		Token string `json:"token"`
@@ -914,53 +1011,78 @@ func (a *API) completeUpload(w http.ResponseWriter, r *http.Request, scope uploa
 		a.folderUnavailable(w)
 		return
 	}
-	up, err := a.up.acquire(scope, r.PathValue("id"), a.o.Now())
+	st, up, ctx, started, err := a.up.complete(a.svc.baseContext(), scope, r.PathValue("id"), a.o.Now())
 	if err != nil {
+		var inc *incompleteError
+		if errors.As(err, &inc) {
+			writeReceived(w, http.StatusConflict, "upload_incomplete", sentence(inc.Error()), inc.received)
+			return
+		}
 		a.uploadError(w, err)
 		return
 	}
-	if up.received != up.size {
-		a.up.release(up, up.received, a.o.Now())
-		writeReceived(w, http.StatusConflict, "upload_incomplete",
-			fmt.Sprintf("The server has %d of %d bytes; send the rest first.", up.received, up.size), up.received)
-		return
-	}
-	stop := keepAnswering(w)
-	defer stop()
-	pv, err := a.verifyUpload(r.Context(), up, scope)
-	stop()
-	if err != nil {
-		if r.Context().Err() != nil {
-			// The client went away; the upload stays and can be completed again.
-			a.up.release(up, up.received, a.o.Now())
+	if started {
+		who := setupActor
+		if scope == scopeAdmin {
+			_, who = actor(r)
+		}
+		// The audit entry and the log keep the request's values, not its end.
+		logCtx := context.WithoutCancel(r.Context())
+		if err := a.svc.background(ctx, func() { a.checkUpload(logCtx, ctx, up, scope, who) }); err != nil {
+			a.up.settle(up, a.o.Now(), func(u *upload) { u.state = UploadUploading })
+			a.jobError(w, err)
 			return
 		}
-		a.up.drop(up, false)
-		a.refuseUpload(w, r, err)
-		return
 	}
-	info, err := dir.adopt(up.path, up.fileName, a.o.Now())
-	if err != nil {
-		a.up.drop(up, false)
-		if !a.jobError(w, err) {
-			a.internalError(w, r, "cannot store an upload", err)
+	status := http.StatusOK
+	if st.State == UploadChecking {
+		status = http.StatusAccepted
+	}
+	httpapi.WriteJSON(w, status, st)
+}
+
+// checkUpload checks a complete upload in the background and records the
+// outcome: a file that passes is added to the folder as a backup of kind
+// uploaded (with the preview of its restore for the setup screen), one
+// that fails is deleted and the reason kept. A check stopped by a shutdown
+// leaves the upload as it was.
+func (a *API) checkUpload(logCtx, ctx context.Context, up *upload, scope uploadScope, who string) {
+	var pv Preview
+	err := a.svc.guard(logCtx, "checking an upload stopped with a panic", func() error {
+		var err error
+		pv, err = a.verify(ctx, up, scope)
+		return err
+	})
+	var added *Info
+	a.up.settle(up, a.o.Now(), func(u *upload) {
+		if err != nil && a.svc.baseContext().Err() != nil {
+			u.state = UploadUploading // shutting down: not the file's fault
+			return
 		}
+		if err == nil {
+			info, aerr := a.dir().adopt(u.path, u.fileName, a.o.Now())
+			if aerr == nil {
+				u.state, u.backup, added = UploadReady, &info, &info
+				if scope == scopeSetup {
+					pv.Info = info
+					u.preview = &pv
+				}
+				return
+			}
+			err = aerr
+		}
+		_ = os.Remove(u.path) //nolint:gosec // the name is a random id
+		reason := a.uploadReason(err)
+		if reason.Code == "internal_error" {
+			a.o.Log.ErrorContext(logCtx, "cannot check an upload", "error", err)
+		}
+		u.state, u.reason = UploadRefused, &reason
+	})
+	if added == nil {
 		return
 	}
-	a.up.drop(up, true)
-	who := setupActor
-	if scope == scopeAdmin {
-		_, who = actor(r)
-	}
-	a.o.Audit.Record(r.Context(), who, actionUploaded, map[string]any{"name": info.Name, "original_name": up.fileName, "size": info.Size})
-	a.o.Log.InfoContext(r.Context(), "backup uploaded", "name", info.Name, "size", info.Size, "actor", who)
-	if scope == scopeSetup {
-		a.up.finished(up.id, info.Name)
-		pv.Info = info
-		httpapi.WriteJSON(w, http.StatusCreated, pv)
-		return
-	}
-	httpapi.WriteJSON(w, http.StatusCreated, info)
+	a.o.Audit.Record(logCtx, who, actionUploaded, map[string]any{"name": added.Name, "original_name": up.fileName, "size": added.Size})
+	a.o.Log.InfoContext(logCtx, "backup uploaded", "name", added.Name, "size", added.Size, "actor", who)
 }
 
 // verifyUpload checks a complete upload in full: its manifest, every
@@ -976,30 +1098,40 @@ func (a *API) verifyUpload(ctx context.Context, up *upload, scope uploadScope) (
 	if err := f.Sync(); err != nil {
 		return Preview{}, a.dir().writeError(err)
 	}
-	if err := a.checkUpload(ctx, f); err != nil {
+	m, err := ReadManifest(ctxReader{ctx, f})
+	if err != nil {
+		return Preview{}, err
+	}
+	if err := checkManifest(m, a.svc.o.KeyFingerprint); err != nil {
 		return Preview{}, err
 	}
 	if scope == scopeSetup {
 		return a.previewOf(ctx, up.path)
 	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return Preview{}, err
+	}
 	_, _, err = VerifyLimited(ctxReader{ctx, f}, a.svc.o.Dumper.SigningKey, nil, expansionLimit(up.size))
 	return Preview{}, err
 }
 
-// refuseUpload answers an upload that failed its check.
-func (a *API) refuseUpload(w http.ResponseWriter, r *http.Request, err error) {
+// uploadReason is the code and message an upload refused for err gets, as
+// an error answer would carry them.
+func (a *API) uploadReason(err error) UploadReason {
+	reason := func(code string) UploadReason { return UploadReason{Code: code, Message: sentence(message(err))} }
 	switch {
 	case errors.Is(err, ErrKeyMismatch):
-		writeError(w, http.StatusUnprocessableEntity, "key_mismatch", sentence(message(err)))
+		return reason("key_mismatch")
 	case errors.Is(err, ErrNewerSchema):
-		writeError(w, http.StatusUnprocessableEntity, "newer_schema", sentence(message(err)))
+		return reason("newer_schema")
 	case errors.Is(err, ErrNotBackup), errors.Is(err, ErrCorrupt), errors.Is(err, ErrFormat), errors.Is(err, ErrSignature):
-		writeError(w, http.StatusUnprocessableEntity, "invalid_backup", sentence(message(err)))
-	default:
-		if !a.jobError(w, err) {
-			a.internalError(w, r, "cannot check an upload", err)
-		}
+		return reason("invalid_backup")
+	case errors.Is(err, ErrNoSpace):
+		return reason("no_space")
+	case errors.Is(err, ErrFolder):
+		return reason("folder_unavailable")
 	}
+	return UploadReason{Code: "internal_error", Message: "Something went wrong while the file was checked. Try the upload again later."}
 }
 
 // checkSetupToken tells whether the setup token is right, so the setup
@@ -1034,7 +1166,7 @@ func (a *API) setupRestore(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "confirmation_required", "Type RESTORE to confirm the restore.")
 		return
 	}
-	name, ok := a.up.backupOf(body.UploadID)
+	name, ok := a.up.backupOf(body.UploadID, a.o.Now())
 	if !ok {
 		writeError(w, http.StatusNotFound, "not_found", "No completed upload with this id. Upload the backup first.")
 		return

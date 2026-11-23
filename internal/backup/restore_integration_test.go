@@ -748,6 +748,65 @@ FROM scans s, generate_series(1, 5000) g WHERE s.kind = 'image'`)
 	}
 }
 
+// TestRestoreCommitUncertain checks that a failed commit is never reported
+// as a restore that changed nothing: PostgreSQL may have committed before
+// the error reached Scanopsis.
+func TestRestoreCommitUncertain(t *testing.T) {
+	t.Parallel()
+	pool := storetest.New(t)
+	seedAll(t, pool)
+	good := dumpPool(t, pool, testFingerprint(t))
+	o := restoreOpts(t)
+	o.testCommit = func(ctx context.Context, tx pgx.Tx) error {
+		_ = tx.Rollback(ctx)
+		return errors.New("unexpected EOF")
+	}
+	err := Restore(context.Background(), pool, good, o)
+	if !errors.Is(err, ErrCommitUncertain) || !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("err = %v, want ErrCommitUncertain", err)
+	}
+}
+
+// TestRestoreReplacesAfterTheCheck checks that BeforeReplace is called once
+// the whole file was checked, before the data is replaced, and never for a
+// file that is refused.
+func TestRestoreReplacesAfterTheCheck(t *testing.T) {
+	t.Parallel()
+	pool := storetest.New(t)
+	seedAll(t, pool)
+	good := dumpPool(t, pool, testFingerprint(t))
+	m := manifestOf(t, good)
+	last := m.Tables[len(m.Tables)-1].Name
+	damaged := filepath.Join(t.TempDir(), filepath.Base(good))
+	if err := os.WriteFile(damaged, tamperTrailer(t, good, func(tr *Trailer) {
+		s := tr.Tables[last]
+		s.SHA256 = strings.Repeat("0", 64)
+		tr.Tables[last] = s
+	}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	o := restoreOpts(t)
+	var stages []string
+	o.BeforeReplace = func() { stages = append(stages, "replace") }
+	o.testHook = func(stage string) error {
+		stages = append(stages, stage)
+		return nil
+	}
+	if err := Restore(context.Background(), pool, damaged, o); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("restore of a damaged file = %v", err)
+	}
+	if len(stages) != 0 {
+		t.Errorf("a damaged file got to %v", stages)
+	}
+	if err := Restore(context.Background(), pool, good, o); err != nil {
+		t.Fatal(err)
+	}
+	if len(stages) < 3 || stages[0] != stageVerified || stages[1] != "replace" || stages[2] != stageDropped {
+		t.Errorf("stages = %v, want verified, replace, dropped, ...", stages)
+	}
+}
+
 func TestRestoreRefusesKeyMismatch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -776,8 +835,8 @@ func TestRestoreRefusesKeyMismatch(t *testing.T) {
 		sameSnapshot(t, name, before, snapshot(t, pool))
 	}
 	if err := Restore(ctx, pool, path, RestoreOptions{Actor: "alice", KeyFingerprint: other, SigningKey: testSigning(t)}); err == nil ||
-		!strings.Contains(err.Error(), "SCANOPSIS_SECRET_KEY") {
-		t.Errorf("the refusal does not say how to fix it: %v", err)
+		!strings.Contains(err.Error(), "set up a new installation with that secret key") {
+		t.Errorf("the refusal does not say how to use the backup: %v", err)
 	}
 }
 

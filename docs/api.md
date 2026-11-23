@@ -15,7 +15,7 @@ Version of the OpenAPI document: 0.4.0.
 
 JSON API of Scanopsis. Most endpoints require a signed-in session (a session cookie); each endpoint states how it is authenticated: a session, an administrator session, a GitLab CI/CD ID token (the Trivy upload), a signed webhook (SonarQube) or none (setup, version, health). State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers).
 
-The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. One client address may hold at most a quarter of the slots, so one client cannot use them all. The probes, the web interface, the Trivy upload, the backup download and the parts of backup uploads are not counted.
+The server serves a limited number of API requests at a time, as many as it has database connections. When all are busy a request waits a few seconds and is then answered `503` with the code `busy` and a `Retry-After` header (seconds). Nothing was done: retry the request. One client address may hold at most a quarter of the slots, so one client cannot use them all. The probes, the web interface, the Trivy upload, the backup download and the parts of backup uploads are not counted. The parts of backup uploads have a limit of their own: at most 4 at once, 2 from one client address.
 
 While a backup is being restored, every API request except GET /api/v1/version and GET /api/v1/restore/status is answered `503` with the code `restoring` and `Retry-After: 30`. The probes and the web interface keep working.
 
@@ -67,7 +67,7 @@ Responses:
 
 Start uploading a backup file (admin only).
 
-Send the file in parts with PUT, then complete the upload. At most two uploads may be open at once; one without a part for an hour is dropped. The file must fit the free space of the backup folder less 512 MiB and less what other open uploads still need.
+Send the file in parts with PUT, then complete the upload. At most two uploads may be open at once; one without a part for an hour is dropped. When two are open, a new upload takes the place of the one that has gone longest without a part, if that is more than 10 minutes. The file must fit the free space of the backup folder less 512 MiB and less what other open uploads still need.
 
 - Operation ID: `startBackupUpload`
 - Authentication: Session, admin
@@ -84,15 +84,15 @@ Responses:
 | 400 | Invalid file name or size (code invalid_request). | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
-| 409 | Two uploads are open already (code too_many_uploads). | `application/json` [Error](#error) |
+| 409 | Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can. | `application/json` [Error](#error) |
 | 503 | The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring). | `application/json` [Error](#error) |
 | 507 | Not enough free space (code no_space; the message gives the numbers). | `application/json` [Error](#error) |
 
 ### `GET /api/v1/admin/backup-uploads/{id}`
 
-How much of an upload the server has (admin only).
+How much of an upload the server has, or the outcome of its check (admin only).
 
-After a dropped connection, ask this and send the next part from `received`.
+After a dropped connection, ask this and send the next part from `received`. After the upload was completed, `state` is `checking` until the check ends, then `ready` with `backup` or `refused` with `reason`; the outcome can be asked for up to a day after the check.
 
 - Operation ID: `getBackupUpload`
 - Authentication: Session, admin
@@ -110,14 +110,14 @@ Responses:
 | 200 | The upload. | `application/json` [UploadStatus](#uploadstatus) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
-| 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
+| 404 | No upload with this id is open or was checked in the last day (code not_found). | `application/json` [Error](#error) |
 | 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `PUT /api/v1/admin/backup-uploads/{id}`
 
 Send one part of an upload (admin only).
 
-The body is the raw bytes of the file from `offset`, at most `chunk_size` (8 MiB) of them. `offset` must equal `received`. A part may take up to 5 minutes to arrive. A part that fails (a dropped connection, a timeout) is not kept: send it again from the same offset. Not counted by the concurrency limit.
+The body is the raw bytes of the file from `offset`, at most `chunk_size` (8 MiB) of them. `offset` must equal `received`. A part may take up to 5 minutes to arrive. A part that fails (a dropped connection, a timeout) is not kept: send it again from the same offset. Not counted by the general concurrency limit: at most 4 parts are received at once, 2 from one client address.
 
 - Operation ID: `putBackupUploadChunk`
 - Authentication: Session, admin
@@ -143,14 +143,16 @@ Responses:
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
 | 408 | The part did not arrive within 5 minutes (code request_timeout). | `application/json` [Error](#error) |
-| 409 | offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy). | `application/json` [UploadError](#uploaderror) |
+| 409 | offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). | `application/json` [UploadError](#uploaderror) |
 | 413 | The part is larger than chunk_size (code payload_too_large). | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring). | `application/json` [Error](#error) |
 | 507 | The backup folder is full (code no_space). | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/admin/backup-uploads/{id}`
 
 Cancel an upload and delete what was received (admin only).
+
+A check in progress is stopped and the file deleted.
 
 - Operation ID: `cancelBackupUpload`
 - Authentication: Session, admin
@@ -169,13 +171,14 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
+| 409 | A part is still being received (code upload_busy); try again in a moment. | `application/json` [Error](#error) |
 | 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/admin/backup-uploads/{id}/complete`
 
 Check a fully received upload and add it to the backups (admin only).
 
-Reads the whole file and checks its manifest, checksums and signature. A file that passes joins the list as a backup of kind uploaded, with its original name; audited as backup.uploaded. A file that fails is deleted and the message says why. The body may be empty.
+Starts the check of the whole file (manifest, checksums and signature) in the background, one check at a time, and answers `202` with the state `checking`; reading a large file takes longer than a proxy waits for an answer. Ask GET /api/v1/admin/backup-uploads/{id} every few seconds for the outcome. A file that passes joins the list as a backup of kind uploaded, with its original name (state `ready`, `backup` describes it); audited as backup.uploaded. A file that fails is deleted (state `refused`, `reason` gives the code, such as invalid_backup, key_mismatch or newer_schema, and a message that says why). Completing again answers `202` while the check runs and `200` with the outcome after it. The body may be empty.
 
 - Operation ID: `completeBackupUpload`
 - Authentication: Session, admin
@@ -190,19 +193,19 @@ Responses:
 
 | Status | Description | Body |
 |---|---|---|
-| 201 | The backup was added. | `application/json` [BackupInfo](#backupinfo) |
+| 200 | The check has ended; `state` is ready or refused. | `application/json` [UploadStatus](#uploadstatus) |
+| 202 | The file is being checked. | `application/json` [UploadStatus](#uploadstatus) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
-| 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
+| 404 | No upload with this id is open or was checked in the last day (code not_found). | `application/json` [Error](#error) |
 | 409 | Not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy). | `application/json` [UploadError](#uploaderror) |
-| 422 | The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). The message says why and how to fix it. | `application/json` [Error](#error) |
-| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The backup folder cannot be used (code folder_unavailable), the server is busy (code busy), shutting down (code unavailable) or restoring a backup (code restoring). | `application/json` [Error](#error) |
 
 ### `GET /api/v1/admin/backups`
 
 List the backups, the current or last job, the backup schedule's last run and the folder (admin only).
 
-The files in the backup folder are the source of truth: the list is read from the folder, newest first. A file whose manifest cannot be read is listed with `readable` false so it can be deleted. When the folder cannot be used, `folder.ok` is false, `folder.error` says why and how to fix it, and the list is empty.
+The files in the backup folder are the source of truth: the list is read from the folder, newest first. A file whose manifest cannot be read is listed with `readable` false so it can be deleted; one made by a newer version of Scanopsis has `newer_version` true. When the folder cannot be used, `folder.ok` is false, `folder.error` says why and how to fix it, and the list is empty.
 
 - Operation ID: `listBackups`
 - Authentication: Session, admin
@@ -235,6 +238,24 @@ Responses:
 | 409 | A backup or restore is already running (code busy). | `application/json` [Error](#error) |
 | 503 | The backup folder cannot be used (code folder_unavailable; the message names the folder and the fix), the server is busy (code busy) or a backup is being restored (code restoring). | `application/json` [Error](#error) |
 | 507 | The backup folder has too little free space for a backup of the database and 512 MiB to spare (code no_space; the message gives both numbers). | `application/json` [Error](#error) |
+
+### `POST /api/v1/admin/backups/schedule-status/dismiss`
+
+Dismiss the failure of the last scheduled backup (admin only).
+
+Hides the banner about a failed scheduled backup: the list then shows `schedule.dismissed` true. The next scheduled run replaces the status, so a new failure shows again. Audited as backup.schedule_alert_dismissed with the time and the error of the failed run; nothing happens, and nothing is audited, when there is no failure to dismiss.
+
+- Operation ID: `dismissBackupScheduleAlert`
+- Authentication: Session, admin
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | Dismissed, or nothing to dismiss. | none |
+| 401 | No valid session. | `application/json` [Error](#error) |
+| 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/admin/backups/{name}`
 
@@ -294,7 +315,7 @@ Responses:
 
 Check a backup in full and tell what restoring it would do (admin only).
 
-Reads the whole file and checks its checksums and signature, as a restore does before it changes anything. A backup made by a newer version or with another secret key is described from its manifest with `schema_ok` or `key_matches` false. `scans_removed_by_retention` is how many of the backup's scans the next data clean-up deletes under the retention period the restored installation will have.
+Reads the whole file and checks its checksums and signature, as a restore does before it changes anything. That takes long for a large backup, so it runs in the background, one check at a time: the answer is `202` with the state `checking` until the preview is ready, then `200` with the preview. Ask again every few seconds. The preview is kept for an hour while the file and the retention period stay the same. A backup made by a newer version or with another secret key is described from its manifest with `schema_ok` or `key_matches` false. `scans_removed_by_retention` is how many of the backup's scans the next data clean-up deletes under the retention period the restored installation will have.
 
 - Operation ID: `previewRestore`
 - Authentication: Session, admin
@@ -310,17 +331,18 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 200 | The preview. | `application/json` [RestorePreview](#restorepreview) |
+| 202 | The backup is being checked; ask again. | `application/json` [BackupCheck](#backupcheck) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No backup with this name (code not_found). | `application/json` [Error](#error) |
 | 422 | The file is damaged, not a Scanopsis backup, of an unknown format or not signed by this installation's key (code invalid_backup; the message says why). | `application/json` [Error](#error) |
-| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy), shutting down (code unavailable) or restoring a backup (code restoring). | `application/json` [Error](#error) |
 
 ### `POST /api/v1/admin/backups/{name}/restore`
 
 Replace all data with a backup (admin only).
 
-Needs the phrase RESTORE and a current two-factor code of the administrator. Unless `skip_safety_backup` is true, a backup of the current data (kind before-restore) is taken first. The restore then runs in the background in one database transaction; while it replaces the data, the API answers 503 with the code restoring. Every session ends, this one too. The backup schedule and keep-days of this server are kept. Follow it with GET /api/v1/restore/status.
+Needs the phrase RESTORE and a current two-factor code of the administrator. Unless `skip_safety_backup` is true, a backup of the current data (kind before-restore) is taken first. The restore then runs in the background in one database transaction; while it replaces the data, the API answers 503 with the code restoring. Every session ends, this one too. The backup schedule and keep-days of this server are kept. Follow it with GET /api/v1/restore/status. Everything that can refuse the restore (a running job, the backup, the phrase) is checked before the two-factor code, so a refused restore does not use up a code. Restore mode starts once the whole file was checked, when the data is replaced.
 
 - Operation ID: `restoreBackup`
 - Authentication: Session, admin
@@ -344,10 +366,10 @@ Responses:
 | 401 | No valid session, or too many wrong two-factor codes ended it (code unauthenticated); sign in again. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No backup with this name (code not_found). | `application/json` [Error](#error) |
-| 409 | A job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema); the message says how to fix it. | `application/json` [Error](#error) |
+| 409 | A job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema); the message says what to do. | `application/json` [Error](#error) |
 | 422 | confirm is not RESTORE (code confirmation_required), the two-factor code is missing, wrong or used (code invalid_code), or the file cannot be read as a backup (code invalid_backup). | `application/json` [Error](#error) |
 | 429 | Too many code attempts (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy), restoring a backup (code restoring), or waits for a restart after a restore or shuts down (code unavailable). | `application/json` [Error](#error) |
 
 ### `GET /api/v1/admin/integrations/sonarqube`
 
@@ -1265,9 +1287,9 @@ Responses:
 
 ### `GET /api/v1/setup/restore/uploads/{id}`
 
-How much of a setup upload the server has.
+How much of a setup upload the server has, or the outcome of its check.
 
-The setup token goes in the X-Setup-Token header.
+Works as GET /api/v1/admin/backup-uploads/{id}; a `ready` upload carries `preview`, the preview of the restore, and `backup`. The setup token goes in the X-Setup-Token header.
 
 - Operation ID: `getSetupRestoreUpload`
 - Authentication: None
@@ -1285,7 +1307,7 @@ Responses:
 |---|---|---|
 | 200 | The upload. | `application/json` [UploadStatus](#uploadstatus) |
 | 403 | Wrong setup token (code invalid_setup_token). | `application/json` [Error](#error) |
-| 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
+| 404 | No upload with this id is open or was checked in the last day (code not_found). | `application/json` [Error](#error) |
 | 409 | Setup is complete (code setup_done). | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
 | 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
@@ -1320,17 +1342,17 @@ Responses:
 | 403 | Wrong setup token (code invalid_setup_token). | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
 | 408 | The part did not arrive within 5 minutes (code request_timeout). | `application/json` [Error](#error) |
-| 409 | Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy). | `application/json` [UploadError](#uploaderror) |
+| 409 | Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). | `application/json` [UploadError](#uploaderror) |
 | 413 | The part is larger than chunk_size (code payload_too_large). | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring). | `application/json` [Error](#error) |
 | 507 | The backup folder is full (code no_space). | `application/json` [Error](#error) |
 
 ### `DELETE /api/v1/setup/restore/uploads/{id}`
 
 Cancel a setup upload and delete what was received.
 
-The setup token goes in the X-Setup-Token header.
+A check in progress is stopped and the file deleted. The setup token goes in the X-Setup-Token header.
 
 - Operation ID: `cancelSetupRestoreUpload`
 - Authentication: None
@@ -1349,7 +1371,7 @@ Responses:
 | 204 | Cancelled. | none |
 | 403 | Wrong setup token (code invalid_setup_token). | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
-| 409 | Setup is complete (code setup_done). | `application/json` [Error](#error) |
+| 409 | Setup is complete (code setup_done), or a part is still being received (code upload_busy); try again in a moment. | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
 | 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
@@ -1357,7 +1379,7 @@ Responses:
 
 Check a fully received setup upload and tell what restoring it would do.
 
-Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete does, adds it to the backup folder as kind uploaded and returns the preview of the restore. Use the upload id to restore it. The setup token goes in the body or in the X-Setup-Token header; with the header the body may be empty.
+Works as POST /api/v1/admin/backup-uploads/{id}/complete: the check runs in the background and GET /api/v1/setup/restore/uploads/{id} gives the outcome. A file that passes is added to the backup folder as kind uploaded, and the outcome carries the preview of the restore in `preview`. Use the upload id to restore it. The setup token goes in the body or in the X-Setup-Token header; with the header the body may be empty.
 
 - Operation ID: `completeSetupRestoreUpload`
 - Authentication: None
@@ -1377,14 +1399,14 @@ Responses:
 
 | Status | Description | Body |
 |---|---|---|
-| 201 | The backup was added. | `application/json` [RestorePreview](#restorepreview) |
+| 200 | The check has ended; `state` is ready or refused. | `application/json` [UploadStatus](#uploadstatus) |
+| 202 | The file is being checked. | `application/json` [UploadStatus](#uploadstatus) |
 | 400 | Malformed body (code invalid_request). | `application/json` [Error](#error) |
 | 403 | Wrong setup token (code invalid_setup_token). | `application/json` [Error](#error) |
-| 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
+| 404 | No upload with this id is open or was checked in the last day (code not_found). | `application/json` [Error](#error) |
 | 409 | Setup is complete (code setup_done), not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy). | `application/json` [UploadError](#uploaderror) |
-| 422 | The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The backup folder cannot be used (code folder_unavailable), the server is busy (code busy), shutting down (code unavailable) or restoring a backup (code restoring). | `application/json` [Error](#error) |
 
 ### `GET /api/v1/users`
 
@@ -1565,6 +1587,14 @@ Type: object
 | `gitlab` | boolean | yes |  |
 | `local` | boolean | yes |  |
 
+### BackupCheck
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `state` | string | yes | The backup is being checked; ask again. |
+
 ### BackupInfo
 
 Type: object
@@ -1577,6 +1607,7 @@ Type: object
 | `key_matches` | boolean | yes | The backup was made with the secret key this server runs with. Only such a backup can be restored. |
 | `kind` | [BackupKind](#backupkind) | yes |  |
 | `name` | string | yes |  |
+| `newer_version` | boolean | yes | True when a newer version of Scanopsis made the backup (a newer file format or database schema): it cannot be restored by this version. A newer file format is also not readable. |
 | `original_name` | string | yes | The file name an uploaded backup had; empty for other kinds. |
 | `readable` | boolean | yes | False when the manifest cannot be read: the backup can be deleted but not restored, and only name, kind, size and created_at are known. |
 | `schema` | integer (int64) | yes | Database schema version of the backup. |
@@ -1958,6 +1989,8 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
+| `dismissed` | boolean | yes | An administrator dismissed the failure of the last scheduled backup; the next scheduled run sets it back to false. |
+| `enabled` | boolean | yes | The backup schedule is on now. |
 | `error` | string | yes | Why the last scheduled backup failed; empty after a success. |
 | `last_run_at` | string or null (date-time) | yes | When the last scheduled backup ran; null before the first. |
 | `ok` | boolean | yes |  |
@@ -2309,11 +2342,22 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
+| `backup` | [BackupInfo](#backupinfo) | no | The backup a ready upload became. |
 | `chunk_size` | integer | yes | The largest part the server takes (8 MiB). |
 | `file_name` | string | yes |  |
 | `id` | string | yes | 128-bit random id in hex. |
+| `preview` | [RestorePreview](#restorepreview) | no | On the setup screen, the preview of restoring a ready upload. |
+| `reason` | object | no | Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space). |
 | `received` | integer (int64) | yes | Bytes stored so far; the next part starts here. |
 | `size` | integer (int64) | yes |  |
+| `state` | string (one of `uploading`, `checking`, `ready`, `refused`) | yes | uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted. |
+
+Properties of `reason`:
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `code` | string | yes |  |
+| `message` | string | yes |  |
 
 ### User
 

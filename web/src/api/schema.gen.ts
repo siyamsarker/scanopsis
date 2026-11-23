@@ -773,7 +773,8 @@ export interface paths {
          * List the backups, the current or last job, the backup schedule's last run and the folder (admin only).
          * @description The files in the backup folder are the source of truth: the list is
          *     read from the folder, newest first. A file whose manifest cannot be
-         *     read is listed with `readable` false so it can be deleted. When the
+         *     read is listed with `readable` false so it can be deleted; one made by
+         *     a newer version of Scanopsis has `newer_version` true. When the
          *     folder cannot be used, `folder.ok` is false, `folder.error` says why
          *     and how to fix it, and the list is empty.
          */
@@ -848,11 +849,16 @@ export interface paths {
         /**
          * Check a backup in full and tell what restoring it would do (admin only).
          * @description Reads the whole file and checks its checksums and signature, as a
-         *     restore does before it changes anything. A backup made by a newer
-         *     version or with another secret key is described from its manifest
-         *     with `schema_ok` or `key_matches` false. `scans_removed_by_retention`
-         *     is how many of the backup's scans the next data clean-up deletes
-         *     under the retention period the restored installation will have.
+         *     restore does before it changes anything. That takes long for a large
+         *     backup, so it runs in the background, one check at a time: the answer
+         *     is `202` with the state `checking` until the preview is ready, then
+         *     `200` with the preview. Ask again every few seconds. The preview is
+         *     kept for an hour while the file and the retention period stay the
+         *     same. A backup made by a newer version or with another secret key is
+         *     described from its manifest with `schema_ok` or `key_matches` false.
+         *     `scans_removed_by_retention` is how many of the backup's scans the
+         *     next data clean-up deletes under the retention period the restored
+         *     installation will have.
          */
         get: operations["previewRestore"];
         put?: never;
@@ -880,9 +886,38 @@ export interface paths {
          *     runs in the background in one database transaction; while it replaces
          *     the data, the API answers 503 with the code restoring. Every session
          *     ends, this one too. The backup schedule and keep-days of this server
-         *     are kept. Follow it with GET /api/v1/restore/status.
+         *     are kept. Follow it with GET /api/v1/restore/status. Everything that
+         *     can refuse the restore (a running job, the backup, the phrase) is
+         *     checked before the two-factor code, so a refused restore does not use
+         *     up a code. Restore mode starts once the whole file was checked, when
+         *     the data is replaced.
          */
         post: operations["restoreBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/schedule-status/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss the failure of the last scheduled backup (admin only).
+         * @description Hides the banner about a failed scheduled backup: the list then shows
+         *     `schedule.dismissed` true. The next scheduled run replaces the status,
+         *     so a new failure shows again. Audited as
+         *     backup.schedule_alert_dismissed with the time and the error of the
+         *     failed run; nothing happens, and nothing is audited, when there is no
+         *     failure to dismiss.
+         */
+        post: operations["dismissBackupScheduleAlert"];
         delete?: never;
         options?: never;
         head?: never;
@@ -902,7 +937,9 @@ export interface paths {
          * Start uploading a backup file (admin only).
          * @description Send the file in parts with PUT, then complete the upload. At most two
          *     uploads may be open at once; one without a part for an hour is
-         *     dropped. The file must fit the free space of the backup folder less
+         *     dropped. When two are open, a new upload takes the place of the one
+         *     that has gone longest without a part, if that is more than 10
+         *     minutes. The file must fit the free space of the backup folder less
          *     512 MiB and less what other open uploads still need.
          */
         post: operations["startBackupUpload"];
@@ -920,8 +957,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * How much of an upload the server has (admin only).
-         * @description After a dropped connection, ask this and send the next part from `received`.
+         * How much of an upload the server has, or the outcome of its check (admin only).
+         * @description After a dropped connection, ask this and send the next part from
+         *     `received`. After the upload was completed, `state` is `checking`
+         *     until the check ends, then `ready` with `backup` or `refused` with
+         *     `reason`; the outcome can be asked for up to a day after the check.
          */
         get: operations["getBackupUpload"];
         /**
@@ -930,11 +970,15 @@ export interface paths {
          *     `chunk_size` (8 MiB) of them. `offset` must equal `received`. A part
          *     may take up to 5 minutes to arrive. A part that fails (a dropped
          *     connection, a timeout) is not kept: send it again from the same
-         *     offset. Not counted by the concurrency limit.
+         *     offset. Not counted by the general concurrency limit: at most 4 parts
+         *     are received at once, 2 from one client address.
          */
         put: operations["putBackupUploadChunk"];
         post?: never;
-        /** Cancel an upload and delete what was received (admin only). */
+        /**
+         * Cancel an upload and delete what was received (admin only).
+         * @description A check in progress is stopped and the file deleted.
+         */
         delete: operations["cancelBackupUpload"];
         options?: never;
         head?: never;
@@ -952,10 +996,17 @@ export interface paths {
         put?: never;
         /**
          * Check a fully received upload and add it to the backups (admin only).
-         * @description Reads the whole file and checks its manifest, checksums and signature.
-         *     A file that passes joins the list as a backup of kind uploaded, with
-         *     its original name; audited as backup.uploaded. A file that fails is
-         *     deleted and the message says why. The body may be empty.
+         * @description Starts the check of the whole file (manifest, checksums and
+         *     signature) in the background, one check at a time, and answers `202`
+         *     with the state `checking`; reading a large file takes longer than a
+         *     proxy waits for an answer. Ask GET /api/v1/admin/backup-uploads/{id}
+         *     every few seconds for the outcome. A file that passes joins the list
+         *     as a backup of kind uploaded, with its original name (state `ready`,
+         *     `backup` describes it); audited as backup.uploaded. A file that fails
+         *     is deleted (state `refused`, `reason` gives the code, such as
+         *     invalid_backup, key_mismatch or newer_schema, and a message that
+         *     says why). Completing again answers `202` while the check runs and
+         *     `200` with the outcome after it. The body may be empty.
          */
         post: operations["completeBackupUpload"];
         delete?: never;
@@ -995,8 +1046,10 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * How much of a setup upload the server has.
-         * @description The setup token goes in the X-Setup-Token header.
+         * How much of a setup upload the server has, or the outcome of its check.
+         * @description Works as GET /api/v1/admin/backup-uploads/{id}; a `ready` upload
+         *     carries `preview`, the preview of the restore, and `backup`. The
+         *     setup token goes in the X-Setup-Token header.
          */
         get: operations["getSetupRestoreUpload"];
         /**
@@ -1007,7 +1060,7 @@ export interface paths {
         post?: never;
         /**
          * Cancel a setup upload and delete what was received.
-         * @description The setup token goes in the X-Setup-Token header.
+         * @description A check in progress is stopped and the file deleted. The setup token goes in the X-Setup-Token header.
          */
         delete: operations["cancelSetupRestoreUpload"];
         options?: never;
@@ -1026,11 +1079,13 @@ export interface paths {
         put?: never;
         /**
          * Check a fully received setup upload and tell what restoring it would do.
-         * @description Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete
-         *     does, adds it to the backup folder as kind uploaded and returns the
-         *     preview of the restore. Use the upload id to restore it. The setup
-         *     token goes in the body or in the X-Setup-Token header; with the
-         *     header the body may be empty.
+         * @description Works as POST /api/v1/admin/backup-uploads/{id}/complete: the check
+         *     runs in the background and GET /api/v1/setup/restore/uploads/{id}
+         *     gives the outcome. A file that passes is added to the backup folder
+         *     as kind uploaded, and the outcome carries the preview of the restore
+         *     in `preview`. Use the upload id to restore it. The setup token goes
+         *     in the body or in the X-Setup-Token header; with the header the body
+         *     may be empty.
          */
         post: operations["completeSetupRestoreUpload"];
         delete?: never;
@@ -1786,6 +1841,8 @@ export interface components {
             key_matches: boolean;
             /** @description False when the manifest cannot be read: the backup can be deleted but not restored, and only name, kind, size and created_at are known. */
             readable: boolean;
+            /** @description True when a newer version of Scanopsis made the backup (a newer file format or database schema): it cannot be restored by this version. A newer file format is also not readable. */
+            newer_version: boolean;
             /**
              * Format: date-time
              * @description When an uploaded backup arrived.
@@ -1835,6 +1892,10 @@ export interface components {
             ok: boolean;
             /** @description Why the last scheduled backup failed; empty after a success. */
             error: string;
+            /** @description An administrator dismissed the failure of the last scheduled backup; the next scheduled run sets it back to false. */
+            dismissed: boolean;
+            /** @description The backup schedule is on now. */
+            enabled: boolean;
         };
         BackupList: {
             /** @description Newest first. */
@@ -1943,6 +2004,28 @@ export interface components {
              * @description Bytes stored so far; the next part starts here.
              */
             received: number;
+            /**
+             * @description uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted.
+             * @enum {string}
+             */
+            state: "uploading" | "checking" | "ready" | "refused";
+            /** @description Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space). */
+            reason?: {
+                /** @example invalid_backup */
+                code: string;
+                message: string;
+            };
+            /** @description The backup a ready upload became. */
+            backup?: components["schemas"]["BackupInfo"];
+            /** @description On the setup screen, the preview of restoring a ready upload. */
+            preview?: components["schemas"]["RestorePreview"];
+        };
+        BackupCheck: {
+            /**
+             * @description The backup is being checked; ask again.
+             * @constant
+             */
+            state: "checking";
         };
         UploadError: {
             error: {
@@ -4059,6 +4142,15 @@ export interface operations {
                     "application/json": components["schemas"]["RestorePreview"];
                 };
             };
+            /** @description The backup is being checked; ask again. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupCheck"];
+                };
+            };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             /** @description No backup with this name (code not_found). */
@@ -4079,7 +4171,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            503: components["responses"]["BusyOrRestoring"];
+            /** @description The server is busy (code busy), shutting down (code unavailable) or restoring a backup (code restoring). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
         };
     };
     restoreBackup: {
@@ -4135,7 +4235,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description A job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema); the message says how to fix it. */
+            /** @description A job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema); the message says what to do. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4162,6 +4262,35 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description The server is busy (code busy), restoring a backup (code restoring), or waits for a restart after a restore or shuts down (code unavailable). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    dismissBackupScheduleAlert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Dismissed, or nothing to dismiss. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             503: components["responses"]["BusyOrRestoring"];
         };
     };
@@ -4198,7 +4327,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description Two uploads are open already (code too_many_uploads). */
+            /** @description Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4250,7 +4379,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description No upload with this id is open (code not_found). */
+            /** @description No upload with this id is open or was checked in the last day (code not_found). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4319,7 +4448,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy). */
+            /** @description offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4337,7 +4466,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            503: components["responses"]["Restoring"];
+            /** @description Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description The backup folder is full (code no_space). */
             507: {
                 headers: {
@@ -4379,6 +4516,15 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
+            /** @description A part is still being received (code upload_busy); try again in a moment. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             503: components["responses"]["BusyOrRestoring"];
         };
     };
@@ -4394,18 +4540,27 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The backup was added. */
-            201: {
+            /** @description The check has ended; `state` is ready or refused. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["BackupInfo"];
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            /** @description The file is being checked. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
                 };
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description No upload with this id is open (code not_found). */
+            /** @description No upload with this id is open or was checked in the last day (code not_found). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4423,8 +4578,8 @@ export interface operations {
                     "application/json": components["schemas"]["UploadError"];
                 };
             };
-            /** @description The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). The message says why and how to fix it. */
-            422: {
+            /** @description The backup folder cannot be used (code folder_unavailable), the server is busy (code busy), shutting down (code unavailable) or restoring a backup (code restoring). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4432,7 +4587,6 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            503: components["responses"]["BusyOrRestoring"];
         };
     };
     startSetupRestoreUpload: {
@@ -4522,7 +4676,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["InvalidSetupToken"];
-            /** @description No upload with this id is open (code not_found). */
+            /** @description No upload with this id is open or was checked in the last day (code not_found). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4603,7 +4757,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy). */
+            /** @description Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received or the file is being checked (code upload_busy). */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4622,7 +4776,15 @@ export interface operations {
                 };
             };
             429: components["responses"]["TooManyAttempts"];
-            503: components["responses"]["Restoring"];
+            /** @description Too many parts are being received (code busy; Retry-After gives seconds) or a backup is being restored (code restoring). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description The backup folder is full (code no_space). */
             507: {
                 headers: {
@@ -4666,7 +4828,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description Setup is complete (code setup_done). */
+            /** @description Setup is complete (code setup_done), or a part is still being received (code upload_busy); try again in a moment. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4698,13 +4860,22 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The backup was added. */
-            201: {
+            /** @description The check has ended; `state` is ready or refused. */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RestorePreview"];
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            /** @description The file is being checked. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
                 };
             };
             /** @description Malformed body (code invalid_request). */
@@ -4717,7 +4888,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["InvalidSetupToken"];
-            /** @description No upload with this id is open (code not_found). */
+            /** @description No upload with this id is open or was checked in the last day (code not_found). */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -4735,8 +4906,9 @@ export interface operations {
                     "application/json": components["schemas"]["UploadError"];
                 };
             };
-            /** @description The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). */
-            422: {
+            429: components["responses"]["TooManyAttempts"];
+            /** @description The backup folder cannot be used (code folder_unavailable), the server is busy (code busy), shutting down (code unavailable) or restoring a backup (code restoring). */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -4744,8 +4916,6 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            429: components["responses"]["TooManyAttempts"];
-            503: components["responses"]["BusyOrRestoring"];
         };
     };
     checkSetupRestoreToken: {

@@ -50,6 +50,11 @@ type Info struct {
 	// file is listed with the kind and time of its name so it can be
 	// deleted, and cannot be restored.
 	Readable bool `json:"readable"`
+	// NewerVersion is true when a newer version of Scanopsis made the
+	// backup: its format or database schema is newer than this version
+	// knows. Such a backup cannot be restored here; one in a newer format
+	// is also not Readable.
+	NewerVersion bool `json:"newer_version"`
 	// UploadedAt and OriginalName describe an uploaded file; they are nil and
 	// empty for backups made here.
 	UploadedAt   *time.Time `json:"uploaded_at"`
@@ -61,6 +66,7 @@ type cached struct {
 	mtime  time.Time
 	m      Manifest
 	ok     bool
+	newer  bool // the manifest is of a newer format
 	upload uploadMeta
 }
 
@@ -267,7 +273,7 @@ func (d *Dir) info(name string, fi os.FileInfo) Info {
 		if f, err := os.Open(filepath.Join(d.path, name)); err == nil { //nolint:gosec // name matched fileName
 			m, err := ReadManifest(f)
 			_ = f.Close()
-			c.m, c.ok = m, err == nil
+			c.m, c.ok, c.newer = m, err == nil, errors.Is(err, ErrFormat)
 		}
 		if b, err := os.ReadFile(filepath.Join(d.path, metaName(name))); err == nil { //nolint:gosec // name matched fileName
 			_ = json.Unmarshal(b, &c.upload)
@@ -286,7 +292,7 @@ func (d *Dir) build(name string, size int64, c cached) Info {
 		info = infoOf(name, size, c.m, d.fingerprint)
 	} else {
 		at, _ := time.Parse("20060102T150405Z", sub[1])
-		info = Info{Name: name, Kind: Kind(sub[2]), Size: size, CreatedAt: at}
+		info = Info{Name: name, Kind: Kind(sub[2]), Size: size, CreatedAt: at, NewerVersion: c.newer}
 	}
 	if info.Kind == KindUploaded && !c.upload.UploadedAt.IsZero() {
 		at := c.upload.UploadedAt
@@ -306,7 +312,7 @@ func (d *Dir) adopt(src, originalName string, at time.Time) (Info, error) {
 	if err := writeFileAtomic(meta, uploadMeta{UploadedAt: at.UTC(), OriginalName: originalName}); err != nil {
 		return Info{}, d.writeError(err)
 	}
-	if err := os.Rename(src, final); err != nil {
+	if err := os.Rename(src, final); err != nil { //nolint:gosec // src is an upload named by a random id, final a name from NewName
 		_ = os.Remove(meta)
 		return Info{}, d.writeError(err)
 	}

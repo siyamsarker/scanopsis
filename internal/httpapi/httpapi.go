@@ -197,6 +197,7 @@ func (s *server) routes() []route {
 		{"GET", "/api/v1/admin/backups/{name}/download", s.requireAdmin(s.feature("downloadBackup"))},
 		{"GET", "/api/v1/admin/backups/{name}/preview", s.requireAdmin(s.feature("previewRestore"))},
 		{"POST", "/api/v1/admin/backups/{name}/restore", s.requireAdmin(s.feature("restoreBackup"))},
+		{"POST", "/api/v1/admin/backups/schedule-status/dismiss", s.requireAdmin(s.feature("dismissBackupScheduleAlert"))},
 		{"POST", "/api/v1/admin/backup-uploads", s.requireAdmin(s.feature("startBackupUpload"))},
 		{"GET", "/api/v1/admin/backup-uploads/{id}", s.requireAdmin(s.feature("getBackupUpload"))},
 		{"PUT", "/api/v1/admin/backup-uploads/{id}", s.requireAdmin(s.feature("putBackupUploadChunk"))},

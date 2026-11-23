@@ -4,6 +4,7 @@
 package backup
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -23,6 +24,12 @@ const (
 	// uploadIdle is how long an upload may go without a part before the
 	// next upload request drops it and deletes its file.
 	uploadIdle = time.Hour
+	// uploadReplaceIdle is how long an upload must have gone without a part
+	// before a new upload may take its place when no slot is free.
+	uploadReplaceIdle = 10 * time.Minute
+	// uploadResultKeep is how long the outcome of a checked upload can be
+	// asked for after the check ended.
+	uploadResultKeep = 24 * time.Hour
 	// maxFileNameBytes bounds the original name of an uploaded file.
 	maxFileNameBytes = 255
 )
@@ -36,14 +43,63 @@ const (
 	scopeSetup uploadScope = "setup"
 )
 
+// UploadState is where an upload stands: parts are being received, the
+// complete file is being checked in the background, or the check ended
+// with the file added to the backups (ready) or deleted (refused).
+type UploadState string
+
+// Upload states.
+const (
+	UploadUploading UploadState = "uploading"
+	UploadChecking  UploadState = "checking"
+	UploadReady     UploadState = "ready"
+	UploadRefused   UploadState = "refused"
+)
+
 var (
 	errNoUpload       = errors.New("no upload with this id is in progress")
 	errTooManyUploads = errors.New("two uploads are already in progress; finish or cancel one first")
 	errUploadBusy     = errors.New("another part of this upload is still being received; try again in a moment")
+	errUploadChecking = fmt.Errorf("%w: the file is complete and being checked", errUploadBusy)
 )
 
-// upload is one file being received in parts. received and touched change
-// under the lock of uploads, by the request that set busy.
+// tooManyUploadsError is errTooManyUploads with the time until a new
+// upload can take the place of an idle one; wait is 0 when every open
+// upload is being checked.
+type tooManyUploadsError struct{ wait time.Duration }
+
+func (e *tooManyUploadsError) Error() string {
+	if e.wait <= 0 {
+		return "two uploads are already in progress and being checked; try again when a check has finished"
+	}
+	minutes := int((e.wait + time.Minute - 1) / time.Minute)
+	unit := "minutes"
+	if minutes == 1 {
+		unit = "minute"
+	}
+	return fmt.Sprintf("%v, or try again in %d %s: an upload that receives nothing for %d minutes then makes room for a new one",
+		errTooManyUploads, minutes, unit, int(uploadReplaceIdle/time.Minute))
+}
+
+func (e *tooManyUploadsError) Is(target error) bool { return target == errTooManyUploads }
+
+// incompleteError refuses to check an upload that is missing bytes.
+type incompleteError struct{ received, size int64 }
+
+func (e *incompleteError) Error() string {
+	return fmt.Sprintf("the server has %d of %d bytes; send the rest first", e.received, e.size)
+}
+
+// UploadReason says why a checked upload was refused, with the code and
+// message an error answer would have.
+type UploadReason struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// upload is one file being received in parts. Its fields change under the
+// lock of uploads: received and touched by the request that set busy,
+// the outcome by the check that set state to checking.
 type upload struct {
 	id       string
 	scope    uploadScope
@@ -53,30 +109,46 @@ type upload struct {
 	path     string
 	busy     bool
 	touched  time.Time
+
+	state UploadState
+	// stopCheck cancels the check while the state is checking.
+	stopCheck context.CancelFunc
+	reason    *UploadReason
+	backup    *Info
+	preview   *Preview
 }
 
-// UploadStatus describes an upload in progress. Parts are sent in order,
-// each at most ChunkSize bytes, starting at Received.
+// UploadStatus describes an upload. Parts are sent in order, each at most
+// ChunkSize bytes, starting at Received. Once all of it was received and
+// the upload completed, State is checking until the check ends; then it is
+// ready, with Backup (the admin panel) or Preview (the setup screen), or
+// refused, with Reason.
 type UploadStatus struct {
-	ID        string `json:"id"`
-	FileName  string `json:"file_name"`
-	Size      int64  `json:"size"`
-	ChunkSize int    `json:"chunk_size"`
-	Received  int64  `json:"received"`
+	ID        string        `json:"id"`
+	FileName  string        `json:"file_name"`
+	Size      int64         `json:"size"`
+	ChunkSize int           `json:"chunk_size"`
+	Received  int64         `json:"received"`
+	State     UploadState   `json:"state"`
+	Reason    *UploadReason `json:"reason,omitempty"`
+	Backup    *Info         `json:"backup,omitempty"`
+	Preview   *Preview      `json:"preview,omitempty"`
 }
 
 func (u *upload) status() UploadStatus {
-	return UploadStatus{ID: u.id, FileName: u.fileName, Size: u.size, ChunkSize: ChunkSize, Received: u.received}
+	return UploadStatus{
+		ID: u.id, FileName: u.fileName, Size: u.size, ChunkSize: ChunkSize, Received: u.received,
+		State: u.state, Reason: u.reason, Backup: u.backup, Preview: u.preview,
+	}
 }
 
-// uploads holds the open uploads in memory; a restart forgets them, and the
-// folder removes their files after a day (see OpenDir).
+// uploads holds the open uploads in memory, and the outcome of the checked
+// ones for a day; a restart forgets them, and the folder removes their
+// files after a day (see OpenDir).
 type uploads struct {
 	mu   sync.Mutex
-	open map[string]*upload
-	// done maps a completed setup upload to the backup it became, for the
-	// restore that follows.
-	done map[string]string
+	open map[string]*upload // uploading or checking
+	done map[string]*upload // ready or refused
 }
 
 // checkFileName returns a message for a file name that is empty, too long or
@@ -107,34 +179,67 @@ func (e *uploadSpaceError) Error() string {
 
 func (e *uploadSpaceError) Is(target error) bool { return target == ErrNoSpace }
 
-// expireLocked drops the uploads that have had no part for uploadIdle. The
-// caller holds mu.
+// expireLocked drops the uploads that have had no part for uploadIdle, and
+// the outcomes older than uploadResultKeep. The caller holds mu.
 func (u *uploads) expireLocked(now time.Time) {
 	for id, up := range u.open {
-		if !up.busy && now.Sub(up.touched) > uploadIdle {
+		if !up.busy && up.state == UploadUploading && now.Sub(up.touched) > uploadIdle {
 			_ = os.Remove(up.path) //nolint:gosec // the name is a random id
 			delete(u.open, id)
 		}
 	}
+	for id, up := range u.done {
+		if now.Sub(up.touched) > uploadResultKeep {
+			delete(u.done, id)
+		}
+	}
+}
+
+// makeRoomLocked frees a slot of scope when maxOpenUploads are open: it
+// drops the upload of scope that has gone longest without a part, if that
+// is more than uploadReplaceIdle. Otherwise it returns a tooManyUploadsError
+// that says when a slot can be freed. The caller holds mu.
+func (u *uploads) makeRoomLocked(scope uploadScope, now time.Time) error {
+	var open int
+	var oldest *upload
+	for _, up := range u.open {
+		if up.scope != scope {
+			continue
+		}
+		open++
+		if !up.busy && up.state == UploadUploading && (oldest == nil || up.touched.Before(oldest.touched)) {
+			oldest = up
+		}
+	}
+	if open < maxOpenUploads {
+		return nil
+	}
+	if oldest == nil {
+		return &tooManyUploadsError{}
+	}
+	if idle := now.Sub(oldest.touched); idle <= uploadReplaceIdle {
+		return &tooManyUploadsError{wait: uploadReplaceIdle - idle}
+	}
+	_ = os.Remove(oldest.path) //nolint:gosec // the name is a random id
+	delete(u.open, oldest.id)
+	return nil
 }
 
 // start opens a new upload of a file of size bytes in dir. The file must fit
 // the free space of the folder less spaceMargin and less what the other open
-// uploads still need.
+// uploads still need. When maxOpenUploads of scope are open, the one that
+// has gone longest without a part makes room if that is more than
+// uploadReplaceIdle.
 func (u *uploads) start(dir *Dir, scope uploadScope, fileName string, size int64, now time.Time) (UploadStatus, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.expireLocked(now)
-	var open int
+	if err := u.makeRoomLocked(scope, now); err != nil {
+		return UploadStatus{}, err
+	}
 	var held uint64
 	for _, up := range u.open {
-		if up.scope == scope {
-			open++
-		}
 		held += uint64(up.size - up.received) //nolint:gosec // received never exceeds size
-	}
-	if open >= maxOpenUploads {
-		return UploadStatus{}, errTooManyUploads
 	}
 	free, err := dir.FreeBytes()
 	if err != nil {
@@ -164,7 +269,7 @@ func (u *uploads) start(dir *Dir, scope uploadScope, fileName string, size int64
 	if u.open == nil {
 		u.open = map[string]*upload{}
 	}
-	up := &upload{id: id, scope: scope, fileName: fileName, size: size, path: path, touched: now}
+	up := &upload{id: id, scope: scope, fileName: fileName, size: size, path: path, touched: now, state: UploadUploading}
 	u.open[id] = up
 	return up.status(), nil
 }
@@ -179,10 +284,16 @@ func (u *uploads) lookupLocked(scope uploadScope, id string, now time.Time) (*up
 	return up, nil
 }
 
-// status returns the state of an open upload.
+// status returns the state of an open upload, or the outcome of a checked one.
 func (u *uploads) status(scope uploadScope, id string, now time.Time) (UploadStatus, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	if up := u.done[id]; up != nil && up.scope == scope {
+		u.expireLocked(now)
+		if u.done[id] != nil {
+			return up.status(), nil
+		}
+	}
 	up, err := u.lookupLocked(scope, id, now)
 	if err != nil {
 		return UploadStatus{}, err
@@ -190,13 +301,17 @@ func (u *uploads) status(scope uploadScope, id string, now time.Time) (UploadSta
 	return up.status(), nil
 }
 
-// acquire claims an open upload for one request; release gives it back.
+// acquire claims an open upload for one request that writes a part;
+// release gives it back.
 func (u *uploads) acquire(scope uploadScope, id string, now time.Time) (*upload, error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	up, err := u.lookupLocked(scope, id, now)
 	if err != nil {
 		return nil, err
+	}
+	if up.state == UploadChecking {
+		return nil, errUploadChecking
 	}
 	if up.busy {
 		return nil, errUploadBusy
@@ -214,43 +329,89 @@ func (u *uploads) release(up *upload, received int64, now time.Time) {
 	up.touched = now
 }
 
-// drop removes a claimed upload, deleting its file unless keepFile.
-func (u *uploads) drop(up *upload, keepFile bool) {
+// complete moves a fully received upload to the checking state and returns
+// it with the context of its check, which the server's shutdown (base) and
+// a cancel of the upload end. started is false when the upload was already
+// being checked or has its outcome: status then tells where it stands.
+func (u *uploads) complete(base context.Context, scope uploadScope, id string, now time.Time) (st UploadStatus, up *upload, ctx context.Context, started bool, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if !keepFile {
+	u.expireLocked(now)
+	if d := u.done[id]; d != nil && d.scope == scope {
+		return d.status(), nil, nil, false, nil
+	}
+	up, err = u.lookupLocked(scope, id, now)
+	if err != nil {
+		return UploadStatus{}, nil, nil, false, err
+	}
+	switch {
+	case up.state == UploadChecking:
+		return up.status(), nil, nil, false, nil
+	case up.busy:
+		return UploadStatus{}, nil, nil, false, errUploadBusy
+	case up.received != up.size:
+		return UploadStatus{}, nil, nil, false, &incompleteError{received: up.received, size: up.size}
+	}
+	ctx, up.stopCheck = context.WithCancel(base)
+	up.state, up.busy, up.touched = UploadChecking, true, now
+	return up.status(), up, ctx, true, nil
+}
+
+// settle ends the check of up: decide sets the outcome (state ready or
+// refused, or uploading again when the check could not run) while no
+// cancel can come in between. It returns false, and deletes the file, when
+// the upload was cancelled during the check; decide is not called then.
+func (u *uploads) settle(up *upload, now time.Time, decide func(up *upload)) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if up.stopCheck != nil {
+		up.stopCheck()
+		up.stopCheck = nil
+	}
+	if u.open[up.id] != up {
 		_ = os.Remove(up.path) //nolint:gosec // the name is a random id
+		return false
 	}
-	delete(u.open, up.id)
+	decide(up)
+	up.busy, up.touched = false, now
+	if up.state == UploadReady || up.state == UploadRefused {
+		delete(u.open, up.id)
+		if u.done == nil {
+			u.done = map[string]*upload{}
+		}
+		u.done[up.id] = up
+	}
+	return true
 }
 
-// finished records that the setup upload id became the backup name.
-func (u *uploads) finished(id, name string) {
+// backupOf returns the backup a checked setup upload became.
+func (u *uploads) backupOf(id string, now time.Time) (string, bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if u.done == nil {
-		u.done = map[string]string{}
+	u.expireLocked(now)
+	up := u.done[id]
+	if up == nil || up.scope != scopeSetup || up.state != UploadReady || up.backup == nil {
+		return "", false
 	}
-	u.done[id] = name
+	return up.backup.Name, true
 }
 
-// backupOf returns the backup a completed setup upload became.
-func (u *uploads) backupOf(id string) (string, bool) {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	name, ok := u.done[id]
-	return name, ok
-}
-
-// cancel drops an open upload and deletes its file. It refuses, with
-// errUploadBusy, an upload a request is working on: a part being written,
-// or a completion that may already be adding the file to the folder.
+// cancel drops an open upload and deletes its file. A check in progress is
+// stopped, and the file is deleted once it has stopped. It refuses, with
+// errUploadBusy, an upload whose part is being written.
 func (u *uploads) cancel(scope uploadScope, id string, now time.Time) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	up, err := u.lookupLocked(scope, id, now)
 	if err != nil {
 		return err
+	}
+	if up.state == UploadChecking {
+		if up.stopCheck != nil {
+			up.stopCheck()
+		}
+		delete(u.open, id)
+		return nil
 	}
 	if up.busy {
 		return errUploadBusy

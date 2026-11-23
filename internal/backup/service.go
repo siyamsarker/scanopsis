@@ -42,8 +42,8 @@ const statusFile = ".schedule-status.json"
 // jobs (data retention, the SonarQube sync) to finish.
 const defaultLockWait = 2 * time.Minute
 
-// restartMessage is the job message after a restore that committed but
-// could not finish.
+// restartMessage is the job message after a restore that committed, or
+// may have committed, but could not finish.
 const restartMessage = "The backup was restored, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
 
 // closeTimeout bounds the closing of the lock connection.
@@ -112,11 +112,15 @@ type JobStatus struct {
 }
 
 // ScheduleStatus is the outcome of the last scheduled backup. It is kept in
-// the backup folder, so it survives a restart and a restore.
+// the backup folder, so it survives a restart and a restore. Dismissed is
+// set when an administrator dismissed the failure; the next scheduled run
+// clears it. Enabled is not kept: it tells whether the schedule is on now.
 type ScheduleStatus struct {
 	LastRunAt *time.Time `json:"last_run_at"`
 	OK        bool       `json:"ok"`
 	Error     string     `json:"error"`
+	Dismissed bool       `json:"dismissed"`
+	Enabled   bool       `json:"enabled"`
 }
 
 // ServiceOptions configure a Service. Dir and Dumper may be nil when the
@@ -170,6 +174,10 @@ type Service struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	jobs   sync.WaitGroup
+	// checks runs one background check (an upload, a preview) at a time;
+	// checking counts the checks that were started or wait for their turn.
+	checks   chan struct{}
+	checking sync.WaitGroup
 
 	restoring atomic.Bool
 	// needRestart is set when a restore committed but could not finish;
@@ -195,6 +203,7 @@ func NewService(o ServiceOptions) *Service {
 		newTimer: func(d time.Duration) timer { return realTimer{time.NewTimer(d)} },
 		restore:  Restore,
 		status:   JobStatus{State: JobIdle},
+		checks:   make(chan struct{}, 1),
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -217,12 +226,42 @@ func NewService(o ServiceOptions) *Service {
 	return s
 }
 
-// Close cancels the running job, if any, and waits for it to end. A
-// cancelled backup leaves no file; a cancelled restore changes nothing.
+// Close cancels the running job and the background checks, if any, and
+// waits for them to end. A cancelled backup leaves no file; a restore
+// cancelled before its commit changes nothing (see StartRestore).
 func (s *Service) Close() {
 	s.stop()
 	s.jobs.Wait()
+	s.checking.Wait()
 }
+
+// background runs fn in the background once no other check runs, so the
+// server reads at most one backup at a time for a check. ctx ends the wait
+// for that turn; fn is then still called, and is expected to see ctx ended
+// and return at once. It refuses, with errClosed, once the service closes;
+// Close waits for fn to return. A panic in fn is logged; fn should turn its
+// own failures into an outcome.
+func (s *Service) background(ctx context.Context, fn func()) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctx.Err() != nil {
+		return errClosed
+	}
+	s.checking.Add(1)
+	go func() {
+		defer s.checking.Done()
+		select {
+		case s.checks <- struct{}{}:
+			defer func() { <-s.checks }()
+		case <-ctx.Done():
+		}
+		_ = s.guard(ctx, "a background check stopped with a panic", func() error { fn(); return nil })
+	}()
+	return nil
+}
+
+// baseContext is the context of the service's background work; Close ends it.
+func (s *Service) baseContext() context.Context { return s.ctx }
 
 // stop cancels the jobs' context. It holds mu, so begin either claims the
 // slot (and adds to jobs) before Close waits, or sees the service closed.
@@ -260,7 +299,7 @@ const (
 	restoreBackingUpMessage = "Saving the current data before the restore."
 	restoreRunningMessage   = "Restoring a backup."
 	restoreDoneMessage      = "Restore finished. Sign in with an account from the backup."
-	restoreFailedMessage    = "The restore failed and nothing was changed. The server log has the reason."
+	restoreFailedMessage    = "The restore failed and nothing was changed. Admins see the reason on the Backups page."
 )
 
 // RestoreStatus is the state of the current or last restore, as anyone may
@@ -326,25 +365,56 @@ func (s *Service) CheckSpace(ctx context.Context) error {
 	return s.o.Dumper.CheckSpace(ctx)
 }
 
-// Schedule returns the outcome of the last scheduled backup.
+// Schedule returns the outcome of the last scheduled backup, and whether
+// the schedule is on.
 func (s *Service) Schedule() ScheduleStatus {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.sched
+	st := s.sched
+	s.mu.Unlock()
+	if s.o.Settings != nil {
+		st.Enabled = s.o.Settings.Current().BackupScheduleEnabled
+	}
+	return st
+}
+
+// DismissScheduleFailure marks the failure of the last scheduled backup as
+// seen, in memory and in the folder, so the banner about it goes away. It
+// reports false when the last scheduled backup did not fail or the failure
+// was dismissed already. The next scheduled run replaces the status.
+func (s *Service) DismissScheduleFailure() (ScheduleStatus, bool) {
+	s.mu.Lock()
+	if s.sched.LastRunAt == nil || s.sched.OK || s.sched.Dismissed {
+		st := s.sched
+		s.mu.Unlock()
+		return st, false
+	}
+	s.sched.Dismissed = true
+	st := s.sched
+	s.mu.Unlock()
+	s.saveSchedule(st)
+	return st, true
+}
+
+// availableLocked reports why no job can start now, or nil. The caller
+// holds mu.
+func (s *Service) availableLocked() error {
+	switch {
+	case s.ctx.Err() != nil:
+		return errClosed
+	case s.needRestart.Load():
+		return errNeedRestart
+	case s.running:
+		return ErrBusy
+	}
+	return nil
 }
 
 // begin claims the job slot. It returns ErrBusy when a job runs.
 func (s *Service) begin(st JobStatus) (JobStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ctx.Err() != nil {
-		return JobStatus{}, errClosed
-	}
-	if s.needRestart.Load() {
-		return JobStatus{}, errNeedRestart
-	}
-	if s.running {
-		return JobStatus{}, ErrBusy
+	if err := s.availableLocked(); err != nil {
+		return JobStatus{}, err
 	}
 	now := s.now().UTC()
 	st.StartedAt = &now
@@ -501,15 +571,40 @@ func message(err error) string {
 	return m
 }
 
+// CheckRestore tells whether a restore of the backup called name can start
+// now, without starting it: it refuses with the error StartRestore would
+// give when a job runs, the server waits for a restart or shuts down, or the
+// manifest of the backup belongs to another key or a newer version. A
+// request checks this before it spends anything, such as a two-factor code.
+func (s *Service) CheckRestore(name string) error {
+	if err := s.usable(); err != nil {
+		return err
+	}
+	path, err := s.o.Dir.Path(name)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	err = s.availableLocked()
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	_, err = s.check(path)
+	return err
+}
+
 // StartRestore starts restoring the backup called name in the background
 // and returns at once. Unless skipSafety is set, a backup of the current
 // data (kind before-restore) is taken first. keepHostSettings keeps this
-// server's backup settings (see RestoreOptions). The data is replaced in
-// one transaction; Restoring is true from its start until AfterRestore has
-// finished. When the transaction committed but AfterRestore then failed,
-// panicked or was cancelled, the server still holds state from before the
-// restore: Restoring stays true, no new job starts, the job fails with a
-// message asking for a restart, and backup.restore_incomplete is audited.
+// server's backup settings (see RestoreOptions). The restore checks the
+// whole file, then replaces the data in one transaction; Restoring is true
+// from the start of that transaction until AfterRestore has finished. When
+// the transaction committed, or its commit failed so that it may have
+// committed (ErrCommitUncertain), and the restore could not finish, the
+// server may hold state from before the restore: Restoring stays true, no
+// new job starts, the job fails with a message asking for a restart, and
+// backup.restore_incomplete is audited.
 func (s *Service) StartRestore(name string, actor string, skipSafety bool, keepHostSettings bool) (JobStatus, error) {
 	if actor == "" {
 		return JobStatus{}, errors.New("restore backup: no actor given")
@@ -559,8 +654,9 @@ func (s *Service) check(path string) (Kind, error) {
 func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSafety, keepHostSettings bool) {
 	ctx := s.ctx
 	var safety string
-	// committed is set once the restore transaction has committed: from
-	// then on the database holds the backup's data, whatever happens next.
+	// committed is set once the restore transaction has committed, or may
+	// have: from then on the database may hold the backup's data, whatever
+	// happens next.
 	var committed bool
 	err := s.guard(ctx, "a restore job stopped with a panic", func() error {
 		release, err := s.lock(ctx, true)
@@ -582,9 +678,8 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 		}
 		s.progress.Store(nil)
 		s.update(func(st *JobStatus) {
-			st.State, st.Kind, st.Progress, st.Message = JobRestoring, kind, Progress{}, "Restoring the backup."
+			st.State, st.Kind, st.Progress, st.Message = JobRestoring, kind, Progress{}, "Checking the backup before the restore."
 		})
-		s.restoring.Store(true)
 		// Restore mode ends here only when the data was not replaced, or
 		// when the server has reloaded everything it keeps in memory.
 		defer func() {
@@ -592,10 +687,20 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 				s.restoring.Store(false)
 			}
 		}()
-		if err := s.restore(ctx, s.o.Pool, path, RestoreOptions{
+		err = s.restore(ctx, s.o.Pool, path, RestoreOptions{
 			KeepHostSettings: keepHostSettings, Actor: actor, KeyFingerprint: s.o.KeyFingerprint,
 			SigningKey: s.o.Dumper.SigningKey, Progress: s.setProgress,
-		}); err != nil {
+			// The file was checked in full: restore mode starts with the
+			// transaction that replaces the data.
+			BeforeReplace: func() {
+				s.update(func(st *JobStatus) { st.Message = "Restoring the backup." })
+				s.restoring.Store(true)
+			},
+		})
+		if errors.Is(err, ErrCommitUncertain) {
+			committed = true
+		}
+		if err != nil {
 			return err
 		}
 		committed = true
@@ -631,8 +736,9 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 }
 
 // incomplete ends a restore whose transaction committed but whose
-// follow-up (AfterRestore) failed, panicked or was cancelled. The server
-// still holds settings and caches from before the restore, so it must not
+// follow-up (AfterRestore) failed, panicked or was cancelled, or whose
+// commit failed in a way that leaves open whether it committed. The server
+// may hold settings and caches from before the restore, so it must not
 // serve again: restore mode stays on and no new job starts until the
 // process is restarted, which reads everything from the restored
 // database.
@@ -867,9 +973,15 @@ func (s *Service) recordSchedule(at time.Time, err error) {
 	s.mu.Lock()
 	s.sched = st
 	s.mu.Unlock()
+	s.saveSchedule(st)
+}
+
+// saveSchedule writes the schedule status to the folder.
+func (s *Service) saveSchedule(st ScheduleStatus) {
 	if s.o.Dir == nil {
 		return
 	}
+	st.Enabled = false // not kept: it comes from the settings
 	if err := writeFileAtomic(filepath.Join(s.o.Dir.Root(), statusFile), st); err != nil {
 		s.o.Log.Warn("could not save the backup schedule status", "error", err)
 	}

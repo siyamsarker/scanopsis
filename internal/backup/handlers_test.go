@@ -320,6 +320,46 @@ func (e *apiEnv) waitNotBusy(fn func() response) response {
 	}
 }
 
+// complete completes an upload, which answers 202 while the server checks
+// the file, and asks for the outcome until the check has ended. It returns
+// the final status.
+func (e *apiEnv) complete(path string, role string, body any, hdr ...string) map[string]any {
+	e.t.Helper()
+	r := e.call("POST", path+"/complete", role, body, hdr...)
+	if r.status != http.StatusAccepted && r.status != http.StatusOK {
+		e.t.Fatalf("complete = %d %s", r.status, r.body)
+	}
+	m := r.json(e.t)
+	if r.status == http.StatusAccepted && m["state"] != string(UploadChecking) {
+		e.t.Fatalf("complete answered 202 with %v", m)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for m["state"] == string(UploadChecking) {
+		if time.Now().After(deadline) {
+			e.t.Fatalf("the check did not end: %v", m)
+		}
+		time.Sleep(5 * time.Millisecond)
+		r = e.call("GET", path, role, nil, hdr...)
+		if r.status != http.StatusOK {
+			e.t.Fatalf("status while checking = %d %s", r.status, r.body)
+		}
+		m = r.json(e.t)
+	}
+	return m
+}
+
+// completed completes an admin upload that must pass, and returns the new
+// backup.
+func (e *apiEnv) completed(id string) map[string]any {
+	e.t.Helper()
+	m := e.complete(adminUploads+"/"+id, "admin", nil)
+	b, _ := m["backup"].(map[string]any)
+	if m["state"] != string(UploadReady) || b == nil {
+		e.t.Fatalf("completed upload = %v", m)
+	}
+	return b
+}
+
 func TestUploadResume(t *testing.T) {
 	e := newAPIEnv(t, nil)
 	data := goodArchive(t)
@@ -359,11 +399,7 @@ func TestUploadResume(t *testing.T) {
 	e.send(id, data, 3*part, part)
 
 	before := time.Now().UTC().Add(-time.Second)
-	r = e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil)
-	if r.status != http.StatusCreated {
-		t.Fatalf("complete = %d %s", r.status, r.body)
-	}
-	info := r.json(t)
+	info := e.completed(id)
 	name, _ := info["name"].(string)
 	if !strings.Contains(name, "-uploaded-") || info["kind"] != "uploaded" || info["original_name"] != "nightly backup.tar.gz" ||
 		info["key_matches"] != true || info["readable"] != true || info["uploaded_at"] == nil || info["created_by"] != ScheduleActor {
@@ -390,9 +426,25 @@ func TestUploadResume(t *testing.T) {
 		ev[0].detail["original_name"] != "nightly backup.tar.gz" || ev[0].detail["size"] != int64(len(data)) {
 		t.Errorf("audit = %+v", ev)
 	}
-	// The finished upload is gone.
-	if r := e.call("GET", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNotFound || r.errorCode(t) != "not_found" {
-		t.Errorf("status of a completed upload = %d %s", r.status, r.body)
+	// The outcome stays: completing again or asking for it answers 200.
+	for _, r := range []response{
+		e.call("GET", adminUploads+"/"+id, "admin", nil),
+		e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil),
+	} {
+		m := r.json(t)
+		if b, _ := m["backup"].(map[string]any); r.status != http.StatusOK || m["state"] != "ready" || b["name"] != name || m["received"] != float64(len(data)) {
+			t.Errorf("outcome of a completed upload = %d %s", r.status, r.body)
+		}
+	}
+	if ev := e.audit.of(actionUploaded); len(ev) != 1 {
+		t.Errorf("completing again audited again: %+v", ev)
+	}
+	// It no longer takes parts, and cannot be cancelled.
+	if r := e.put(id, 0, data[:10]); r.status != http.StatusNotFound {
+		t.Errorf("PUT to a completed upload = %d %s", r.status, r.body)
+	}
+	if r := e.call("DELETE", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNotFound {
+		t.Errorf("cancel of a completed upload = %d %s", r.status, r.body)
 	}
 	// The listing of the API shows it too.
 	r = e.call("GET", "/api/v1/admin/backups", "admin", nil)
@@ -431,10 +483,7 @@ func TestUploadConcurrent(t *testing.T) {
 	wg.Wait()
 	sums := map[string]bool{}
 	for _, id := range []string{ida, idb} {
-		r := e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil)
-		if r.status != http.StatusCreated {
-			t.Fatalf("complete %s = %d %s", id, r.status, r.body)
-		}
+		e.completed(id)
 	}
 	list := e.list()
 	if len(list) != 2 {
@@ -528,6 +577,8 @@ func TestUploadRejects(t *testing.T) {
 		}
 		if r := e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil); r.status != http.StatusConflict || r.errorCode(t) != "upload_incomplete" {
 			t.Errorf("complete before the end = %d %s", r.status, r.body)
+		} else if e, _ := r.json(t)["error"].(map[string]any); e["received"] != float64(1000) {
+			t.Errorf("upload_incomplete does not give received: %s", r.body)
 		}
 		for _, method := range []string{"GET", "PUT", "DELETE"} {
 			if r := e.call(method, adminUploads+"/0123456789abcdef0123456789abcdef?offset=0", "admin", nil); r.status != http.StatusNotFound || r.errorCode(t) != "not_found" {
@@ -543,18 +594,20 @@ func TestUploadRejects(t *testing.T) {
 	}{
 		{"truncated", "invalid_backup", "ends too early", good[:len(good)/2]},
 		{"not a backup", "invalid_backup", "not a Scanopsis backup", bytes.Repeat([]byte("x"), 5000)},
-		{"other key", "key_mismatch", "SCANOPSIS_SECRET_KEY", uploadArchive(t, "other-fingerprint", testSigningKey, store.LatestVersion())},
+		{"other key", "key_mismatch", "set up a new installation with that secret key", uploadArchive(t, "other-fingerprint", testSigningKey, store.LatestVersion())},
 		{"forged signature", "invalid_backup", "secret key", uploadArchive(t, apiFingerprint, bytes.Repeat([]byte{1}, 32), store.LatestVersion())},
 		{"newer schema", "newer_schema", "upgrade Scanopsis", newer},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			id := e.startUpload("x.tar.gz", len(c.data))
 			e.send(id, c.data, 0, 64<<10)
-			r := e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil)
-			if r.status != http.StatusUnprocessableEntity || r.errorCode(t) != c.code || !strings.Contains(r.errorMessage(t), c.reason) {
-				t.Fatalf("complete = %d %s, want 422 %s naming %q", r.status, r.body, c.code, c.reason)
+			m := e.complete(adminUploads+"/"+id, "admin", nil)
+			reason, _ := m["reason"].(map[string]any)
+			msg, _ := reason["message"].(string)
+			if m["state"] != "refused" || reason["code"] != c.code || !strings.Contains(msg, c.reason) || m["backup"] != nil {
+				t.Fatalf("outcome = %v, want refused %s naming %q", m, c.code, c.reason)
 			}
-			if r := e.call("GET", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNotFound {
+			if r := e.put(id, 0, c.data[:10]); r.status != http.StatusNotFound {
 				t.Errorf("a refused upload is still open: %d %s", r.status, r.body)
 			}
 		})
@@ -636,7 +689,7 @@ func TestNonAdminForbidden(t *testing.T) {
 	data := goodArchive(t)
 	id := e.startUpload("a.tar.gz", len(data))
 	e.send(id, data, 0, len(data))
-	name := e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil).json(t)["name"].(string)
+	name := e.completed(id)["name"].(string)
 	id = e.startUpload("b.tar.gz", 10)
 	base := "/api/v1/admin/backups/" + name
 
@@ -652,6 +705,7 @@ func TestNonAdminForbidden(t *testing.T) {
 		{"PUT", adminUploads + "/" + id + "?offset=0"},
 		{"DELETE", adminUploads + "/" + id},
 		{"POST", adminUploads + "/" + id + "/complete"},
+		{"POST", "/api/v1/admin/backups/schedule-status/dismiss"},
 	} {
 		for role, want := range map[string]string{"": "unauthenticated", "viewer": "forbidden", "unverified": "mfa_required"} {
 			body := []byte(`{"file_name":"x.tar.gz","size":1,"confirm":"RESTORE","code":"123456"}`)
@@ -684,7 +738,7 @@ func TestDownloadAndDelete(t *testing.T) {
 	data := goodArchive(t)
 	id := e.startUpload("a.tar.gz", len(data))
 	e.send(id, data, 0, len(data))
-	name := e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil).json(t)["name"].(string)
+	name := e.completed(id)["name"].(string)
 	base := "/api/v1/admin/backups/" + name
 
 	r := e.call("GET", base+"/download", "admin", nil)
@@ -779,7 +833,7 @@ func TestDeleteRefusedWhileRestoring(t *testing.T) {
 	data := goodArchive(t)
 	id := e.startUpload("a.tar.gz", len(data))
 	e.send(id, data, 0, len(data))
-	name := e.call("POST", adminUploads+"/"+id+"/complete", "admin", nil).json(t)["name"].(string)
+	name := e.completed(id)["name"].(string)
 	if _, err := e.svc.begin(JobStatus{State: JobRestoring, Type: JobTypeRestore, Name: name}); err != nil {
 		t.Fatal(err)
 	}
@@ -911,6 +965,9 @@ func TestPublicRestoreMessages(t *testing.T) {
 		{JobStatus{State: JobFailed, Type: JobTypeRestore, Message: "/var/lib/x failed"}, false, JobFailed, restoreFailedMessage},
 		{JobStatus{State: JobFailed, Type: JobTypeRestore, Message: "anything"}, true, JobFailed, restartMessage},
 	} {
+		if c.message == restoreFailedMessage && c.message != "The restore failed and nothing was changed. Admins see the reason on the Backups page." {
+			t.Errorf("the public failure message is %q", c.message)
+		}
 		got := publicRestore(c.st, c.needRestart)
 		if got.State != c.state || got.Message != c.message || got.RestartRequired != (c.message == restartMessage) {
 			t.Errorf("publicRestore(%+v, %v) = %+v, want %s %q", c.st, c.needRestart, got, c.state, c.message)

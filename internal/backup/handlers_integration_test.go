@@ -307,13 +307,22 @@ func TestRestoreRefusals(t *testing.T) {
 		if r.status != c.status || r.errorCode(t) != c.code {
 			t.Errorf("%s: restore = %d %s, want %d %s", c.name, r.status, r.body, c.status, c.code)
 		}
-		if c.code == "key_mismatch" && !strings.Contains(r.errorMessage(t), "SCANOPSIS_SECRET_KEY") {
-			t.Errorf("%s: the message does not say how to fix it: %s", c.name, r.body)
+		if c.code == "key_mismatch" && (!strings.Contains(r.errorMessage(t), "set up a new installation with that secret key") ||
+			!strings.Contains(r.errorMessage(t), "Never change the secret key of an installation in use")) {
+			t.Errorf("%s: the message does not say how to use it: %s", c.name, r.body)
 		}
 	}
-	// While a restore runs, another one is refused.
-	release := make(chan struct{})
-	e.svc.restore = func(ctx context.Context, _ *pgxpool.Pool, _ string, _ RestoreOptions) error {
+	// While a restore runs, another one is refused: busy while the file is
+	// checked, restoring once the data is being replaced.
+	checking, replace, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	e.svc.restore = func(ctx context.Context, _ *pgxpool.Pool, _ string, o RestoreOptions) error {
+		close(checking)
+		select {
+		case <-replace:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		o.BeforeReplace()
 		select {
 		case <-release:
 		case <-ctx.Done():
@@ -325,6 +334,11 @@ func TestRestoreRefusals(t *testing.T) {
 	if r := api.call("POST", "/api/v1/admin/backups/"+good+"/restore", "admin", body); r.status != http.StatusAccepted {
 		t.Fatalf("restore = %d %s", r.status, r.body)
 	}
+	<-checking
+	if r := api.call("POST", "/api/v1/admin/backups/"+good+"/restore", "admin", body); r.status != http.StatusConflict || r.errorCode(t) != "busy" || e.svc.Restoring() {
+		t.Errorf("second restore while the file is checked = %d %s", r.status, r.body)
+	}
+	close(replace)
 	deadline := time.Now().Add(10 * time.Second)
 	for !e.svc.Restoring() && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
@@ -350,6 +364,14 @@ func TestRestoreRefusals(t *testing.T) {
 func TestPreviewAPI(t *testing.T) {
 	_, api, name, _ := restoreAPI(t)
 	r := api.call("GET", "/api/v1/admin/backups/"+name+"/preview", "admin", nil)
+	deadline := time.Now().Add(30 * time.Second)
+	for r.status == http.StatusAccepted && time.Now().Before(deadline) {
+		if m := r.json(t); m["state"] != "checking" {
+			t.Fatalf("preview while checking = %v", m)
+		}
+		time.Sleep(10 * time.Millisecond)
+		r = api.call("GET", "/api/v1/admin/backups/"+name+"/preview", "admin", nil)
+	}
 	if r.status != http.StatusOK {
 		t.Fatalf("preview = %d %s", r.status, r.body)
 	}
@@ -411,11 +433,8 @@ func TestSetupRestoreFlow(t *testing.T) {
 	if r := api.call("POST", base, "", map[string]any{"token": token, "upload_id": id, "confirm": "RESTORE"}); r.status != http.StatusNotFound {
 		t.Errorf("restore of an upload not yet completed = %d %s", r.status, r.body)
 	}
-	r = api.call("POST", base+"/uploads/"+id+"/complete", "", map[string]any{"token": token})
-	if r.status != http.StatusCreated {
-		t.Fatalf("complete = %d %s", r.status, r.body)
-	}
-	preview := r.json(t)
+	outcome := api.complete(base+"/uploads/"+id, "", map[string]any{"token": token}, "X-Setup-Token", token)
+	preview, _ := outcome["preview"].(map[string]any)
 	info, _ := preview["info"].(map[string]any)
 	if preview["key_matches"] != true || preview["schema_ok"] != true || info["kind"] != "uploaded" ||
 		info["original_name"] != "from-old-server.tar.gz" || info["created_by"] != "alice" {
@@ -493,11 +512,7 @@ func TestUploadStoresTheFileUnchanged(t *testing.T) {
 	api := serveAPI(t, e.svc, nil, false)
 	id := api.startUpload("copy.tar.gz", len(data))
 	api.send(id, data, 0, ChunkSize)
-	r := api.call("POST", adminUploads+"/"+id+"/complete", "admin", nil)
-	if r.status != http.StatusCreated {
-		t.Fatalf("complete = %d %s", r.status, r.body)
-	}
-	stored, _ := e.dir.Path(r.json(t)["name"].(string))
+	stored, _ := e.dir.Path(api.completed(id)["name"].(string))
 	got, err := os.ReadFile(stored)
 	if err != nil || sha256.Sum256(got) != sha256.Sum256(data) {
 		t.Fatalf("stored file differs (err %v)", err)

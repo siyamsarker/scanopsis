@@ -421,7 +421,7 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 	name := e.backup(t)
 	mustExec(t, e.pool, `INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('orders-api', 'example/orders-api', 'manual')`)
 
-	var safetyRestoring, restoreRestoring atomic.Bool
+	var safetyRestoring, restoreRestoring, checkRestoring atomic.Bool
 	var safetyState, restoreState atomic.Value
 	realDump, realRestore := e.svc.dump, e.svc.restore
 	e.svc.dump = func(ctx context.Context, kind Kind, actor string, progress func(Progress)) (Info, error) {
@@ -432,10 +432,16 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 		return realDump(ctx, kind, actor, progress)
 	}
 	e.svc.restore = func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error {
-		restoreRestoring.Store(e.svc.Restoring())
+		// The file is checked before restore mode starts.
+		checkRestoring.Store(e.svc.Restoring())
 		restoreState.Store(e.svc.Status().State)
-		if o.Actor != "local:alice" || !o.KeepHostSettings || o.KeyFingerprint != testFingerprint(t) || o.Progress == nil {
+		if o.Actor != "local:alice" || !o.KeepHostSettings || o.KeyFingerprint != testFingerprint(t) || o.Progress == nil || o.BeforeReplace == nil {
 			t.Errorf("options = %+v", o)
+		}
+		replace := o.BeforeReplace
+		o.BeforeReplace = func() {
+			replace()
+			restoreRestoring.Store(e.svc.Restoring())
 		}
 		return realRestore(ctx, pool, path, o)
 	}
@@ -454,8 +460,9 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 	if safetyRestoring.Load() || safetyState.Load() != JobBackingUp {
 		t.Errorf("during the safety backup: restoring %v, state %v", safetyRestoring.Load(), safetyState.Load())
 	}
-	if !restoreRestoring.Load() || restoreState.Load() != JobRestoring {
-		t.Errorf("during the restore: restoring %v, state %v", restoreRestoring.Load(), restoreState.Load())
+	if checkRestoring.Load() || !restoreRestoring.Load() || restoreState.Load() != JobRestoring {
+		t.Errorf("restoring %v while the file is checked, %v while the data is replaced, state %v; want false, true, restoring",
+			checkRestoring.Load(), restoreRestoring.Load(), restoreState.Load())
 	}
 	if e.after.Load() != 1 || !e.afterRestoring.Load() {
 		t.Errorf("AfterRestore calls %d, restoring during it %v", e.after.Load(), e.afterRestoring.Load())
@@ -479,6 +486,7 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 
 	// A failed restore: restore mode ends, the failure is recorded.
 	e.svc.restore = func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error {
+		o.BeforeReplace()
 		restoreRestoring.Store(e.svc.Restoring())
 		return errors.New("restore backup: the file is damaged")
 	}
@@ -729,8 +737,13 @@ func TestServiceFailedScheduledRecorded(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	s := e.svc.Schedule()
-	if s.OK || s.LastRunAt == nil || !strings.Contains(s.Error, folder) {
+	if s.OK || s.LastRunAt == nil || !strings.Contains(s.Error, folder) || !s.Enabled || s.Dismissed {
 		t.Fatalf("schedule status = %+v", s)
+	}
+	// Turning the schedule off hides the failure.
+	e.patchSettings(t, `{"backup.schedule_enabled": false}`)
+	if s := e.svc.Schedule(); s.Enabled || s.OK {
+		t.Errorf("schedule status after turning it off = %+v", s)
 	}
 	var actor string
 	var detail map[string]any
@@ -968,6 +981,32 @@ func TestServiceAfterRestorePanics(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkIncomplete(t, e, name, errInternal.Error())
+}
+
+// TestServiceCommitUncertain checks that a commit that failed, and so may
+// have committed, is handled as a committed restore that could not finish.
+func TestServiceCommitUncertain(t *testing.T) {
+	e, name := restoredEnv(t)
+	real := e.svc.restore
+	e.svc.restore = func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error {
+		o.testCommit = func(ctx context.Context, tx pgx.Tx) error {
+			if err := tx.Commit(ctx); err != nil {
+				t.Error(err)
+			}
+			return errors.New("unexpected EOF")
+		}
+		return real(ctx, pool, path, o)
+	}
+	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
+		t.Fatal(err)
+	}
+	checkIncomplete(t, e, name, "unexpected EOF")
+	if st := e.svc.RestoreStatus(); !st.RestartRequired || strings.Contains(st.Message, "nothing was changed") {
+		t.Errorf("public status = %+v", st)
+	}
+	if e.after.Load() != 0 {
+		t.Error("AfterRestore ran after an uncertain commit")
+	}
 }
 
 // TestServiceShutdownAfterCommit checks that a shutdown after the restore

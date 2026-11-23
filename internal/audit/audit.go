@@ -67,14 +67,17 @@ const (
 	// actor is "setup" for an upload on the setup screen);
 	// backup.downloaded carries "name", "size" and the first and last byte
 	// sent as "start" and "end" (with "ranges", their number, when several
-	// ranges were sent); backup.deleted carries "name" and "size".
-	ActionBackupCreated           = "backup.created"
-	ActionBackupFailed            = "backup.failed"
-	ActionBackupRestoreFailed     = "backup.restore_failed"
-	ActionBackupRestoreIncomplete = "backup.restore_incomplete"
-	ActionBackupUploaded          = "backup.uploaded"
-	ActionBackupDownloaded        = "backup.downloaded"
-	ActionBackupDeleted           = "backup.deleted"
+	// ranges were sent); backup.deleted carries "name" and "size";
+	// backup.schedule_alert_dismissed (an administrator hid the banner about
+	// a failed scheduled backup) carries "last_run_at" and "error".
+	ActionBackupCreated                = "backup.created"
+	ActionBackupFailed                 = "backup.failed"
+	ActionBackupRestoreFailed          = "backup.restore_failed"
+	ActionBackupRestoreIncomplete      = "backup.restore_incomplete"
+	ActionBackupUploaded               = "backup.uploaded"
+	ActionBackupDownloaded             = "backup.downloaded"
+	ActionBackupDeleted                = "backup.deleted"
+	ActionBackupScheduleAlertDismissed = "backup.schedule_alert_dismissed"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.

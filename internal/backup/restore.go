@@ -32,6 +32,11 @@ var (
 	// ErrNewerSchema means the backup was made by a newer version of
 	// Scanopsis, whose database this version does not know.
 	ErrNewerSchema = errors.New("the backup was made by a newer version of Scanopsis")
+	// ErrCommitUncertain means the commit of the restore transaction
+	// failed in a way that leaves open whether PostgreSQL committed it, for
+	// example because the connection broke: the database may hold the
+	// backup's data or the data from before.
+	ErrCommitUncertain = errors.New("the database did not confirm the end of the restore, so it may or may not have been saved")
 )
 
 // actionRestored is the audit action of a finished restore.
@@ -90,9 +95,16 @@ type RestoreOptions struct {
 	// not block: store the values and let another goroutine report them.
 	Progress func(Progress)
 
+	// BeforeReplace, if not nil, is called once the whole file was checked,
+	// just before the transaction that replaces the data starts. It is not
+	// called when the file is refused.
+	BeforeReplace func()
+
 	// testHook, if not nil, is called after every stage; an error it
 	// returns fails the restore there.
 	testHook func(stage string) error
+	// testCommit, if not nil, commits instead of tx.Commit.
+	testCommit func(ctx context.Context, tx pgx.Tx) error
 }
 
 // Preview describes what restoring a backup would do.
@@ -127,7 +139,7 @@ func keysMatch(backup, running string) bool {
 // checkManifest refuses a backup that cannot be restored here.
 func checkManifest(m Manifest, keyFingerprint string) error {
 	if !keysMatch(m.KeyFingerprint, keyFingerprint) {
-		return fmt.Errorf("%w: its encrypted settings, two-factor secrets and recovery codes cannot be read with the key of this server. Start Scanopsis with the SCANOPSIS_SECRET_KEY the backup was made with, or restore a backup made with the current key", ErrKeyMismatch)
+		return fmt.Errorf("%w and cannot be restored into this installation. To use it, set up a new installation with that secret key and restore the backup on its setup screen. Never change the secret key of an installation in use", ErrKeyMismatch)
 	}
 	if latest := store.LatestVersion(); m.Schema > latest {
 		return fmt.Errorf("%w (%s, database schema %d; this version has schema %d): upgrade Scanopsis to that version or a newer one, then restore the backup", ErrNewerSchema, m.AppVersion, m.Schema, latest)
@@ -204,7 +216,8 @@ func (c ctxReader) Read(p []byte) (int, error) {
 // elsewhere, or changed after it was made) and one made by a newer version
 // (ErrNewerSchema).
 //
-// The restore then runs in one transaction: it drops the Scanopsis tables,
+// Once the file passed, BeforeReplace is called. The restore then runs in
+// one transaction: it drops the Scanopsis tables,
 // creates them again at the schema version of the backup, loads every
 // table with COPY, sets each sequence after the highest restored id,
 // applies the migrations that are newer than the backup and records them
@@ -212,7 +225,8 @@ func (c ctxReader) Read(p []byte) (int, error) {
 // deletes all sessions and writes a "backup.restored" entry to the restored
 // audit log. Only then is it committed: on any failure, including a
 // cancelled ctx, the transaction is rolled back and the database is
-// exactly as it was.
+// exactly as it was. A failed commit is the exception: PostgreSQL may have
+// committed before the error, so Restore returns ErrCommitUncertain.
 //
 // Restore depends only on the database and the file, not on the state of a
 // running server; the caller stops other writers and reloads what it caches
@@ -266,6 +280,9 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 	}
 	if err := rewind(); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
+	}
+	if o.BeforeReplace != nil {
+		o.BeforeReplace()
 	}
 	if err := restoreTx(ctx, pool, f, limit, filepath.Base(path), m, o); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
@@ -378,7 +395,14 @@ func restoreTx(ctx context.Context, pool *pgxpool.Pool, f io.Reader, limit int64
 	if err := o.testHook(stageAnalyzed); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	commit := tx.Commit
+	if o.testCommit != nil {
+		commit = func(ctx context.Context) error { return o.testCommit(ctx, tx) }
+	}
+	if err := commit(ctx); err != nil {
+		return fmt.Errorf("%w: %w", ErrCommitUncertain, err)
+	}
+	return nil
 }
 
 // sameTables checks, after the schema of the backup's version was created,
@@ -585,7 +609,7 @@ func infoOf(name string, size int64, m Manifest, keyFingerprint string) Info {
 	return Info{
 		Name: name, Kind: kind, Size: size, CreatedAt: m.CreatedAt, CreatedBy: m.CreatedBy,
 		AppVersion: m.AppVersion, Schema: m.Schema, KeyMatches: keysMatch(m.KeyFingerprint, keyFingerprint),
-		Readable: true,
+		Readable: true, NewerVersion: m.Schema > store.LatestVersion(),
 	}
 }
 
