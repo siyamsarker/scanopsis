@@ -3,6 +3,7 @@
 
 import {
   countOf,
+  formatBytes,
   findingStatusLabel,
   formatExactTime,
   formatInt,
@@ -147,5 +148,23 @@ describe('findingStatusLabel and packageClassLabel', () => {
     expect(packageClassLabel('lang-pkgs')).toBe('Language packages');
     expect(packageClassLabel('config')).toBe('config');
     expect(packageClassLabel(null)).toBe('–');
+  });
+});
+
+describe('formatBytes', () => {
+  it('uses binary units with one decimal, like the server', () => {
+    expect(formatBytes(0)).toBe('0 B');
+    expect(formatBytes(1023)).toBe('1,023 B');
+    expect(formatBytes(1024)).toBe('1.0 KiB');
+    expect(formatBytes(1536)).toBe('1.5 KiB');
+    expect(formatBytes(8 * 1024 * 1024)).toBe('8.0 MiB');
+    expect(formatBytes(12.34 * 1024 ** 3)).toBe('12.3 GiB');
+    expect(formatBytes(3 * 1024 ** 4)).toBe('3.0 TiB');
+  });
+
+  it('shows the no-value dash for a missing or negative size', () => {
+    expect(formatBytes(null)).toBe('–');
+    expect(formatBytes(Number.NaN)).toBe('–');
+    expect(formatBytes(-1)).toBe('–');
   });
 });

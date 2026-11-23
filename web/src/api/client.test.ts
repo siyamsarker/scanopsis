@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { ApiError, toApiError, unwrap } from './client';
+import { hideRestoreOverlay, isRestoreOverlayShown } from './restoreMode';
 
 function response(status: number, headers: Record<string, string> = {}) {
   return new Response(null, { status, headers });
@@ -38,6 +39,29 @@ describe('toApiError', () => {
       expect(err.message).toBe('The server answered with status 502. Try again.');
     },
   );
+});
+
+describe('toApiError for uploads and restores', () => {
+  afterEach(() => hideRestoreOverlay());
+
+  it('keeps the count of bytes the server received', () => {
+    const err = toApiError(response(409), {
+      error: { code: 'offset_mismatch', message: 'Wrong offset.', received: 8388608 },
+    });
+    expect(err.received).toBe(8388608);
+    expect(toApiError(response(409), { error: { code: 'busy' } }).received).toBeUndefined();
+  });
+
+  it('raises the restore screen for a 503 restoring, and only for that', () => {
+    toApiError(response(503), { error: { code: 'busy', message: 'Busy.' } });
+    expect(isRestoreOverlayShown()).toBe(false);
+    toApiError(response(409), { error: { code: 'restoring', message: 'x' } });
+    expect(isRestoreOverlayShown()).toBe(false);
+    toApiError(response(503, { 'Retry-After': '30' }), {
+      error: { code: 'restoring', message: 'A backup is being restored.' },
+    });
+    expect(isRestoreOverlayShown()).toBe(true);
+  });
 });
 
 describe('unwrap', () => {

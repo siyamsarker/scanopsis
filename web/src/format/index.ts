@@ -177,3 +177,22 @@ export function packageClassLabel(cls: string | null | undefined): string {
   if (!cls) return NO_VALUE;
   return CLASS_LABEL[cls] ?? cls;
 }
+
+const BYTE_UNITS = ['KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB'];
+
+/**
+ * A size in binary units with one decimal, as the server writes them in its
+ * messages: 1536 becomes "1.5 KiB", 13 254 000 000 "12.3 GiB". Below 1 KiB
+ * the bytes are counted: "512 B".
+ */
+export function formatBytes(bytes: number | null | undefined) {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return NO_VALUE;
+  if (bytes < 1024) return `${formatInt(bytes)} B`;
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(1)} ${BYTE_UNITS[unit]}`;
+}
