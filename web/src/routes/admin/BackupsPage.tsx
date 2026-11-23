@@ -172,7 +172,12 @@ export function BackupsPage() {
   const folderOk = backups.data?.folder.ok ?? false;
   const canBackUp = backups.isSuccess && folderOk && !running && !create.isPending;
 
+  // A second click before the page has re-rendered (a double click) would
+  // start a second request, which the server refuses as busy.
+  const starting = useRef(false);
   function backUp() {
+    if (starting.current) return;
+    starting.current = true;
     create.mutate(undefined, {
       onSuccess: () =>
         toast.success('Backup started', {
@@ -180,6 +185,9 @@ export function BackupsPage() {
         }),
       onError: (error) =>
         toast.error('The backup could not start', { description: describeError(error) }),
+      onSettled: () => {
+        starting.current = false;
+      },
     });
   }
 

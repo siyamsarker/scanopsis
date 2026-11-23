@@ -500,6 +500,45 @@ describe('backups page', () => {
     expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
   });
 
+  it('starts one backup on a double click', async () => {
+    const { calls } = mockFetch(
+      api((call) =>
+        call.path === '/api/v1/admin/backups' && call.method === 'POST'
+          ? json(202, { ...idle, state: 'backing_up', type: 'backup', kind: 'manual' })
+          : undefined,
+      ),
+    );
+    renderApp('/admin/backups');
+    await screen.findByRole('table', { name: 'Backups' });
+    const button = screen.getByRole('button', { name: 'Back up now' });
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(await screen.findByText('Backup started')).toBeInTheDocument();
+    expect(calls.filter((c) => c.method === 'POST')).toHaveLength(1);
+    expect(screen.queryByText('The backup could not start')).toBeNull();
+  });
+
+  it('says why Restore is off while a backup runs', async () => {
+    mockFetch(
+      api((call) =>
+        call.path === '/api/v1/admin/backups'
+          ? json(
+              200,
+              list({ job: { ...idle, state: 'backing_up', type: 'backup', kind: 'manual' } }),
+            )
+          : undefined,
+      ),
+    );
+    renderApp('/admin/backups');
+    await screen.findByRole('table', { name: 'Backups' });
+    const menu = await openMenu(/Actions for the backup from 21 Nov 2026/);
+    expect(within(menu).getByRole('menuitem', { name: 'Restore' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(menu).toHaveTextContent('A backup or restore is running. Restore once it has finished.');
+  });
+
   it('explains a refused backup', async () => {
     mockFetch(
       api((call) =>

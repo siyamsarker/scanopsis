@@ -120,7 +120,11 @@ function BackupRow({ backup, busy }: { backup: BackupInfo; busy: boolean }) {
             >
               Restore
             </MenuItem>
-            {blocked ? <MenuLabel>{blockedHints[blocked]}</MenuLabel> : null}
+            {blocked ? (
+              <MenuLabel>{blockedHints[blocked]}</MenuLabel>
+            ) : busy ? (
+              <MenuLabel>A backup or restore is running. Restore once it has finished.</MenuLabel>
+            ) : null}
             <MenuSeparator />
             <MenuItem
               icon={<Trash2 {...iconProps} />}
