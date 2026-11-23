@@ -999,7 +999,7 @@ paths:
         "400": { description: Invalid file name or size (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { description: "Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { description: "The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "507": { description: Not enough free space (code no_space; the message gives the numbers)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/v1/admin/backup-uploads/{id}:
@@ -1111,7 +1111,7 @@ paths:
         "201": { description: The upload is open., content: { application/json: { schema: { $ref: "#/components/schemas/UploadStatus" } } } }
         "400": { description: Invalid request (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "403": { $ref: "#/components/responses/InvalidSetupToken" }
-        "409": { description: "Setup is complete (code setup_done), or two uploads are open already (code too_many_uploads).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "Setup is complete (code setup_done), or two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/TooManyAttempts" }
         "503": { description: "The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "507": { description: Not enough free space (code no_space)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

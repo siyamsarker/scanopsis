@@ -668,7 +668,9 @@ a backup file and the **same** `secrets/secret_key` it was made with.
    backup**, enter the setup token and choose the backup file. Scanopsis
    uploads it in parts, checks it in the background (the screen says
    **Checking the backup** meanwhile) and shows its date, version and whether
-   the key matches.
+   the key matches. If the page is reloaded during the check, enter the setup
+   token again in the same browser tab: the screen follows the same check and
+   does not ask for the file again.
 4. Type `RESTORE` and confirm. There is no two-factor code to enter, because
    no account exists yet; the setup token proves your right instead. Wrong
    tokens are limited per client address.

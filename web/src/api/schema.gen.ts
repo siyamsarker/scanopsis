@@ -4328,7 +4328,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can. */
+            /** @description Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished. */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -4622,7 +4622,7 @@ export interface operations {
                 };
             };
             403: components["responses"]["InvalidSetupToken"];
-            /** @description Setup is complete (code setup_done), or two uploads are open already (code too_many_uploads). */
+            /** @description Setup is complete (code setup_done), or two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished. */
             409: {
                 headers: {
                     [name: string]: unknown;
