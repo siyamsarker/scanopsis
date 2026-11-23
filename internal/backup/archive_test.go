@@ -767,3 +767,30 @@ func TestSizeLimitIsExact(t *testing.T) {
 		t.Errorf("limit below the manifest: error = %v", err)
 	}
 }
+
+// TestReadersPassContextErrors checks that a reader that stops because its
+// context ended is reported as that, not as a damaged file.
+func TestReadersPassContextErrors(t *testing.T) {
+	archive, trailer := buildArchive(t)
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		for at := 0; at < len(archive); at += len(archive) / 7 {
+			r := io.MultiReader(bytes.NewReader(archive[:at]), iotestErrReader{cause})
+			_, _, err := Verify(r, nil)
+			if !errors.Is(err, cause) || errors.Is(err, ErrCorrupt) {
+				t.Errorf("Verify stopped by %v at byte %d: err = %v", cause, at, err)
+			}
+			r = io.MultiReader(bytes.NewReader(archive[:at]), iotestErrReader{cause})
+			_, err = ReadTables(r, func(tb TableSpec, data io.Reader) (int64, error) {
+				_, err := io.Copy(io.Discard, data)
+				return trailer.Tables[tb.Name].Rows, err
+			})
+			if !errors.Is(err, cause) || errors.Is(err, ErrCorrupt) {
+				t.Errorf("ReadTables stopped by %v at byte %d: err = %v", cause, at, err)
+			}
+		}
+	}
+}
+
+type iotestErrReader struct{ err error }
+
+func (r iotestErrReader) Read([]byte) (int, error) { return 0, r.err }

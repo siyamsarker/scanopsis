@@ -324,10 +324,12 @@ func (a *archiveWriter) report() {
 }
 
 // damaged wraps a read error as ErrCorrupt with a fixed sentence for a
-// person. The text of the library error is not passed on.
+// person. The text of the library error is not passed on. A context that
+// ended is not damage and is returned as it is.
 func damaged(err error) error {
 	switch {
-	case errors.Is(err, ErrCorrupt), errors.Is(err, ErrNotBackup), errors.Is(err, ErrFormat):
+	case errors.Is(err, ErrCorrupt), errors.Is(err, ErrNotBackup), errors.Is(err, ErrFormat),
+		errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return err
 	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
 		return fmt.Errorf("%w: the file ends too early", ErrCorrupt)
