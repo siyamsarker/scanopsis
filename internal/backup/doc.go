@@ -24,7 +24,9 @@
 // container.
 //
 // A backup file can come from anywhere, so the readers trust nothing in it.
-// They cap the size of the JSON parts, accept only the entry names the format
+// They stop a file that expands past DefaultMaxBytes (or the limit given to
+// VerifyLimited and ReadTablesLimited), count every decompressed byte, cap the
+// number of tables, and cap the size of the JSON parts, accept only the entry names the format
 // allows, in the order it allows, and refuse anything else (other names, links,
 // pieces out of order). Failures wrap ErrNotBackup, ErrCorrupt or ErrFormat
 // with a sentence that is meant to be shown to a person.

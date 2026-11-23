@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"math"
 	"regexp"
 	"time"
 )
@@ -27,6 +28,19 @@ const FormatVersion = 1
 // ChunkSize is the largest size of one tables/<name>/<number>.csv entry.
 const ChunkSize = 8 << 20
 
+// DefaultMaxBytes is the ceiling Verify and ReadTables put on the amount of
+// data a backup may expand to (all bytes of the decompressed archive). It is
+// generous for real data but finite, so a small file that expands to
+// terabytes (a decompression bomb) is stopped.
+const DefaultMaxBytes int64 = 1 << 40
+
+// NoLimit, passed to VerifyLimited or ReadTablesLimited, removes the ceiling.
+// Use it only for input that is trusted.
+const NoLimit int64 = math.MaxInt64
+
+// defaultLimit is DefaultMaxBytes; tests lower it.
+var defaultLimit = DefaultMaxBytes
+
 const (
 	manifestName = "manifest.json"
 	trailerName  = "checksums.json"
@@ -36,6 +50,7 @@ const (
 	maxTrailingData = 1 << 20 // padding allowed after the tar end marker
 	maxChunks       = 999999  // the sequence number has six digits
 	maxColumns      = 1000    // columns listed for one table
+	maxTables       = 1000    // tables listed in a manifest
 
 	errTooBig = "the file expands to more data than a backup of this size can hold"
 )
@@ -122,6 +137,9 @@ var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 // names, so they can safely become part of an entry name, and plain unique
 // column names, since a restore puts them into a COPY statement.
 func checkTables(tables []TableSpec) error {
+	if len(tables) > maxTables {
+		return fmt.Errorf("the manifest lists too many tables (%d)", len(tables))
+	}
 	seen := make(map[string]bool, len(tables))
 	for _, t := range tables {
 		if !tableName.MatchString(t.Name) {
@@ -333,12 +351,35 @@ func corruptf(format string, args ...any) error {
 
 // archiveReader walks the entries of a backup with one entry of look-ahead.
 type archiveReader struct {
-	gz      *gzip.Reader
+	src     *limitReader // the decompressed stream; everything read passes here
 	tr      *tar.Reader
 	pending *tar.Header
 }
 
-func openArchive(r io.Reader) (*archiveReader, error) {
+// limitReader counts every byte taken from the decompressed stream and fails
+// once more than max have been read.
+type limitReader struct {
+	r   io.Reader
+	n   int64
+	max int64
+}
+
+func (l *limitReader) Read(p []byte) (int, error) {
+	if l.n > l.max {
+		return 0, corruptf("%s", errTooBig)
+	}
+	if left := l.max - l.n; left < math.MaxInt64 && int64(len(p)) > left+1 {
+		p = p[:left+1] // read one byte past the limit to notice it
+	}
+	n, err := l.r.Read(p)
+	l.n += int64(n)
+	if l.n > l.max {
+		return n, corruptf("%s", errTooBig)
+	}
+	return n, err
+}
+
+func openArchive(r io.Reader, maxBytes int64) (*archiveReader, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		if errors.Is(err, gzip.ErrHeader) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
@@ -346,7 +387,8 @@ func openArchive(r io.Reader) (*archiveReader, error) {
 		}
 		return nil, damaged(err)
 	}
-	return &archiveReader{gz: gz, tr: tar.NewReader(gz)}, nil
+	src := &limitReader{r: gz, max: maxBytes}
+	return &archiveReader{src: src, tr: tar.NewReader(src)}, nil
 }
 
 // next returns the next entry header, or io.EOF at the end of the archive.
@@ -423,7 +465,7 @@ func (a *archiveReader) manifest() (Manifest, error) {
 
 // ReadManifest reads only the manifest, the first entry of a backup.
 func ReadManifest(r io.Reader) (Manifest, error) {
-	a, err := openArchive(r)
+	a, err := openArchive(r, DefaultMaxBytes)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -445,10 +487,9 @@ type tableReader struct {
 	budget    *budget
 }
 
-// budget counts the table bytes read over all tables and enforces the limit.
+// budget counts the table bytes read over all tables for the progress report.
 type budget struct {
 	total    int64
-	max      int64 // 0 means no limit
 	progress func(int64)
 }
 
@@ -520,10 +561,6 @@ func (t *tableReader) Read(p []byte) (int, error) {
 	t.bytes += int64(n)
 	if b := t.budget; b != nil {
 		b.total += int64(n)
-		if b.max > 0 && b.total > b.max {
-			t.err = corruptf("%s", errTooBig)
-			return n, t.err
-		}
 		if b.progress != nil {
 			b.progress(b.total)
 		}
@@ -539,7 +576,7 @@ func (t *tableReader) Read(p []byte) (int, error) {
 // load it hands each table's data to load first. It returns the trailer
 // stored in the file after comparing it with what was read.
 func readAll(r io.Reader, progress func(int64), maxBytes int64, load func(TableSpec, io.Reader) (int64, error)) (Manifest, Trailer, error) {
-	a, err := openArchive(r)
+	a, err := openArchive(r, maxBytes)
 	if err != nil {
 		return Manifest{}, Trailer{}, err
 	}
@@ -548,7 +585,7 @@ func readAll(r io.Reader, progress func(int64), maxBytes int64, load func(TableS
 		return Manifest{}, Trailer{}, err
 	}
 
-	bud := &budget{max: maxBytes, progress: progress}
+	bud := &budget{progress: progress}
 	got := make(map[string]TableSum, len(m.Tables))
 	for _, t := range m.Tables {
 		tr := &tableReader{a: a, name: t.Name, sum: sha256.New(), budget: bud}
@@ -628,7 +665,7 @@ func (a *archiveReader) end() error {
 		}
 		return err
 	}
-	n, err := io.Copy(io.Discard, io.LimitReader(a.gz, maxTrailingData+1))
+	n, err := io.Copy(io.Discard, io.LimitReader(a.src, maxTrailingData+1))
 	if err != nil {
 		return damaged(err)
 	}
@@ -643,14 +680,19 @@ func (a *archiveReader) end() error {
 // table bytes read so far. Row counts are not checked, since that needs the
 // data to be parsed.
 func Verify(r io.Reader, progress func(bytes int64)) (Manifest, Trailer, error) {
-	return readAll(r, progress, 0, nil)
+	return readAll(r, progress, defaultLimit, nil)
 }
 
-// VerifyLimited is Verify with a ceiling on the table data. A small gzip file
-// can expand to a huge amount of data, so a caller that knows how much a
-// backup of this size may hold passes maxBytes; a file that expands beyond it
-// fails with ErrCorrupt. maxBytes 0 means no limit.
+// VerifyLimited is Verify with an explicit ceiling on the decompressed size of
+// the whole archive (table data, entry headers, the manifest and the trailer).
+// A small gzip file can expand to a huge amount of data, so a caller that knows
+// how much a backup of this size may hold passes maxBytes; a file that expands
+// beyond it fails with ErrCorrupt. maxBytes must be positive; NoLimit removes
+// the ceiling.
 func VerifyLimited(r io.Reader, progress func(bytes int64), maxBytes int64) (Manifest, Trailer, error) {
+	if maxBytes <= 0 {
+		return Manifest{}, Trailer{}, errLimit
+	}
 	return readAll(r, progress, maxBytes, nil)
 }
 
@@ -663,16 +705,21 @@ func ReadTables(r io.Reader, load func(t TableSpec, data io.Reader) (rows int64,
 	if load == nil {
 		return Manifest{}, errors.New("read backup: no loader given")
 	}
-	m, _, err := readAll(r, nil, 0, load)
+	m, _, err := readAll(r, nil, defaultLimit, load)
 	return m, err
 }
 
-// ReadTablesLimited is ReadTables with a ceiling on the table data, in the
-// way VerifyLimited has one. maxBytes 0 means no limit.
+// ReadTablesLimited is ReadTables with an explicit ceiling on the decompressed
+// size of the archive, as VerifyLimited has. maxBytes must be positive.
 func ReadTablesLimited(r io.Reader, maxBytes int64, load func(t TableSpec, data io.Reader) (rows int64, err error)) (Manifest, error) {
 	if load == nil {
 		return Manifest{}, errors.New("read backup: no loader given")
 	}
+	if maxBytes <= 0 {
+		return Manifest{}, errLimit
+	}
 	m, _, err := readAll(r, nil, maxBytes, load)
 	return m, err
 }
+
+var errLimit = errors.New("read backup: the size limit must be positive")

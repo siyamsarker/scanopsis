@@ -642,7 +642,128 @@ func TestSizeLimit(t *testing.T) {
 	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 64<<20); err != nil {
 		t.Errorf("VerifyLimited within the limit: %v", err)
 	}
-	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 0); err != nil {
-		t.Errorf("VerifyLimited without a limit: %v", err)
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, NoLimit); err != nil {
+		t.Errorf("VerifyLimited with NoLimit: %v", err)
+	}
+}
+
+func TestSizeLimitMustBePositive(t *testing.T) {
+	archive, _ := buildArchive(t)
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 0); err == nil {
+		t.Error("VerifyLimited accepted a limit of 0")
+	}
+	if _, err := ReadTablesLimited(bytes.NewReader(archive), -1, func(TableSpec, io.Reader) (int64, error) { return 0, nil }); err == nil {
+		t.Error("ReadTablesLimited accepted a negative limit")
+	}
+}
+
+func TestDefaultLimitApplies(t *testing.T) {
+	old := defaultLimit
+	defaultLimit = 10 << 20
+	t.Cleanup(func() { defaultLimit = old })
+	archive, _ := buildArchive(t)
+	if _, _, err := Verify(bytes.NewReader(archive), nil); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
+		t.Errorf("Verify error = %v, want the expansion error", err)
+	}
+	_, err := ReadTables(bytes.NewReader(archive), func(_ TableSpec, r io.Reader) (int64, error) {
+		_, err := io.Copy(io.Discard, r)
+		return 0, err
+	})
+	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
+		t.Errorf("ReadTables error = %v, want the expansion error", err)
+	}
+	if DefaultMaxBytes <= 0 || DefaultMaxBytes == NoLimit {
+		t.Errorf("DefaultMaxBytes = %d, want finite and positive", DefaultMaxBytes)
+	}
+}
+
+// TestSizeLimitCountsEverything uses an archive whose table data is tiny but
+// which carries a large extra amount in the manifest and in trailing padding.
+func TestSizeLimitCountsEverything(t *testing.T) {
+	small := forge(t, []byte("a,b\n"))
+	if _, _, err := VerifyLimited(bytes.NewReader(small), nil, 1<<20); err != nil {
+		t.Fatalf("small archive rejected: %v", err)
+	}
+
+	// Trailing data after the tar end marker (inside the gzip stream).
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	es := unpack(t, small)
+	for _, e := range es {
+		_ = tw.WriteHeader(&tar.Header{Name: e.name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(len(e.body))})
+		_, _ = tw.Write(e.body)
+	}
+	_ = tw.Close()
+	_, _ = gz.Write(make([]byte, 5<<20))
+	_ = gz.Close()
+	// The padding is over the trailing-data cap and over a 1 MiB limit alike;
+	// with the cap out of the way the byte budget must still stop it.
+	_, _, err := VerifyLimited(bytes.NewReader(buf.Bytes()), nil, 1<<20)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Errorf("trailing padding: error = %v", err)
+	}
+
+	// Drained table data: the loader reads nothing, the rest is drained.
+	big := forge(t, randomBytes(2, ChunkSize), []byte("x"))
+	_, err = ReadTablesLimited(bytes.NewReader(big), 4<<20, func(TableSpec, io.Reader) (int64, error) { return 0, nil })
+	if err == nil || !strings.Contains(err.Error(), "expands") {
+		t.Errorf("drained data: error = %v, want the expansion error", err)
+	}
+
+	// A skipped entry body: an oversized extra entry before the trailer is an
+	// unexpected entry, but its bytes are charged while tar skips them.
+	es = unpack(t, small)
+	es = append(es[:len(es)-1], entry{"filler.bin", tar.TypeReg, make([]byte, 6<<20)}, es[len(es)-1])
+	_, _, err = VerifyLimited(bytes.NewReader(pack(t, es)), nil, 1<<20)
+	if !errors.Is(err, ErrCorrupt) {
+		t.Errorf("skipped entry: error = %v", err)
+	}
+}
+
+func TestTooManyTables(t *testing.T) {
+	m := testManifest()
+	m.Tables = nil
+	for i := 0; i <= maxTables; i++ {
+		m.Tables = append(m.Tables, TableSpec{Name: fmt.Sprintf("t%d", i), Columns: []string{"id"}})
+	}
+	if _, err := WriteArchive(context.Background(), io.Discard, m, dataCopier(nil), nil); err == nil {
+		t.Error("WriteArchive accepted too many tables")
+	}
+	m.Format = FormatVersion
+	mb, _ := json.Marshal(m)
+	_, err := ReadManifest(bytes.NewReader(pack(t, []entry{{manifestName, tar.TypeReg, mb}})))
+	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "too many tables") {
+		t.Errorf("ReadManifest error = %v", err)
+	}
+}
+
+// TestSizeLimitIsExact shows that headers, the manifest, the trailer and the
+// end marker are charged: the table data is 5 bytes, yet the limit that is
+// just enough is the size of the whole decompressed archive.
+func TestSizeLimitIsExact(t *testing.T) {
+	small := forge(t, []byte("a,b\n"))
+	gz, err := gzip.NewReader(bytes.NewReader(small))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	total := int64(len(raw))
+	if total < 2048 {
+		t.Fatalf("decompressed size %d is unexpectedly small", total)
+	}
+	if _, _, err := VerifyLimited(bytes.NewReader(small), nil, total); err != nil {
+		t.Errorf("limit equal to the size rejected: %v", err)
+	}
+	_, _, err = VerifyLimited(bytes.NewReader(small), nil, total-1)
+	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
+		t.Errorf("limit one byte short: error = %v", err)
+	}
+	_, _, err = VerifyLimited(bytes.NewReader(small), nil, 100)
+	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
+		t.Errorf("limit below the manifest: error = %v", err)
 	}
 }
