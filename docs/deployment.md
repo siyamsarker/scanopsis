@@ -536,6 +536,10 @@ Backups cross the proxy in two ways:
 - **Uploads** go in parts of at most 8 MiB, one request each, so the proxy
   limit `client_max_body_size 100m;` above is plenty. A proxy that limits the
   body to less than 8 MiB (nginx allows 1 MiB by default) refuses the parts.
+  When every part has arrived, Scanopsis checks the whole file in the
+  background and the page asks for the result every few seconds. The same
+  goes for the check that comes before a restore. No request waits while a
+  large backup is read, so these checks need no longer proxy timeout.
 - **Downloads** can be large files. Scanopsis serves them with `Range`
   support and keeps a slow download going as long as it makes progress. nginx
   buffers a proxied answer by default, which can fill its temporary folder
@@ -569,7 +573,9 @@ slow links come near these limits.
 
 - **nginx** reads the whole body before it passes the request on, so a slow
   client never holds Scanopsis. Keep `proxy_read_timeout` above the time an
-  upload takes to store, such as the 90 seconds above.
+  upload takes to store, such as the 90 seconds above. Backups need nothing
+  more: their parts are small requests, the checks of a whole backup run in
+  the background, and a download keeps sending data.
 - **Caddy** streams the body and has no timeout of its own by default, so the
   limits of Scanopsis apply.
 

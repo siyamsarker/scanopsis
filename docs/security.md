@@ -153,7 +153,9 @@ that it changed. A failed sign-in for an unknown name is recorded as
 The backup events are `backup.created`, `backup.failed`, `backup.downloaded`
 (with the byte range served; for a request with several ranges, the span from
 the first to the last byte), `backup.uploaded`, `backup.deleted`,
-`backup.restored`, `backup.restore_failed` and `backup.restore_incomplete`.
+`backup.restored`, `backup.restore_failed`, `backup.restore_incomplete` and
+`backup.schedule_alert_dismissed` (an administrator hid the banner about a
+failed scheduled backup).
 A scheduled backup has the actor `scheduler`; an upload on the setup screen
 has the actor `setup`. A change of the backup schedule is a `settings.changed`
 event. Administrators read it on the **Audit log** page. Writing an event never

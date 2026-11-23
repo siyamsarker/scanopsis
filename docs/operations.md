@@ -550,7 +550,10 @@ you delete them.
 
 If a scheduled backup fails, administrators see a banner with the reason on
 the Backups page and on the portfolio page, and the audit log has the event
-**Backup failed**. The most common reasons are in
+**Backup failed**. The banner shows only while the schedule is on. **Dismiss**
+hides it until the next scheduled run, which shows it again if that run fails
+too; dismissing is audited as **Backup alert dismissed**
+(`backup.schedule_alert_dismissed`). The most common reasons are in
 [troubleshooting](troubleshooting.md#backups-and-restores).
 
 A schedule change is saved as a setting, so it appears in the audit log as
@@ -568,12 +571,17 @@ a key kept apart from the secret key, as
 **Upload a backup** adds a file you downloaded earlier, for example from
 another installation that uses the same secret key. The browser sends it in parts of 8 MiB, so a large file
 passes a proxy and an interrupted upload resumes where it stopped. Scanopsis
-then reads the whole file and checks the signature. A file from another
-secret key, from a newer version of Scanopsis or a damaged file is refused
-with the reason.
+then reads the whole file and checks the signature, in the background, one
+file at a time; the dialog says **Checking the backup** until it is done. A
+file from another secret key, from a newer version of Scanopsis or a damaged
+file is refused with the reason. **Cancel upload** also stops a check. At most
+two uploads can be open at once; an upload that receives nothing for 10
+minutes makes room for a new one.
 
 Backups that Scanopsis cannot read are listed as **Cannot be read**; you can
-delete them, not restore them. A backup made with another secret key shows
+delete them, not restore them. A backup from a newer version of Scanopsis is
+listed as **Made by a newer version of Scanopsis**: install that version or a
+later one to restore it. A backup made with another secret key shows
 **Made with another secret key** and cannot be restored here. To use it, set
 up a new installation with that secret key and restore it on the setup
 screen, as in [restore on a new host](#restore-on-a-new-host).
@@ -584,7 +592,10 @@ A restore replaces everything in Scanopsis with the backup. Do it in a quiet
 moment. You need an administrator account with two-factor authentication.
 
 1. In the menu of the backup, choose **Restore**. Scanopsis reads the whole
-   file first. The dialog then says that:
+   file first, in the background; the dialog says **Checking the backup…**
+   until it is done, which takes several minutes for a large backup. The
+   dialog then shows the version of Scanopsis that made the backup and who
+   made it, and says that:
    - everything is replaced by the backup, and everything that changed after
      its date is lost;
    - everyone is signed out, including you;
@@ -601,6 +612,10 @@ Scanopsis first saves the current data as a before-restore backup, so you can
 go back. If the disk has no room for it, tick **Skip the backup of the
 current state** in the dialog. The restore then cannot be undone.
 
+A restore that cannot start, because another job runs or the backup cannot be
+restored here, is refused before your two-factor code is checked, so the code
+stays usable for the next try.
+
 While the restore runs, a full-screen page shows the progress. The API
 answers `503` with the code `restoring` and `Retry-After: 30`, except for
 `/api/v1/version` and `/api/v1/restore/status`; `/healthz`, `/readyz` and the
@@ -610,13 +625,17 @@ not kept; the upload script from the
 retry for several minutes and then lets the job pass.
 
 The restore is all or nothing: it runs in one database transaction, so a
-failure leaves the data as it was and the page says so. When it ends, sign in
+failure leaves the data as it was and the page says so. The API turns
+requests away only from the moment the data is replaced, after the
+before-restore backup and after the file was checked again in full. When it ends, sign in
 again with an account from the backup. The backup schedule keeps the values
 this server had before the restore.
 
 A restore can commit and still not finish, for example when a step after the
-commit fails. The page then says that Scanopsis must restart, and the server
-stays in restore mode until it does:
+commit fails. When the commit itself fails, Scanopsis cannot tell whether
+PostgreSQL saved the restore, and handles it the same way. The page then says
+that Scanopsis must restart, and the server stays in restore mode until it
+does:
 
 ```sh
 docker compose restart scanopsis
@@ -645,8 +664,9 @@ a backup file and the **same** `secrets/secret_key` it was made with.
 
 3. Open the address of Scanopsis. On the first screen choose **Restore from a
    backup**, enter the setup token and choose the backup file. Scanopsis
-   uploads it in parts, checks it and shows its date, version and whether the
-   key matches.
+   uploads it in parts, checks it in the background (the screen says
+   **Checking the backup** meanwhile) and shows its date, version and whether
+   the key matches.
 4. Type `RESTORE` and confirm. There is no two-factor code to enter, because
    no account exists yet; the setup token proves your right instead. Wrong
    tokens are limited per client address.

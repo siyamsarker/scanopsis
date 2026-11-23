@@ -266,9 +266,19 @@ millions of findings:
 
 The package `internal/backup` writes, reads and restores backups. One job
 runs at a time, and the service refuses a second job with `busy`. A
-PostgreSQL advisory lock keeps it from overlapping with the retention job and
-the SonarQube sync, which a restore waits for. The jobs run in the background; the page and the API read their
-progress.
+PostgreSQL advisory lock of its own keeps two instances of Scanopsis on one
+database from running a backup or a restore at the same time. A backup does
+not wait for the retention job or the SonarQube sync: it reads everything in
+one transaction. Only a restore also takes their advisory locks, and waits up
+to two minutes for them, so neither runs while the data is replaced. The jobs
+run in the background; the page and the API read their progress.
+
+Two other tasks read a whole backup: the check of an uploaded file and the
+preview of a restore. They run in the background too, one at a time, and are
+stopped when Scanopsis shuts down. The API answers `202` with the state
+`checking` and the page asks again every few seconds, so no request waits
+while a large file is read. A preview is kept for an hour while the file stays
+the same.
 
 **The archive.** A backup is a gzip-compressed tar file with a fixed order:
 
@@ -302,13 +312,18 @@ Migrations run inside this transaction, so a statement that cannot run in a
 transaction is not supported in a migration: it would make restores fail. The
 one exception is `CREATE INDEX CONCURRENTLY` and `DROP INDEX CONCURRENTLY`,
 which run without `CONCURRENTLY` here. A failure anywhere before the commit
-leaves the database as it was.
+leaves the database as it was. When the commit itself fails, for example
+because the connection breaks, Scanopsis cannot tell whether PostgreSQL saved
+the restore, so it handles it like a restore that committed and could not
+finish (see below).
 
-**Restore mode.** From the start of a restore until it has finished, the API
-answers `503 restoring`, apart from the version and the restore status, so
-that nothing writes to tables that are being replaced. After the commit,
-Scanopsis refreshes what it holds in memory. If that fails, the server stays
-in restore mode and asks for a restart.
+**Restore mode.** Restore mode starts when the data replacement starts: after
+the backup of the current data (unless it was skipped) and after the whole
+file was verified. From then until the restore has finished, the API answers
+`503 restoring`, apart from the version and the restore status, so that
+nothing writes to tables that are being replaced. After the commit,
+Scanopsis refreshes what it holds in memory. If that fails, or the commit
+failed, the server stays in restore mode and asks for a restart.
 
 ## Key design decisions
 
