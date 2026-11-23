@@ -1,0 +1,603 @@
+// Copyright 2026 Siyam Sarker
+// SPDX-License-Identifier: Apache-2.0
+
+package backup
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"hash"
+	"io"
+	"regexp"
+	"time"
+)
+
+// FormatVersion is the version of the file layout described in the package
+// documentation.
+const FormatVersion = 1
+
+// ChunkSize is the largest size of one tables/<name>/<number>.csv entry.
+const ChunkSize = 8 << 20
+
+const (
+	manifestName = "manifest.json"
+	trailerName  = "checksums.json"
+
+	maxManifestSize = 1 << 20 // the manifest is read into memory
+	maxTrailerSize  = 4 << 20 // so is the trailer
+	maxTrailingData = 1 << 20 // padding allowed after the tar end marker
+	maxChunks       = 999999  // the sequence number has six digits
+)
+
+// Kind says why a backup was made.
+type Kind string
+
+// The reasons a backup exists.
+const (
+	KindManual        Kind = "manual"
+	KindScheduled     Kind = "scheduled"
+	KindUploaded      Kind = "uploaded"
+	KindBeforeRestore Kind = "before-restore"
+)
+
+// Errors returned by the readers. They are wrapped with a reason that is
+// written for a person, so use errors.Is to test for them and err.Error() to
+// show them.
+var (
+	// ErrNotBackup means the input is not a Scanopsis backup at all.
+	ErrNotBackup = errors.New("the file is not a Scanopsis backup")
+	// ErrCorrupt means the input is a backup that is incomplete or changed.
+	ErrCorrupt = errors.New("the file is damaged")
+	// ErrFormat means the backup uses a layout this version cannot read.
+	ErrFormat = errors.New("the backup format is not supported")
+)
+
+// formatError is an ErrFormat that carries the offending version.
+type formatError struct{ got int }
+
+func (e *formatError) Error() string {
+	return fmt.Sprintf("the backup was made with format %d; this version reads format %d", e.got, FormatVersion)
+}
+
+func (e *formatError) Is(target error) bool { return target == ErrFormat }
+
+// TableSpec names a table and the columns saved for it.
+type TableSpec struct {
+	Name    string   `json:"name"`
+	Columns []string `json:"columns"`
+}
+
+// Manifest describes a backup. It is the first entry of the file.
+type Manifest struct {
+	Format         int         `json:"format"`
+	AppVersion     string      `json:"app_version"`
+	AppCommit      string      `json:"app_commit"`
+	Schema         int64       `json:"schema"`
+	CreatedAt      time.Time   `json:"created_at"`
+	Kind           Kind        `json:"kind"`
+	CreatedBy      string      `json:"created_by"`
+	KeyFingerprint string      `json:"key_fingerprint"`
+	Tables         []TableSpec `json:"tables"`
+}
+
+// TableSum is what the trailer records about one table.
+type TableSum struct {
+	Rows   int64  `json:"rows"`
+	Bytes  int64  `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+// Trailer is the last entry of the file: one sum per table.
+type Trailer struct {
+	Tables map[string]TableSum `json:"tables"`
+}
+
+// Progress tells how far WriteArchive has come.
+type Progress struct {
+	Table       string
+	TablesDone  int
+	TablesTotal int
+	// Bytes is the amount of table data written so far, for all tables.
+	Bytes int64
+}
+
+// TableCopier writes the CSV data of one table to w and returns the number of
+// rows it wrote.
+type TableCopier func(ctx context.Context, t TableSpec, w io.Writer) (rows int64, err error)
+
+var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+
+// checkTables validates the table list of a manifest: plain unique names, so
+// they can safely become part of an entry name.
+func checkTables(tables []TableSpec) error {
+	seen := make(map[string]bool, len(tables))
+	for _, t := range tables {
+		if !tableName.MatchString(t.Name) {
+			return fmt.Errorf("table name %q is not allowed", t.Name)
+		}
+		if seen[t.Name] {
+			return fmt.Errorf("table %s is listed twice", t.Name)
+		}
+		seen[t.Name] = true
+	}
+	return nil
+}
+
+func chunkName(table string, seq int) string {
+	return fmt.Sprintf("tables/%s/%06d.csv", table, seq)
+}
+
+// WriteArchive writes a backup to w. It writes the manifest, then calls
+// copyTable for each table of m in order, and finally writes the trailer,
+// which it also returns. At most ChunkSize bytes of table data are held in
+// memory. progress may be nil.
+func WriteArchive(ctx context.Context, w io.Writer, m Manifest, copyTable TableCopier, progress func(Progress)) (Trailer, error) {
+	m.Format = FormatVersion
+	if err := checkTables(m.Tables); err != nil {
+		return Trailer{}, fmt.Errorf("write backup: %w", err)
+	}
+	gz, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+	if err != nil {
+		return Trailer{}, fmt.Errorf("write backup: %w", err)
+	}
+	aw := &archiveWriter{ctx: ctx, tw: tar.NewWriter(gz), mod: m.CreatedAt, total: len(m.Tables), progress: progress}
+
+	body, err := json.Marshal(m)
+	if err != nil {
+		return Trailer{}, fmt.Errorf("write backup: encode manifest: %w", err)
+	}
+	if err := aw.entry(manifestName, body); err != nil {
+		return Trailer{}, err
+	}
+
+	aw.buf = make([]byte, 0, ChunkSize)
+	trailer := Trailer{Tables: make(map[string]TableSum, len(m.Tables))}
+	for i, t := range m.Tables {
+		if err := ctx.Err(); err != nil {
+			return Trailer{}, err
+		}
+		aw.start(t.Name, i)
+		rows, err := copyTable(ctx, t, aw)
+		if err != nil {
+			return Trailer{}, fmt.Errorf("write backup: copy table %s: %w", t.Name, err)
+		}
+		if err := aw.finish(); err != nil {
+			return Trailer{}, err
+		}
+		trailer.Tables[t.Name] = TableSum{Rows: rows, Bytes: aw.tableBytes, SHA256: hex.EncodeToString(aw.sum.Sum(nil))}
+		aw.done = i + 1
+		aw.allBytes += aw.tableBytes
+		aw.tableBytes = 0
+		aw.report()
+	}
+
+	body, err = json.Marshal(trailer)
+	if err != nil {
+		return Trailer{}, fmt.Errorf("write backup: encode checksums: %w", err)
+	}
+	if err := aw.entry(trailerName, body); err != nil {
+		return Trailer{}, err
+	}
+	if err := aw.tw.Close(); err != nil {
+		return Trailer{}, fmt.Errorf("write backup: %w", err)
+	}
+	if err := gz.Close(); err != nil {
+		return Trailer{}, fmt.Errorf("write backup: %w", err)
+	}
+	return trailer, nil
+}
+
+// archiveWriter cuts the data of one table at a time into chunk entries. It is
+// the io.Writer handed to the TableCopier.
+type archiveWriter struct {
+	ctx      context.Context
+	tw       *tar.Writer
+	mod      time.Time
+	progress func(Progress)
+
+	buf        []byte // the one reusable chunk buffer
+	table      string
+	seq        int // chunks written for the current table
+	sum        hash.Hash
+	tableBytes int64
+	allBytes   int64 // bytes of finished tables
+	done       int
+	total      int
+}
+
+func (a *archiveWriter) header(name string, size int) *tar.Header {
+	return &tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: 0o600, Size: int64(size), ModTime: a.mod, Format: tar.FormatUSTAR}
+}
+
+func (a *archiveWriter) entry(name string, body []byte) error {
+	if err := a.tw.WriteHeader(a.header(name, len(body))); err != nil {
+		return fmt.Errorf("write backup: %w", err)
+	}
+	if _, err := a.tw.Write(body); err != nil {
+		return fmt.Errorf("write backup: %w", err)
+	}
+	return nil
+}
+
+func (a *archiveWriter) start(table string, i int) {
+	a.table, a.seq, a.tableBytes, a.done = table, 0, 0, i
+	a.sum = sha256.New()
+	a.buf = a.buf[:0]
+}
+
+// Write implements io.Writer for the copier.
+func (a *archiveWriter) Write(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		if len(a.buf) == cap(a.buf) {
+			if err := a.flush(); err != nil {
+				return n - len(p), err
+			}
+		}
+		k := copy(a.buf[len(a.buf):cap(a.buf)], p)
+		a.buf = a.buf[:len(a.buf)+k]
+		p = p[k:]
+	}
+	return n, nil
+}
+
+// flush writes the buffer as the next chunk entry.
+func (a *archiveWriter) flush() error {
+	if err := a.ctx.Err(); err != nil {
+		return err
+	}
+	if a.seq >= maxChunks {
+		return fmt.Errorf("write backup: table %s has too many chunks", a.table)
+	}
+	a.seq++
+	if err := a.entry(chunkName(a.table, a.seq), a.buf); err != nil {
+		return err
+	}
+	a.sum.Write(a.buf)
+	a.tableBytes += int64(len(a.buf))
+	a.buf = a.buf[:0]
+	a.report()
+	return nil
+}
+
+// finish writes what is left in the buffer. A table with no data still gets
+// one empty chunk, so every table is present in the file.
+func (a *archiveWriter) finish() error {
+	if len(a.buf) > 0 || a.seq == 0 {
+		if err := a.flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *archiveWriter) report() {
+	if a.progress != nil {
+		a.progress(Progress{Table: a.table, TablesDone: a.done, TablesTotal: a.total, Bytes: a.allBytes + a.tableBytes})
+	}
+}
+
+// damaged wraps a read error as ErrCorrupt with a reason for a person.
+func damaged(err error) error {
+	if errors.Is(err, ErrCorrupt) || errors.Is(err, ErrNotBackup) || errors.Is(err, ErrFormat) {
+		return err
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return fmt.Errorf("%w: the file ends too early", ErrCorrupt)
+	}
+	return fmt.Errorf("%w: %w", ErrCorrupt, err)
+}
+
+func corruptf(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrCorrupt, fmt.Sprintf(format, args...))
+}
+
+// archiveReader walks the entries of a backup with one entry of look-ahead.
+type archiveReader struct {
+	gz      *gzip.Reader
+	tr      *tar.Reader
+	pending *tar.Header
+}
+
+func openArchive(r io.Reader) (*archiveReader, error) {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, fmt.Errorf("%w: it is not a gzip file", ErrNotBackup)
+	}
+	return &archiveReader{gz: gz, tr: tar.NewReader(gz)}, nil
+}
+
+// next returns the next entry header, or io.EOF at the end of the archive.
+// Entries other than plain files are refused.
+func (a *archiveReader) next() (*tar.Header, error) {
+	if h := a.pending; h != nil {
+		a.pending = nil
+		return h, nil
+	}
+	h, err := a.tr.Next()
+	if errors.Is(err, io.EOF) {
+		return nil, io.EOF
+	}
+	if err != nil {
+		return nil, damaged(err)
+	}
+	if h.Typeflag != tar.TypeReg {
+		return nil, corruptf("entry %q is not a plain file", h.Name)
+	}
+	return h, nil
+}
+
+func (a *archiveReader) unread(h *tar.Header) { a.pending = h }
+
+// readBody reads the whole body of the entry h, which must not exceed limit.
+func (a *archiveReader) readBody(h *tar.Header, limit int64) ([]byte, error) {
+	if h.Size > limit {
+		return nil, corruptf("entry %s is too large", h.Name)
+	}
+	b, err := io.ReadAll(io.LimitReader(a.tr, h.Size))
+	if err != nil {
+		return nil, damaged(err)
+	}
+	if int64(len(b)) != h.Size {
+		return nil, damaged(io.ErrUnexpectedEOF)
+	}
+	return b, nil
+}
+
+// manifest reads and checks the first entry.
+func (a *archiveReader) manifest() (Manifest, error) {
+	h, err := a.tr.Next()
+	if err != nil {
+		return Manifest{}, fmt.Errorf("%w: it has no manifest", ErrNotBackup)
+	}
+	if h.Name != manifestName || h.Typeflag != tar.TypeReg {
+		return Manifest{}, fmt.Errorf("%w: it has no manifest", ErrNotBackup)
+	}
+	if h.Size > maxManifestSize {
+		return Manifest{}, fmt.Errorf("%w: the manifest is too large", ErrNotBackup)
+	}
+	b, err := a.readBody(h, maxManifestSize)
+	if err != nil {
+		return Manifest{}, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return Manifest{}, fmt.Errorf("%w: the manifest cannot be read", ErrNotBackup)
+	}
+	if m.Format != FormatVersion {
+		if m.Format <= 0 {
+			return Manifest{}, fmt.Errorf("%w: the manifest has no format", ErrNotBackup)
+		}
+		return Manifest{}, &formatError{got: m.Format}
+	}
+	if err := checkTables(m.Tables); err != nil {
+		return Manifest{}, corruptf("the manifest is wrong: %v", err)
+	}
+	return m, nil
+}
+
+// ReadManifest reads only the manifest, the first entry of a backup.
+func ReadManifest(r io.Reader) (Manifest, error) {
+	a, err := openArchive(r)
+	if err != nil {
+		return Manifest{}, err
+	}
+	return a.manifest()
+}
+
+// tableReader streams all chunks of one table as a single reader and keeps
+// the checksum and size of what it passed on.
+type tableReader struct {
+	a         *archiveReader
+	name      string
+	seq       int   // chunks entered so far
+	remaining int64 // bytes left in the current chunk
+	finished  bool
+	sum       hash.Hash
+	bytes     int64
+	err       error
+	onBytes   func(n int64)
+}
+
+func (t *tableReader) fail(err error) (int, error) {
+	t.err = err
+	return 0, err
+}
+
+// nextChunk moves to the next chunk of this table, or sets finished.
+func (t *tableReader) nextChunk() error {
+	h, err := t.a.next()
+	if errors.Is(err, io.EOF) {
+		if t.seq == 0 {
+			return corruptf("table %s is missing", t.name)
+		}
+		t.finished = true
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if h.Name != chunkName(t.name, t.seq+1) {
+		if t.seq == 0 {
+			return corruptf("table %s is missing or out of order (found %q)", t.name, h.Name)
+		}
+		t.a.unread(h)
+		t.finished = true
+		return nil
+	}
+	if h.Size > ChunkSize {
+		return corruptf("entry %s is larger than the chunk size", h.Name)
+	}
+	t.seq++
+	t.remaining = h.Size
+	return nil
+}
+
+func (t *tableReader) Read(p []byte) (int, error) {
+	if t.err != nil {
+		return 0, t.err
+	}
+	for t.remaining == 0 {
+		if t.finished {
+			return 0, io.EOF
+		}
+		if err := t.nextChunk(); err != nil {
+			return t.fail(err)
+		}
+	}
+	if int64(len(p)) > t.remaining {
+		p = p[:t.remaining]
+	}
+	n, err := t.a.tr.Read(p)
+	if errors.Is(err, io.EOF) {
+		err = nil
+		if n == 0 {
+			err = io.ErrUnexpectedEOF
+		}
+	}
+	t.remaining -= int64(n)
+	t.sum.Write(p[:n])
+	t.bytes += int64(n)
+	if t.onBytes != nil {
+		t.onBytes(int64(n))
+	}
+	if err != nil {
+		t.err = damaged(err)
+		return n, t.err
+	}
+	return n, nil
+}
+
+// readAll walks a whole backup. With load nil it only checks the file; with
+// load it hands each table's data to load first. It returns the trailer
+// stored in the file after comparing it with what was read.
+func readAll(r io.Reader, progress func(int64), load func(TableSpec, io.Reader) (int64, error)) (Manifest, Trailer, error) {
+	a, err := openArchive(r)
+	if err != nil {
+		return Manifest{}, Trailer{}, err
+	}
+	m, err := a.manifest()
+	if err != nil {
+		return Manifest{}, Trailer{}, err
+	}
+
+	var total int64
+	got := make(map[string]TableSum, len(m.Tables))
+	for _, t := range m.Tables {
+		tr := &tableReader{a: a, name: t.Name, sum: sha256.New()}
+		if progress != nil {
+			tr.onBytes = func(n int64) { total += n; progress(total) }
+		}
+		var rows int64
+		if load != nil {
+			rows, err = load(t, tr)
+			if err != nil {
+				return m, Trailer{}, err
+			}
+		}
+		// Whatever the loader left unread still counts towards the sums.
+		if _, err := io.Copy(io.Discard, tr); err != nil {
+			return m, Trailer{}, err
+		}
+		got[t.Name] = TableSum{Rows: rows, Bytes: tr.bytes, SHA256: hex.EncodeToString(tr.sum.Sum(nil))}
+	}
+
+	trailer, err := a.trailer()
+	if err != nil {
+		return m, Trailer{}, err
+	}
+	// The sums are stored after the data, so they can only be compared here;
+	// ReadTables callers have not committed anything before this returns.
+	if len(trailer.Tables) != len(m.Tables) {
+		return m, Trailer{}, corruptf("the checksums do not match the list of tables")
+	}
+	for _, t := range m.Tables {
+		want, ok := trailer.Tables[t.Name]
+		if !ok {
+			return m, Trailer{}, corruptf("checksum of table %s is missing", t.Name)
+		}
+		have := got[t.Name]
+		switch {
+		case have.SHA256 != want.SHA256:
+			return m, Trailer{}, corruptf("checksum of table %s does not match", t.Name)
+		case have.Bytes != want.Bytes:
+			return m, Trailer{}, corruptf("size of table %s does not match", t.Name)
+		case load != nil && have.Rows != want.Rows:
+			return m, Trailer{}, corruptf("row count of table %s does not match (%d loaded, %d expected)", t.Name, have.Rows, want.Rows)
+		}
+	}
+	if err := a.end(); err != nil {
+		return m, Trailer{}, err
+	}
+	return m, trailer, nil
+}
+
+// trailer reads checksums.json, which must be the next entry.
+func (a *archiveReader) trailer() (Trailer, error) {
+	h, err := a.next()
+	if errors.Is(err, io.EOF) {
+		return Trailer{}, corruptf("the checksums are missing")
+	}
+	if err != nil {
+		return Trailer{}, err
+	}
+	if h.Name != trailerName {
+		return Trailer{}, corruptf("unexpected entry %q", h.Name)
+	}
+	b, err := a.readBody(h, maxTrailerSize)
+	if err != nil {
+		return Trailer{}, err
+	}
+	var tr Trailer
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(&tr); err != nil {
+		return Trailer{}, corruptf("the checksums cannot be read")
+	}
+	return tr, nil
+}
+
+// end checks that nothing follows the trailer.
+func (a *archiveReader) end() error {
+	if _, err := a.next(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return corruptf("there is an extra entry after the checksums")
+		}
+		return err
+	}
+	n, err := io.Copy(io.Discard, io.LimitReader(a.gz, maxTrailingData+1))
+	if err != nil {
+		return damaged(err)
+	}
+	if n > maxTrailingData {
+		return corruptf("there is extra data after the end of the archive")
+	}
+	return nil
+}
+
+// Verify reads a whole backup and checks its order, entry names, checksums,
+// sizes and format version. progress, if not nil, is called with the number of
+// table bytes read so far. Row counts are not checked, since that needs the
+// data to be parsed.
+func Verify(r io.Reader, progress func(bytes int64)) (Manifest, Trailer, error) {
+	return readAll(r, progress, nil)
+}
+
+// ReadTables reads a whole backup, passing the data of each table, as one
+// continuous reader, to load. load returns the number of rows it loaded.
+// Everything is compared with the trailer, which is stored after the data, so
+// a mismatch is reported (as ErrCorrupt) by the last step of ReadTables; the
+// caller must not make what load did permanent before ReadTables returns nil.
+func ReadTables(r io.Reader, load func(t TableSpec, data io.Reader) (rows int64, err error)) (Manifest, error) {
+	if load == nil {
+		return Manifest{}, errors.New("read backup: no loader given")
+	}
+	m, _, err := readAll(r, nil, load)
+	return m, err
+}
