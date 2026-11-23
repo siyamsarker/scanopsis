@@ -27,7 +27,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { formatExactTime } from '../../format';
+import { formatExactTime, formatInt } from '../../format';
 import { auditActions, rejectionLabels } from './labels';
 import { settingLabel } from './settingLabels';
 
@@ -377,21 +377,26 @@ export function describeEvent(action: string, d: Detail): Described {
     case 'report.exported':
       return { icon: FileDown, tone: 'neutral', sentence: 'exported a scan report', used: [] };
     case 'retention.deleted': {
-      const parts = [
-        ['scans', 'scan'],
-        ['sonar_analyses', 'analysis'],
-        ['audit_events', 'audit event'],
-      ]
-        .map(([key, one]) => [num(d[key]) ?? 0, one] as const)
+      // Every count the run reports, so the sentence never says nothing was
+      // deleted while a count below says otherwise.
+      const kinds = [
+        ['scans', 'scan', 'scans'],
+        ['raw_reports', 'raw report', 'raw reports'],
+        ['sonar_analyses', 'analysis', 'analyses'],
+        ['sonar_deliveries', 'SonarQube delivery', 'SonarQube deliveries'],
+        ['audit_events', 'audit event', 'audit events'],
+      ] as const;
+      const parts = kinds
+        .map(([key, one, other]) => [num(d[key]) ?? 0, one, other] as const)
         .filter(([n]) => n > 0)
-        .map(([n, one]) => plural(n, one, one === 'analysis' ? 'analyses' : `${one}s`));
+        .map(([n, one, other]) => `${formatInt(n)} ${n === 1 ? one : other}`);
       return {
         icon: Eraser,
         tone: 'neutral',
         sentence: parts.length
           ? `deleted old data: ${parts.join(', ')}`
           : 'found no old data to delete',
-        used: ['scans', 'sonar_analyses', 'audit_events', 'retention_days'],
+        used: [...kinds.map(([key]) => key), 'retention_days'],
       };
     }
     default:

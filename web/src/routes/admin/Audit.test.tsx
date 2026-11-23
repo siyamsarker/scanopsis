@@ -324,6 +324,20 @@ describe('audit wording', () => {
       'deleted old data: 1 scan, 2 analyses',
     );
     expect(sentence('retention.deleted', {})).toBe('found no old data to delete');
+    expect(sentence('retention.deleted', { scans: 0, raw_reports: 360000 })).toBe(
+      'deleted old data: 360,000 raw reports',
+    );
+    expect(
+      sentence('retention.deleted', {
+        scans: 1,
+        raw_reports: 2,
+        sonar_analyses: 2,
+        sonar_deliveries: 1,
+        audit_events: 3,
+      }),
+    ).toBe(
+      'deleted old data: 1 scan, 2 raw reports, 2 analyses, 1 SonarQube delivery, 3 audit events',
+    );
     expect(sentence('user.deleted', { username: 'eve' })).toBe('deleted eve');
   });
 
