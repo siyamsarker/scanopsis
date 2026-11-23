@@ -171,7 +171,7 @@ describe('restore from the setup screen', () => {
     renderApp('/setup');
     await openRestore();
     expect(screen.getByLabelText('Setup token')).toHaveAccessibleDescription(
-      'Printed in the server log at start-up. In deploy/compose, run docker compose logs scanopsis and copy the setup_token value.',
+      'Printed in the server log at start-up. Run docker compose logs scanopsis in the deploy/compose folder and copy the setup_token value.',
     );
     enterToken('nope');
     expect(
