@@ -6,6 +6,7 @@ package backup
 import (
 	"archive/tar"
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -34,6 +35,9 @@ const (
 	maxTrailerSize  = 4 << 20 // so is the trailer
 	maxTrailingData = 1 << 20 // padding allowed after the tar end marker
 	maxChunks       = 999999  // the sequence number has six digits
+	maxColumns      = 1000    // columns listed for one table
+
+	errTooBig = "the file expands to more data than a backup of this size can hold"
 )
 
 // Kind says why a backup was made.
@@ -114,8 +118,9 @@ type TableCopier func(ctx context.Context, t TableSpec, w io.Writer) (rows int64
 
 var tableName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 
-// checkTables validates the table list of a manifest: plain unique names, so
-// they can safely become part of an entry name.
+// checkTables validates the table list of a manifest: plain unique table
+// names, so they can safely become part of an entry name, and plain unique
+// column names, since a restore puts them into a COPY statement.
 func checkTables(tables []TableSpec) error {
 	seen := make(map[string]bool, len(tables))
 	for _, t := range tables {
@@ -126,6 +131,22 @@ func checkTables(tables []TableSpec) error {
 			return fmt.Errorf("table %s is listed twice", t.Name)
 		}
 		seen[t.Name] = true
+		if len(t.Columns) == 0 {
+			return fmt.Errorf("table %s has no columns", t.Name)
+		}
+		if len(t.Columns) > maxColumns {
+			return fmt.Errorf("table %s has too many columns", t.Name)
+		}
+		cols := make(map[string]bool, len(t.Columns))
+		for _, c := range t.Columns {
+			if !tableName.MatchString(c) {
+				return fmt.Errorf("column name %q of table %s is not allowed", c, t.Name)
+			}
+			if cols[c] {
+				return fmt.Errorf("column %s of table %s is listed twice", c, t.Name)
+			}
+			cols[c] = true
+		}
 	}
 	return nil
 }
@@ -284,15 +305,26 @@ func (a *archiveWriter) report() {
 	}
 }
 
-// damaged wraps a read error as ErrCorrupt with a reason for a person.
+// damaged wraps a read error as ErrCorrupt with a fixed sentence for a
+// person. The text of the library error is not passed on.
 func damaged(err error) error {
-	if errors.Is(err, ErrCorrupt) || errors.Is(err, ErrNotBackup) || errors.Is(err, ErrFormat) {
+	switch {
+	case errors.Is(err, ErrCorrupt), errors.Is(err, ErrNotBackup), errors.Is(err, ErrFormat):
 		return err
-	}
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
 		return fmt.Errorf("%w: the file ends too early", ErrCorrupt)
+	case errors.Is(err, gzip.ErrChecksum):
+		return fmt.Errorf("%w: the compressed data does not match its checksum", ErrCorrupt)
+	case errors.Is(err, gzip.ErrHeader):
+		return fmt.Errorf("%w: the compression header is wrong", ErrCorrupt)
+	case errors.Is(err, tar.ErrHeader):
+		return fmt.Errorf("%w: the archive structure is wrong", ErrCorrupt)
 	}
-	return fmt.Errorf("%w: %w", ErrCorrupt, err)
+	var flateErr flate.CorruptInputError
+	if errors.As(err, &flateErr) {
+		return fmt.Errorf("%w: the compressed data is broken", ErrCorrupt)
+	}
+	return fmt.Errorf("%w: the file could not be read", ErrCorrupt)
 }
 
 func corruptf(format string, args ...any) error {
@@ -309,7 +341,10 @@ type archiveReader struct {
 func openArchive(r io.Reader) (*archiveReader, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
-		return nil, fmt.Errorf("%w: it is not a gzip file", ErrNotBackup)
+		if errors.Is(err, gzip.ErrHeader) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return nil, fmt.Errorf("%w: it is not a gzip file", ErrNotBackup)
+		}
+		return nil, damaged(err)
 	}
 	return &archiveReader{gz: gz, tr: tar.NewReader(gz)}, nil
 }
@@ -355,7 +390,10 @@ func (a *archiveReader) readBody(h *tar.Header, limit int64) ([]byte, error) {
 func (a *archiveReader) manifest() (Manifest, error) {
 	h, err := a.tr.Next()
 	if err != nil {
-		return Manifest{}, fmt.Errorf("%w: it has no manifest", ErrNotBackup)
+		if errors.Is(err, io.EOF) || errors.Is(err, tar.ErrHeader) {
+			return Manifest{}, fmt.Errorf("%w: it has no manifest", ErrNotBackup)
+		}
+		return Manifest{}, damaged(err)
 	}
 	if h.Name != manifestName || h.Typeflag != tar.TypeReg {
 		return Manifest{}, fmt.Errorf("%w: it has no manifest", ErrNotBackup)
@@ -402,8 +440,16 @@ type tableReader struct {
 	finished  bool
 	sum       hash.Hash
 	bytes     int64
+	prevSize  int64 // size of the previous chunk
 	err       error
-	onBytes   func(n int64)
+	budget    *budget
+}
+
+// budget counts the table bytes read over all tables and enforces the limit.
+type budget struct {
+	total    int64
+	max      int64 // 0 means no limit
+	progress func(int64)
 }
 
 func (t *tableReader) fail(err error) (int, error) {
@@ -413,6 +459,9 @@ func (t *tableReader) fail(err error) (int, error) {
 
 // nextChunk moves to the next chunk of this table, or sets finished.
 func (t *tableReader) nextChunk() error {
+	if t.seq >= maxChunks {
+		return corruptf("table %s has too many chunks", t.name)
+	}
 	h, err := t.a.next()
 	if errors.Is(err, io.EOF) {
 		if t.seq == 0 {
@@ -435,7 +484,11 @@ func (t *tableReader) nextChunk() error {
 	if h.Size > ChunkSize {
 		return corruptf("entry %s is larger than the chunk size", h.Name)
 	}
+	if t.seq > 0 && (t.prevSize != ChunkSize || h.Size == 0) {
+		return corruptf("table %s is not cut into chunks the way a backup is", t.name)
+	}
 	t.seq++
+	t.prevSize = h.Size
 	t.remaining = h.Size
 	return nil
 }
@@ -465,8 +518,15 @@ func (t *tableReader) Read(p []byte) (int, error) {
 	t.remaining -= int64(n)
 	t.sum.Write(p[:n])
 	t.bytes += int64(n)
-	if t.onBytes != nil {
-		t.onBytes(int64(n))
+	if b := t.budget; b != nil {
+		b.total += int64(n)
+		if b.max > 0 && b.total > b.max {
+			t.err = corruptf("%s", errTooBig)
+			return n, t.err
+		}
+		if b.progress != nil {
+			b.progress(b.total)
+		}
 	}
 	if err != nil {
 		t.err = damaged(err)
@@ -478,7 +538,7 @@ func (t *tableReader) Read(p []byte) (int, error) {
 // readAll walks a whole backup. With load nil it only checks the file; with
 // load it hands each table's data to load first. It returns the trailer
 // stored in the file after comparing it with what was read.
-func readAll(r io.Reader, progress func(int64), load func(TableSpec, io.Reader) (int64, error)) (Manifest, Trailer, error) {
+func readAll(r io.Reader, progress func(int64), maxBytes int64, load func(TableSpec, io.Reader) (int64, error)) (Manifest, Trailer, error) {
 	a, err := openArchive(r)
 	if err != nil {
 		return Manifest{}, Trailer{}, err
@@ -488,13 +548,10 @@ func readAll(r io.Reader, progress func(int64), load func(TableSpec, io.Reader) 
 		return Manifest{}, Trailer{}, err
 	}
 
-	var total int64
+	bud := &budget{max: maxBytes, progress: progress}
 	got := make(map[string]TableSum, len(m.Tables))
 	for _, t := range m.Tables {
-		tr := &tableReader{a: a, name: t.Name, sum: sha256.New()}
-		if progress != nil {
-			tr.onBytes = func(n int64) { total += n; progress(total) }
-		}
+		tr := &tableReader{a: a, name: t.Name, sum: sha256.New(), budget: bud}
 		var rows int64
 		if load != nil {
 			rows, err = load(t, tr)
@@ -586,7 +643,15 @@ func (a *archiveReader) end() error {
 // table bytes read so far. Row counts are not checked, since that needs the
 // data to be parsed.
 func Verify(r io.Reader, progress func(bytes int64)) (Manifest, Trailer, error) {
-	return readAll(r, progress, nil)
+	return readAll(r, progress, 0, nil)
+}
+
+// VerifyLimited is Verify with a ceiling on the table data. A small gzip file
+// can expand to a huge amount of data, so a caller that knows how much a
+// backup of this size may hold passes maxBytes; a file that expands beyond it
+// fails with ErrCorrupt. maxBytes 0 means no limit.
+func VerifyLimited(r io.Reader, progress func(bytes int64), maxBytes int64) (Manifest, Trailer, error) {
+	return readAll(r, progress, maxBytes, nil)
 }
 
 // ReadTables reads a whole backup, passing the data of each table, as one
@@ -598,6 +663,16 @@ func ReadTables(r io.Reader, load func(t TableSpec, data io.Reader) (rows int64,
 	if load == nil {
 		return Manifest{}, errors.New("read backup: no loader given")
 	}
-	m, _, err := readAll(r, nil, load)
+	m, _, err := readAll(r, nil, 0, load)
+	return m, err
+}
+
+// ReadTablesLimited is ReadTables with a ceiling on the table data, in the
+// way VerifyLimited has one. maxBytes 0 means no limit.
+func ReadTablesLimited(r io.Reader, maxBytes int64, load func(t TableSpec, data io.Reader) (rows int64, err error)) (Manifest, error) {
+	if load == nil {
+		return Manifest{}, errors.New("read backup: no loader given")
+	}
+	m, _, err := readAll(r, nil, maxBytes, load)
 	return m, err
 }

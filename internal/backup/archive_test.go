@@ -16,6 +16,7 @@ import (
 	"io"
 	"math/rand/v2"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -299,6 +300,19 @@ func TestVerifyDetects(t *testing.T) {
 			es[i].body = bytes.Replace(es[i].body, []byte(`"bytes":26`), []byte(`"bytes":27`), 1)
 			return es
 		}), ErrCorrupt},
+		{"truncated before the manifest", archive[:40], ErrCorrupt},
+		{"column that injects SQL", rewrite(func(es []entry) []entry {
+			es[0].body = bytes.Replace(es[0].body, []byte(`"id","name"`), []byte(`"id) FROM STDIN; --"`), 1)
+			return es
+		}), ErrCorrupt},
+		{"table without columns", rewrite(func(es []entry) []entry {
+			es[0].body = bytes.Replace(es[0].body, []byte(`["id","name"]`), []byte(`[]`), 1)
+			return es
+		}), ErrCorrupt},
+		{"duplicate column", rewrite(func(es []entry) []entry {
+			es[0].body = bytes.Replace(es[0].body, []byte(`"id","name"`), []byte(`"id","id"`), 1)
+			return es
+		}), ErrCorrupt},
 		{"gzip of random bytes", randomGz.Bytes(), ErrNotBackup},
 		{"plain tar without manifest", plainTar.Bytes(), ErrNotBackup},
 		{"gzipped tar without manifest", rewrite(func(es []entry) []entry { return es[1:] }), ErrNotBackup},
@@ -322,12 +336,11 @@ func TestVerifyDetects(t *testing.T) {
 				}
 			}
 			_, err = ReadTables(bytes.NewReader(tc.data), func(_ TableSpec, r io.Reader) (int64, error) {
-				n, err := io.Copy(io.Discard, r)
-				_ = n
+				_, err := io.Copy(io.Discard, r)
 				return 0, err
 			})
-			if err == nil {
-				t.Errorf("ReadTables accepted the damaged file")
+			if !errors.Is(err, tc.want) {
+				t.Errorf("ReadTables error = %v, want %v", err, tc.want)
 			}
 		})
 	}
@@ -541,5 +554,95 @@ func TestProgress(t *testing.T) {
 	want := int64(len(testData()["projects"]) + len(testData()["scans"]))
 	if seen != want {
 		t.Errorf("Verify progress ended at %d, want %d", seen, want)
+	}
+}
+
+func TestNoLibraryTextInErrors(t *testing.T) {
+	archive, _ := buildArchive(t)
+	bad := bytes.Clone(archive)
+	bad[len(bad)/2] ^= 0xff
+	for _, tail := range [][]byte{bad, bad[:len(bad)-3]} {
+		_, _, err := Verify(bytes.NewReader(tail), nil)
+		if !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("error = %v, want ErrCorrupt", err)
+		}
+		for _, leak := range []string{"gzip:", "flate:", "archive/tar", "unexpected EOF"} {
+			if strings.Contains(err.Error(), leak) {
+				t.Errorf("error %q contains library text %q", err, leak)
+			}
+		}
+	}
+}
+
+// forge builds a valid-looking archive of one table from the given chunks,
+// with a correct trailer, so only the layout of the chunks is in question.
+func forge(t *testing.T, chunks ...[]byte) []byte {
+	t.Helper()
+	m := testManifest()
+	m.Format = FormatVersion
+	m.Tables = []TableSpec{{Name: "scans", Columns: []string{"id"}}}
+	mb, _ := json.Marshal(m)
+	es := []entry{{manifestName, tar.TypeReg, mb}}
+	h := sha256.New()
+	var n int64
+	for i, c := range chunks {
+		es = append(es, entry{chunkName("scans", i+1), tar.TypeReg, c})
+		h.Write(c)
+		n += int64(len(c))
+	}
+	tb, _ := json.Marshal(Trailer{Tables: map[string]TableSum{"scans": {Bytes: n, SHA256: hex.EncodeToString(h.Sum(nil))}}})
+	return pack(t, append(es, entry{trailerName, tar.TypeReg, tb}))
+}
+
+func TestChunkLayout(t *testing.T) {
+	full := randomBytes(1, ChunkSize)
+	if _, _, err := Verify(bytes.NewReader(forge(t, full, full, []byte("tail"))), nil); err != nil {
+		t.Fatalf("canonical layout rejected: %v", err)
+	}
+	if _, _, err := Verify(bytes.NewReader(forge(t, nil)), nil); err != nil {
+		t.Fatalf("empty table rejected: %v", err)
+	}
+	cases := map[string][][]byte{
+		"short chunk before the last": {[]byte("short"), []byte("tail")},
+		"empty chunk after data":      {full, nil},
+		"empty chunk before data":     {nil, []byte("tail")},
+	}
+	for name, chunks := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, _, err := Verify(bytes.NewReader(forge(t, chunks...)), nil)
+			if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "chunks") {
+				t.Fatalf("error = %v, want ErrCorrupt about chunks", err)
+			}
+		})
+	}
+}
+
+func TestChunkCountBound(t *testing.T) {
+	a := &archiveReader{pending: &tar.Header{Name: chunkName("x", maxChunks+1), Size: 1}}
+	tr := &tableReader{a: a, name: "x", seq: maxChunks, prevSize: ChunkSize}
+	if err := tr.nextChunk(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("error = %v, want ErrCorrupt", err)
+	}
+}
+
+func TestSizeLimit(t *testing.T) {
+	archive, _ := buildArchive(t) // about 20 MiB of table data
+	const want = "the file is damaged: the file expands to more data than a backup of this size can hold"
+
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 10<<20); err == nil || !errors.Is(err, ErrCorrupt) || err.Error() != want {
+		t.Errorf("VerifyLimited error = %v", err)
+	}
+	_, err := ReadTablesLimited(bytes.NewReader(archive), 10<<20, func(_ TableSpec, r io.Reader) (int64, error) {
+		_, err := io.Copy(io.Discard, r)
+		return 0, err
+	})
+	if !errors.Is(err, ErrCorrupt) || err.Error() != want {
+		t.Errorf("ReadTablesLimited error = %v", err)
+	}
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 64<<20); err != nil {
+		t.Errorf("VerifyLimited within the limit: %v", err)
+	}
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 0); err != nil {
+		t.Errorf("VerifyLimited without a limit: %v", err)
 	}
 }
