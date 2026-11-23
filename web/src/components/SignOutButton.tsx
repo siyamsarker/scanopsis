@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { linkClass } from '../ui';
+import { forgetSession } from '../auth/forgetSession';
 
 /** Signs out from a session step, where the application header is not shown. */
 export function SignOutButton() {
@@ -24,7 +25,7 @@ export function SignOutButton() {
         return;
       }
     }
-    queryClient.clear();
+    forgetSession(queryClient);
     void navigate('/login', { replace: true });
   }
 

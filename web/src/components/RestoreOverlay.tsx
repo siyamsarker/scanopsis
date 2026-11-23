@@ -14,6 +14,7 @@ import { buttonClass } from '../ui';
 import { Wordmark } from './ApertureMark';
 import { StatusMark } from './SeverityMark';
 import { LensSpinner } from './states';
+import { forgetSession } from '../auth/forgetSession';
 
 /** The heading of each view; it also names the screen for screen readers. */
 const titles: Record<OverlayView['kind'] | 'waiting', string> = {
@@ -226,7 +227,7 @@ export function RestoreOverlayHost() {
       backLabel={onSetup ? 'Back to setup' : isAdmin ? 'Back to Backups' : 'Back to the portfolio'}
       onSignIn={() => {
         void (async () => {
-          queryClient.clear();
+          forgetSession(queryClient);
           // After a restore on the setup screen the gate must know an administrator exists
           // before it sees the sign-in page, or it shows setup again for a moment.
           if (onSetup)

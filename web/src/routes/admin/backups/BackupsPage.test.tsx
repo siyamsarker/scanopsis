@@ -705,6 +705,42 @@ describe('scheduled backups', () => {
     ).toHaveValue(7);
   });
 
+  it('keeps unsaved schedule changes to the admin who made them, until a sign-out', async () => {
+    mockFetch(api());
+    const first = renderApp('/admin/backups');
+    const form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    fireEvent.change(
+      await within(form).findByRole('spinbutton', { name: 'Keep scheduled backups for' }),
+      { target: { value: '9' } },
+    );
+    first.unmount();
+
+    // Another administrator in the same tab does not get them.
+    mockFetch(
+      api((call) =>
+        call.path === '/api/v1/me' ? json(200, makeUser({ id: 2, username: 'grace' })) : undefined,
+      ),
+    );
+    const second = renderApp('/admin/backups');
+    const other = await screen.findByRole('region', { name: 'Scheduled backups' });
+    expect(
+      await within(other).findByRole('spinbutton', { name: 'Keep scheduled backups for' }),
+    ).toHaveValue(7);
+    second.unmount();
+
+    // A session that ended (401) takes them away.
+    mockFetch(
+      api((call) =>
+        call.path === '/api/v1/me' ? apiError(401, 'unauthenticated', 'Sign in.') : undefined,
+      ),
+    );
+    expect(Object.keys(sessionStorage).filter((k) => k.startsWith('scanopsis.'))).not.toEqual([]);
+    renderApp('/admin/backups');
+    await waitFor(() =>
+      expect(Object.keys(sessionStorage).filter((k) => k.startsWith('scanopsis.'))).toEqual([]),
+    );
+  });
+
   it('narrows the time zones as a filter is typed, and keeps Enter from saving', async () => {
     const { calls } = mockFetch(api());
     renderApp('/admin/backups');

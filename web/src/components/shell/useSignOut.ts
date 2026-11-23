@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { api, ApiError, unwrap } from '../../api/client';
 import { toast } from '../Toast';
+import { forgetSession } from '../../auth/forgetSession';
 
 export const SIGN_OUT_FAILED = 'Signing out failed. Check your connection and try again.';
 
@@ -21,7 +22,7 @@ export function useSignOut() {
 
   function finish() {
     setSigningOut(true);
-    queryClient.clear();
+    forgetSession(queryClient);
     void navigate('/login', { replace: true });
   }
 

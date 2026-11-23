@@ -42,6 +42,7 @@ import { toast } from '../components/Toast';
 import { countOf } from '../format';
 import { iconButtonClass } from '../ui';
 import { FlatTable, InitialsAvatar, When, td, th } from './admin/kit';
+import { forgetSession } from '../auth/forgetSession';
 
 const units: [Intl.RelativeTimeFormatUnit, number][] = [
   ['year', 365 * 24 * 3600],
@@ -151,7 +152,7 @@ function UserRow({ user, isSelf }: { user: User; isSelf: boolean }) {
         setConfirm(null);
         if (isSelf) {
           // The server ended every session of this user, this one included.
-          queryClient.clear();
+          forgetSession(queryClient);
           void navigate('/login', { replace: true });
           return;
         }

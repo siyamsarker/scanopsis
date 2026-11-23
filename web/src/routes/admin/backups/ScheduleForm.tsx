@@ -13,7 +13,7 @@ import {
 } from 'react';
 import type { BackupList } from '../../../api/backups';
 import { describeError } from '../../../api/errors';
-import { SettingsValidationError, useSettings, useUpdateSettings } from '../../../api/hooks';
+import { SettingsValidationError, useMe, useSettings, useUpdateSettings } from '../../../api/hooks';
 import { Spinner } from '../../../components/ConfirmDialog';
 import { SearchInput, Select } from '../../../components/inputs';
 import { ErrorState, Skeleton } from '../../../components/states';
@@ -32,6 +32,7 @@ import {
   timeZoneOptions,
   zoneMatches,
 } from './model';
+import { scheduleDraftKey } from '../../../auth/forgetSession';
 
 const KEYS = {
   enabled: 'backup.schedule_enabled',
@@ -54,20 +55,25 @@ const labelClass = 'text-body-s font-medium text-text';
 function ScheduleFields({
   saved,
   lastRun,
+  userId,
 }: {
   saved: Schedule;
   lastRun: BackupList['schedule'] | undefined;
+  /** The signed-in user, whose unsaved changes the tab keeps. */
+  userId: number;
 }) {
   const update = useUpdateSettings();
   const id = useId();
-  // Changes not saved yet come back when the page is opened again in this tab.
+  // Changes not saved yet come back when the page is opened again in this
+  // tab, for the same user only; a sign-out forgets them (forgetSession).
+  const draftKey = scheduleDraftKey(userId);
   const [restored] = useState(() => {
-    const kept = readDraft();
+    const kept = readDraft(draftKey);
     return kept && !sameSchedule(kept, saved) ? kept : null;
   });
   const [draft, setDraft] = useState<Schedule>(restored ?? saved);
   const changed = !sameSchedule(draft, saved);
-  useEffect(() => writeDraft(changed ? draft : null), [changed, draft]);
+  useEffect(() => writeDraft(draftKey, changed ? draft : null), [draftKey, changed, draft]);
   const timeInput = useRef<HTMLInputElement>(null);
   const keepInput = useRef<HTMLInputElement>(null);
   const [newTime, setNewTime] = useState('');
@@ -391,8 +397,6 @@ function ScheduleFields({
   );
 }
 
-const DRAFT_KEY = 'scanopsis.backup-schedule-draft';
-
 function sameSchedule(a: Schedule, b: Schedule): boolean {
   return (
     a.enabled === b.enabled &&
@@ -403,9 +407,9 @@ function sameSchedule(a: Schedule, b: Schedule): boolean {
 }
 
 /** The unsaved schedule kept for this tab, or null; storage may be unavailable. */
-function readDraft(): Schedule | null {
+function readDraft(key: string): Schedule | null {
   try {
-    const kept: unknown = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? 'null');
+    const kept: unknown = JSON.parse(sessionStorage.getItem(key) ?? 'null');
     if (
       kept &&
       typeof kept === 'object' &&
@@ -432,10 +436,10 @@ function readDraft(): Schedule | null {
   return null;
 }
 
-function writeDraft(draft: Schedule | null) {
+function writeDraft(key: string, draft: Schedule | null) {
   try {
-    if (draft) sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
-    else sessionStorage.removeItem(DRAFT_KEY);
+    if (draft) sessionStorage.setItem(key, JSON.stringify(draft));
+    else sessionStorage.removeItem(key);
   } catch {
     // Without storage, unsaved changes are not kept.
   }
@@ -462,7 +466,8 @@ function readSchedule(items: { key: string; value: unknown }[]): Schedule {
  */
 export function ScheduleForm({ lastRun }: { lastRun: BackupList['schedule'] | undefined }) {
   const settings = useSettings();
-  if (settings.isPending) {
+  const me = useMe();
+  if (settings.isPending || !me.data) {
     return (
       <div role="status" aria-label="Loading" className="flex flex-col gap-4">
         <Skeleton className="h-6 w-40" />
@@ -484,5 +489,12 @@ export function ScheduleForm({ lastRun }: { lastRun: BackupList['schedule'] | un
   }
   const saved = readSchedule(settings.data);
   // A saved change starts the form again from the server's values.
-  return <ScheduleFields key={JSON.stringify(saved)} saved={saved} lastRun={lastRun} />;
+  return (
+    <ScheduleFields
+      key={`${me.data.id} ${JSON.stringify(saved)}`}
+      saved={saved}
+      lastRun={lastRun}
+      userId={me.data.id}
+    />
+  );
 }

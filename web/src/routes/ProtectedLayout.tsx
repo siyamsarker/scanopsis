@@ -13,15 +13,16 @@ import { useGlobalShortcuts } from '../components/shell/shortcuts';
 import { ShortcutsDialog } from '../components/shell/ShortcutsDialog';
 import { Sidebar, useSidebarCollapsed } from '../components/shell/Sidebar';
 import { useSignOut } from '../components/shell/useSignOut';
+import { forgetSession } from '../auth/forgetSession';
 
 // The palette (and cmdk) loads the first time it is opened.
 const CommandPalette = lazy(() => import('../components/shell/CommandPalette'));
 
-/** Empties the query cache once, so data of an ended session is never kept. */
+/** Forgets the ended session once, so none of its data or drafts is kept. */
 function ClearCache() {
   const queryClient = useQueryClient();
   useEffect(() => {
-    queryClient.clear();
+    forgetSession(queryClient);
   }, [queryClient]);
   return null;
 }
