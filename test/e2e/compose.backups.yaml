@@ -1,0 +1,86 @@
+# Copyright 2026 Siyam Sarker
+# SPDX-License-Identifier: Apache-2.0
+
+# Stack for the backup tests, apart from the main one because a restore
+# replaces all data and ends every session. Two Scanopsis servers with the same
+# secret key and a database each: `scanopsis` is set up and backed up, and
+# `scanopsis-empty` stays empty so a backup can be restored on its setup screen.
+# The keys and passwords are public on purpose.
+name: scanopsis-e2e-backups
+
+x-scanopsis: &scanopsis
+  build:
+    context: ../..
+  image: scanopsis-e2e-backups:local
+  environment: &env
+    SCANOPSIS_SECRET_KEY: c2Nhbm9wc2lzLWUyZS1maXhlZC10ZXN0LWtleS0zMi4=
+    SCANOPSIS_LISTEN_ADDR: ":8080"
+
+x-db: &db
+  image: postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
+  environment:
+    POSTGRES_USER: scanopsis
+    POSTGRES_PASSWORD: scanopsis
+    POSTGRES_DB: scanopsis
+  tmpfs:
+    - /var/lib/postgresql
+  healthcheck:
+    test: ["CMD-SHELL", "pg_isready -U scanopsis -d scanopsis"]
+    interval: 1s
+    timeout: 3s
+    retries: 30
+
+services:
+  db:
+    <<: *db
+
+  db-empty:
+    <<: *db
+
+  # A sign-in provider for the one non-admin account the access checks need.
+  fake-gitlab:
+    build:
+      context: ../..
+      dockerfile: test/fakegitlab/Dockerfile
+    environment:
+      FAKEGITLAB_LISTEN: ":19001"
+      FAKEGITLAB_ISSUER: http://fake-gitlab:19001
+      FAKEGITLAB_CLIENT_ID: e2e-client
+      FAKEGITLAB_CLIENT_SECRET: e2e-client-secret
+      FAKEGITLAB_REDIRECT_URI: http://localhost:18090/api/v1/auth/gitlab/callback
+      FAKEGITLAB_USERS: /etc/fakegitlab/users.json
+    volumes:
+      - ./fixtures/users.json:/etc/fakegitlab/users.json:ro
+    ports:
+      - "127.0.0.1:19001:19001"
+
+  scanopsis:
+    <<: *scanopsis
+    depends_on:
+      db:
+        condition: service_healthy
+      fake-gitlab:
+        condition: service_started
+    environment:
+      <<: *env
+      SCANOPSIS_DATABASE_URL: postgres://scanopsis:scanopsis@db:5432/scanopsis?sslmode=disable
+      SCANOPSIS_PUBLIC_URL: http://localhost:18090
+    # The backup folder lives in memory: every run starts without backups.
+    tmpfs:
+      - /var/lib/scanopsis/backups:uid=65532,gid=65532,mode=0700
+    ports:
+      - "127.0.0.1:18090:8080"
+
+  scanopsis-empty:
+    <<: *scanopsis
+    depends_on:
+      db-empty:
+        condition: service_healthy
+    environment:
+      <<: *env
+      SCANOPSIS_DATABASE_URL: postgres://scanopsis:scanopsis@db-empty:5432/scanopsis?sslmode=disable
+      SCANOPSIS_PUBLIC_URL: http://localhost:18091
+    tmpfs:
+      - /var/lib/scanopsis/backups:uid=65532,gid=65532,mode=0700
+    ports:
+      - "127.0.0.1:18091:8080"

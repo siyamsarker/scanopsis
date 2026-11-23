@@ -114,6 +114,7 @@ e2e: ## Run the end-to-end tests in a browser against a Docker Compose stack
 
 e2e-down: ## Stop the end-to-end stack that E2E_KEEP=1 left running
 	docker compose -p scanopsis-e2e -f test/e2e/compose.yaml down -v --remove-orphans
+	docker compose -p scanopsis-e2e-backups -f test/e2e/compose.backups.yaml down -v --remove-orphans
 
 .PHONY: coverage go-coverage web-coverage
 

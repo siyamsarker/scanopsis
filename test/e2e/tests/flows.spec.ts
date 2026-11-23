@@ -102,6 +102,9 @@ test('1. setup creates the administrator and enrols two-factor', async ({ browse
 
   await root.goto('/');
   await expect(root).toHaveURL(/\/setup$/);
+  // A new installation starts with a choice between a fresh start and a restore.
+  await expect(root.getByRole('heading', { name: 'Welcome to Scanopsis' })).toBeVisible();
+  await root.getByRole('button', { name: /Set up a new installation/ }).click();
   await expect(root.getByRole('heading', { name: 'Set up Scanopsis' })).toBeVisible();
   await expect(root.getByText('Step 1 of 3')).toBeVisible();
 
@@ -115,7 +118,7 @@ test('1. setup creates the administrator and enrols two-factor', async ({ browse
 
   await create('not-the-token');
   await expect(root.getByText('The setup token is not correct.')).toBeVisible();
-  await expect(root).toHaveURL(/\/setup$/);
+  await expect(root).toHaveURL(/\/setup(\?start=new)?$/);
 
   await create(process.env.E2E_SETUP_TOKEN ?? '');
   await expect(root).toHaveURL(/\/2fa\/setup$/);

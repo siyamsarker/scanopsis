@@ -55,5 +55,8 @@ services:
       SCANOPSIS_PUBLIC_URL: http://localhost:18080
       SCANOPSIS_SECRET_KEY: c2Nhbm9wc2lzLWUyZS1maXhlZC10ZXN0LWtleS0zMi4=
       SCANOPSIS_LISTEN_ADDR: ":8080"
+    # The backup folder lives in memory: every run starts without backups.
+    tmpfs:
+      - /var/lib/scanopsis/backups:uid=65532,gid=65532,mode=0700
     ports:
       - "127.0.0.1:18080:8080"

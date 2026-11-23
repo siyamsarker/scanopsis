@@ -4,11 +4,35 @@
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-const composeFile = fileURLToPath(new URL('../compose.yaml', import.meta.url));
-const baseArgs = ['compose', '-p', 'scanopsis-e2e', '-f', composeFile];
+/** A Docker Compose project the tests start and stop. */
+export interface Stack {
+  project: string;
+  file: string;
+  /** The service whose log holds the setup token. */
+  app: string;
+}
 
-/** Runs `docker compose` against the test stack and returns standard output. */
-export function compose(args: string[]): Promise<string> {
+export const mainStack: Stack = {
+  project: 'scanopsis-e2e',
+  file: fileURLToPath(new URL('../compose.yaml', import.meta.url)),
+  app: 'scanopsis',
+};
+
+/**
+ * The stack of the backup tests: its own database, so that a restore cannot
+ * disturb the other tests. `app` is the installation that gets set up and
+ * backed up; `empty` stays empty for a restore from the setup screen.
+ */
+export const backupStack: Stack = {
+  project: 'scanopsis-e2e-backups',
+  file: fileURLToPath(new URL('../compose.backups.yaml', import.meta.url)),
+  app: 'scanopsis',
+};
+export const emptyService = 'scanopsis-empty';
+
+/** Runs `docker compose` against a test stack and returns standard output. */
+export function compose(args: string[], stack: Stack = mainStack): Promise<string> {
+  const baseArgs = ['compose', '-p', stack.project, '-f', stack.file];
   return new Promise((resolve, reject) => {
     execFile(
       'docker',
@@ -26,14 +50,17 @@ export function compose(args: string[]): Promise<string> {
 }
 
 /** Reads the one-time setup token Scanopsis writes to its log on first start. */
-export async function readSetupToken(): Promise<string> {
-  const logs = await compose(['logs', '--no-log-prefix', 'scanopsis']);
+export async function readSetupToken(
+  stack: Stack = mainStack,
+  service: string = stack.app,
+): Promise<string> {
+  const logs = await compose(['logs', '--no-log-prefix', service], stack);
   for (const line of logs.split('\n')) {
     if (!line.includes('"setup_token"')) continue;
     const entry = JSON.parse(line) as { setup_token?: string };
     if (entry.setup_token) return entry.setup_token;
   }
-  throw new Error('the scanopsis log has no setup_token line');
+  throw new Error(`the log of ${service} has no setup_token line`);
 }
 
 /** Sets the temporary password of a local account and returns it. */
