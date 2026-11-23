@@ -66,19 +66,22 @@ func NewSetup(s SetupStore, sessions SessionStarter, audit AuditRecorder, client
 // PrepareToken returns a new one-time token if no administrator exists, and
 // "" otherwise. The caller logs it at start. Only its SHA-256 is kept, and
 // only in memory; it stops working once setup completes. It fails if a token
-// was already issued by this Setup.
+// was already issued by this Setup and no administrator exists. When one
+// does (the database was replaced by a restore), the old token is dropped.
 func (s *Setup) PrepareToken(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.hasToken {
-		return "", errors.New("a setup token was already issued")
-	}
 	n, err := s.store.CountAdmins(ctx)
 	if err != nil {
 		return "", fmt.Errorf("count administrators: %w", err)
 	}
 	if n > 0 {
+		s.hasToken = false
+		s.tokenHash = [sha256.Size]byte{}
 		return "", nil
+	}
+	if s.hasToken {
+		return "", errors.New("a setup token was already issued")
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -88,6 +91,43 @@ func (s *Setup) PrepareToken(ctx context.Context) (string, error) {
 	s.tokenHash = sha256.Sum256([]byte(token))
 	s.hasToken = true
 	return token, nil
+}
+
+var (
+	// ErrSetupDone means an administrator exists, so there is no setup.
+	ErrSetupDone = errors.New("setup is already complete")
+	// ErrInvalidToken means the setup token is wrong.
+	ErrInvalidToken = errors.New("the setup token is wrong")
+)
+
+// checkRateKey is the rate-limit key of CheckToken. The caller's address is
+// not known there, so all checks share one bucket, which is stricter than
+// the per-address limit of the setup form.
+const checkRateKey = "setup-check"
+
+// CheckToken checks token against the setup token without using it up. It
+// returns ErrSetupDone once an administrator exists, ErrInvalidToken if the
+// token is wrong or none was issued, and ErrTooManyAttempts when the setup
+// rate limit is exceeded. It compares as the setup form does, in constant
+// time, and uses the same limiter.
+func (s *Setup) CheckToken(ctx context.Context, token string) error {
+	if ok, _ := s.limiter.Allow(checkRateKey); !ok {
+		return ErrTooManyAttempts
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, err := s.store.CountAdmins(ctx)
+	if err != nil {
+		return fmt.Errorf("count administrators: %w", err)
+	}
+	if n > 0 {
+		return ErrSetupDone
+	}
+	sum := sha256.Sum256([]byte(token))
+	if !s.hasToken || subtle.ConstantTimeCompare(sum[:], s.tokenHash[:]) != 1 {
+		return ErrInvalidToken
+	}
+	return nil
 }
 
 // Handler serves GET and POST /api/v1/setup.

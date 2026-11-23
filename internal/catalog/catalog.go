@@ -53,6 +53,11 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, log *
 	return c
 }
 
+// ResetCaches drops what the service keeps in memory about the database
+// (the portfolio history), so that nothing computed from data that has been
+// replaced is served. The next request computes it again.
+func (c *Catalog) ResetCaches() { c.history.Reset() }
+
 // Handlers returns the HTTP handlers by OpenAPI operation ID.
 func (c *Catalog) Handlers() map[string]http.Handler {
 	return map[string]http.Handler{

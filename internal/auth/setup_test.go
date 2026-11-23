@@ -496,3 +496,55 @@ func TestSetupInternalErrors(t *testing.T) {
 		}
 	})
 }
+
+func TestSetupCheckToken(t *testing.T) {
+	f := newSetupFixture(t, 4)
+	ctx := context.Background()
+	if err := f.s.CheckToken(ctx, f.token); err != nil {
+		t.Fatalf("valid token: %v", err)
+	}
+	// Checking does not spend the token.
+	if err := f.s.CheckToken(ctx, f.token); err != nil {
+		t.Fatalf("valid token again: %v", err)
+	}
+	if err := f.s.CheckToken(ctx, "wrong"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("wrong token: %v", err)
+	}
+	if err := f.s.CheckToken(ctx, ""); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("empty token: %v", err)
+	}
+	// The limiter is the setup limiter: attempts run out.
+	if err := f.s.CheckToken(ctx, f.token); !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("over the limit: %v", err)
+	}
+	f.clock.Advance(time.Minute)
+	f.store.admins = 1
+	if err := f.s.CheckToken(ctx, f.token); !errors.Is(err, ErrSetupDone) {
+		t.Fatalf("after an administrator exists: %v", err)
+	}
+}
+
+func TestSetupCheckTokenWithoutToken(t *testing.T) {
+	s := NewSetup(&fakeSetupStore{}, &fakeStarter{}, &fakeAudit{}, nil, NewRateLimiter(time.Second, 5, nil), nil)
+	if err := s.CheckToken(context.Background(), "anything"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("no token issued: %v", err)
+	}
+}
+
+func TestSetupPrepareTokenAgainAfterRestore(t *testing.T) {
+	f := newSetupFixture(t, 5)
+	ctx := context.Background()
+	// The database was replaced by one with an administrator: the old token
+	// is dropped, no new one is issued.
+	f.store.admins = 1
+	if tok, err := f.s.PrepareToken(ctx); tok != "" || err != nil {
+		t.Fatalf("PrepareToken with an admin: %q, %v", tok, err)
+	}
+	f.store.admins = 0
+	if err := f.s.CheckToken(ctx, f.token); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("old token still accepted: %v", err)
+	}
+	if tok, err := f.s.PrepareToken(ctx); tok == "" || tok == f.token || err != nil {
+		t.Fatalf("new token %q, %v", tok, err)
+	}
+}

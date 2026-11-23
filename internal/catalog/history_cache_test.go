@@ -216,3 +216,49 @@ func TestHistoryGrace(t *testing.T) {
 		t.Fatalf("after a failure: %q with %d computations, want f#4 with %d", b, f.calls.Load(), calls)
 	}
 }
+
+// Reset drops the cached history at once, whatever the fingerprint and the
+// grace period say, and a computation that was running when the data was
+// replaced does not put its old result back.
+func TestHistoryCacheReset(t *testing.T) {
+	f, h := newFake(t)
+	if b := getBody(t, h); b != "a#1" {
+		t.Fatalf("first = %q", b)
+	}
+	// Unchanged fingerprint, young history: served from the cache.
+	if b := getBody(t, h); b != "a#1" || f.calls.Load() != 1 {
+		t.Fatalf("second = %q after %d computations", b, f.calls.Load())
+	}
+	h.Reset()
+	if b := getBody(t, h); b != "a#2" {
+		t.Fatalf("after Reset = %q, want a fresh a#2", b)
+	}
+
+	// A computation in flight during Reset is not stored.
+	f.mu.Lock()
+	f.hold = make(chan struct{})
+	hold := f.hold
+	f.mu.Unlock()
+	f.set("b", time.Minute)
+	stale := make(chan string)
+	go func() { stale <- getBody(t, h) }()
+	for f.calls.Load() < 3 {
+		time.Sleep(time.Millisecond)
+	}
+	// Drain the start signals of the three computations so far.
+	<-f.started
+	<-f.started
+	h.Reset()
+	f.mu.Lock()
+	f.hold = nil
+	f.print = "c"
+	f.mu.Unlock()
+	if b := getBody(t, h); b != "c#4" {
+		t.Fatalf("after Reset during a computation = %q, want c#4", b)
+	}
+	close(hold)
+	<-stale
+	if b := getBody(t, h); b != "c#4" {
+		t.Fatalf("a reset computation replaced the history: %q", b)
+	}
+}

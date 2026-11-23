@@ -62,6 +62,9 @@ type historyCache struct {
 	bodyAt    time.Time // when the computation of body started
 	startedAt time.Time // when the latest computation started
 	running   *historyFill
+	// epoch counts resets; a computation that began in an earlier epoch
+	// does not store its result.
+	epoch uint64
 }
 
 // historyFill is a computation in progress; done is closed when it ends.
@@ -130,6 +133,7 @@ func (h *historyCache) get(ctx context.Context) ([]byte, error) {
 func (h *historyCache) start(parent context.Context, fp string, now time.Time) *historyFill {
 	f := &historyFill{done: make(chan struct{})}
 	h.running, h.startedAt = f, now
+	epoch := h.epoch
 	// Detached from the request that starts it (keeping its values for the
 	// log), so a caller that gives up does not cancel it for the others,
 	// and bounded on its own.
@@ -138,12 +142,27 @@ func (h *historyCache) start(parent context.Context, fp string, now time.Time) *
 		defer cancel()
 		f.body, f.err = h.compute(ctx)
 		h.mu.Lock()
-		if f.err == nil {
+		if f.err == nil && h.epoch == epoch {
 			h.body, h.bodyPrint, h.bodyAt = f.body, fp, now
 		}
-		h.running = nil
+		if h.running == f {
+			h.running = nil
+		}
 		h.mu.Unlock()
 		close(f.done)
 	}()
 	return f
+}
+
+// Reset drops the cached history and forgets the running computation, so
+// the next request computes a new one from the database as it is now. It is
+// for after the data was replaced (a restore), when the fingerprint cannot
+// be trusted to tell the old data from the new.
+func (h *historyCache) Reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.epoch++
+	h.body, h.bodyPrint = nil, ""
+	h.bodyAt, h.startedAt = time.Time{}, time.Time{}
+	h.running = nil
 }

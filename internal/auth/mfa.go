@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -365,23 +366,105 @@ func (m *MFA) rejected(w http.ResponseWriter, r *http.Request, p *Principal, met
 // user. The failure that reaches mfaMaxFailures locks the account: all of its
 // sessions are deleted and the answer is 423.
 func (m *MFA) rejectedVerify(w http.ResponseWriter, r *http.Request, p *Principal, user store.User, method string) {
-	ctx := r.Context()
-	m.audit.Record(ctx, actorOf(p), audit.ActionMFAFailed, m.detail(r, method))
-	failures, err := m.store.RecordMFAFailure(ctx, user.ID)
-	if err != nil {
+	locked, err := m.countFailure(r.Context(), actorOf(p), user.ID, m.detail(r, method))
+	switch {
+	case errors.Is(err, errCountFailure):
 		m.fail(w, r, "cannot count the failed code", err)
-		return
+	case err != nil:
+		m.fail(w, r, "cannot end the sessions of a locked user", err)
+	case locked:
+		writeLocked(w)
+	default:
+		writeError(w, http.StatusUnauthorized, "invalid_code", "That code is wrong or has already been used.")
+	}
+}
+
+// errCountFailure marks an error of countFailure that came from counting
+// rather than from ending the sessions.
+var errCountFailure = errors.New("count the failed code")
+
+// countFailure audits a wrong code and counts it against the user. When
+// that failure reaches mfaMaxFailures it audits the lock and ends every
+// session of the user, and locked is true.
+func (m *MFA) countFailure(ctx context.Context, actor string, userID int64, detail map[string]any) (locked bool, err error) {
+	m.audit.Record(ctx, actor, audit.ActionMFAFailed, detail)
+	failures, err := m.store.RecordMFAFailure(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", errCountFailure, err)
 	}
 	if failures < mfaMaxFailures {
-		writeError(w, http.StatusUnauthorized, "invalid_code", "That code is wrong or has already been used.")
-		return
+		return false, nil
 	}
-	m.audit.Record(ctx, actorOf(p), audit.ActionMFALocked, m.detail(r, method))
-	if err := m.store.DeleteUserSessions(ctx, user.ID); err != nil {
-		m.fail(w, r, "cannot end the sessions of a locked user", err)
-		return
+	m.audit.Record(ctx, actor, audit.ActionMFALocked, detail)
+	if err := m.store.DeleteUserSessions(ctx, userID); err != nil {
+		return false, err
 	}
-	writeLocked(w)
+	return true, nil
+}
+
+var (
+	// ErrInvalidCode means a two-factor code is wrong or was already used.
+	ErrInvalidCode = errors.New("the code is wrong or has already been used")
+	// ErrLocked means the account's second factor is locked after too many
+	// wrong codes.
+	ErrLocked = errors.New("two-factor authentication is locked after too many wrong codes")
+	// ErrTooManyAttempts means a rate limit was exceeded.
+	ErrTooManyAttempts = errors.New("too many attempts; try again later")
+)
+
+// CheckCode checks a fresh TOTP code of the user, for an action that needs
+// the person at the keyboard again. It is the check of sign-in without the
+// session: the code must match within the same skew, a step is accepted once
+// (a code used at sign-in cannot be used here, and the other way round), a
+// wrong code counts toward the lock, and the same limiter applies. Recovery
+// codes are not accepted; one is a wrong code. It returns ErrInvalidCode,
+// ErrLocked or ErrTooManyAttempts, or another error if the check could not be
+// made.
+func (m *MFA) CheckCode(ctx context.Context, userID int64, code string) error {
+	user, err := m.store.GetUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("load user: %w", err)
+	}
+	if !user.TotpEnabledAt.Valid {
+		return ErrInvalidCode
+	}
+	if user.MfaFailedAttempts >= mfaMaxFailures {
+		return ErrLocked
+	}
+	if ok, _ := m.opts.Limiter.Allow(strconv.FormatInt(userID, 10)); !ok {
+		return ErrTooManyAttempts
+	}
+	code = normaliseCode(code)
+	accepted := false
+	if isTOTPCode(code) {
+		step, matched, err := m.matchTOTP(user, code)
+		if err != nil {
+			return fmt.Errorf("cannot decrypt TOTP secret; check SCANOPSIS_SECRET_KEY: %w", err)
+		}
+		if matched {
+			accepted, err = queryRow(m.store.UseTOTPStep(ctx, store.UseTOTPStepParams{Step: step, ID: user.ID}))
+			if err != nil {
+				return fmt.Errorf("record TOTP step: %w", err)
+			}
+		}
+	}
+	if !accepted {
+		locked, err := m.countFailure(ctx, user.Source+":"+user.Username, user.ID,
+			map[string]any{"method": "totp", "purpose": "step_up"})
+		switch {
+		case err != nil:
+			return err
+		case locked:
+			return ErrLocked
+		}
+		return ErrInvalidCode
+	}
+	if user.MfaFailedAttempts > 0 {
+		if err := m.store.ResetMFAFailures(ctx, user.ID); err != nil {
+			return fmt.Errorf("reset the failed-code count: %w", err)
+		}
+	}
+	return nil
 }
 
 func writeLocked(w http.ResponseWriter) {

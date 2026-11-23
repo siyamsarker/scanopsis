@@ -1061,3 +1061,112 @@ func TestMFAWithoutRecoveryKeyIssuesNoCodes(t *testing.T) {
 		t.Fatal("a version 2 code was looked up without a key")
 	}
 }
+
+func TestCheckCodeReplay(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	ctx := context.Background()
+	code := f.codeAt(t, secret, f.clock.Now())
+	if err := f.mfa.CheckCode(ctx, mfaUserID, code); err != nil {
+		t.Fatalf("first use: %v", err)
+	}
+	if err := f.mfa.CheckCode(ctx, mfaUserID, code); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("replay: %v; want ErrInvalidCode", err)
+	}
+	// A step the sign-in check already used is a replay here too.
+	f.clock.Advance(time.Minute)
+	signIn := f.codeAt(t, secret, f.clock.Now())
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(signIn)); w.Code != http.StatusNoContent {
+		t.Fatalf("sign-in: %d %s", w.Code, w.Body)
+	}
+	if err := f.mfa.CheckCode(ctx, mfaUserID, signIn); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("code used at sign-in: %v; want ErrInvalidCode", err)
+	}
+	// A code with spaces, as typed, is accepted.
+	f.clock.Advance(time.Minute)
+	c := f.codeAt(t, secret, f.clock.Now())
+	if err := f.mfa.CheckCode(ctx, mfaUserID, c[:3]+" "+c[3:]); err != nil {
+		t.Fatalf("spaced code: %v", err)
+	}
+}
+
+func TestCheckCodeLockout(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	f.mfa.opts.Limiter = NewRateLimiter(time.Second, 1000, f.clock.Now)
+	ctx := context.Background()
+	for i := 1; i < mfaMaxFailures; i++ {
+		if err := f.mfa.CheckCode(ctx, mfaUserID, "000000"); !errors.Is(err, ErrInvalidCode) {
+			t.Fatalf("failure %d: %v", i, err)
+		}
+		if f.store.user.MfaFailedAttempts != int32(i) {
+			t.Fatalf("counter %d after %d failures", f.store.user.MfaFailedAttempts, i)
+		}
+	}
+	if err := f.mfa.CheckCode(ctx, mfaUserID, "000000"); !errors.Is(err, ErrLocked) {
+		t.Fatalf("tenth failure: %v; want ErrLocked", err)
+	}
+	if last := f.audit.events[len(f.audit.events)-1]; last.Action != audit.ActionMFALocked || last.Actor != "local:vic" {
+		t.Fatalf("last audit event %+v; want mfa.locked", last)
+	}
+	if len(f.sstore.sessions) != 0 {
+		t.Fatalf("%d sessions left after the lock", len(f.sstore.sessions))
+	}
+	// Locked: even the right code is refused, and nothing is counted.
+	events := len(f.audit.events)
+	if err := f.mfa.CheckCode(ctx, mfaUserID, f.codeAt(t, secret, f.clock.Now())); !errors.Is(err, ErrLocked) {
+		t.Fatalf("right code while locked: %v", err)
+	}
+	if len(f.audit.events) != events || f.store.user.MfaFailedAttempts != mfaMaxFailures {
+		t.Fatal("a locked account checked the code")
+	}
+}
+
+func TestCheckCodeSuccessResetsTheCounter(t *testing.T) {
+	f := newMFAFixture(t)
+	secret, _ := f.enrolled(t)
+	ctx := context.Background()
+	_ = f.mfa.CheckCode(ctx, mfaUserID, "000000")
+	_ = f.mfa.CheckCode(ctx, mfaUserID, "000000")
+	if err := f.mfa.CheckCode(ctx, mfaUserID, f.codeAt(t, secret, f.clock.Now())); err != nil {
+		t.Fatal(err)
+	}
+	if f.store.user.MfaFailedAttempts != 0 {
+		t.Fatalf("counter %d after a right code", f.store.user.MfaFailedAttempts)
+	}
+}
+
+func TestCheckCodeRejectsRecoveryCode(t *testing.T) {
+	f := newMFAFixture(t)
+	_, codes := f.enrolled(t)
+	ctx := context.Background()
+	if err := f.mfa.CheckCode(ctx, mfaUserID, codes[0]); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("recovery code: %v; want ErrInvalidCode", err)
+	}
+	if f.store.user.MfaFailedAttempts != 1 {
+		t.Fatalf("counter %d; a recovery code counts as a failure", f.store.user.MfaFailedAttempts)
+	}
+	// It was not used up.
+	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(codes[0])); w.Code != http.StatusNoContent {
+		t.Fatalf("recovery code at sign-in afterwards: %d %s", w.Code, w.Body)
+	}
+}
+
+func TestCheckCodeLimiterAndNotEnrolled(t *testing.T) {
+	f := newMFAFixture(t)
+	ctx := context.Background()
+	if err := f.mfa.CheckCode(ctx, mfaUserID, "123456"); !errors.Is(err, ErrInvalidCode) {
+		t.Fatalf("not enrolled: %v", err)
+	}
+	secret, _ := f.enrolled(t)
+	_ = secret
+	var err error
+	for range 10 {
+		if err = f.mfa.CheckCode(ctx, mfaUserID, "000000"); errors.Is(err, ErrTooManyAttempts) {
+			break
+		}
+	}
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("last error %v; want ErrTooManyAttempts", err)
+	}
+}
