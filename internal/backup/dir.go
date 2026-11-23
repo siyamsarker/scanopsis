@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -111,6 +112,13 @@ type Info struct {
 	// empty for backups made here.
 	UploadedAt   *time.Time `json:"uploaded_at"`
 	OriginalName string     `json:"original_name"`
+	// Problem says why a file that looked like a backup cannot be used,
+	// once a check of the whole file found it damaged; Readable is then
+	// false. Empty when no problem is known.
+	Problem string `json:"problem,omitempty"`
+
+	// unchecked is true while the whole file, as it is now, was not checked.
+	unchecked bool
 }
 
 type cached struct {
@@ -134,6 +142,23 @@ type uploadMeta struct {
 // called name.
 func metaName(name string) string { return "." + name + ".json" }
 
+// checksFile, in the folder, keeps the outcome of the checks of whole
+// backup files, so a file is not read again after a restart.
+const checksFile = ".checked.json"
+
+// checkMark is the outcome of a check of the whole backup file of the
+// given size and modification time: Problem says why it cannot be used,
+// empty when it passed. A file that changed is checked again.
+type checkMark struct {
+	Size    int64  `json:"size"`
+	ModTime int64  `json:"mod_time"`
+	Problem string `json:"problem,omitempty"`
+}
+
+func (m checkMark) of(fi os.FileInfo) bool {
+	return m.Size == fi.Size() && m.ModTime == fi.ModTime().UnixNano()
+}
+
 // Dir is the folder that holds backup files.
 type Dir struct {
 	path        string
@@ -142,6 +167,10 @@ type Dir struct {
 
 	mu    sync.Mutex
 	cache map[string]cached
+	// checks holds the outcome of the checks of whole files, by name; it is
+	// kept in checksFile, whose writes saveMu orders.
+	checks map[string]checkMark
+	saveMu sync.Mutex
 
 	// probeMu guards the last check that the folder can be written; it is
 	// repeated at most every probeEvery.
@@ -171,6 +200,14 @@ func OpenDir(path string, keyFingerprint string) (*Dir, error) {
 	d := &Dir{
 		path: path, fingerprint: keyFingerprint, freeBytes: func() (uint64, error) { return statfsFree(path) },
 		cache: map[string]cached{}, probeEvery: probeEvery, probedAt: time.Now(),
+		checks: map[string]checkMark{},
+	}
+	if b, err := os.ReadFile(filepath.Join(path, checksFile)); err == nil { //nolint:gosec // a fixed name in the folder
+		// An unreadable file only means the files are checked again.
+		_ = json.Unmarshal(b, &d.checks)
+		if d.checks == nil {
+			d.checks = map[string]checkMark{}
+		}
 	}
 	d.sweep(time.Now())
 	return d, nil
@@ -258,7 +295,12 @@ func (d *Dir) Delete(name string) error {
 	_ = os.Remove(filepath.Join(d.path, metaName(name))) //nolint:gosec // name matched fileName in Path
 	d.mu.Lock()
 	delete(d.cache, name)
+	_, checked := d.checks[name]
+	delete(d.checks, name)
 	d.mu.Unlock()
+	if checked {
+		d.saveChecks()
+	}
 	return nil
 }
 
@@ -331,7 +373,17 @@ func (d *Dir) List() ([]Info, error) {
 			delete(d.cache, n)
 		}
 	}
+	gone := false
+	for n := range d.checks {
+		if !seen[n] {
+			delete(d.checks, n)
+			gone = true
+		}
+	}
 	d.mu.Unlock()
+	if gone {
+		d.saveChecks()
+	}
 	sort.Slice(out, func(i, j int) bool {
 		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
 			return out[i].CreatedAt.After(out[j].CreatedAt)
@@ -359,7 +411,65 @@ func (d *Dir) info(name string, fi os.FileInfo) Info {
 		d.cache[name] = c
 		d.mu.Unlock()
 	}
-	return d.build(name, fi.Size(), c)
+	info := d.build(name, fi.Size(), c)
+	d.mu.Lock()
+	mark, checked := d.checks[name]
+	d.mu.Unlock()
+	switch {
+	case checked && mark.of(fi) && mark.Problem != "":
+		info.Readable, info.Problem = false, mark.Problem
+	case !checked || !mark.of(fi):
+		info.unchecked = true
+	}
+	return info
+}
+
+// checkable reports whether a check of the whole file of info can tell
+// whether it is damaged: a backup of this key and a version this one reads
+// that was not checked yet in its current form.
+func (info Info) checkable() bool {
+	return info.unchecked && info.Readable && info.KeyMatches && !info.NewerVersion
+}
+
+// markChecked records the outcome of a check of the whole backup called
+// name, as the file fi was then; problem is empty when it passed. The
+// outcome is kept in the folder; when it cannot be written there, it is
+// kept until the server stops.
+func (d *Dir) markChecked(name string, fi os.FileInfo, problem string) {
+	d.mu.Lock()
+	if d.checks == nil {
+		d.checks = map[string]checkMark{}
+	}
+	d.checks[name] = checkMark{Size: fi.Size(), ModTime: fi.ModTime().UnixNano(), Problem: problem}
+	d.mu.Unlock()
+	d.saveChecks()
+}
+
+// problemOf returns why the backup called name cannot be used, as a check
+// of the whole file as it is now found it, or "".
+func (d *Dir) problemOf(name string, fi os.FileInfo) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if mark, ok := d.checks[name]; ok && mark.of(fi) {
+		return mark.Problem
+	}
+	return ""
+}
+
+// saveChecks writes the outcomes of the checks to the folder.
+func (d *Dir) saveChecks() {
+	d.saveMu.Lock()
+	defer d.saveMu.Unlock()
+	d.mu.Lock()
+	checks := make(map[string]checkMark, len(d.checks))
+	maps.Copy(checks, d.checks)
+	d.mu.Unlock()
+	// A folder that cannot be written is reported by Usable.
+	if len(checks) == 0 {
+		_ = os.Remove(filepath.Join(d.path, checksFile))
+		return
+	}
+	_ = writeFileAtomic(filepath.Join(d.path, checksFile), checks)
 }
 
 func (d *Dir) build(name string, size int64, c cached) Info {
@@ -403,6 +513,8 @@ func (d *Dir) adopt(src, originalName string, at time.Time) (Info, error) {
 	if err != nil {
 		return Info{}, d.writeError(err)
 	}
+	// The upload was checked in full before it was adopted.
+	d.markChecked(name, fi, "")
 	return d.info(name, fi), nil
 }
 

@@ -1843,8 +1843,10 @@ export interface components {
             schema: number;
             /** @description The backup was made with the secret key this server runs with. Only such a backup can be restored. */
             key_matches: boolean;
-            /** @description False when the manifest cannot be read: the backup can be deleted but not restored, and only name, kind, size and created_at are known. */
+            /** @description False when the manifest cannot be read, or a check of the whole file found it damaged (see problem): the backup can be downloaded and deleted but not restored. Without a manifest, only name, kind, size and created_at are known. */
             readable: boolean;
+            /** @description Why the file cannot be used, when a check of the whole file found it damaged, for example "The file is damaged: the file ends too early." Absent when no problem is known. Backups that appear in the folder without being made or uploaded here are checked in the background, one at a time, after the other checks. */
+            problem?: string;
             /** @description True when a newer version of Scanopsis made the backup (a newer file format or database schema): it cannot be restored by this version. A newer file format is also not readable. */
             newer_version: boolean;
             /**

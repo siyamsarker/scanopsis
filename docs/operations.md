@@ -584,7 +584,14 @@ two uploads can be open at once; an upload that receives nothing for 10
 minutes makes room for a new one.
 
 Backups that Scanopsis cannot read are listed as **Cannot be read**; you can
-delete them, not restore them. A backup from a newer version of Scanopsis is
+download and delete them, not restore them. A file that appears in the folder
+without being made or uploaded through Scanopsis, for example one copied in by
+hand, is read in full in the background, one file at a time and after the
+other checks. If it is damaged, for example because the copy stopped early, it
+is listed as **Cannot be read** with the reason, such as `The file is damaged:
+the file ends too early.` Scanopsis remembers the outcome in the hidden file
+`.checked.json` in the backup folder, so a file is read again only when it
+changes. A backup from a newer version of Scanopsis is
 listed as **Made by a newer version of Scanopsis**: install that version or a
 later one to restore it. A backup made with another secret key shows
 **Made with another secret key** and cannot be restored here. To use it, set

@@ -178,6 +178,8 @@ type Service struct {
 	restore  func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error
 	// lockFn takes the locks of a job (see lock); tests replace it.
 	lockFn func(ctx context.Context, exclusive bool) (func(), error)
+	// verifyFile checks the whole backup file at path; tests replace it.
+	verifyFile func(ctx context.Context, path string) error
 	// expiring, if not nil, is called with the names expiry is about to
 	// delete.
 	expiring func(names []string)
@@ -199,6 +201,11 @@ type Service struct {
 	// saveMu orders the writes of the schedule status file, so the file
 	// always ends with the latest status.
 	saveMu sync.Mutex
+
+	// listedChecks holds the names of the files checked for the list,
+	// waiting or running.
+	listedMu     sync.Mutex
+	listedChecks map[string]bool
 
 	mu      sync.Mutex
 	running bool
@@ -226,6 +233,7 @@ func NewService(o ServiceOptions) *Service {
 		s.dump = o.Dumper.Dump
 	}
 	s.lockFn = s.lock
+	s.verifyFile = s.verifyWhole
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	idle := make(chan struct{})
 	close(idle)
@@ -259,6 +267,10 @@ const (
 	// checkPreview computes the preview of a backup in the folder, which
 	// only informs a decision; it waits while an upload check waits.
 	checkPreview
+	// checkListed checks a backup that appeared in the folder without
+	// being written or checked here, so the list can mark a damaged one;
+	// nobody waits for it.
+	checkListed
 	checkPriorities
 )
 
@@ -699,8 +711,101 @@ func (s *Service) CheckRestore(name string) error {
 	if err != nil {
 		return err
 	}
+	if fi, err := os.Stat(path); err == nil {
+		if problem := s.o.Dir.problemOf(name, fi); problem != "" {
+			return &publicError{msg: problem, err: fmt.Errorf("%w: %s", ErrCorrupt, problem)}
+		}
+	}
 	_, err = s.check(path)
 	return err
+}
+
+// verifyWhole checks the whole backup file at path, as Restore does before
+// it writes anything: every checksum and the signature of this key.
+func (s *Service) verifyWhole(ctx context.Context, path string) error {
+	f, err := os.Open(path) //nolint:gosec // path comes from Dir.Path
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	_, _, err = VerifyLimited(ctxReader{ctx, f}, s.o.Dumper.SigningKey, nil, expansionLimit(fi.Size()))
+	return err
+}
+
+// checkListed checks, in the background and after every other check, the
+// whole of each listed backup that could be restored here but was neither
+// written nor checked here in its current form: a file copied into the
+// folder by hand, or one that changed. A damaged one is then listed as such
+// (see Dir.markChecked). A check that cannot tell, because the file went
+// away or the server stops, is tried again at a later listing.
+func (s *Service) checkListed(list []Info) {
+	if s.o.Dir == nil || s.o.Dumper == nil {
+		return
+	}
+	for _, info := range list {
+		if !info.checkable() {
+			continue
+		}
+		name := info.Name
+		s.listedMu.Lock()
+		if s.listedChecks[name] {
+			s.listedMu.Unlock()
+			continue
+		}
+		if s.listedChecks == nil {
+			s.listedChecks = map[string]bool{}
+		}
+		s.listedChecks[name] = true
+		s.listedMu.Unlock()
+		done := func() {
+			s.listedMu.Lock()
+			delete(s.listedChecks, name)
+			s.listedMu.Unlock()
+		}
+		err := s.background(s.ctx, checkListed, func() {
+			defer done()
+			if s.ctx.Err() != nil {
+				return
+			}
+			s.recordCheck(s.ctx, name, s.verifyFile)
+		})
+		if err != nil {
+			done()
+		}
+	}
+}
+
+// recordCheck runs check on the backup called name and keeps the outcome
+// for the list, when it is one that lasts as long as the file stays the
+// same.
+func (s *Service) recordCheck(ctx context.Context, name string, check func(context.Context, string) error) {
+	path, err := s.o.Dir.Path(name)
+	if err != nil {
+		return
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	err = check(ctx, path)
+	s.markOutcome(ctx, name, fi, err)
+}
+
+// markOutcome keeps the outcome err of a check of the whole backup called
+// name, as the file fi was before the check, when it lasts: a pass, or a
+// file that is damaged, not a backup or not signed with this key.
+func (s *Service) markOutcome(ctx context.Context, name string, fi os.FileInfo, err error) {
+	switch {
+	case err == nil:
+		s.o.Dir.markChecked(name, fi, "")
+	case lasting(err) && !errors.Is(err, os.ErrNotExist):
+		s.o.Log.WarnContext(ctx, "a backup in the folder is damaged", "name", name, "error", err)
+		s.o.Dir.markChecked(name, fi, message(err))
+	}
 }
 
 // StartRestore starts restoring the backup called name in the background
@@ -760,6 +865,7 @@ func (s *Service) check(path string) (Kind, error) {
 func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSafety, keepHostSettings bool) {
 	ctx := s.ctx
 	var safety string
+	before, _ := os.Stat(path)
 	// committed is set once the restore transaction has committed, or may
 	// have: from then on the database may hold the backup's data, whatever
 	// happens next.
@@ -834,6 +940,10 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 		return
 	}
 	err = s.stopped(err)
+	if err != nil && before != nil && lasting(err) {
+		// The list then shows the file as damaged.
+		s.markOutcome(ctx, name, before, err)
+	}
 	if err != nil {
 		s.o.Log.ErrorContext(ctx, "restore failed", "name", name, "actor", actor, "error", err)
 		s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupRestoreFailed, map[string]any{"name": name, "error": message(err)})

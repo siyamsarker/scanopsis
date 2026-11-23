@@ -367,6 +367,7 @@ func (a *API) list(w http.ResponseWriter, _ *http.Request) {
 		fail(err)
 	} else {
 		out.Backups = list
+		a.svc.checkListed(list)
 	}
 	if free, err := dir.FreeBytes(); err != nil {
 		fail(err)
@@ -687,6 +688,11 @@ func (a *API) preview(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			pv, err = a.computePreview(ctx, p)
+			// A preview of a backup this server can restore read the
+			// whole file: the list can use what it found.
+			if err != nil || (pv.KeyMatches && pv.SchemaOK) {
+				a.svc.markOutcome(ctx, fi.Name(), fi, err)
+			}
 		})
 		if err != nil {
 			stop()

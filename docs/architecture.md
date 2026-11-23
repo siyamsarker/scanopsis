@@ -273,10 +273,14 @@ one transaction. Only a restore also takes their advisory locks, and waits up
 to two minutes for them, so neither runs while the data is replaced. The jobs
 run in the background; the page and the API read their progress.
 
-Two other tasks read a whole backup: the check of an uploaded file and the
-preview of a restore. They run in the background too, one at a time, and are
-stopped when Scanopsis shuts down. When several wait, the check of an upload
-goes before a preview. The API answers `202` with the state `checking` and
+Three other tasks read a whole backup: the check of an uploaded file, the
+preview of a restore, and the check of a file that appeared in the folder
+without being written or checked by Scanopsis, so the list can mark a damaged
+one. They run in the background too, one at a time, and are stopped when
+Scanopsis shuts down. When several wait, the check of an upload goes first,
+then a preview, then the check for the list. The outcome of every check of a
+whole file is kept in `.checked.json` in the backup folder, by name, size and
+modification time. The API answers `202` with the state `checking` and
 the page asks again every few seconds, so no request waits while a large file
 is read. A preview that nobody asks for during 60 seconds, because its dialog
 was closed, is stopped. A finished preview is kept for an hour while the file

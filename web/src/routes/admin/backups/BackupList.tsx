@@ -73,6 +73,11 @@ function BackupRow({ backup, busy }: { backup: BackupInfo; busy: boolean }) {
             {blockedLabels[blocked]}
           </StatusPill>
         ) : null}
+        {blocked === 'unreadable' && backup.problem ? (
+          <p className="mt-1 text-small break-words whitespace-normal text-text-muted">
+            {backup.problem}
+          </p>
+        ) : null}
         <p className="mt-1 text-small text-text-muted sm:hidden">
           {kindLabel(backup.kind)}, {formatBytes(backup.size)}
         </p>

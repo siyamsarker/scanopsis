@@ -341,6 +341,34 @@ describe('backups page', () => {
     expect(menu).toHaveTextContent('Only that version of Scanopsis or a later one can restore it.');
   });
 
+  it('marks a damaged backup, says why, and offers only download and delete', async () => {
+    const damaged = backup({
+      name: 'scanopsis-backup-20261118T100000Z-manual-trc123.tar.gz',
+      kind: 'manual',
+      created_at: '2026-11-18T10:00:00Z',
+      readable: false,
+      problem: 'The file is damaged: the file ends too early.',
+    });
+    mockFetch(
+      api((call) =>
+        call.path === '/api/v1/admin/backups' ? json(200, list({ backups: [damaged] })) : undefined,
+      ),
+    );
+    renderApp('/admin/backups');
+    const table = await screen.findByRole('table', { name: 'Backups' });
+    expect(within(table).getByText('Cannot be read')).toBeInTheDocument();
+    expect(within(table).getByText('The file is damaged: the file ends too early.')).toBeVisible();
+    const menu = await openMenu(/Actions for the backup from 18 Nov 2026/);
+    expect(within(menu).getByRole('menuitem', { name: 'Restore' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(within(menu).getByRole('menuitem', { name: 'Download' })).not.toHaveAttribute(
+      'aria-disabled',
+    );
+    expect(menu).toHaveTextContent('Only a readable backup can be restored.');
+  });
+
   it('reports a failed restore of a scheduled backup', async () => {
     mockFetch(
       api((call) =>

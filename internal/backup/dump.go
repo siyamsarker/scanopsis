@@ -144,6 +144,8 @@ func (d *Dumper) Dump(ctx context.Context, kind Kind, actor string, progress fun
 	if err != nil {
 		return Info{}, fmt.Errorf("take backup: %w", err)
 	}
+	// The file was written whole and synced: it needs no check to be listed.
+	d.Dir.markChecked(name, fi, "")
 	return d.Dir.info(name, fi), nil
 }
 

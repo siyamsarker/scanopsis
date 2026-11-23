@@ -210,8 +210,8 @@ func TestDumpBasic(t *testing.T) {
 	if _, _, err := Verify(f, testSigningKey, nil); err != nil {
 		t.Errorf("Verify: %v", err)
 	}
-	if list, _ := d.Dir.List(); len(list) != 1 || list[0].Name != info.Name {
-		t.Errorf("List = %+v", list)
+	if list, _ := d.Dir.List(); len(list) != 1 || list[0].Name != info.Name || list[0].unchecked {
+		t.Errorf("List = %+v; want the new backup, known to be whole", list)
 	}
 }
 
