@@ -416,14 +416,15 @@ func (a *API) download(w http.ResponseWriter, r *http.Request) {
 	// file is sent would cancel the request.
 	_ = rc.SetReadDeadline(time.Time{})
 	dw := &deadlineWriter{ResponseWriter: w, rc: rc}
-	// A download is audited once: when the whole file or a range from its
-	// start is sent. Resuming it (a later range), a HEAD and a refused range
-	// are not recorded.
+	// Every GET that sends content of the file is audited, with the bytes
+	// sent as numbers and nothing taken from the request as it was written.
+	// A HEAD, a 304 and a refused range send none and are not recorded.
 	dw.onHeader = func(status int) {
-		fromStart := status == http.StatusOK ||
-			status == http.StatusPartialContent && strings.HasPrefix(r.Header.Get("Range"), "bytes=0-")
-		if r.Method == http.MethodGet && fromStart {
-			a.o.Audit.Record(r.Context(), who, actionDownloaded, map[string]any{"name": name, "size": fi.Size()})
+		if r.Method != http.MethodGet {
+			return
+		}
+		if detail, ok := downloadDetail(status, w.Header().Get("Content-Range"), r.Header.Get("Range"), name, fi.Size()); ok {
+			a.o.Audit.Record(r.Context(), who, actionDownloaded, detail)
 		}
 	}
 	dw.extend()
@@ -432,6 +433,105 @@ func (a *API) download(w http.ResponseWriter, r *http.Request) {
 	h.Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	h.Set("Cache-Control", "no-store")
 	http.ServeContent(dw, r, name, fi.ModTime(), f)
+}
+
+// downloadDetail is the audit detail of a download answered with status:
+// the name and size of the file, and the first and last byte sent. A
+// single range is read from the Content-Range the server wrote; for
+// several ranges (a multipart answer, which has none) start and end span
+// them all and ranges counts them. It reports false for an answer that
+// sends no content of the file.
+func downloadDetail(status int, contentRange, rangeHeader, name string, size int64) (map[string]any, bool) {
+	detail := map[string]any{"name": name, "size": size}
+	switch status {
+	case http.StatusOK:
+		detail["start"], detail["end"] = int64(0), size-1
+	case http.StatusPartialContent:
+		if start, end, ok := parseContentRange(contentRange); ok {
+			detail["start"], detail["end"] = start, end
+			break
+		}
+		spans := servedRanges(rangeHeader, size)
+		if len(spans) == 0 { // not expected: the server sent a range
+			detail["start"], detail["end"] = int64(0), size-1
+			break
+		}
+		start, end := spans[0][0], spans[0][1]
+		for _, s := range spans[1:] {
+			start, end = min(start, s[0]), max(end, s[1])
+		}
+		detail["start"], detail["end"], detail["ranges"] = start, end, int64(len(spans))
+	default:
+		return nil, false
+	}
+	return detail, true
+}
+
+// parseContentRange reads "bytes <first>-<last>/<size>".
+func parseContentRange(v string) (start, end int64, ok bool) {
+	v, found := strings.CutPrefix(v, "bytes ")
+	if !found {
+		return 0, 0, false
+	}
+	v, _, found = strings.Cut(v, "/")
+	if !found {
+		return 0, 0, false
+	}
+	a, b, found := strings.Cut(v, "-")
+	if !found {
+		return 0, 0, false
+	}
+	start, err1 := strconv.ParseInt(a, 10, 64)
+	end, err2 := strconv.ParseInt(b, 10, 64)
+	return start, end, err1 == nil && err2 == nil && start >= 0 && end >= start
+}
+
+// servedRanges returns the byte ranges of a Range header of a file of size
+// bytes, as first and last byte, by the rules net/http's ServeContent
+// follows: "a-b", "a-" and the suffix "-n"; a range that starts past the
+// end is left out. It returns nil for a header it cannot read.
+func servedRanges(v string, size int64) [][2]int64 {
+	v, ok := strings.CutPrefix(v, "bytes=")
+	if !ok {
+		return nil
+	}
+	var out [][2]int64
+	for _, part := range strings.Split(v, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		a, b, ok := strings.Cut(part, "-")
+		if !ok {
+			return nil
+		}
+		a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+		if a == "" {
+			n, err := strconv.ParseInt(b, 10, 64)
+			if err != nil || n < 0 {
+				return nil
+			}
+			n = min(n, size)
+			out = append(out, [2]int64{size - n, size - 1})
+			continue
+		}
+		start, err := strconv.ParseInt(a, 10, 64)
+		if err != nil || start < 0 {
+			return nil
+		}
+		if start >= size {
+			continue
+		}
+		end := size - 1
+		if b != "" {
+			if end, err = strconv.ParseInt(b, 10, 64); err != nil || end < start {
+				return nil
+			}
+			end = min(end, size-1)
+		}
+		out = append(out, [2]int64{start, end})
+	}
+	return out
 }
 
 func (a *API) delete(w http.ResponseWriter, r *http.Request) {

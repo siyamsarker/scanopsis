@@ -270,6 +270,10 @@ type RestoreStatus struct {
 	Percent    int        `json:"percent"`
 	Message    string     `json:"message"`
 	FinishedAt *time.Time `json:"finished_at"`
+	// RestartRequired is true only when a restore replaced the data but
+	// Scanopsis must restart to finish it (state failed); until then the
+	// API stays in restore mode.
+	RestartRequired bool `json:"restart_required"`
 }
 
 // RestoreStatus returns the state of the current or last restore. When the
@@ -291,7 +295,7 @@ func publicRestore(st JobStatus, needRestart bool) RestoreStatus {
 	case st.State == JobDone:
 		out.Message = restoreDoneMessage
 	case needRestart:
-		out.Message = restartMessage
+		out.Message, out.RestartRequired = restartMessage, true
 	default:
 		out.Message = restoreFailedMessage
 	}

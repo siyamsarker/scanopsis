@@ -65,8 +65,9 @@ const (
 	// who started the job, or "scheduler" for scheduled backups.
 	// backup.uploaded carries "name", "original_name" and "size" (the
 	// actor is "setup" for an upload on the setup screen);
-	// backup.downloaded carries "name", "size" and, for a part of the file,
-	// "range"; backup.deleted carries "name" and "size".
+	// backup.downloaded carries "name", "size" and the first and last byte
+	// sent as "start" and "end" (with "ranges", their number, when several
+	// ranges were sent); backup.deleted carries "name" and "size".
 	ActionBackupCreated           = "backup.created"
 	ActionBackupFailed            = "backup.failed"
 	ActionBackupRestoreFailed     = "backup.restore_failed"

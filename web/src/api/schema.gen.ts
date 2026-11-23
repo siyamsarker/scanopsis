@@ -824,8 +824,10 @@ export interface paths {
          *     attachment`, `Content-Length` and range support: a `Range` request
          *     resumes an interrupted download (206). The download may take as long
          *     as the client keeps reading; it is cut off only after 60 seconds
-         *     without progress. Not counted by the concurrency limit. Audited as
-         *     backup.downloaded with the name, the size and the range, if any.
+         *     without progress. Not counted by the concurrency limit. Every GET
+         *     that sends content (200 or 206) is audited as backup.downloaded with
+         *     the name, the size and the first and last byte sent (for several
+         *     ranges, the span and their number); HEAD, 304 and 416 are not.
          */
         get: operations["downloadBackup"];
         put?: never;
@@ -1074,8 +1076,8 @@ export interface paths {
          * @description Public, so the web interface can show progress while every other API
          *     request is answered 503 restoring. It names no backup, account or
          *     folder. The state is idle when the last job was not a restore. After a
-         *     restore that needs a restart, the state is failed and the message
-         *     says to restart Scanopsis.
+         *     restore that needs a restart, the state is failed,
+         *     `restart_required` is true and the message says to restart Scanopsis.
          */
         get: operations["getRestoreStatus"];
         put?: never;
@@ -1870,6 +1872,8 @@ export interface components {
             message: string;
             /** Format: date-time */
             finished_at: string | null;
+            /** @description Always sent. True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart. */
+            restart_required?: boolean;
         };
         UploadStart: {
             /** @description The name of the file being uploaded; kept as original_name. */

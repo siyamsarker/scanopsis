@@ -698,14 +698,25 @@ func TestDownloadAndDelete(t *testing.T) {
 		r.header.Get("Content-Type") != "application/gzip" || r.header.Get("Cache-Control") != "no-store" {
 		t.Errorf("headers = %v", r.header)
 	}
-	r = e.call("GET", base+"/download", "admin", nil, "Range", "bytes=1000-")
-	if r.status != http.StatusPartialContent || !bytes.Equal(r.body, data[1000:]) {
-		t.Errorf("range = %d, %d bytes", r.status, len(r.body))
-	}
-	// A download is audited once: in full, or by a range from the start.
-	// Resuming it, a range outside the file and a HEAD are not.
-	if r := e.call("GET", base+"/download", "admin", nil, "Range", "bytes=0-99"); r.status != http.StatusPartialContent || len(r.body) != 100 {
-		t.Errorf("first range = %d, %d bytes", r.status, len(r.body))
+	// Every GET that sends file content is audited once, with the range
+	// actually sent as numbers; a HEAD and a refused range are not.
+	n := len(data)
+	for _, c := range []struct {
+		rng        string
+		status     int
+		body       []byte
+		start, end int
+	}{
+		{"bytes=1000-", http.StatusPartialContent, data[1000:], 1000, n - 1},
+		{"bytes=0-99", http.StatusPartialContent, data[:100], 0, 99},
+		{"bytes=-100", http.StatusPartialContent, data[n-100:], n - 100, n - 1},
+		{"bytes=00-", http.StatusPartialContent, data, 0, n - 1},
+		{"bytes=0-9,100-199", http.StatusPartialContent, nil, 0, 199},
+	} {
+		r := e.call("GET", base+"/download", "admin", nil, "Range", c.rng)
+		if r.status != c.status || (c.body != nil && !bytes.Equal(r.body, c.body)) {
+			t.Errorf("%s = %d, %d bytes", c.rng, r.status, len(r.body))
+		}
 	}
 	if r := e.call("GET", base+"/download", "admin", nil, "Range", "bytes=99999999-"); r.status != http.StatusRequestedRangeNotSatisfiable {
 		t.Errorf("range outside the file = %d", r.status)
@@ -714,13 +725,23 @@ func TestDownloadAndDelete(t *testing.T) {
 		t.Errorf("HEAD = %d", r.status)
 	}
 	ev := e.audit.of(actionDownloaded)
-	if len(ev) != 2 || ev[0].actor != adminActor || ev[0].detail["name"] != name || ev[0].detail["size"] != int64(len(data)) {
-		t.Errorf("audit = %+v", ev)
+	want := [][2]int64{{0, int64(n - 1)}, {1000, int64(n - 1)}, {0, 99}, {int64(n - 100), int64(n - 1)}, {0, int64(n - 1)}, {0, 199}}
+	if len(ev) != len(want) {
+		t.Fatalf("%d downloads audited, want %d: %+v", len(ev), len(want), ev)
 	}
-	for _, x := range ev {
-		if len(x.detail) != 2 {
-			t.Errorf("audit detail = %v, want only name and size", x.detail)
+	for i, x := range ev {
+		d := x.detail
+		if x.actor != adminActor || d["name"] != name || d["size"] != int64(n) || d["start"] != want[i][0] || d["end"] != want[i][1] {
+			t.Errorf("audit %d = %v, want range %v", i, d, want[i])
 		}
+		for k, v := range d {
+			if _, isInt := v.(int64); k != "name" && !isInt {
+				t.Errorf("audit %d: %s = %#v is not a number", i, k, v)
+			}
+		}
+	}
+	if d := ev[5].detail; d["ranges"] != int64(2) {
+		t.Errorf("multi-range audit = %v, want ranges 2", d)
 	}
 
 	for _, bad := range []string{"scanopsis-backup-20261123T100000Z-manual-zzzzzz.tar.gz", "..%2F..%2Fetc%2Fpasswd", "x.tar.gz"} {
@@ -838,7 +859,7 @@ func TestRestoreStatusIsPublic(t *testing.T) {
 		t.Fatalf("status = %d %s", r.status, r.body)
 	}
 	m := r.json(t)
-	if m["state"] != "idle" || m["percent"] != float64(0) || m["finished_at"] != nil || len(m) != 4 {
+	if m["state"] != "idle" || m["percent"] != float64(0) || m["finished_at"] != nil || m["restart_required"] != false || len(m) != 5 {
 		t.Errorf("idle status = %v", m)
 	}
 
@@ -860,7 +881,7 @@ func TestRestoreStatusIsPublic(t *testing.T) {
 	}
 	e.svc.restoring.Store(true)
 	r = e.call("GET", "/api/v1/restore/status", "", nil)
-	if m := r.json(t); r.status != http.StatusOK || m["state"] != "restoring" || strings.Contains(string(r.body), "scanopsis-backup") {
+	if m := r.json(t); r.status != http.StatusOK || m["state"] != "restoring" || m["restart_required"] != false || strings.Contains(string(r.body), "scanopsis-backup") {
 		t.Errorf("status during a restore = %d %s", r.status, r.body)
 	}
 	// Other API requests are turned away meanwhile.
@@ -870,7 +891,7 @@ func TestRestoreStatusIsPublic(t *testing.T) {
 	e.svc.needRestart.Store(true)
 	e.svc.finish(func(st *JobStatus) { st.State, st.Message = JobFailed, restartMessage+" "+"local:alice" })
 	r = e.call("GET", "/api/v1/restore/status", "", nil)
-	if m := r.json(t); m["state"] != "failed" || m["message"] != restartMessage || m["finished_at"] == nil {
+	if m := r.json(t); m["state"] != "failed" || m["message"] != restartMessage || m["finished_at"] == nil || m["restart_required"] != true {
 		t.Errorf("status of a restore that needs a restart = %s", r.body)
 	}
 }
@@ -891,7 +912,7 @@ func TestPublicRestoreMessages(t *testing.T) {
 		{JobStatus{State: JobFailed, Type: JobTypeRestore, Message: "anything"}, true, JobFailed, restartMessage},
 	} {
 		got := publicRestore(c.st, c.needRestart)
-		if got.State != c.state || got.Message != c.message {
+		if got.State != c.state || got.Message != c.message || got.RestartRequired != (c.message == restartMessage) {
 			t.Errorf("publicRestore(%+v, %v) = %+v, want %s %q", c.st, c.needRestart, got, c.state, c.message)
 		}
 	}
@@ -945,6 +966,40 @@ func TestSetupEndpointsRefuseOnceSetUp(t *testing.T) {
 		r := e.call(c.method, c.path, "", map[string]any{"token": "setup-token"}, "X-Setup-Token", "setup-token")
 		if r.status != http.StatusConflict || r.errorCode(t) != "setup_done" {
 			t.Errorf("%s %s = %d %s", c.method, c.path, r.status, r.body)
+		}
+	}
+}
+
+func TestDownloadDetail(t *testing.T) {
+	for _, c := range []struct {
+		status        int
+		contentRange  string
+		rng           string
+		ok            bool
+		start, end, n int64
+	}{
+		{http.StatusOK, "", "", true, 0, 999, 0},
+		{http.StatusOK, "", "bytes=500-", true, 0, 999, 0}, // If-Range failed: the whole file
+		{http.StatusPartialContent, "bytes 10-19/1000", "bytes=10-19", true, 10, 19, 0},
+		{http.StatusPartialContent, "", "bytes=-5000, 990-", true, 0, 999, 2},
+		{http.StatusPartialContent, "", "bytes=0-1,2000-,900-950", true, 0, 950, 2},
+		{http.StatusPartialContent, "", "nonsense", true, 0, 999, 0},
+		{http.StatusNotModified, "", "", false, 0, 0, 0},
+		{http.StatusRequestedRangeNotSatisfiable, "bytes */1000", "bytes=5000-", false, 0, 0, 0},
+	} {
+		d, ok := downloadDetail(c.status, c.contentRange, c.rng, "x.tar.gz", 1000)
+		if ok != c.ok {
+			t.Errorf("%d %q: ok = %v", c.status, c.rng, ok)
+			continue
+		}
+		if !ok {
+			continue
+		}
+		if d["start"] != c.start || d["end"] != c.end || d["size"] != int64(1000) || d["name"] != "x.tar.gz" {
+			t.Errorf("%d %q: detail = %v", c.status, c.rng, d)
+		}
+		if n, has := d["ranges"]; c.n > 0 && n != c.n || c.n == 0 && has {
+			t.Errorf("%d %q: ranges = %v, want %d", c.status, c.rng, n, c.n)
 		}
 	}
 }
