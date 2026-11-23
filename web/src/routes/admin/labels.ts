@@ -66,4 +66,12 @@ export const auditActions: Record<string, string> = {
   'webhook.rejected': 'Webhook rejected',
   'report.exported': 'Scan report exported',
   'retention.deleted': 'Old data deleted',
+  'backup.created': 'Backup created',
+  'backup.failed': 'Backup failed',
+  'backup.uploaded': 'Backup uploaded',
+  'backup.downloaded': 'Backup downloaded',
+  'backup.deleted': 'Backup deleted',
+  'backup.restored': 'Backup restored',
+  'backup.restore_failed': 'Restore failed',
+  'backup.restore_incomplete': 'Restore needs a restart',
 };
