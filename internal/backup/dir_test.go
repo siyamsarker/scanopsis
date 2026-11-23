@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -206,6 +207,26 @@ func TestDirUsableChecksAtMostEveryFewSeconds(t *testing.T) {
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".write-test-") {
 			t.Errorf("the check left %s behind", e.Name())
+		}
+	}
+}
+
+// A write that fails half way, as on a full disk, leaves no temporary file
+// behind, such as .checked.json.tmp in the backup folder.
+func TestWriteFileAtomicLeavesNoTemporaryFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), checksFile)
+	real := writeTemp
+	t.Cleanup(func() { writeTemp = real })
+	writeTemp = func(name string, b []byte, perm os.FileMode) error {
+		_ = real(name, b[:len(b)/2], perm)
+		return syscall.ENOSPC
+	}
+	if err := writeFileAtomic(path, map[string]int{"a": 1}); !errors.Is(err, syscall.ENOSPC) {
+		t.Fatalf("err = %v", err)
+	}
+	for _, p := range []string{path, path + ".tmp"} {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s exists after the failed write", filepath.Base(p))
 		}
 	}
 }

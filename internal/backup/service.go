@@ -1256,13 +1256,18 @@ func (s *Service) saveSchedule() {
 
 // writeFileAtomic writes v as JSON to path through a temporary file, so a
 // reader never sees half a file.
+// writeTemp writes the temporary file of writeFileAtomic; tests replace it.
+var writeTemp = os.WriteFile
+
 func writeFileAtomic(path string, v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+	if err := writeTemp(tmp, b, 0o600); err != nil {
+		// A write that failed half way, as on a full disk, leaves nothing.
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
