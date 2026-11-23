@@ -2364,7 +2364,7 @@ Type: object
 | `file_name` | string | yes |  |
 | `id` | string | yes | 128-bit random id in hex. |
 | `preview` | [RestorePreview](#restorepreview) | no | On the setup screen, the preview of restoring a ready upload. |
-| `reason` | object | no | Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space). |
+| `reason` | object | no | Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space, or already_listed for a copy of a backup the list holds already, on the admin panel). |
 | `received` | integer (int64) | yes | Bytes stored so far; the next part starts here. |
 | `size` | integer (int64) | yes |  |
 | `state` | string (one of `uploading`, `checking`, `ready`, `refused`) | yes | uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted. |

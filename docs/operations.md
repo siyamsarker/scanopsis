@@ -587,7 +587,8 @@ checking** closes the dialog; a message says when the backup is in the list.
 An interrupted upload stays when you close the dialog: open it again and
 select **Resume upload**. An empty file is refused before anything is sent. A
 file from another secret key, from a newer version of Scanopsis or a damaged
-file is refused with the reason. **Cancel upload** also stops a check. At most
+file is refused with the reason, and so is a copy of a backup that is already
+in the list. **Cancel upload** also stops a check. At most
 two uploads can be open at once; an upload that receives nothing for 10
 minutes makes room for a new one. Uploads that were started but not finished,
 for example because the page was closed, are listed under **Unfinished

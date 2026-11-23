@@ -2041,7 +2041,7 @@ export interface components {
              * @enum {string}
              */
             state: "uploading" | "checking" | "ready" | "refused";
-            /** @description Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space). */
+            /** @description Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space, or already_listed for a copy of a backup the list holds already, on the admin panel). */
             reason?: {
                 /** @example invalid_backup */
                 code: string;

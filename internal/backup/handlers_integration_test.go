@@ -509,6 +509,10 @@ func TestUploadStoresTheFileUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A copy of a listed backup is refused; this one comes from elsewhere.
+	if err := e.dir.Delete(src); err != nil {
+		t.Fatal(err)
+	}
 	api := serveAPI(t, e.svc, nil, false)
 	id := api.startUpload("copy.tar.gz", len(data))
 	api.send(id, data, 0, ChunkSize)

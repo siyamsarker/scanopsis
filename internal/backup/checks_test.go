@@ -130,7 +130,8 @@ func TestUploadCheckRunsInBackground(t *testing.T) {
 func TestUploadChecksOneAtATime(t *testing.T) {
 	e := newAPIEnv(t, nil)
 	g := gateVerify(e)
-	a, b := goodArchive(t), goodArchive(t)
+	// Two different backups: a copy of a listed one would be refused.
+	a, b := goodArchive(t), uploadArchive(t, apiFingerprint, testSigningKey, 3)
 	ida, idb := e.startUpload("a.tar.gz", len(a)), e.startUpload("b.tar.gz", len(b))
 	e.send(ida, a, 0, len(a))
 	e.send(idb, b, 0, len(b))
@@ -684,7 +685,8 @@ func TestPreviewAbandonedWhileWaiting(t *testing.T) {
 func TestUploadChecksGoBeforePreviews(t *testing.T) {
 	e := newAPIEnv(t, nil)
 	g := gateVerify(e)
-	a, b := goodArchive(t), goodArchive(t)
+	// Two different backups: a copy of a listed one would be refused.
+	a, b := goodArchive(t), uploadArchive(t, apiFingerprint, testSigningKey, 3)
 	ida, idb := e.startUpload("a.tar.gz", len(a)), e.startUpload("b.tar.gz", len(b))
 	e.send(ida, a, 0, len(a))
 	e.send(idb, b, 0, len(b))

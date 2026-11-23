@@ -1178,8 +1178,35 @@ func (a *API) verifyUpload(ctx context.Context, up *upload, scope uploadScope) (
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return Preview{}, err
 	}
-	_, _, err = VerifyLimited(ctxReader{ctx, f}, a.svc.o.Dumper.SigningKey, nil, expansionLimit(up.size))
-	return Preview{}, err
+	if _, _, err = VerifyLimited(ctxReader{ctx, f}, a.svc.o.Dumper.SigningKey, nil, expansionLimit(up.size)); err != nil {
+		return Preview{}, err
+	}
+	return Preview{}, a.alreadyListed(m, up.size)
+}
+
+// errAlreadyListed refuses an upload of a backup that is in the list.
+var errAlreadyListed = errors.New("the backup is already in the list")
+
+// alreadyListed refuses, with errAlreadyListed, the upload of a backup the
+// list holds already: one of the same size whose manifest tells the same
+// moment, author and version and schema. A second copy would only add an identical
+// row. The setup screen does not ask this: a file uploaded again there is
+// the one to restore.
+func (a *API) alreadyListed(m Manifest, size int64) error {
+	list, err := a.dir().List()
+	if err != nil {
+		return nil // the list is not needed to accept the file
+	}
+	for _, b := range list {
+		if b.Readable && b.Size == size && b.CreatedAt.Equal(m.CreatedAt) && b.CreatedBy == m.CreatedBy &&
+			b.AppVersion == m.AppVersion && b.Schema == m.Schema {
+			return &publicError{
+				msg: fmt.Sprintf("This backup is already in the list, as the backup made on %s. Nothing was added.", m.CreatedAt.UTC().Format("2 Jan 2006, 15:04 UTC")),
+				err: fmt.Errorf("%w: %s", errAlreadyListed, b.Name),
+			}
+		}
+	}
+	return nil
 }
 
 // uploadReason is the code and message an upload refused for err gets, as
@@ -1197,6 +1224,8 @@ func (a *API) uploadReason(err error) UploadReason {
 		return reason("no_space")
 	case errors.Is(err, ErrFolder):
 		return reason("folder_unavailable")
+	case errors.Is(err, errAlreadyListed):
+		return reason("already_listed")
 	}
 	return UploadReason{Code: "internal_error", Message: "Something went wrong while the file was checked. Try the upload again later."}
 }

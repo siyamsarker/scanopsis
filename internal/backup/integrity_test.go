@@ -142,3 +142,31 @@ func TestListShowsOpenUploads(t *testing.T) {
 		t.Errorf("uploads after cancelling one = %s", r.body)
 	}
 }
+
+// Uploading a backup that is already in the list adds no second, identical
+// row: the upload is refused and says which backup it is.
+func TestUploadOfAListedBackup(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	data := goodArchive(t)
+	upload := func() map[string]any {
+		t.Helper()
+		id := e.startUpload("copy.tar.gz", len(data))
+		e.send(id, data, 0, len(data))
+		return e.complete(adminUploads+"/"+id, "admin", nil)
+	}
+	if first := upload(); first["state"] != "ready" {
+		t.Fatalf("first upload = %v", first)
+	}
+	second := upload()
+	reason, _ := second["reason"].(map[string]any)
+	if second["state"] != "refused" || reason["code"] != "already_listed" ||
+		reason["message"] != "This backup is already in the list, as the backup made on 20 Nov 2026, 02:00 UTC. Nothing was added." {
+		t.Errorf("second upload = %v", second)
+	}
+	if n := len(e.list()); n != 1 {
+		t.Errorf("%d backups listed, want 1", n)
+	}
+	if left := uploadFiles(t, e.dir); len(left) != 0 {
+		t.Errorf("upload folder = %v", left)
+	}
+}

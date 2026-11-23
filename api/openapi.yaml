@@ -2133,7 +2133,7 @@ components:
           description: "uploading while parts are sent; checking once the upload was completed, while the server checks the file; ready when it passed and was added to the backups; refused when it failed and was deleted."
         reason:
           type: object
-          description: Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space).
+          description: Why a refused upload failed, with the code and message an error answer would carry (for example invalid_backup, key_mismatch, newer_schema, no_space, or already_listed for a copy of a backup the list holds already, on the admin panel).
           required: [code, message]
           properties:
             code: { type: string, example: invalid_backup }

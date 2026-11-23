@@ -215,24 +215,37 @@ test('4. a downloaded backup is a gzip tar that starts with manifest.json', asyn
 
 test('4a. an uploaded backup is checked in the background, then listed', async () => {
   expect(downloadedFile, 'the download flow ran').not.toBe('');
+  // A copy of a listed backup is refused, so the original goes first; the
+  // uploaded copy is the one backup the flows below start from.
+  const before = (
+    (await (await adminContext.request.get('/api/v1/admin/backups')).json()) as {
+      backups: { name: string }[];
+    }
+  ).backups;
+  expect(before).toHaveLength(1);
+  const removed = await adminContext.request.delete(`/api/v1/admin/backups/${before[0].name}`);
+  expect(removed.status(), await removed.text()).toBe(204);
+
   await admin.goto('/admin/backups');
-  await expect(backupRows(admin)).toHaveCount(1);
+  await expect(admin.getByText('No backups yet')).toBeVisible();
   await admin.getByRole('button', { name: 'Upload a backup' }).click();
   const dialog = admin.getByRole('dialog', { name: 'Upload a backup' });
+  await expect(dialog.getByRole('button', { name: 'Choose a file' })).toBeFocused();
   await dialog.getByLabel('Backup file').setInputFiles(downloadedFile);
   // Once every part has arrived, the server checks the file in the background
   // and the page asks for the outcome.
   await expect(dialog.getByText(/Checking the backup/)).toBeVisible();
   await expect(admin.getByText('Backup uploaded', { exact: true })).toBeVisible({ timeout: 60_000 });
   await expect(dialog).toHaveCount(0);
-  await expect(backupRows(admin)).toHaveCount(2);
+  await expect(backupRows(admin)).toHaveCount(1);
   const uploaded = backupRows(admin).filter({ hasText: 'Uploaded' });
   await expect(uploaded).toHaveCount(1);
   const original = downloadedFile.split('/').pop()!;
   await expect(uploaded).toContainText(original);
 
   // The same check over the API: complete answers 202 while the file is
-  // checked, and the upload's state gives the outcome.
+  // checked, and the upload's state gives the outcome; a second copy of the
+  // listed backup is refused.
   const size = readFileSync(downloadedFile).length;
   const started = await adminContext.request.post('/api/v1/admin/backup-uploads', {
     data: { file_name: 'api-copy.tar.gz', size },
@@ -247,7 +260,9 @@ test('4a. an uploaded backup is checked in the background, then listed', async (
   const completed = await adminContext.request.post(`/api/v1/admin/backup-uploads/${id}/complete`);
   expect(completed.status(), await completed.text()).toBe(202);
   expect(((await completed.json()) as { state: string }).state).toBe('checking');
-  let outcome: { state: string; backup?: { name: string } } = { state: 'checking' };
+  let outcome: { state: string; reason?: { code: string; message: string } } = {
+    state: 'checking',
+  };
   await expect
     .poll(
       async () => {
@@ -256,18 +271,9 @@ test('4a. an uploaded backup is checked in the background, then listed', async (
       },
       { timeout: 60_000 },
     )
-    .toBe('ready');
-  // Both copies go again, so the flows below start from the one backup.
-  const listed = (
-    (await (await adminContext.request.get('/api/v1/admin/backups')).json()) as {
-      backups: { name: string; kind: string }[];
-    }
-  ).backups.filter((b) => b.kind === 'uploaded');
-  expect(listed.map((b) => b.name)).toContain(outcome.backup?.name);
-  for (const b of listed) {
-    const deleted = await adminContext.request.delete(`/api/v1/admin/backups/${b.name}`);
-    expect(deleted.status(), await deleted.text()).toBe(204);
-  }
+    .toBe('refused');
+  expect(outcome.reason?.code).toBe('already_listed');
+  expect(outcome.reason?.message).toMatch(/^This backup is already in the list/);
   await admin.reload();
   await expect(backupRows(admin)).toHaveCount(1);
 });
