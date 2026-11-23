@@ -354,7 +354,7 @@ describe('backups page', () => {
                   type: 'restore',
                   kind: 'scheduled',
                   name: scheduled.name,
-                  message: 'restore: the backup file is truncated',
+                  message: 'The file is damaged: the file ends too early.',
                 },
               }),
             )
@@ -364,7 +364,7 @@ describe('backups page', () => {
     renderApp('/admin/backups');
     const notice = await screen.findByRole('region', { name: 'Last job failed' });
     expect(notice).toHaveTextContent('The last restore did not finish. Nothing was changed.');
-    expect(notice).toHaveTextContent('restore: the backup file is truncated');
+    expect(notice).toHaveTextContent('The file is damaged: the file ends too early.');
   });
 
   it('backs up now, shows the progress and then the new backup', async () => {
