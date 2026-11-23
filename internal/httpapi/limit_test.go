@@ -378,8 +378,9 @@ func TestConcurrencyLimitDoesNotBufferIngestPaths(t *testing.T) {
 			t.Errorf("POST %s: %d bytes of the body were read by the server stack, want 0 (rejected without reading: %d)", path, n, rec.Code)
 		}
 	}
-	if limitedAPIPath("/api/v1/ingest/anything") || limitedAPIPath(uploadPath) || !limitedAPIPath("/api/v1/services") || limitedAPIPath("/healthz") {
-		t.Error("limitedAPIPath disagrees with the documented exemptions")
+	if limitedAPIRequest("POST", "/api/v1/ingest/anything") || limitedAPIRequest("POST", uploadPath) ||
+		!limitedAPIRequest("GET", "/api/v1/services") || limitedAPIRequest("GET", "/healthz") {
+		t.Error("limitedAPIRequest disagrees with the documented exemptions")
 	}
 }
 

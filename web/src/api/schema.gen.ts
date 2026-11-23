@@ -1026,7 +1026,9 @@ export interface paths {
          * Check a fully received setup upload and tell what restoring it would do.
          * @description Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete
          *     does, adds it to the backup folder as kind uploaded and returns the
-         *     preview of the restore. Use the upload id to restore it.
+         *     preview of the restore. Use the upload id to restore it. The setup
+         *     token goes in the body or in the X-Setup-Token header; with the
+         *     header the body may be empty.
          */
         post: operations["completeSetupRestoreUpload"];
         delete?: never;
@@ -4002,7 +4004,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            503: components["responses"]["BusyOrRestoring"];
+            503: components["responses"]["Restoring"];
         };
     };
     previewRestore: {
@@ -4226,7 +4228,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            503: components["responses"]["Restoring"];
+            503: components["responses"]["BusyOrRestoring"];
         };
     };
     putBackupUploadChunk: {
@@ -4346,7 +4348,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            503: components["responses"]["Restoring"];
+            503: components["responses"]["BusyOrRestoring"];
         };
     };
     completeBackupUpload: {
@@ -4399,7 +4401,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            503: components["responses"]["Restoring"];
+            503: components["responses"]["BusyOrRestoring"];
         };
     };
     startSetupRestoreUpload: {
@@ -4508,7 +4510,7 @@ export interface operations {
                 };
             };
             429: components["responses"]["TooManyAttempts"];
-            503: components["responses"]["Restoring"];
+            503: components["responses"]["BusyOrRestoring"];
         };
     };
     putSetupRestoreUploadChunk: {
@@ -4643,20 +4645,23 @@ export interface operations {
                 };
             };
             429: components["responses"]["TooManyAttempts"];
-            503: components["responses"]["Restoring"];
+            503: components["responses"]["BusyOrRestoring"];
         };
     };
     completeSetupRestoreUpload: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The one-time setup token, when the body does not carry it. */
+                "X-Setup-Token"?: string;
+            };
             path: {
                 /** @description Id of an open upload. */
                 id: components["parameters"]["UploadID"];
             };
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": components["schemas"]["SetupTokenBody"];
             };
@@ -4709,7 +4714,7 @@ export interface operations {
                 };
             };
             429: components["responses"]["TooManyAttempts"];
-            503: components["responses"]["Restoring"];
+            503: components["responses"]["BusyOrRestoring"];
         };
     };
     restoreSetupBackup: {

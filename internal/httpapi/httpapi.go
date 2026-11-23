@@ -189,7 +189,7 @@ func (s *server) routes() []route {
 		{"GET", "/api/v1/admin/integrations/sonarqube", s.requireAdmin(s.feature("getSonarIntegration"))},
 
 		// Backups. The download and the upload parts bound their own
-		// transfer (see limitedAPIPath); the setup routes check the setup
+		// transfer (see limitedAPIRequest); the setup routes check the setup
 		// token and answer only while no administrator exists.
 		{"GET", "/api/v1/admin/backups", s.requireAdmin(s.feature("listBackups"))},
 		{"POST", "/api/v1/admin/backups", s.requireAdmin(s.feature("createBackup"))},

@@ -65,25 +65,63 @@ func TestRestoreGateOffWithoutFunc(t *testing.T) {
 	}
 }
 
-func TestLimitedAPIPathExemptsTransfers(t *testing.T) {
-	for path, want := range map[string]bool{
-		"/api/v1/admin/backups":                             true,
-		"/api/v1/admin/backups/x/preview":                   true,
-		"/api/v1/admin/backups/x/restore":                   true,
-		"/api/v1/admin/backup-uploads":                      true,
-		"/api/v1/admin/backup-uploads/abc":                  false,
-		"/api/v1/admin/backup-uploads/abc/complete":         false,
-		"/api/v1/setup/restore":                             true,
-		"/api/v1/setup/restore/uploads":                     true,
-		"/api/v1/setup/restore/uploads/abc":                 false,
-		"/api/v1/admin/backups/scanopsis-backup-x/download": false,
-		"/api/v1/services/3/download":                       true,
-		"/api/v1/ingest/trivy":                              false,
-		"/api/v1/portfolio":                                 true,
+// Only the transfers themselves bypass the generic limits: sending a part
+// of an upload and downloading a backup. The other upload requests read at
+// most a small JSON body and are limited like any request.
+func TestLimitedAPIRequestExemptsTransfers(t *testing.T) {
+	const name = "/api/v1/admin/backups/scanopsis-backup-20261123T100000Z-manual-abc123.tar.gz"
+	for _, c := range []struct {
+		method, path string
+		want         bool
+	}{
+		{"GET", "/api/v1/admin/backups", true},
+		{"GET", name + "/preview", true},
+		{"POST", name + "/restore", true},
+		{"GET", name + "/download", false},
+		{"HEAD", name + "/download", false},
+		{"POST", name + "/download", true},
+		{"GET", "/api/v1/services/3/download", true},
+		{"POST", "/api/v1/admin/backup-uploads", true},
+		{"PUT", "/api/v1/admin/backup-uploads/abc", false},
+		{"GET", "/api/v1/admin/backup-uploads/abc", true},
+		{"DELETE", "/api/v1/admin/backup-uploads/abc", true},
+		{"POST", "/api/v1/admin/backup-uploads/abc/complete", true},
+		{"PUT", "/api/v1/admin/backup-uploads/abc/complete", true},
+		{"POST", "/api/v1/setup/restore", true},
+		{"POST", "/api/v1/setup/restore/uploads", true},
+		{"PUT", "/api/v1/setup/restore/uploads/abc", false},
+		{"GET", "/api/v1/setup/restore/uploads/abc", true},
+		{"POST", "/api/v1/setup/restore/uploads/abc/complete", true},
+		{"POST", "/api/v1/ingest/trivy", false},
+		{"GET", "/api/v1/portfolio", true},
+		{"GET", "/healthz", false},
 	} {
-		if got := limitedAPIPath(path); got != want {
-			t.Errorf("limitedAPIPath(%q) = %v, want %v", path, got, want)
+		if got := limitedAPIRequest(c.method, c.path); got != c.want {
+			t.Errorf("limitedAPIRequest(%s %s) = %v, want %v", c.method, c.path, got, c.want)
 		}
+	}
+}
+
+// Completing an upload is an ordinary request: it waits for a slot and is
+// answered busy when none comes free.
+func TestUploadCompleteIsLimited(t *testing.T) {
+	hold := newGate()
+	done := newGate()
+	close(done.release)
+	e := newEnv(t, func(d *Deps) {
+		d.MaxConcurrent = 1
+		d.BusyWait = 20 * time.Millisecond
+		d.Features = map[string]http.Handler{"getPortfolio": hold, "completeBackupUpload": done, "completeSetupRestoreUpload": done}
+	})
+	finished := make(chan struct{})
+	go func() { e.do("GET", "/api/v1/portfolio", "viewer", ""); close(finished) }()
+	<-hold.entered
+	assertError(t, e.do("POST", "/api/v1/admin/backup-uploads/abc/complete", "admin", ""), http.StatusServiceUnavailable, "busy")
+	assertError(t, e.do("POST", "/api/v1/setup/restore/uploads/abc/complete", "", ""), http.StatusServiceUnavailable, "busy")
+	close(hold.release)
+	<-finished
+	if rec := e.do("POST", "/api/v1/admin/backup-uploads/abc/complete", "admin", ""); rec.Code != http.StatusOK {
+		t.Errorf("complete with a free slot = %d", rec.Code)
 	}
 }
 

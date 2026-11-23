@@ -111,7 +111,7 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `PUT /api/v1/admin/backup-uploads/{id}`
 
@@ -169,7 +169,7 @@ Responses:
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/admin/backup-uploads/{id}/complete`
 
@@ -196,7 +196,7 @@ Responses:
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
 | 409 | Not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy). | `application/json` [UploadError](#uploaderror) |
 | 422 | The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). The message says why and how to fix it. | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/admin/backups`
 
@@ -288,7 +288,7 @@ Responses:
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | No backup with this name (code not_found). | `application/json` [Error](#error) |
 | 416 | The range is outside the file. | none |
-| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/admin/backups/{name}/preview`
 
@@ -1264,7 +1264,7 @@ Responses:
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
 | 409 | Setup is complete (code setup_done). | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `PUT /api/v1/setup/restore/uploads/{id}`
 
@@ -1327,13 +1327,13 @@ Responses:
 | 404 | No upload with this id is open (code not_found). | `application/json` [Error](#error) |
 | 409 | Setup is complete (code setup_done). | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `POST /api/v1/setup/restore/uploads/{id}/complete`
 
 Check a fully received setup upload and tell what restoring it would do.
 
-Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete does, adds it to the backup folder as kind uploaded and returns the preview of the restore. Use the upload id to restore it.
+Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete does, adds it to the backup folder as kind uploaded and returns the preview of the restore. Use the upload id to restore it. The setup token goes in the body or in the X-Setup-Token header; with the header the body may be empty.
 
 - Operation ID: `completeSetupRestoreUpload`
 - Authentication: None
@@ -1342,9 +1342,10 @@ Parameters:
 
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
+| `X-Setup-Token` | header | no | string | The one-time setup token, when the body does not carry it. |
 | `id` | path | yes | string | Id of an open upload. |
 
-Request body (required):
+Request body (optional):
 
 - `application/json`: [SetupTokenBody](#setuptokenbody)
 
@@ -1359,7 +1360,7 @@ Responses:
 | 409 | Setup is complete (code setup_done), not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy). | `application/json` [UploadError](#uploaderror) |
 | 422 | The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). | `application/json` [Error](#error) |
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
-| 503 | A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
 ### `GET /api/v1/users`
 

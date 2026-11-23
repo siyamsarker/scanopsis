@@ -570,6 +570,26 @@ func TestUploadRejects(t *testing.T) {
 	}
 }
 
+// An upload that a request is working on cannot be cancelled under it.
+func TestUploadCancelWhileBusy(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	id := e.startUpload("a.tar.gz", 10)
+	up, err := e.api.up.acquire(scopeAdmin, id, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := e.call("DELETE", adminUploads+"/"+id, "admin", nil); r.status != http.StatusConflict || r.errorCode(t) != "upload_busy" {
+		t.Errorf("cancel while busy = %d %s", r.status, r.body)
+	}
+	if len(uploadFiles(t, e.dir)) != 1 {
+		t.Error("the file of a busy upload was deleted")
+	}
+	e.api.up.release(up, 0, time.Now())
+	if r := e.call("DELETE", adminUploads+"/"+id, "admin", nil); r.status != http.StatusNoContent {
+		t.Errorf("cancel after release = %d %s", r.status, r.body)
+	}
+}
+
 func TestUploadCancel(t *testing.T) {
 	e := newAPIEnv(t, nil)
 	data := goodArchive(t)
@@ -682,9 +702,25 @@ func TestDownloadAndDelete(t *testing.T) {
 	if r.status != http.StatusPartialContent || !bytes.Equal(r.body, data[1000:]) {
 		t.Errorf("range = %d, %d bytes", r.status, len(r.body))
 	}
-	if ev := e.audit.of(actionDownloaded); len(ev) != 2 || ev[0].actor != adminActor || ev[0].detail["name"] != name ||
-		ev[1].detail["range"] != "bytes=1000-" {
+	// A download is audited once: in full, or by a range from the start.
+	// Resuming it, a range outside the file and a HEAD are not.
+	if r := e.call("GET", base+"/download", "admin", nil, "Range", "bytes=0-99"); r.status != http.StatusPartialContent || len(r.body) != 100 {
+		t.Errorf("first range = %d, %d bytes", r.status, len(r.body))
+	}
+	if r := e.call("GET", base+"/download", "admin", nil, "Range", "bytes=99999999-"); r.status != http.StatusRequestedRangeNotSatisfiable {
+		t.Errorf("range outside the file = %d", r.status)
+	}
+	if r := e.call("HEAD", base+"/download", "admin", nil); r.status != http.StatusOK {
+		t.Errorf("HEAD = %d", r.status)
+	}
+	ev := e.audit.of(actionDownloaded)
+	if len(ev) != 2 || ev[0].actor != adminActor || ev[0].detail["name"] != name || ev[0].detail["size"] != int64(len(data)) {
 		t.Errorf("audit = %+v", ev)
+	}
+	for _, x := range ev {
+		if len(x.detail) != 2 {
+			t.Errorf("audit detail = %v, want only name and size", x.detail)
+		}
 	}
 
 	for _, bad := range []string{"scanopsis-backup-20261123T100000Z-manual-zzzzzz.tar.gz", "..%2F..%2Fetc%2Fpasswd", "x.tar.gz"} {

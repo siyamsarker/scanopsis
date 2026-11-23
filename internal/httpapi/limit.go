@@ -52,18 +52,25 @@ const (
 	downloadSuffix      = "/download"
 )
 
-// limitedAPIPath reports whether the generic limits of the API apply to a
-// path: the body limit of limitBody and the concurrency limit. They apply to
-// everything below /api/ except the transfer paths (the Trivy upload, the
-// backup upload parts and the backup download), whose handlers do their own.
-// Both use this one test, so no path is left without either.
-func limitedAPIPath(path string) bool {
+// limitedAPIRequest reports whether the generic limits of the API apply to a
+// request: the body limit of limitBody and the concurrency limit. They apply
+// to everything below /api/ except the transfers (the Trivy upload, a PUT of
+// a backup upload part and a GET or HEAD of a backup download), whose
+// handlers bound the body and the time themselves. The other requests on
+// uploads (status, cancel, complete) read at most a small JSON body and are
+// limited like any other. Both limits use this one test, so no request is
+// left without either.
+func limitedAPIRequest(method, path string) bool {
+	part := func(prefix string) bool {
+		id, ok := strings.CutPrefix(path, prefix)
+		return ok && id != "" && !strings.Contains(id, "/")
+	}
 	switch {
 	case !strings.HasPrefix(path, "/api/"),
 		strings.HasPrefix(path, ingestPrefix),
-		strings.HasPrefix(path, backupUploadsPrefix),
-		strings.HasPrefix(path, setupUploadsPrefix),
-		strings.HasPrefix(path, backupsPrefix) && strings.HasSuffix(path, downloadSuffix):
+		method == http.MethodPut && (part(backupUploadsPrefix) || part(setupUploadsPrefix)),
+		(method == http.MethodGet || method == http.MethodHead) &&
+			strings.HasPrefix(path, backupsPrefix) && strings.HasSuffix(path, downloadSuffix):
 		return false
 	}
 	return true
@@ -278,7 +285,7 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 		wait = DefaultBusyWait
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !limitedAPIPath(r.URL.Path) {
+		if !limitedAPIRequest(r.Method, r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}

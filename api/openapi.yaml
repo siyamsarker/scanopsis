@@ -893,7 +893,7 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No backup with this name (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "416": { description: The range is outside the file. }
-        "503": { $ref: "#/components/responses/BusyOrRestoring" }
+        "503": { $ref: "#/components/responses/Restoring" }
   /api/v1/admin/backups/{name}/preview:
     get:
       tags: [backups]
@@ -981,7 +981,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { $ref: "#/components/responses/Restoring" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
     put:
       tags: [backups]
       summary: Send one part of an upload (admin only).
@@ -1022,7 +1022,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { $ref: "#/components/responses/Restoring" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
   /api/v1/admin/backup-uploads/{id}/complete:
     post:
       tags: [backups]
@@ -1042,7 +1042,7 @@ paths:
         "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: "Not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
         "422": { description: "The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). The message says why and how to fix it.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-        "503": { $ref: "#/components/responses/Restoring" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
   /api/v1/setup/restore/uploads:
     post:
       tags: [setup]
@@ -1083,7 +1083,7 @@ paths:
         "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: Setup is complete (code setup_done)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/TooManyAttempts" }
-        "503": { $ref: "#/components/responses/Restoring" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
     put:
       tags: [setup]
       summary: Send one part of a setup upload.
@@ -1125,7 +1125,7 @@ paths:
         "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "409": { description: Setup is complete (code setup_done)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/TooManyAttempts" }
-        "503": { $ref: "#/components/responses/Restoring" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
   /api/v1/setup/restore/uploads/{id}/complete:
     post:
       tags: [setup]
@@ -1133,13 +1133,16 @@ paths:
       description: |
         Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete
         does, adds it to the backup folder as kind uploaded and returns the
-        preview of the restore. Use the upload id to restore it.
+        preview of the restore. Use the upload id to restore it. The setup
+        token goes in the body or in the X-Setup-Token header; with the
+        header the body may be empty.
       operationId: completeSetupRestoreUpload
       security: []
       parameters:
         - $ref: "#/components/parameters/UploadID"
+        - { name: X-Setup-Token, in: header, required: false, description: "The one-time setup token, when the body does not carry it.", schema: { type: string } }
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema: { $ref: "#/components/schemas/SetupTokenBody" }
@@ -1151,7 +1154,7 @@ paths:
         "409": { description: "Setup is complete (code setup_done), not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
         "422": { description: "The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/TooManyAttempts" }
-        "503": { $ref: "#/components/responses/Restoring" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
   /api/v1/setup/restore:
     post:
       tags: [setup]

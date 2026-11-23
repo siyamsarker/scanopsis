@@ -242,14 +242,18 @@ func (u *uploads) backupOf(id string) (string, bool) {
 	return name, ok
 }
 
-// cancel drops an open upload and deletes its file. A part still being
-// received is written into the deleted file and then forgotten.
+// cancel drops an open upload and deletes its file. It refuses, with
+// errUploadBusy, an upload a request is working on: a part being written,
+// or a completion that may already be adding the file to the folder.
 func (u *uploads) cancel(scope uploadScope, id string, now time.Time) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	up, err := u.lookupLocked(scope, id, now)
 	if err != nil {
 		return err
+	}
+	if up.busy {
+		return errUploadBusy
 	}
 	_ = os.Remove(up.path) //nolint:gosec // the name is a random id
 	delete(u.open, id)

@@ -110,7 +110,7 @@ func (s *server) securityHeaders(next http.Handler) http.Handler {
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Scan reports are larger; the ingest handler applies its own limit.
-		if limitedAPIPath(r.URL.Path) && r.Body != nil {
+		if limitedAPIRequest(r.Method, r.URL.Path) && r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
 		}
 		next.ServeHTTP(w, r)

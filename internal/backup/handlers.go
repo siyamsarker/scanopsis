@@ -362,9 +362,22 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 // reading, not after a fixed time.
 type deadlineWriter struct {
 	http.ResponseWriter
-	rc      *http.ResponseController
-	since   int64     // bytes written since the deadline was moved
-	movedAt time.Time // when it was moved
+	rc       *http.ResponseController
+	since    int64     // bytes written since the deadline was moved
+	movedAt  time.Time // when it was moved
+	onHeader func(status int)
+	sent     bool
+}
+
+// WriteHeader passes the status of the answer to onHeader, once.
+func (d *deadlineWriter) WriteHeader(status int) {
+	if !d.sent {
+		d.sent = true
+		if d.onHeader != nil {
+			d.onHeader(status)
+		}
+	}
+	d.ResponseWriter.WriteHeader(status)
 }
 
 func (d *deadlineWriter) extend() {
@@ -373,6 +386,9 @@ func (d *deadlineWriter) extend() {
 }
 
 func (d *deadlineWriter) Write(p []byte) (int, error) {
+	if !d.sent {
+		d.WriteHeader(http.StatusOK)
+	}
 	if d.since >= deadlineStep || time.Since(d.movedAt) > 5*time.Second {
 		d.extend()
 	}
@@ -394,19 +410,22 @@ func (a *API) download(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = f.Close() }()
 	name := fi.Name()
 	_, who := actor(r)
-	detail := map[string]any{"name": name, "size": fi.Size()}
-	if rg := r.Header.Get("Range"); rg != "" {
-		detail["range"] = rg
-	}
-	if r.Method != http.MethodHead {
-		a.o.Audit.Record(r.Context(), who, actionDownloaded, detail)
-	}
 
 	rc := http.NewResponseController(w)
 	// The request has been read; a read deadline running out while the
 	// file is sent would cancel the request.
 	_ = rc.SetReadDeadline(time.Time{})
 	dw := &deadlineWriter{ResponseWriter: w, rc: rc}
+	// A download is audited once: when the whole file or a range from its
+	// start is sent. Resuming it (a later range), a HEAD and a refused range
+	// are not recorded.
+	dw.onHeader = func(status int) {
+		fromStart := status == http.StatusOK ||
+			status == http.StatusPartialContent && strings.HasPrefix(r.Header.Get("Range"), "bytes=0-")
+		if r.Method == http.MethodGet && fromStart {
+			a.o.Audit.Record(r.Context(), who, actionDownloaded, map[string]any{"name": name, "size": fi.Size()})
+		}
+	}
 	dw.extend()
 	h := w.Header()
 	h.Set("Content-Type", "application/gzip")
