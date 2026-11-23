@@ -1261,7 +1261,8 @@ Measured during the work on version 0.4.0 on an Apple M4 Pro with 24 GiB of
 memory, in Docker Desktop with 10 CPUs and 15.6 GiB for its Linux machine, with
 PostgreSQL 18.7. The Scanopsis container had the limits of `compose.yaml`:
 512 MiB and `GOMEMLIMIT=400MiB`. The database held 503 services, 540,012 scans
-and 4,321,242 findings, 1.5 GB as `pg_database_size` reports it. The data
+and 4,321,242 findings: `pg_database_size` reported 1,583,809,039 bytes,
+about 1.58 GB. The data
 clean-up had already removed the stored reports of the 360,000 older scans, so
 the backup is mostly findings.
 
@@ -1272,7 +1273,7 @@ the backup is mostly findings.
 | Upload and check of that file | 3 seconds | | not measured |
 | Restore from the Backups page, with the backup of the current data first | 58 seconds | | 73 MiB of process memory |
 | Restore from the Backups page, without that backup | 55 seconds | | 174 MiB of process memory |
-| Restore on the setup screen of an empty installation | 56 seconds, and 3 seconds of upload and check before | restored database 1.5 GB | 24 MiB of process memory |
+| Restore on the setup screen of an empty installation | 56 seconds, and 3 seconds of upload and check before | restored database 1,549,883,071 bytes (about 1.55 GB) | 24 MiB of process memory |
 
 Process memory is what Scanopsis itself holds (`anon` in the container's
 `memory.stat`). The container's memory figure (`memory.current`) also counts

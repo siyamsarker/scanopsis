@@ -522,7 +522,9 @@ The folder has mode 700 and belongs to user 65532, the user that runs
 Scanopsis; the files in it have mode 600. The Backups page checks every few
 seconds that Scanopsis can still write to the folder. If it cannot, the page
 says why and **Back up now** and **Upload a backup** are disabled until it is
-fixed; no restart is needed.
+fixed; the page notices the fix within a few seconds. Only a folder that could
+not be used when Scanopsis started needs a restart after the fix; the page
+then says so.
 
 ### Back up from the Backups page
 
