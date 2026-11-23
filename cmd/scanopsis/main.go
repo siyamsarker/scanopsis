@@ -35,6 +35,7 @@ import (
 	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/auditlog"
 	"github.com/siyamsarker/scanopsis/internal/auth"
+	"github.com/siyamsarker/scanopsis/internal/backup"
 	"github.com/siyamsarker/scanopsis/internal/catalog"
 	"github.com/siyamsarker/scanopsis/internal/clientip"
 	"github.com/siyamsarker/scanopsis/internal/config"
@@ -149,13 +150,21 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	mySessions := auth.NewMySessions(q, sessions, rec, resolver.IP, log)
 
 	setup := auth.NewSetup(q, sessions, rec, resolver.IP, auth.NewRateLimiter(12*time.Second, 5, nil), log)
-	token, err := setup.PrepareToken(startCtx)
-	if err != nil {
-		return err
+	// prepareSetupToken is also run after a restore, which may leave a
+	// database without an administrator.
+	prepareSetupToken := func(ctx context.Context) error {
+		token, err := setup.PrepareToken(ctx)
+		if err != nil {
+			return err
+		}
+		if token != "" {
+			log.Warn("no administrator exists yet: open Scanopsis in a browser to finish the setup",
+				"setup_url", cfg.PublicURL.String()+"/setup", "setup_token", token)
+		}
+		return nil
 	}
-	if token != "" {
-		log.Warn("no administrator exists yet: open Scanopsis in a browser to finish the setup",
-			"setup_url", cfg.PublicURL.String()+"/setup", "setup_token", token)
+	if err := prepareSetupToken(startCtx); err != nil {
+		return err
 	}
 
 	recoveryKey, err := auth.RecoveryKey(cfg.SecretKey)
@@ -248,6 +257,24 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Build:                httpapi.BuildInfo{Version: version, Commit: resolveCommit(), Go: runtime.Version()},
 		Secure:               cfg.Secure(),
 	}
+	catalogService := catalog.New(pool, conf, rec, log)
+	backups, err := newBackupService(cfg, pool, conf, rec, log, func(ctx context.Context) error {
+		// A restore replaced the database under the running server: read
+		// the settings again and drop what was computed from the old data.
+		// Sessions are read from the database on every request, so the ones
+		// the restore deleted are already gone.
+		if err := conf.Reload(ctx); err != nil {
+			return err
+		}
+		catalogService.ResetCaches()
+		return prepareSetupToken(ctx)
+	})
+	if err != nil {
+		return err
+	}
+	// Ends running backup jobs and waits for them, also when start-up fails
+	// below; Run does the same when ctx ends.
+	defer backups.Close()
 	sonarQube := sonar.New(pool, conf, sonar.Options{HTTPClient: httpClient, Logger: log, Audit: rec, ClientIP: resolver.IP})
 	features, err := mergeFeatures(
 		ingest.New(pool, conf, rec, ingest.Options{
@@ -257,7 +284,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 			ClientIP:   resolver.IP,
 			Logger:     log,
 		}).Handlers(),
-		catalog.New(pool, conf, rec, log).Handlers(),
+		catalogService.Handlers(),
 		findings.New(pool, conf, log).Handlers(),
 		sonarQube.Handlers(),
 		auditlog.New(pool, log).Handlers(),
@@ -276,6 +303,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	go removeExpiredSessions(ctx, sessions, log)
 	go sonarQube.Run(ctx)
 	go retention.New(pool, conf, log).Run(ctx)
+	go backups.Run(ctx)
 
 	var lc net.ListenConfig
 	ln, err := lc.Listen(ctx, "tcp", cfg.ListenAddr)
@@ -284,6 +312,46 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	}
 	log.Info("scanopsis listening", "addr", ln.Addr().String())
 	return serve(ctx, ln, httpapi.New(deps), log, shutdownGrace)
+}
+
+// newBackupService opens the backup folder and returns the backup service.
+// A folder that cannot be used is not fatal: the server starts, logs one
+// warning that names the folder and the fix, and every backup and restore
+// then fails with that reason. A secret key that cannot give a fingerprint or
+// a signing key stops the start.
+func newBackupService(cfg *config.Config, pool *pgxpool.Pool, conf *settings.Service, rec auth.AuditRecorder, log *slog.Logger, afterRestore func(context.Context) error) (*backup.Service, error) {
+	fingerprint, err := backup.KeyFingerprint(cfg.SecretKey)
+	if err != nil {
+		return nil, err
+	}
+	signingKey, err := backup.SigningKey(cfg.SecretKey)
+	if err != nil {
+		return nil, err
+	}
+	o := backup.ServiceOptions{
+		Pool:           pool,
+		Settings:       conf,
+		Audit:          rec,
+		Log:            log,
+		KeyFingerprint: fingerprint,
+		AfterRestore:   afterRestore,
+		ExclusiveLocks: []int64{retention.AdvisoryLockKey, sonar.AdvisoryLockKey},
+	}
+	dir, err := backup.OpenDir(cfg.BackupDir, fingerprint)
+	switch {
+	case errors.Is(err, backup.ErrFolder):
+		log.Warn("backups are unavailable until the backup folder is fixed; fix it and restart Scanopsis",
+			"folder", cfg.BackupDir, "error", err)
+	case err != nil:
+		return nil, err
+	default:
+		o.Dir = dir
+		o.Dumper = &backup.Dumper{
+			Pool: pool, Dir: dir, App: version, Commit: resolveCommit(),
+			KeyFingerprint: fingerprint, SigningKey: signingKey,
+		}
+	}
+	return backup.NewService(o), nil
 }
 
 // mergeFeatures combines the handlers of the feature packages, keyed by

@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -244,5 +245,92 @@ func TestIntegrationServerSetupAndTwoFactor(t *testing.T) {
 
 	if strings.Contains(logs.String(), "a long enough password") || strings.Contains(logs.String(), secret) {
 		t.Fatal("a password or TOTP secret reached the log")
+	}
+}
+
+// startServer runs the server against the test's database with the given
+// backup folder and returns its base URL and log once it is ready.
+func startServer(t *testing.T, backupDir string) (string, *syncBuffer) {
+	t.Helper()
+	pool := storetest.New(t)
+	addr := freeAddr(t)
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+	cfg, err := config.Load(env(map[string]string{
+		"SCANOPSIS_DATABASE_URL": dbURL(t, pool),
+		"SCANOPSIS_PUBLIC_URL":   "http://" + addr,
+		"SCANOPSIS_LISTEN_ADDR":  addr,
+		"SCANOPSIS_SECRET_KEY":   key,
+		"SCANOPSIS_BACKUP_DIR":   backupDir,
+	}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &syncBuffer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serveApp(ctx, cfg, slog.New(slog.NewJSONHandler(logs, nil))) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("serveApp returned %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("server did not stop")
+		}
+	})
+	base := "http://" + addr
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		req, _ := http.NewRequestWithContext(t.Context(), "GET", base+"/readyz", nil)
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return base, logs
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server not ready; log:\n%s", logs.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// backupWarnings counts the log lines that warn about the backup folder.
+func backupWarnings(logs string) (n int, folder string) {
+	sc := bufio.NewScanner(strings.NewReader(logs))
+	for sc.Scan() {
+		var line map[string]any
+		if json.Unmarshal(sc.Bytes(), &line) == nil && line["level"] == "WARN" {
+			if f, ok := line["folder"].(string); ok {
+				n++
+				folder = f
+			}
+		}
+	}
+	return n, folder
+}
+
+func TestIntegrationServerStartsWithoutBackupFolder(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "no-such-folder")
+	base, logs := startServer(t, missing)
+	c := &client{t: t, base: base}
+	if code, body := c.do("GET", "/api/v1/setup", nil); code != 200 || body["required"] != true {
+		t.Fatalf("setup status = %d %v; the server must serve", code, body)
+	}
+	n, folder := backupWarnings(logs.String())
+	if n != 1 || folder != missing {
+		t.Fatalf("%d backup folder warnings naming %q; want one naming %q\n%s", n, folder, missing, logs.String())
+	}
+	if !strings.Contains(logs.String(), "fix it and restart") {
+		t.Fatalf("the warning does not say how to fix it:\n%s", logs.String())
+	}
+}
+
+func TestIntegrationServerStartsWithBackupFolder(t *testing.T) {
+	_, logs := startServer(t, t.TempDir())
+	if n, _ := backupWarnings(logs.String()); n != 0 {
+		t.Fatalf("%d backup folder warnings with a usable folder:\n%s", n, logs.String())
 	}
 }
