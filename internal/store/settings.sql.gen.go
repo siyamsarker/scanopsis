@@ -23,7 +23,7 @@ const listSettings = `-- name: ListSettings :many
 SELECT key, value, secret_enc, source, updated_by, updated_at FROM settings ORDER BY key
 `
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 func (q *Queries) ListSettings(ctx context.Context) ([]Setting, error) {
 	rows, err := q.db.Query(ctx, listSettings)

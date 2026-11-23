@@ -1,4 +1,4 @@
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
 /** SVG path helpers for bars with a rounded data end and a square baseline end. */

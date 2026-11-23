@@ -1,4 +1,4 @@
-# Copyright 2026 The Scanopsis Authors
+# Copyright 2026 Siyam Sarker
 # SPDX-License-Identifier: Apache-2.0
 
 # Stack for the end-to-end tests: PostgreSQL, a fake GitLab sign-in provider and

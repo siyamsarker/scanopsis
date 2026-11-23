@@ -1,4 +1,4 @@
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
 // Shared Tailwind class strings. Focus rings come from index.css.

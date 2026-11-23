@@ -1,4 +1,4 @@
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
 import { Archive, ChevronDown, GitBranch, Pencil, Plus, Settings, Trash2 } from 'lucide-react';

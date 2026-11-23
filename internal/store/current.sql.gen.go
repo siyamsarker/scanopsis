@@ -109,7 +109,7 @@ type ListRefsRow struct {
 	LastScannedAt pgtype.Timestamptz
 }
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 // The "current state" of a service for a ref is the latest scan per
 // (artifact_name, kind). Lists never select raw_report.

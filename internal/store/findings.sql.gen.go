@@ -409,7 +409,7 @@ FROM services
 WHERE id = $1
 `
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 // Read queries of the findings API. "Current scans" are the ids returned by
 // CurrentScans; findings are always read by scan_id so the (scan_id, id)

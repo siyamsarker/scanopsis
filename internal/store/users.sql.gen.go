@@ -139,7 +139,7 @@ const getUser = `-- name: GetUser :one
 SELECT id, source, gitlab_user_id, username, name, email, role, password_hash, created_at, last_login_at, must_change_password, totp_secret_enc, totp_enabled_at, totp_last_step, mfa_failed_attempts, disabled_at, gitlab_issuer FROM users WHERE id = $1
 `
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 func (q *Queries) GetUser(ctx context.Context, id int64) (User, error) {
 	row := q.db.QueryRow(ctx, getUser, id)

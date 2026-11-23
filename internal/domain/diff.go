@@ -1,4 +1,4 @@
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
 // Package domain holds the pure rules of the findings read API: what makes

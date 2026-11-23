@@ -1,4 +1,4 @@
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
 // Time-based one-time passwords (RFC 6238) on top of HOTP (RFC 4226), using

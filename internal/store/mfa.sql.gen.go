@@ -25,7 +25,7 @@ const deleteRecoveryCodes = `-- name: DeleteRecoveryCodes :exec
 DELETE FROM recovery_codes WHERE user_id = $1
 `
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID int64) error {
 	_, err := q.db.Exec(ctx, deleteRecoveryCodes, userID)

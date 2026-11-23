@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright 2026 The Scanopsis Authors
+# Copyright 2026 Siyam Sarker
 # SPDX-License-Identifier: Apache-2.0
 #
 # Usage: check-dco.sh <base-sha> <head-sha>

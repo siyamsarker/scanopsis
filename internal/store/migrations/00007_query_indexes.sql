@@ -1,4 +1,4 @@
--- Copyright 2026 The Scanopsis Authors
+-- Copyright 2026 Siyam Sarker
 -- SPDX-License-Identifier: Apache-2.0
 
 -- Indexes for the portfolio, the first-seen lookup of the findings pages and

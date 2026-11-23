@@ -1,4 +1,4 @@
-# Copyright 2026 The Scanopsis Authors
+# Copyright 2026 Siyam Sarker
 # SPDX-License-Identifier: Apache-2.0
 
 # Pinned tool versions. Tools run through `go run`, so nothing is installed

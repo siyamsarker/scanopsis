@@ -137,7 +137,7 @@ Every new source file starts with this header (in the comment style of its
 language); `make headers` checks it:
 
 ```text
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 ```
 

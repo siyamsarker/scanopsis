@@ -224,7 +224,7 @@ const lockIngestProject = `-- name: LockIngestProject :exec
 SELECT pg_advisory_xact_lock(hashtextextended('scanopsis.ingest:' || $1::text, 0))
 `
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 // Serialises uploads for one GitLab project until the transaction ends, so
 // concurrent uploads cannot create the same service or scan twice.

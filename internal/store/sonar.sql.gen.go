@@ -370,7 +370,7 @@ type SonarServiceByGitlabProjectRow struct {
 	SonarProjectKey pgtype.Text
 }
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 func (q *Queries) SonarServiceByGitlabProject(ctx context.Context, gitlabProjectID pgtype.Int8) (SonarServiceByGitlabProjectRow, error) {
 	row := q.db.QueryRow(ctx, sonarServiceByGitlabProject, gitlabProjectID)

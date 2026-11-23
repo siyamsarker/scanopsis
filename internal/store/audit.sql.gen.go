@@ -20,7 +20,7 @@ type InsertAuditParams struct {
 	Detail []byte
 }
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 func (q *Queries) InsertAudit(ctx context.Context, arg InsertAuditParams) error {
 	_, err := q.db.Exec(ctx, insertAudit, arg.Actor, arg.Action, arg.Detail)

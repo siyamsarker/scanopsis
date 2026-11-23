@@ -94,7 +94,7 @@ type ListServicesParams struct {
 	MaxRows  int32
 }
 
-// Copyright 2026 The Scanopsis Authors
+// Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 func (q *Queries) ListServices(ctx context.Context, arg ListServicesParams) ([]Service, error) {
 	rows, err := q.db.Query(ctx, listServices,

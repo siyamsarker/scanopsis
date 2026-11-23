@@ -1,4 +1,4 @@
--- Copyright 2026 The Scanopsis Authors
+-- Copyright 2026 Siyam Sarker
 -- SPDX-License-Identifier: Apache-2.0
 
 -- The vulnerability search also looks at every protected ref. Finding them
