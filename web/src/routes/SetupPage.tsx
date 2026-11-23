@@ -31,10 +31,25 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [mismatch, setMismatch] = useState(false);
+  const [missing, setMissing] = useState<{ token?: string; username?: string; password?: string }>(
+    {},
+  );
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError(null);
+    // The page says what is missing, in its own words rather than a browser bubble.
+    const empty = {
+      token: token.trim() ? undefined : 'Enter the setup token.',
+      username: username.trim() ? undefined : 'Enter a username.',
+      password: password ? undefined : 'Enter a password.',
+    };
+    setMissing(empty);
+    const first = (['token', 'username', 'password'] as const).find((field) => empty[field]);
+    if (first) {
+      document.getElementById(first)?.focus();
+      return;
+    }
     if (password !== confirm) {
       setMismatch(true);
       return;
@@ -66,7 +81,7 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
       lead="Create the first administrator. Two-factor sign-in comes next."
       steps={{ labels: setupSteps, current: 0 }}
     >
-      <form onSubmit={(e) => void submit(e)} className="flex flex-col gap-4">
+      <form onSubmit={(e) => void submit(e)} noValidate className="flex flex-col gap-4">
         <AuthField
           id="token"
           label="Setup token"
@@ -76,9 +91,13 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
           autoCapitalize="off"
           required
           value={token}
-          onChange={(e) => setToken(e.target.value)}
+          onChange={(e) => {
+            setToken(e.target.value);
+            setMissing((m) => ({ ...m, token: undefined }));
+          }}
           className={monoInputClass}
           hint={<SetupTokenHint />}
+          error={missing.token}
         />
         <AuthField
           id="username"
@@ -89,7 +108,11 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
           spellCheck={false}
           required
           value={username}
-          onChange={(e) => setUsername(e.target.value)}
+          onChange={(e) => {
+            setUsername(e.target.value);
+            setMissing((m) => ({ ...m, username: undefined }));
+          }}
+          error={missing.username}
         />
         <PasswordField
           id="password"
@@ -98,8 +121,12 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
           required
           minLength={12}
           value={password}
-          onChange={setPassword}
+          onChange={(v) => {
+            setPassword(v);
+            setMissing((m) => ({ ...m, password: undefined }));
+          }}
           hint={<PasswordRules password={password} username={username} />}
+          error={missing.password}
         />
         <PasswordField
           id="confirm"

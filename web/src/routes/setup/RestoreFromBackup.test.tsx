@@ -148,6 +148,19 @@ describe('restore from the setup screen', () => {
     );
   });
 
+  it('asks for a missing token in the page, in the same column as the later steps', async () => {
+    const { calls } = mockFetch(api({ required: true }));
+    renderApp('/setup');
+    await openRestore();
+    const button = screen.getByRole('button', { name: 'Continue' });
+    expect(button.closest('form')).toHaveAttribute('novalidate');
+    expect(button).toHaveClass('w-full');
+    fireEvent.click(button);
+    expect(await screen.findByText('Enter the setup token.')).toBeVisible();
+    expect(screen.getByLabelText('Setup token')).toHaveFocus();
+    expect(calls.some((c) => c.path === '/api/v1/setup/restore/token')).toBe(false);
+  });
+
   it('checks the token first and stays on it when it is wrong', async () => {
     const { calls } = mockFetch(
       api({
@@ -294,7 +307,10 @@ describe('restore from the setup screen', () => {
     enterToken('tok-123');
     await sendFile();
 
-    expect(await screen.findByRole('heading', { name: 'Review the backup' })).toBeVisible();
+    const review = await screen.findByRole('heading', { name: 'Review the backup' });
+    expect(review).toBeVisible();
+    // The same column as the steps before it, so the step bar does not move.
+    expect(review.closest('section')).toHaveClass('max-w-md');
     expect(screen.getByText('0.4.0')).toBeVisible();
     expect(screen.getByText('The same secret key as this installation')).toBeVisible();
     expect(

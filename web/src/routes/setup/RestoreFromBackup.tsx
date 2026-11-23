@@ -43,6 +43,9 @@ type Step =
 
 const labelClass = 'text-body-s font-medium text-text';
 
+/** The buttons of a step, stacked: the main one first, as on the new-installation form. */
+const actionsClass = 'mt-2 flex flex-col gap-2';
+
 /**
  * The upload whose every byte was sent, kept for this browser tab so that a
  * reload during the check picks it up again once the token is entered,
@@ -93,6 +96,7 @@ function save(upload: SavedUpload | null) {
 export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
   const queryClient = useQueryClient();
   const [token, setToken] = useState('');
+  const [missingToken, setMissingToken] = useState(false);
   const [step, setStep] = useState<Step>({ kind: 'token' });
   const [checking, setChecking] = useState(false);
   // A file was chosen and checked earlier; choosing another leaves it in the backup folder.
@@ -170,7 +174,12 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
 
   async function checkToken(event: FormEvent) {
     event.preventDefault();
-    if (!cleanToken || checking) return;
+    if (checking) return;
+    if (!cleanToken) {
+      setMissingToken(true);
+      document.getElementById('restore-token')?.focus();
+      return;
+    }
     const abort = new AbortController();
     tokenCheck.current = abort;
     setChecking(true);
@@ -226,10 +235,10 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
         <p className="text-body-s text-text-muted">
           After the restart, Scanopsis prints a new setup token in its log.
         </p>
-        <div className="flex flex-wrap gap-2">
+        <div className={actionsClass}>
           <button
             type="button"
-            className={buttonClass('primary')}
+            className={`${buttonClass('primary', 'lg')} w-full`}
             onClick={() => {
               setToken('');
               setStep({ kind: 'token' });
@@ -239,7 +248,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           </button>
           <button
             type="button"
-            className={buttonClass('ghost')}
+            className={`${buttonClass('ghost')} w-full`}
             onClick={() => {
               save(null);
               setStep({ kind: 'file' });
@@ -279,16 +288,20 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           upload={upload}
           note={replaced ? 'The earlier file stays in the backup folder.' : undefined}
         />
-        <div className="flex flex-wrap gap-2">
+        <div className={actionsClass}>
           {phase.kind === 'interrupted' ? (
-            <button type="button" className={buttonClass('primary')} onClick={upload.resume}>
+            <button
+              type="button"
+              className={`${buttonClass('primary', 'lg')} w-full`}
+              onClick={upload.resume}
+            >
               Resume upload
             </button>
           ) : null}
           {phase.kind === 'failed' ? (
             <button
               type="button"
-              className={buttonClass('primary')}
+              className={`${buttonClass('primary', 'lg')} w-full`}
               onClick={() => {
                 save(null);
                 upload.chooseAnother();
@@ -300,13 +313,17 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           {phase.kind === 'idle' ? (
             <button
               type="button"
-              className={buttonClass('ghost')}
+              className={`${buttonClass('ghost')} w-full`}
               onClick={() => setStep({ kind: 'token' })}
             >
               Back
             </button>
           ) : (
-            <button type="button" className={buttonClass('secondary')} onClick={cancelUpload}>
+            <button
+              type="button"
+              className={`${buttonClass('secondary')} w-full`}
+              onClick={cancelUpload}
+            >
               {phase.kind === 'failed' ? 'Start over' : 'Cancel upload'}
             </button>
           )}
@@ -321,7 +338,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
       lead="Move Scanopsis to this host with a backup from the old one. The accounts come from the backup."
       steps={{ labels: steps, current: 0 }}
     >
-      <form onSubmit={(e) => void checkToken(e)} className="flex flex-col gap-4">
+      <form onSubmit={(e) => void checkToken(e)} noValidate className="flex flex-col gap-4">
         <AuthField
           id="restore-token"
           label="Setup token"
@@ -331,22 +348,26 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           autoCapitalize="off"
           required
           value={token}
-          onChange={(e) => setToken(e.target.value)}
+          onChange={(e) => {
+            setToken(e.target.value);
+            setMissingToken(false);
+          }}
           className={monoInputClass}
           hint={<SetupTokenHint />}
+          error={missingToken ? 'Enter the setup token.' : undefined}
         />
         {step.error ? <Problem>{step.error}</Problem> : null}
-        <div className="flex flex-wrap gap-2">
+        <div className={actionsClass}>
           <button
             type="submit"
             disabled={checking}
             aria-busy={checking || undefined}
-            className={buttonClass('primary', 'lg')}
+            className={`${buttonClass('primary', 'lg')} w-full`}
           >
             {checking ? <Spinner /> : null}
             Continue
           </button>
-          <button type="button" className={buttonClass('ghost', 'lg')} onClick={onBack}>
+          <button type="button" className={`${buttonClass('ghost')} w-full`} onClick={onBack}>
             Back
           </button>
         </div>
@@ -411,7 +432,6 @@ function Review({
       title="Review the backup"
       lead="Check what the backup holds before Scanopsis takes it over."
       steps={{ labels: steps, current: 2 }}
-      wide
     >
       <dl className="flex flex-col gap-2.5 rounded-inner border border-line bg-surface p-4">
         <Fact term="Made on">{date}</Fact>
@@ -465,10 +485,10 @@ function Review({
           />
         </div>
         {error ? <Problem>{error}</Problem> : null}
-        <div className="flex flex-wrap gap-2">
+        <div className={actionsClass}>
           <button
             type="submit"
-            className={buttonClass('danger')}
+            className={`${buttonClass('danger', 'lg')} w-full`}
             disabled={!ready || pending}
             aria-busy={pending || undefined}
           >
@@ -477,7 +497,7 @@ function Review({
           </button>
           <button
             type="button"
-            className={buttonClass('ghost')}
+            className={`${buttonClass('ghost')} w-full`}
             disabled={pending}
             onClick={onBack}
           >

@@ -85,6 +85,20 @@ describe('setup page', () => {
     expect(rules().every((text) => text?.endsWith(': met'))).toBe(true);
   });
 
+  it('says what is missing in the page, not in a browser bubble', async () => {
+    const { calls } = mockFetch(setupApi(() => noContent()));
+    renderApp('/');
+    await startNew();
+    const button = screen.getByRole('button', { name: 'Create administrator' });
+    expect(button.closest('form')).toHaveAttribute('novalidate');
+    fireEvent.click(button);
+    expect(await screen.findByText('Enter the setup token.')).toBeVisible();
+    expect(screen.getByLabelText('Setup token')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByText('Enter a username.')).toBeVisible();
+    expect(screen.getByLabelText('Setup token')).toHaveFocus();
+    expect(calls.some((c) => c.method === 'POST' && c.path === '/api/v1/setup')).toBe(false);
+  });
+
   it('shows where setup is in the steps to the first sign-in', async () => {
     mockFetch(setupApi(() => noContent()));
     renderApp('/setup');
