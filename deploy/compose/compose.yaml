@@ -48,8 +48,9 @@ services:
       - postgres_password
     volumes:
       # A host folder, not a named volume, so that no Docker command can
-      # delete the data. PostgreSQL 18 keeps its files in a versioned
-      # subfolder (18/docker) below this path.
+      # delete the data. Create it with mode 700 (it holds the database
+      # files, so only its owner should read it). PostgreSQL 18 keeps its
+      # files in a versioned subfolder (18/docker) below this path.
       - ./data/postgres:/var/lib/postgresql
     # Only Scanopsis can reach the database; it has no route to other networks.
     networks:
@@ -109,7 +110,7 @@ services:
       - secret_key
     volumes:
       # Backups are written here. The folder belongs to user 65532, which
-      # runs Scanopsis (see docs/getting-started.md).
+      # runs Scanopsis, with mode 700 (see docs/getting-started.md).
       - ./backups:/var/lib/scanopsis/backups
     networks:
       - backend

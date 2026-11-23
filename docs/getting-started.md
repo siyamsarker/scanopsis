@@ -116,15 +116,14 @@ Scanopsis keeps its two kinds of data in plain folders next to
 `compose.yaml`, not in Docker volumes. Create them in `deploy/compose`:
 
 ```sh
-mkdir -p data/postgres backups
-sudo chown 65532:65532 backups
-chmod 700 backups
+install -d -m 700 data/postgres
+sudo install -d -m 700 -o 65532 -g 65532 backups
 ```
 
 | Folder | What it holds |
 | --- | --- |
-| `data/postgres` | The database. Docker creates the files inside it; leave its owner alone. |
-| `backups` | The backup files Scanopsis writes. The container runs as user 65532, so that user must own the folder; mode 700 keeps other users on the host out. |
+| `data/postgres` | The database. Mode 700, because it holds the database files and only its owner should read them. Docker creates the files inside it; leave its owner alone. |
+| `backups` | The backup files Scanopsis writes. The container runs as user 65532, so that user must own the folder; `sudo install` sets owner and mode 700 in one step, which keeps other users on the host out. |
 
 Why folders: a Docker volume is deleted by `docker compose down -v`,
 `docker volume prune` and `docker system prune --volumes`. No Docker command
@@ -226,7 +225,7 @@ If this step fails:
 | `scanopsis-scanopsis-1` is `Restarting` | Run `docker compose logs scanopsis`. The server prints `configuration error:` and one line per problem, for example `SCANOPSIS_PUBLIC_URL is required, for example https://scanopsis.example.com`. Fix `.env` and run `docker compose up -d` again. |
 | The log says `SCANOPSIS_SECRET_KEY is not valid` | `secrets/secret_key` is not a base64 encoded 32-byte key. Create it again as in step 2. |
 | `curl` cannot connect | The container is not running, or another program uses port 8080 on the host. Run `docker compose ps`. |
-| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when `data/postgres` is first filled. If you changed the password after the first start and have not finished the setup yet, run `docker compose down`, delete the folder with `sudo rm -rf data/postgres`, create it again with `mkdir data/postgres`, and start again. This deletes all data. |
+| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when `data/postgres` is first filled. If you changed the password after the first start and have not finished the setup yet, run `docker compose down`, delete the folder with `sudo rm -rf data/postgres`, create it again with `install -d -m 700 data/postgres`, and start again. This deletes all data. |
 
 ## Step 7. Get the setup token
 

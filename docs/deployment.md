@@ -824,9 +824,8 @@ in `secrets/database_url`. The names are examples.
 
 ```sh
 docker network create scanopsis-net
-mkdir -p data/postgres backups
-sudo chown 65532:65532 backups
-chmod 700 backups
+install -d -m 700 data/postgres
+sudo install -d -m 700 -o 65532 -g 65532 backups
 
 docker run -d --name scanopsis-db --network scanopsis-net \
   -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \

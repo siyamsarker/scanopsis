@@ -120,14 +120,15 @@ change it finds missing.
 4. Compare `deploy/compose/compose.yaml` and `deploy/compose/.env.example` of
    0.4.0 with your copies and take over new settings. Copy the new
    `compose.yaml` if you did not change yours: it keeps the database and the
-   backups in folders, see
-   [move the database into a folder](#move-the-database-into-a-folder).
+   backups in folders. Leave `SCANOPSIS_IMAGE` in `.env` on your old image for
+   now.
 
 5. If your database is still in a Docker volume (every version before 0.4.0
    does this), [move it into a folder](#move-the-database-into-a-folder)
-   now. A new 0.4.0 `compose.yaml` started without the move would create an
-   empty database in `data/postgres` and leave your data behind in the
-   volume.
+   now, while the old image is still set. A new 0.4.0 `compose.yaml` started
+   without the move would create an empty database in `data/postgres` and
+   leave your data behind in the volume. If `deploy/compose/data/postgres`
+   exists already, skip this step.
 
 6. Set `SCANOPSIS_IMAGE=scanopsis:v0.4.0` in `deploy/compose/.env` and start
    it:
@@ -143,6 +144,13 @@ change it finds missing.
 7. [Check the running version](#check-the-running-version). It must show
    `v0.4.0`.
 
+8. Once 0.4.0 runs well and a backup exists, remove the old volume, if you
+   moved one. Until then it is your way back:
+
+   ```sh
+   docker volume rm scanopsis_db-data
+   ```
+
 The [deployment guide](deployment.md#upgrade-and-roll-back) shows a recorded
 upgrade from 0.1.0 to 0.4.0 with the output of each step.
 
@@ -156,10 +164,12 @@ which no Docker command deletes. Move the data once, with the old version
 stopped. **Takes:** a few minutes, plus the copy. You need the free disk space
 for a second copy of the database.
 
-1. In `deploy/compose`, with the old version still running, count the rows of
-   every table and keep the output:
+1. In `deploy/compose`, stop Scanopsis so that nothing writes any more. The
+   database keeps running. Count the rows of every table and keep the
+   output:
 
    ```sh
+   docker compose stop scanopsis
    docker compose exec -T db psql -U scanopsis -d scanopsis -c "SELECT table_name, (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I', table_name), false, true, '')))[1]::text AS rows FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY 1"
    ```
 
@@ -183,48 +193,50 @@ for a second copy of the database.
    (12 rows)
    ```
 
-2. Stop the old version. Do not add `-v`:
+2. Stop the rest. Do not add `-v`:
 
    ```sh
    docker compose down
    ```
 
-3. Create the two folders and copy the volume into `data/postgres`. The
-   volume is named `<project>_db-data`, and the project is `scanopsis` unless
-   you changed `name:` in `compose.yaml`; `docker volume ls` shows it.
+3. Check that the old volume exists, create the two folders and copy the
+   volume into `data/postgres`. The volume is named `<project>_db-data`, and
+   the project is `scanopsis` unless you changed `name:` in `compose.yaml`;
+   `docker volume ls` shows it.
 
    ```sh
-   mkdir -p data/postgres backups
-   sudo chown 65532:65532 backups
-   chmod 700 backups
+   docker volume inspect scanopsis_db-data > /dev/null
+   install -d -m 700 data/postgres
+   sudo install -d -m 700 -o 65532 -g 65532 backups
    docker run --rm -v scanopsis_db-data:/from -v "$PWD/data/postgres":/to \
      alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f \
-     sh -c 'cp -a /from/. /to/'
+     sh -c 'test -z "$(ls -A /to)" || { echo "data/postgres is not empty" >&2; exit 1; }; cp -a /from/. /to/'
    ```
 
-   The command prints nothing and exits with 0. `cp -a` keeps the owners of
-   the files, which the database needs. The folder `data/postgres` then holds
-   one folder named `18`, the PostgreSQL major version.
+   Do not go on if the first command prints `no such volume`: without
+   it, `docker run` would create an empty volume and copy nothing. The copy
+   refuses to run if `data/postgres` already holds files, so it never mixes
+   two databases. Otherwise the commands print nothing and exit with 0. `cp -a`
+   keeps the owners of the files, which the database needs. The folder
+   `data/postgres` then holds one folder named `18`, the PostgreSQL major
+   version. `data/postgres` has mode 700 because it holds the database files.
 
-4. Check that `compose.yaml` is the 0.4.0 one and that `SCANOPSIS_IMAGE` in
-   `.env` names the 0.4.0 image, then start:
+4. Start again. `compose.yaml` is the new one, and `SCANOPSIS_IMAGE` in `.env`
+   still names your old image, so that the move is the only change:
 
    ```sh
    docker compose up -d
    ```
 
-5. Run the count from step 1 again. Every number must be the same as before
-   the move (the schema version in `goose_db_version` grows only if the
-   upgrade added database changes). If a number differs, run `docker compose
-   down`, keep both the volume and the folder, and
+5. Wait until `docker compose ps` shows both containers `(healthy)`, then run
+   the count from step 1 again. Every number must be exactly the same as
+   before the move. If a number differs, run `docker compose down`, keep both
+   the volume and the folder, and
    [open an issue](https://github.com/siyamsarker/scanopsis/issues).
 
-6. Remove the old volume only after the check, and once your first backup
-   exists:
-
-   ```sh
-   docker volume rm scanopsis_db-data
-   ```
+Go on with the upgrade: set the new image only now. The old volume stays until
+the upgraded version runs well (step 8 of
+[upgrade to the newest version](#upgrade-to-the-newest-version)).
 
 From now on `docker compose down -v` removes only the containers and the
 network, and the database is still there after `docker compose up -d`.
