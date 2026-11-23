@@ -6,7 +6,7 @@ import { FileArchive, Upload } from 'lucide-react';
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { adminUploadEndpoints, backupsKey } from '../../../api/backups';
 import { describeError } from '../../../api/errors';
-import { uploadInChunks, UploadInterruptedError } from '../../../api/upload';
+import { cancelUpload, uploadInChunks, UploadInterruptedError } from '../../../api/upload';
 import { Spinner } from '../../../components/ConfirmDialog';
 import { Dialog } from '../../../components/Dialog';
 import { toast } from '../../../components/Toast';
@@ -18,7 +18,7 @@ type Phase =
   | { kind: 'choose' }
   | { kind: 'uploading'; file: File; sent: number }
   | { kind: 'interrupted'; file: File; id: string; sent: number }
-  | { kind: 'failed'; file: File; message: string };
+  | { kind: 'failed'; file: File; message: string; id?: string };
 
 function Progress({ sent, total }: { sent: number; total: number }) {
   const percent = total > 0 ? Math.round((sent / total) * 100) : 0;
@@ -61,17 +61,28 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
   // Leaving the page cancels an upload in flight.
   useEffect(() => () => controller.current?.abort(), []);
 
-  async function run(file: File, resumeId?: string) {
+  async function run(file: File, resume?: { id: string; sent: number }) {
     const abort = new AbortController();
     controller.current = abort;
-    setPhase({ kind: 'uploading', file, sent: 0 });
+    let id = resume?.id;
+    let sentAll = false;
+    setPhase({ kind: 'uploading', file, sent: resume?.sent ?? 0 });
     try {
       await uploadInChunks(
         file,
         adminUploadEndpoints,
-        (sent) => setPhase({ kind: 'uploading', file, sent }),
+        (sent) => {
+          sentAll = sent >= file.size;
+          setPhase({ kind: 'uploading', file, sent });
+        },
         abort.signal,
-        { resumeId },
+        {
+          resumeId: resume?.id,
+          resumeReceived: resume?.sent,
+          onStarted: (started) => {
+            id = started;
+          },
+        },
       );
       controller.current = null;
       setOpen(false);
@@ -82,12 +93,16 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
       void queryClient.invalidateQueries({ queryKey: backupsKey });
     } catch (err) {
       controller.current = null;
-      if (abort.signal.aborted) return;
+      if (abort.signal.aborted) {
+        // Cancelled while the server checked the file: it may still have added it.
+        if (sentAll) void queryClient.invalidateQueries({ queryKey: backupsKey });
+        return;
+      }
       if (err instanceof UploadInterruptedError) {
         setPhase({ kind: 'interrupted', file, id: err.id, sent: err.received });
         return;
       }
-      setPhase({ kind: 'failed', file, message: describeError(err) });
+      setPhase({ kind: 'failed', file, message: describeError(err), id });
     }
   }
 
@@ -97,13 +112,23 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
     if (file) void run(file);
   }
 
+  /** Frees an upload the server still holds; it would drop it after an hour anyway. */
+  function release() {
+    if ((phase.kind === 'interrupted' || phase.kind === 'failed') && phase.id) {
+      void cancelUpload(adminUploadEndpoints, phase.id);
+    }
+  }
+
   function close() {
+    if (phase.kind === 'uploading' && phase.sent >= phase.file.size) {
+      toast.info('Upload cancelled', {
+        description:
+          'The server was already checking the file, so it may still appear in the list.',
+      });
+    }
     controller.current?.abort();
     controller.current = null;
-    if (phase.kind === 'interrupted') {
-      // The server would drop it after an hour; free the space now.
-      void adminUploadEndpoints.cancel(phase.id).catch(() => undefined);
-    }
+    release();
     setOpen(false);
     setPhase({ kind: 'choose' });
   }
@@ -141,13 +166,11 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
             </button>
           ) : phase.kind === 'failed' ? (
             <>
-              <button type="button" className={buttonClass('ghost')} onClick={close}>
-                Close
-              </button>
               <button
                 type="button"
                 className={buttonClass('primary')}
                 onClick={() => {
+                  release();
                   setPhase({ kind: 'choose' });
                   input.current?.click();
                 }}
@@ -164,7 +187,7 @@ export function UploadBackup({ disabled = false }: { disabled?: boolean }) {
                 <button
                   type="button"
                   className={buttonClass('primary')}
-                  onClick={() => void run(phase.file, phase.id)}
+                  onClick={() => void run(phase.file, { id: phase.id, sent: phase.sent })}
                 >
                   Resume upload
                 </button>

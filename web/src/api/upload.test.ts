@@ -3,6 +3,7 @@
 
 import { ApiError } from './client';
 import {
+  cancelUpload,
   restUploadEndpoints,
   uploadInChunks,
   UploadInterruptedError,
@@ -132,6 +133,64 @@ describe('uploadInChunks', () => {
     expect(result.id).toBe('u1');
     expect(server.endpoints.start).toHaveBeenCalledTimes(1);
     expect(server.stored.map((s) => s.text).join('')).toBe('abcdefgh');
+  });
+
+  it('stays resumable when a resume finds the server still unreachable', async () => {
+    const server = fakeServer(8);
+    for (const offline of [
+      new TypeError('Failed to fetch'),
+      new ApiError(502, 'unknown', 'Bad gateway.'),
+      new ApiError(503, 'unavailable', 'Down.'),
+    ]) {
+      vi.mocked(server.endpoints.status).mockRejectedValueOnce(offline);
+      const error = await uploadInChunks(
+        file('abcdefgh'),
+        server.endpoints,
+        () => {},
+        new AbortController().signal,
+        { ...fast, resumeId: 'u1', resumeReceived: 4 },
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(UploadInterruptedError);
+      expect(error).toMatchObject({ id: 'u1', received: 4, size: 8 });
+    }
+    expect(server.endpoints.start).not.toHaveBeenCalled();
+    expect(server.endpoints.cancel).not.toHaveBeenCalled();
+  });
+
+  it('does not treat the restore gate as a passing outage', async () => {
+    const server = fakeServer(8);
+    vi.mocked(server.endpoints.status).mockRejectedValueOnce(
+      new ApiError(503, 'restoring', 'A backup is being restored.'),
+    );
+    await expect(
+      uploadInChunks(file('abcdefgh'), server.endpoints, () => {}, new AbortController().signal, {
+        ...fast,
+        resumeId: 'u1',
+      }),
+    ).rejects.toMatchObject({ code: 'restoring' });
+  });
+
+  it('asks a busy server again to start, and reports the new id', async () => {
+    const server = fakeServer(4);
+    vi.mocked(server.endpoints.start).mockRejectedValueOnce(new ApiError(503, 'busy', 'Busy.'));
+    const started = vi.fn();
+    await uploadInChunks(file('abcd'), server.endpoints, () => {}, new AbortController().signal, {
+      ...fast,
+      onStarted: started,
+    });
+    expect(server.endpoints.start).toHaveBeenCalledTimes(2);
+    expect(started).toHaveBeenCalledWith('u1');
+  });
+
+  it('cancels an upload, asking a busy server again', async () => {
+    const server = fakeServer(4);
+    vi.mocked(server.endpoints.cancel)
+      .mockRejectedValueOnce(new ApiError(503, 'busy', 'Busy.'))
+      .mockRejectedValueOnce(new ApiError(409, 'upload_busy', 'Still writing.'));
+    await cancelUpload(server.endpoints, 'u1', 0);
+    expect(server.endpoints.cancel).toHaveBeenCalledTimes(3);
+    vi.mocked(server.endpoints.cancel).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    await expect(cancelUpload(server.endpoints, 'u1', 0)).resolves.toBeUndefined();
   });
 
   it('retries a busy server, separately from network errors', async () => {

@@ -40,6 +40,10 @@ export interface UploadResult<R> {
 export interface UploadOptions {
   /** Continue this upload (after an UploadInterruptedError) instead of starting one. */
   resumeId?: string;
+  /** Bytes the server was known to hold when the upload stopped, for a resume that fails again. */
+  resumeReceived?: number;
+  /** Called with the upload's id once the server has opened it, so a caller can cancel it later. */
+  onStarted?: (id: string) => void;
   /** Waits before each retry after a network error; their number is the number of retries. */
   retryDelaysMs?: number[];
   /** Wait before asking a busy server again when it names no wait itself. */
@@ -101,10 +105,18 @@ function isBusy(err: unknown): err is ApiError {
   );
 }
 
-/** A failure that a new attempt may get past: no answer, a timeout, a gateway error. */
+/**
+ * A failure that a new attempt may get past: no answer, a timeout, a gateway
+ * error, or a 503 other than "restoring" (which raises the restore screen).
+ */
 function isTransient(err: unknown): boolean {
   if (err instanceof ApiError) {
-    return err.status === 408 || err.status === 502 || err.status === 504;
+    return (
+      err.status === 408 ||
+      err.status === 502 ||
+      err.status === 504 ||
+      (err.status === 503 && err.code !== 'restoring')
+    );
   }
   return err instanceof TypeError;
 }
@@ -146,9 +158,21 @@ export async function uploadInChunks<R>(
   let received = 0;
 
   try {
-    const first = id
-      ? await patiently(() => endpoints.status(id!, signal), signal, busyDelay)
-      : await endpoints.start(file, signal);
+    let first: UploadStatus;
+    if (id) {
+      try {
+        first = await patiently(() => endpoints.status(id!, signal), signal, busyDelay);
+      } catch (err) {
+        // Still offline: the upload stays resumable where it was.
+        if (!signal.aborted && isTransient(err)) {
+          throw new UploadInterruptedError(id, options.resumeReceived ?? 0, file.size);
+        }
+        throw err;
+      }
+    } else {
+      first = await patiently(() => endpoints.start(file, signal), signal, busyDelay);
+      options.onStarted?.(first.id);
+    }
     id = first.id;
     received = first.received;
     const chunk = first.chunk_size;
@@ -218,14 +242,23 @@ export async function uploadInChunks<R>(
       }
     }
   } catch (err) {
-    if (signal.aborted && id) {
-      // Best effort: an upload nobody completes is dropped after an hour anyway.
-      const silent = new AbortController().signal;
-      await patiently(() => endpoints.cancel(id!), silent, busyDelay).catch(() => undefined);
-    }
+    if (signal.aborted && id) await cancelUpload(endpoints, id, busyDelay);
     if (signal.aborted) throw abortError();
     throw err;
   }
+}
+
+/**
+ * Cancels an open upload, asking a busy server again. Best effort: an upload
+ * nobody completes is dropped after an hour anyway, so a failure is ignored.
+ */
+export async function cancelUpload<R>(
+  endpoints: UploadEndpoints<R>,
+  id: string,
+  busyDelayMs = BUSY_DELAY_MS,
+): Promise<void> {
+  const never = new AbortController().signal;
+  await patiently(() => endpoints.cancel(id), never, busyDelayMs).catch(() => undefined);
 }
 
 export interface RestUploadOptions {

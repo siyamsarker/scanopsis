@@ -102,3 +102,52 @@ describe('upload a backup', () => {
     expect(within(dialog).getByRole('button', { name: 'Choose another file' })).toBeVisible();
   });
 });
+
+describe('upload a backup, leaving early', () => {
+  it('cancels an upload the server refused when the dialog closes', async () => {
+    const { calls } = mockFetch(
+      api((call) =>
+        call.path.endsWith('/complete')
+          ? apiError(507, 'no_space', 'The backup folder has too little free space.')
+          : call.method === 'DELETE'
+            ? new Response(null, { status: 204 })
+            : undefined,
+      ),
+    );
+    const dialog = await chooseFile();
+    await within(dialog).findByText('The backup folder has too little free space.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === 'DELETE' && c.path === '/api/v1/admin/backup-uploads/u1'),
+      ).toBe(true),
+    );
+  });
+
+  it('reloads the list once when cancelled while the server checks the file', async () => {
+    const { calls } = mockFetch(
+      api((call) => {
+        if (call.path.endsWith('/complete')) {
+          return new Promise<Response>((resolve) =>
+            setTimeout(() => resolve(apiError(409, 'upload_busy', 'Busy.')), 200),
+          );
+        }
+        if (call.method === 'DELETE') return new Response(null, { status: 204 });
+        return undefined;
+      }),
+    );
+    const dialog = await chooseFile();
+    await within(dialog).findByText(/Checking the backup/);
+    const listed = calls.filter((c) => c.path === '/api/v1/admin/backups').length;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel upload' }));
+    expect(await screen.findByText('Upload cancelled')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'The server was already checking the file, so it may still appear in the list.',
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(calls.filter((c) => c.path === '/api/v1/admin/backups').length).toBe(listed + 1),
+    );
+  });
+});
