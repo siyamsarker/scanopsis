@@ -1246,14 +1246,45 @@ Retention also keeps the latest scans of each dashboard branch and of
 protected branches and tags beyond the period: well under 1 GB for 500
 services. Size the disk for the estimate plus 50% (index growth, write-ahead
 log, vacuum), and the same again for backups. The stored reports are most of every backup too, and
-scheduled backups are kept for 7 days by default. Figures for how long a backup or
-restore takes and how much memory they use are not measured yet; they will be
-added here. Most pipelines scan less, so
+scheduled backups are kept for 7 days by default; see
+[backup and restore](#backup-and-restore) for the time and memory they take.
+Most pipelines scan less, so
 your real figure is likely lower. The **Integrations** page shows your uploads
 per day. Shorten `retention.days` if you need less history.
 
 Dashboards read the counts stored on each scan and never the stored reports,
 so they do not slow down as reports pile up.
+
+### Backup and restore
+
+Measured during the work on version 0.4.0 on an Apple M4 Pro with 24 GiB of
+memory, in Docker Desktop with 10 CPUs and 15.6 GiB for its Linux machine, with
+PostgreSQL 18.7. The Scanopsis container had the limits of `compose.yaml`:
+512 MiB and `GOMEMLIMIT=400MiB`. The database held 503 services, 540,012 scans
+and 4,321,242 findings, 1.5 GB as `pg_database_size` reports it. The data
+clean-up had already removed the stored reports of the 360,000 older scans, so
+the backup is mostly findings.
+
+| Operation | Time | Size | Scanopsis memory |
+|---|---|---|---|
+| Back up now | 2.5 to 2.6 seconds | 75.3 MiB file, 549 MB of table data inside | 67 to 90 MiB of process memory |
+| Download over localhost | 0.35 seconds | 75.3 MiB | not measured |
+| Upload and check of that file | 3 seconds | | not measured |
+| Restore from the Backups page, with the backup of the current data first | 58 seconds | | 73 MiB of process memory |
+| Restore from the Backups page, without that backup | 55 seconds | | 174 MiB of process memory |
+| Restore on the setup screen of an empty installation | 56 seconds, and 3 seconds of upload and check before | restored database 1.5 GB | 24 MiB of process memory |
+
+Process memory is what Scanopsis itself holds (`anon` in the container's
+`memory.stat`). The container's memory figure (`memory.current`) also counts
+the page cache of the backup files the kernel keeps after reading or writing
+them. During the restores it reached the 512 MiB limit: the kernel then frees
+cache instead of stopping the process, and no out-of-memory kill and no
+restart happened. PostgreSQL used up to 490 MiB during a restore.
+
+A real backup with 30 days of stored original reports is larger and takes
+longer than these figures: the reports are most of the data (see
+[database size](#database-size)). Take a backup and a restore of your own data
+on a test installation to know your figures.
 
 ## Upgrade and roll back
 
