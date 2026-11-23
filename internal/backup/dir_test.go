@@ -124,7 +124,7 @@ func TestDirListAndFree(t *testing.T) {
 		var buf bytes.Buffer
 		m := Manifest{AppVersion: "0.4.0", Schema: 10, CreatedAt: at, Kind: KindScheduled, CreatedBy: "scheduler", KeyFingerprint: key,
 			Tables: []TableSpec{{Name: "t", Columns: []string{"a"}}}}
-		if _, err := WriteArchive(context.Background(), &buf, m, func(_ context.Context, _ TableSpec, w io.Writer) (int64, error) {
+		if _, err := WriteArchive(context.Background(), &buf, m, testSigningKey, func(_ context.Context, _ TableSpec, w io.Writer) (int64, error) {
 			return 0, nil
 		}, nil); err != nil {
 			t.Fatal(err)

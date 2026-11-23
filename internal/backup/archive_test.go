@@ -23,6 +23,9 @@ import (
 )
 
 // randomBytes returns n deterministic pseudo-random bytes for a seed.
+// testSigningKey signs the archives of these tests.
+var testSigningKey = bytes.Repeat([]byte{0x5a}, 32)
+
 func randomBytes(seed uint64, n int) []byte {
 	var s [32]byte
 	s[0] = byte(seed)
@@ -75,7 +78,7 @@ func dataCopier(data map[string][]byte) TableCopier {
 func buildArchive(t *testing.T) ([]byte, Trailer) {
 	t.Helper()
 	var buf bytes.Buffer
-	tr, err := WriteArchive(context.Background(), &buf, testManifest(), dataCopier(testData()), nil)
+	tr, err := WriteArchive(context.Background(), &buf, testManifest(), testSigningKey, dataCopier(testData()), nil)
 	if err != nil {
 		t.Fatalf("WriteArchive: %v", err)
 	}
@@ -96,7 +99,7 @@ func TestRoundTrip(t *testing.T) {
 
 	var order []string
 	out := map[string][]byte{}
-	m, err := ReadTables(bytes.NewReader(archive), func(ts TableSpec, r io.Reader) (int64, error) {
+	m, err := ReadTables(bytes.NewReader(archive), testSigningKey, func(ts TableSpec, r io.Reader) (int64, error) {
 		order = append(order, ts.Name)
 		b, err := io.ReadAll(r)
 		out[ts.Name] = b
@@ -117,7 +120,7 @@ func TestRoundTrip(t *testing.T) {
 		}
 	}
 
-	m2, tr2, err := Verify(bytes.NewReader(archive), nil)
+	m2, tr2, err := Verify(bytes.NewReader(archive), testSigningKey, nil)
 	if err != nil {
 		t.Fatalf("Verify: %v", err)
 	}
@@ -153,6 +156,7 @@ func TestChunking(t *testing.T) {
 		"tables/scans/000001.csv", "tables/scans/000002.csv", "tables/scans/000003.csv",
 		"tables/empty_one/000001.csv",
 		"checksums.json",
+		"signature",
 	}
 	if fmt.Sprint(names) != fmt.Sprint(want) {
 		t.Errorf("entries = %v\nwant %v", names, want)
@@ -276,7 +280,13 @@ func TestVerifyDetects(t *testing.T) {
 			i := index(es, "tables/scans/000001.csv")
 			return append(es[:i], es[i+1:]...)
 		}), ErrCorrupt},
-		{"missing trailer", rewrite(func(es []entry) []entry { return es[:len(es)-1] }), ErrCorrupt},
+		{"missing trailer", rewrite(func(es []entry) []entry {
+			i := index(es, trailerName)
+			return append(es[:i], es[i+1:]...)
+		}), ErrCorrupt},
+		{"entry after the signature", rewrite(func(es []entry) []entry {
+			return append(es, entry{"extra.txt", tar.TypeReg, []byte("x")})
+		}), ErrCorrupt},
 		{"extra entry", rewrite(func(es []entry) []entry {
 			return append(es, entry{"extra.txt", tar.TypeReg, []byte("x")})
 		}), ErrCorrupt},
@@ -326,16 +336,16 @@ func TestVerifyDetects(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := Verify(bytes.NewReader(tc.data), nil)
+			_, _, err := Verify(bytes.NewReader(tc.data), testSigningKey, nil)
 			if !errors.Is(err, tc.want) {
 				t.Fatalf("Verify error = %v, want %v", err, tc.want)
 			}
-			if !errors.Is(tc.want, ErrCorrupt) {
+			if errors.Is(tc.want, ErrNotBackup) || errors.Is(tc.want, ErrFormat) {
 				if _, err := ReadManifest(bytes.NewReader(tc.data)); !errors.Is(err, tc.want) {
 					t.Errorf("ReadManifest error = %v, want %v", err, tc.want)
 				}
 			}
-			_, err = ReadTables(bytes.NewReader(tc.data), func(_ TableSpec, r io.Reader) (int64, error) {
+			_, err = ReadTables(bytes.NewReader(tc.data), testSigningKey, func(_ TableSpec, r io.Reader) (int64, error) {
 				_, err := io.Copy(io.Discard, r)
 				return 0, err
 			})
@@ -358,7 +368,7 @@ func TestErrorMessages(t *testing.T) {
 	es = unpack(t, archive)
 	i := index(es, "tables/projects/000001.csv")
 	es[i].body[0] ^= 1
-	_, _, err = Verify(bytes.NewReader(pack(t, es)), nil)
+	_, _, err = Verify(bytes.NewReader(pack(t, es)), testSigningKey, nil)
 	if err == nil || err.Error() != "the file is damaged: checksum of table projects does not match" {
 		t.Errorf("checksum error = %v", err)
 	}
@@ -371,7 +381,7 @@ func TestErrorMessages(t *testing.T) {
 
 func TestReadTablesRowMismatch(t *testing.T) {
 	archive, _ := buildArchive(t)
-	_, err := ReadTables(bytes.NewReader(archive), func(_ TableSpec, r io.Reader) (int64, error) {
+	_, err := ReadTables(bytes.NewReader(archive), testSigningKey, func(_ TableSpec, r io.Reader) (int64, error) {
 		_, err := io.Copy(io.Discard, r)
 		return 1000, err
 	})
@@ -384,7 +394,7 @@ func TestReadTablesLoadError(t *testing.T) {
 	archive, _ := buildArchive(t)
 	boom := errors.New("copy failed")
 	calls := 0
-	_, err := ReadTables(bytes.NewReader(archive), func(_ TableSpec, r io.Reader) (int64, error) {
+	_, err := ReadTables(bytes.NewReader(archive), testSigningKey, func(_ TableSpec, r io.Reader) (int64, error) {
 		calls++
 		return 0, boom
 	})
@@ -397,7 +407,7 @@ func TestReadTablesUnreadData(t *testing.T) {
 	// A loader that stops early must not break the next table or the checks.
 	archive, _ := buildArchive(t)
 	data := testData()
-	_, err := ReadTables(bytes.NewReader(archive), func(ts TableSpec, r io.Reader) (int64, error) {
+	_, err := ReadTables(bytes.NewReader(archive), testSigningKey, func(ts TableSpec, r io.Reader) (int64, error) {
 		_, _ = io.CopyN(io.Discard, r, 10)
 		return int64(bytes.Count(data[ts.Name], []byte("\n"))), nil
 	})
@@ -422,7 +432,7 @@ func TestReadManifestFast(t *testing.T) {
 	m.Tables = []TableSpec{{Name: "scans", Columns: []string{"id"}}}
 	data := map[string][]byte{"scans": randomBytes(9, 50<<20)}
 	var buf bytes.Buffer
-	if _, err := WriteArchive(context.Background(), &buf, m, dataCopier(data), nil); err != nil {
+	if _, err := WriteArchive(context.Background(), &buf, m, testSigningKey, dataCopier(data), nil); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() < 50<<20 {
@@ -491,7 +501,7 @@ func TestWriteArchiveMemory(t *testing.T) {
 			}
 		}
 	}()
-	tr, err := WriteArchive(context.Background(), io.Discard, m, copier, nil)
+	tr, err := WriteArchive(context.Background(), io.Discard, m, testSigningKey, copier, nil)
 	close(stop)
 	<-done
 	if err != nil {
@@ -511,12 +521,12 @@ func TestWriteArchiveMemory(t *testing.T) {
 func TestWriteArchiveCancelAndErrors(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := WriteArchive(ctx, io.Discard, testManifest(), dataCopier(testData()), nil); !errors.Is(err, context.Canceled) {
+	if _, err := WriteArchive(ctx, io.Discard, testManifest(), testSigningKey, dataCopier(testData()), nil); !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled context: error = %v", err)
 	}
 
 	boom := errors.New("copy exploded")
-	_, err := WriteArchive(context.Background(), io.Discard, testManifest(),
+	_, err := WriteArchive(context.Background(), io.Discard, testManifest(), testSigningKey,
 		func(context.Context, TableSpec, io.Writer) (int64, error) { return 0, boom }, nil)
 	if !errors.Is(err, boom) {
 		t.Errorf("copier error = %v", err)
@@ -524,12 +534,12 @@ func TestWriteArchiveCancelAndErrors(t *testing.T) {
 
 	bad := testManifest()
 	bad.Tables[0].Name = "../etc"
-	if _, err := WriteArchive(context.Background(), io.Discard, bad, dataCopier(testData()), nil); err == nil {
+	if _, err := WriteArchive(context.Background(), io.Discard, bad, testSigningKey, dataCopier(testData()), nil); err == nil {
 		t.Error("a table name with a path was accepted")
 	}
 	dup := testManifest()
 	dup.Tables[1].Name = dup.Tables[0].Name
-	if _, err := WriteArchive(context.Background(), io.Discard, dup, dataCopier(testData()), nil); err == nil {
+	if _, err := WriteArchive(context.Background(), io.Discard, dup, testSigningKey, dataCopier(testData()), nil); err == nil {
 		t.Error("a duplicate table name was accepted")
 	}
 }
@@ -537,7 +547,7 @@ func TestWriteArchiveCancelAndErrors(t *testing.T) {
 func TestProgress(t *testing.T) {
 	var got []Progress
 	var buf bytes.Buffer
-	if _, err := WriteArchive(context.Background(), &buf, testManifest(), dataCopier(testData()), func(p Progress) {
+	if _, err := WriteArchive(context.Background(), &buf, testManifest(), testSigningKey, dataCopier(testData()), func(p Progress) {
 		got = append(got, p)
 	}); err != nil {
 		t.Fatal(err)
@@ -548,7 +558,7 @@ func TestProgress(t *testing.T) {
 	}
 
 	var seen int64
-	if _, _, err := Verify(&buf, func(b int64) { seen = b }); err != nil {
+	if _, _, err := Verify(&buf, testSigningKey, func(b int64) { seen = b }); err != nil {
 		t.Fatal(err)
 	}
 	want := int64(len(testData()["projects"]) + len(testData()["scans"]))
@@ -562,7 +572,7 @@ func TestNoLibraryTextInErrors(t *testing.T) {
 	bad := bytes.Clone(archive)
 	bad[len(bad)/2] ^= 0xff
 	for _, tail := range [][]byte{bad, bad[:len(bad)-3]} {
-		_, _, err := Verify(bytes.NewReader(tail), nil)
+		_, _, err := Verify(bytes.NewReader(tail), testSigningKey, nil)
 		if !errors.Is(err, ErrCorrupt) {
 			t.Fatalf("error = %v, want ErrCorrupt", err)
 		}
@@ -591,15 +601,16 @@ func forge(t *testing.T, chunks ...[]byte) []byte {
 		n += int64(len(c))
 	}
 	tb, _ := json.Marshal(Trailer{Tables: map[string]TableSum{"scans": {Bytes: n, SHA256: hex.EncodeToString(h.Sum(nil))}}})
-	return pack(t, append(es, entry{trailerName, tar.TypeReg, tb}))
+	sig := []byte(hex.EncodeToString(sign(testSigningKey, mb, tb)))
+	return pack(t, append(es, entry{trailerName, tar.TypeReg, tb}, entry{signatureName, tar.TypeReg, sig}))
 }
 
 func TestChunkLayout(t *testing.T) {
 	full := randomBytes(1, ChunkSize)
-	if _, _, err := Verify(bytes.NewReader(forge(t, full, full, []byte("tail"))), nil); err != nil {
+	if _, _, err := Verify(bytes.NewReader(forge(t, full, full, []byte("tail"))), testSigningKey, nil); err != nil {
 		t.Fatalf("canonical layout rejected: %v", err)
 	}
-	if _, _, err := Verify(bytes.NewReader(forge(t, nil)), nil); err != nil {
+	if _, _, err := Verify(bytes.NewReader(forge(t, nil)), testSigningKey, nil); err != nil {
 		t.Fatalf("empty table rejected: %v", err)
 	}
 	cases := map[string][][]byte{
@@ -609,7 +620,7 @@ func TestChunkLayout(t *testing.T) {
 	}
 	for name, chunks := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, _, err := Verify(bytes.NewReader(forge(t, chunks...)), nil)
+			_, _, err := Verify(bytes.NewReader(forge(t, chunks...)), testSigningKey, nil)
 			if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "chunks") {
 				t.Fatalf("error = %v, want ErrCorrupt about chunks", err)
 			}
@@ -629,30 +640,30 @@ func TestSizeLimit(t *testing.T) {
 	archive, _ := buildArchive(t) // about 20 MiB of table data
 	const want = "the file is damaged: the file expands to more data than a backup of this size can hold"
 
-	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 10<<20); err == nil || !errors.Is(err, ErrCorrupt) || err.Error() != want {
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), testSigningKey, nil, 10<<20); err == nil || !errors.Is(err, ErrCorrupt) || err.Error() != want {
 		t.Errorf("VerifyLimited error = %v", err)
 	}
-	_, err := ReadTablesLimited(bytes.NewReader(archive), 10<<20, func(_ TableSpec, r io.Reader) (int64, error) {
+	_, err := ReadTablesLimited(bytes.NewReader(archive), testSigningKey, 10<<20, func(_ TableSpec, r io.Reader) (int64, error) {
 		_, err := io.Copy(io.Discard, r)
 		return 0, err
 	})
 	if !errors.Is(err, ErrCorrupt) || err.Error() != want {
 		t.Errorf("ReadTablesLimited error = %v", err)
 	}
-	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 64<<20); err != nil {
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), testSigningKey, nil, 64<<20); err != nil {
 		t.Errorf("VerifyLimited within the limit: %v", err)
 	}
-	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, NoLimit); err != nil {
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), testSigningKey, nil, NoLimit); err != nil {
 		t.Errorf("VerifyLimited with NoLimit: %v", err)
 	}
 }
 
 func TestSizeLimitMustBePositive(t *testing.T) {
 	archive, _ := buildArchive(t)
-	if _, _, err := VerifyLimited(bytes.NewReader(archive), nil, 0); err == nil {
+	if _, _, err := VerifyLimited(bytes.NewReader(archive), testSigningKey, nil, 0); err == nil {
 		t.Error("VerifyLimited accepted a limit of 0")
 	}
-	if _, err := ReadTablesLimited(bytes.NewReader(archive), -1, func(TableSpec, io.Reader) (int64, error) { return 0, nil }); err == nil {
+	if _, err := ReadTablesLimited(bytes.NewReader(archive), testSigningKey, -1, func(TableSpec, io.Reader) (int64, error) { return 0, nil }); err == nil {
 		t.Error("ReadTablesLimited accepted a negative limit")
 	}
 }
@@ -662,10 +673,10 @@ func TestDefaultLimitApplies(t *testing.T) {
 	defaultLimit = 10 << 20
 	t.Cleanup(func() { defaultLimit = old })
 	archive, _ := buildArchive(t)
-	if _, _, err := Verify(bytes.NewReader(archive), nil); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
+	if _, _, err := Verify(bytes.NewReader(archive), testSigningKey, nil); !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
 		t.Errorf("Verify error = %v, want the expansion error", err)
 	}
-	_, err := ReadTables(bytes.NewReader(archive), func(_ TableSpec, r io.Reader) (int64, error) {
+	_, err := ReadTables(bytes.NewReader(archive), testSigningKey, func(_ TableSpec, r io.Reader) (int64, error) {
 		_, err := io.Copy(io.Discard, r)
 		return 0, err
 	})
@@ -681,7 +692,7 @@ func TestDefaultLimitApplies(t *testing.T) {
 // which carries a large extra amount in the manifest and in trailing padding.
 func TestSizeLimitCountsEverything(t *testing.T) {
 	small := forge(t, []byte("a,b\n"))
-	if _, _, err := VerifyLimited(bytes.NewReader(small), nil, 1<<20); err != nil {
+	if _, _, err := VerifyLimited(bytes.NewReader(small), testSigningKey, nil, 1<<20); err != nil {
 		t.Fatalf("small archive rejected: %v", err)
 	}
 
@@ -699,14 +710,14 @@ func TestSizeLimitCountsEverything(t *testing.T) {
 	_ = gz.Close()
 	// The padding is over the trailing-data cap and over a 1 MiB limit alike;
 	// with the cap out of the way the byte budget must still stop it.
-	_, _, err := VerifyLimited(bytes.NewReader(buf.Bytes()), nil, 1<<20)
+	_, _, err := VerifyLimited(bytes.NewReader(buf.Bytes()), testSigningKey, nil, 1<<20)
 	if !errors.Is(err, ErrCorrupt) {
 		t.Errorf("trailing padding: error = %v", err)
 	}
 
 	// Drained table data: the loader reads nothing, the rest is drained.
 	big := forge(t, randomBytes(2, ChunkSize), []byte("x"))
-	_, err = ReadTablesLimited(bytes.NewReader(big), 4<<20, func(TableSpec, io.Reader) (int64, error) { return 0, nil })
+	_, err = ReadTablesLimited(bytes.NewReader(big), testSigningKey, 4<<20, func(TableSpec, io.Reader) (int64, error) { return 0, nil })
 	if err == nil || !strings.Contains(err.Error(), "expands") {
 		t.Errorf("drained data: error = %v, want the expansion error", err)
 	}
@@ -715,7 +726,7 @@ func TestSizeLimitCountsEverything(t *testing.T) {
 	// unexpected entry, but its bytes are charged while tar skips them.
 	es = unpack(t, small)
 	es = append(es[:len(es)-1], entry{"filler.bin", tar.TypeReg, make([]byte, 6<<20)}, es[len(es)-1])
-	_, _, err = VerifyLimited(bytes.NewReader(pack(t, es)), nil, 1<<20)
+	_, _, err = VerifyLimited(bytes.NewReader(pack(t, es)), testSigningKey, nil, 1<<20)
 	if !errors.Is(err, ErrCorrupt) {
 		t.Errorf("skipped entry: error = %v", err)
 	}
@@ -727,7 +738,7 @@ func TestTooManyTables(t *testing.T) {
 	for i := 0; i <= maxTables; i++ {
 		m.Tables = append(m.Tables, TableSpec{Name: fmt.Sprintf("t%d", i), Columns: []string{"id"}})
 	}
-	if _, err := WriteArchive(context.Background(), io.Discard, m, dataCopier(nil), nil); err == nil {
+	if _, err := WriteArchive(context.Background(), io.Discard, m, testSigningKey, dataCopier(nil), nil); err == nil {
 		t.Error("WriteArchive accepted too many tables")
 	}
 	m.Format = FormatVersion
@@ -755,14 +766,14 @@ func TestSizeLimitIsExact(t *testing.T) {
 	if total < 2048 {
 		t.Fatalf("decompressed size %d is unexpectedly small", total)
 	}
-	if _, _, err := VerifyLimited(bytes.NewReader(small), nil, total); err != nil {
+	if _, _, err := VerifyLimited(bytes.NewReader(small), testSigningKey, nil, total); err != nil {
 		t.Errorf("limit equal to the size rejected: %v", err)
 	}
-	_, _, err = VerifyLimited(bytes.NewReader(small), nil, total-1)
+	_, _, err = VerifyLimited(bytes.NewReader(small), testSigningKey, nil, total-1)
 	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
 		t.Errorf("limit one byte short: error = %v", err)
 	}
-	_, _, err = VerifyLimited(bytes.NewReader(small), nil, 100)
+	_, _, err = VerifyLimited(bytes.NewReader(small), testSigningKey, nil, 100)
 	if !errors.Is(err, ErrCorrupt) || !strings.Contains(err.Error(), "expands") {
 		t.Errorf("limit below the manifest: error = %v", err)
 	}
@@ -775,12 +786,12 @@ func TestReadersPassContextErrors(t *testing.T) {
 	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
 		for at := 0; at < len(archive); at += len(archive) / 7 {
 			r := io.MultiReader(bytes.NewReader(archive[:at]), iotestErrReader{cause})
-			_, _, err := Verify(r, nil)
+			_, _, err := Verify(r, testSigningKey, nil)
 			if !errors.Is(err, cause) || errors.Is(err, ErrCorrupt) {
 				t.Errorf("Verify stopped by %v at byte %d: err = %v", cause, at, err)
 			}
 			r = io.MultiReader(bytes.NewReader(archive[:at]), iotestErrReader{cause})
-			_, err = ReadTables(r, func(tb TableSpec, data io.Reader) (int64, error) {
+			_, err = ReadTables(r, testSigningKey, func(tb TableSpec, data io.Reader) (int64, error) {
 				_, err := io.Copy(io.Discard, data)
 				return trailer.Tables[tb.Name].Rows, err
 			})
@@ -794,3 +805,90 @@ func TestReadersPassContextErrors(t *testing.T) {
 type iotestErrReader struct{ err error }
 
 func (r iotestErrReader) Read([]byte) (int, error) { return 0, r.err }
+
+// TestSignature checks that only a backup signed with the signing key is
+// accepted, and that changing any part of it, even with the checksums made
+// to agree, breaks the signature.
+func TestSignature(t *testing.T) {
+	archive, trailer := buildArchive(t)
+	rows := func(tb TableSpec, r io.Reader) (int64, error) {
+		_, err := io.Copy(io.Discard, r)
+		return trailer.Tables[tb.Name].Rows, err
+	}
+	check := func(name string, data, key []byte, want error) {
+		t.Helper()
+		_, _, err := Verify(bytes.NewReader(data), key, nil)
+		_, rerr := ReadTables(bytes.NewReader(data), key, rows)
+		for reader, err := range map[string]error{"Verify": err, "ReadTables": rerr} {
+			if want == nil && err != nil || want != nil && !errors.Is(err, want) {
+				t.Errorf("%s: %s error = %v, want %v", name, reader, err, want)
+			}
+		}
+	}
+	check("signed with the key", archive, testSigningKey, nil)
+	check("signed with another key", archive, bytes.Repeat([]byte{1}, 32), ErrSignature)
+
+	rewrite := func(f func(es []entry) []entry) []byte { return pack(t, f(unpack(t, archive))) }
+	check("signature missing", rewrite(func(es []entry) []entry { return es[:len(es)-1] }), testSigningKey, ErrSignature)
+	check("signature not hex", rewrite(func(es []entry) []entry {
+		es[len(es)-1].body = bytes.Repeat([]byte("z"), 64)
+		return es
+	}), testSigningKey, ErrSignature)
+	check("manifest changed", rewrite(func(es []entry) []entry {
+		es[0].body = bytes.Replace(es[0].body, []byte(`"created_by":"alice"`), []byte(`"created_by":"mallory"`), 1)
+		return es
+	}), testSigningKey, ErrSignature)
+	// Data changed and its checksum and size recomputed, so everything but
+	// the signature agrees.
+	check("data and checksums changed together", rewrite(func(es []entry) []entry {
+		i := index(es, "tables/projects/000001.csv")
+		es[i].body = bytes.Replace(es[i].body, []byte("web-shop"), []byte("evil-shop"), 1)
+		var tr Trailer
+		ti := index(es, trailerName)
+		if err := json.Unmarshal(es[ti].body, &tr); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(es[i].body)
+		s := tr.Tables["projects"]
+		s.SHA256, s.Bytes = hex.EncodeToString(sum[:]), int64(len(es[i].body))
+		tr.Tables["projects"] = s
+		es[ti].body, _ = json.Marshal(tr)
+		return es
+	}), testSigningKey, ErrSignature)
+
+	if _, _, err := Verify(bytes.NewReader(archive), nil, nil); !errors.Is(err, errNoKey) {
+		t.Errorf("Verify without a key: %v", err)
+	}
+	if _, err := ReadTables(bytes.NewReader(archive), nil, rows); !errors.Is(err, errNoKey) {
+		t.Errorf("ReadTables without a key: %v", err)
+	}
+	if _, err := WriteArchive(context.Background(), io.Discard, testManifest(), nil, dataCopier(testData()), nil); !errors.Is(err, errNoKey) {
+		t.Errorf("WriteArchive without a key: %v", err)
+	}
+	if strings.Contains(ErrSignature.Error(), "hmac") || !strings.Contains(ErrSignature.Error(), "secret key") {
+		t.Errorf("ErrSignature does not read as meant for a person: %q", ErrSignature)
+	}
+}
+
+func TestExpansionLimit(t *testing.T) {
+	const mib = 1 << 20
+	for size, want := range map[int64]int64{
+		-1:                   64 * mib,
+		0:                    64 * mib,
+		1:                    deflateMaxRatio + 64*mib,
+		10 * mib:             10*mib*deflateMaxRatio + 64*mib,
+		DefaultMaxBytes / 10: DefaultMaxBytes,
+		1 << 62:              DefaultMaxBytes,
+	} {
+		if got := expansionLimit(size); got != want {
+			t.Errorf("expansionLimit(%d) = %d, want %d", size, got, want)
+		}
+	}
+	edge := (DefaultMaxBytes - 64*mib) / deflateMaxRatio
+	if got := expansionLimit(edge); got > DefaultMaxBytes || got < DefaultMaxBytes-deflateMaxRatio {
+		t.Errorf("expansionLimit at the edge = %d", got)
+	}
+	if got := expansionLimit(edge + 1); got != DefaultMaxBytes {
+		t.Errorf("expansionLimit past the edge = %d", got)
+	}
+}

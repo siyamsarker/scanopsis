@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,6 +52,15 @@ func testFingerprint(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return fp
+}
+
+func testSigning(t *testing.T) []byte {
+	t.Helper()
+	k, err := SigningKey(testKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
 }
 
 func testBox(t *testing.T) *secretbox.Box {
@@ -272,7 +282,7 @@ func dumpPool(t *testing.T, pool *pgxpool.Pool, fingerprint string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := &Dumper{Pool: pool, Dir: dir, App: "0.4.0", Commit: "abc", KeyFingerprint: fingerprint}
+	d := &Dumper{Pool: pool, Dir: dir, App: "0.4.0", Commit: "abc", KeyFingerprint: fingerprint, SigningKey: testSigning(t)}
 	info, err := d.Dump(context.Background(), KindManual, "alice", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +301,7 @@ func countCSV(t *testing.T, data []byte) int64 {
 	var n int64
 	for {
 		_, err := r.Read()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return n
 		}
 		if err != nil {
@@ -302,9 +312,15 @@ func countCSV(t *testing.T, data []byte) int64 {
 }
 
 // rebuild writes a copy of the backup src to a new file next to it, with
-// valid checksums, after editManifest and editData (either may be nil) have
-// changed it. It returns the path of the copy.
+// valid checksums and signature, after editManifest and editData (either
+// may be nil) have changed it. It returns the path of the copy.
 func rebuild(t *testing.T, src string, editManifest func(*Manifest), editData func(table string, data []byte) []byte) string {
+	t.Helper()
+	return rebuildSigned(t, src, testSigning(t), editManifest, editData)
+}
+
+// rebuildSigned is rebuild with the copy signed with key.
+func rebuildSigned(t *testing.T, src string, key []byte, editManifest func(*Manifest), editData func(table string, data []byte) []byte) string {
 	t.Helper()
 	f, err := os.Open(src)
 	if err != nil {
@@ -312,7 +328,7 @@ func rebuild(t *testing.T, src string, editManifest func(*Manifest), editData fu
 	}
 	defer func() { _ = f.Close() }()
 	data := map[string][]byte{}
-	m, err := ReadTables(f, func(tb TableSpec, r io.Reader) (int64, error) {
+	m, err := ReadTables(f, testSigning(t), func(tb TableSpec, r io.Reader) (int64, error) {
 		b, err := io.ReadAll(r)
 		data[tb.Name] = b
 		return countCSV(t, b), err
@@ -329,7 +345,7 @@ func rebuild(t *testing.T, src string, editManifest func(*Manifest), editData fu
 		t.Fatal(err)
 	}
 	defer func() { _ = out.Close() }()
-	_, err = WriteArchive(context.Background(), out, m, func(_ context.Context, tb TableSpec, w io.Writer) (int64, error) {
+	_, err = WriteArchive(context.Background(), out, m, key, func(_ context.Context, tb TableSpec, w io.Writer) (int64, error) {
 		b := data[tb.Name]
 		if editData != nil {
 			b = editData(tb.Name, b)
@@ -346,6 +362,57 @@ func rebuild(t *testing.T, src string, editManifest func(*Manifest), editData fu
 // tamperTrailer returns the bytes of the backup src with its trailer
 // changed by edit and everything else as it was.
 func tamperTrailer(t *testing.T, src string, edit func(*Trailer)) []byte {
+	t.Helper()
+	return rewriteEntries(t, src, func(name string, body []byte) ([]byte, bool) {
+		if name != trailerName {
+			return body, true
+		}
+		var trailer Trailer
+		if err := json.Unmarshal(body, &trailer); err != nil {
+			t.Fatal(err)
+		}
+		edit(&trailer)
+		b, err := json.Marshal(trailer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b, true
+	})
+}
+
+// tamperData returns the bytes of the backup src with the first chunk of
+// table changed by edit and its checksum and size in the trailer made to
+// agree, but the signature left as it was: what someone without the secret
+// key can do to a backup. The table must fit in one chunk.
+func tamperData(t *testing.T, src, table string, edit func([]byte) []byte) []byte {
+	t.Helper()
+	var sum TableSum
+	b := rewriteEntries(t, src, func(name string, body []byte) ([]byte, bool) {
+		if name == chunkName(table, 1) {
+			changed := edit(slices.Clone(body))
+			if bytes.Equal(changed, body) {
+				t.Fatalf("the edit did not change table %s", table)
+			}
+			h := sha256.Sum256(changed)
+			sum = TableSum{Bytes: int64(len(changed)), SHA256: hex.EncodeToString(h[:])}
+			return changed, true
+		}
+		return body, true
+	})
+	step := filepath.Join(t.TempDir(), "tampered")
+	if err := os.WriteFile(step, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return tamperTrailer(t, step, func(tr *Trailer) {
+		s := tr.Tables[table]
+		s.Bytes, s.SHA256 = sum.Bytes, sum.SHA256
+		tr.Tables[table] = s
+	})
+}
+
+// rewriteEntries returns the bytes of the backup src with every entry
+// passed through edit, which returns the new body and whether to keep it.
+func rewriteEntries(t *testing.T, src string, edit func(name string, body []byte) ([]byte, bool)) []byte {
 	t.Helper()
 	f, err := os.Open(src)
 	if err != nil {
@@ -372,17 +439,11 @@ func tamperTrailer(t *testing.T, src string, edit func(*Trailer)) []byte {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if h.Name == trailerName {
-			var trailer Trailer
-			if err := json.Unmarshal(body, &trailer); err != nil {
-				t.Fatal(err)
-			}
-			edit(&trailer)
-			if body, err = json.Marshal(trailer); err != nil {
-				t.Fatal(err)
-			}
-			h.Size = int64(len(body))
+		body, keep := edit(h.Name, body)
+		if !keep {
+			continue
 		}
+		h.Size = int64(len(body))
 		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
@@ -414,7 +475,7 @@ func manifestOf(t *testing.T, path string) Manifest {
 }
 
 func restoreOpts(t *testing.T) RestoreOptions {
-	return RestoreOptions{Actor: "alice", KeyFingerprint: testFingerprint(t)}
+	return RestoreOptions{Actor: "alice", KeyFingerprint: testFingerprint(t), SigningKey: testSigning(t)}
 }
 
 // gooseClean checks that goose sees every migration as applied, so starting
@@ -515,6 +576,12 @@ func TestRestoreRoundTrip(t *testing.T) {
 		t.Errorf("recovery code after the restore: %d, %v", used, err)
 	}
 
+	// The restored tables have planner statistics.
+	var tuples float64
+	if err := pool.QueryRow(ctx, `SELECT reltuples FROM pg_class WHERE oid = 'vulnerabilities'::regclass`).Scan(&tuples); err != nil || tuples <= 0 {
+		t.Errorf("vulnerabilities after the restore: reltuples %v, %v; want statistics", tuples, err)
+	}
+
 	gooseClean(t, pool)
 	if len(steps) == 0 {
 		t.Fatal("no progress reported")
@@ -530,7 +597,7 @@ var errInjected = errors.New("injected failure")
 // restoreStages are the stages of a restore, in order.
 var restoreStages = []string{
 	stageVerified, stageDropped, stageSchema, stageLoaded, stageSequences,
-	stageMigrated, stageRecorded, stageSettings, stageSessions, stageAudited,
+	stageMigrated, stageRecorded, stageSettings, stageSessions, stageAudited, stageAnalyzed,
 }
 
 func TestRestoreFailureLeavesDataUnchanged(t *testing.T) {
@@ -569,6 +636,31 @@ FROM scans s, generate_series(1, 5000) g WHERE s.kind = 'image'`)
 	if err != nil {
 		t.Fatal(err)
 	}
+	write := func(b []byte) string {
+		p := filepath.Join(t.TempDir(), filepath.Base(good))
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// Bob made an administrator, with the checksums made to agree but
+	// without the secret key to sign it.
+	promote := func(b []byte) []byte {
+		return bytes.Replace(b, []byte(`,bob,"","",viewer,`), []byte(`,bob,"","",admin,`), 1)
+	}
+	forged := tamperData(t, good, "users", promote)
+	// The same change signed with another key under this key's fingerprint.
+	otherSigner := rebuildSigned(t, good, bytes.Repeat([]byte{3}, 32), nil, func(table string, data []byte) []byte {
+		if table == "users" {
+			return promote(data)
+		}
+		return data
+	})
+	unsigned := write(rewriteEntries(t, good, func(name string, body []byte) ([]byte, bool) { return body, name != signatureName }))
+	// A table left out of the manifest, signed: it would be restored empty.
+	missingTable := rebuild(t, good, func(m *Manifest) {
+		m.Tables = slices.DeleteFunc(m.Tables, func(tb TableSpec) bool { return tb.Name == "sonar_deliveries" })
+	}, nil)
 	changeAll(t, pool)
 
 	type tc struct {
@@ -584,6 +676,11 @@ FROM scans s, generate_series(1, 5000) g WHERE s.kind = 'image'`)
 		{name: "damaged file", file: damaged, wantErr: ErrCorrupt, wantText: "checksum of table " + lastTable},
 		{name: "checksum of the last table wrong after verifying", file: good, swapWith: badChecksum, wantErr: ErrCorrupt, wantText: "checksum of table " + lastTable},
 		{name: "file replaced by a backup of another key after verifying", file: good, swapWith: otherKey, wantErr: ErrCorrupt, wantText: "changed while"},
+		{name: "data changed and checksums recomputed, not signed", file: write(forged), wantErr: ErrSignature},
+		{name: "signed with another key", file: otherSigner, wantErr: ErrSignature},
+		{name: "signature missing", file: unsigned, wantErr: ErrSignature},
+		{name: "unsigned change swapped in after verifying", file: good, swapWith: forged, wantErr: ErrSignature},
+		{name: "table missing from the backup", file: missingTable, wantErr: ErrCorrupt, wantText: "sonar_deliveries"},
 		{name: "row violating a constraint", file: duplicate, wantText: "duplicate key"},
 		{name: "context cancelled during a copy", file: good, cancelIn: "vulnerabilities", wantErr: context.Canceled},
 	}
@@ -678,7 +775,7 @@ func TestRestoreRefusesKeyMismatch(t *testing.T) {
 		}
 		sameSnapshot(t, name, before, snapshot(t, pool))
 	}
-	if err := Restore(ctx, pool, path, RestoreOptions{Actor: "alice", KeyFingerprint: other}); err == nil ||
+	if err := Restore(ctx, pool, path, RestoreOptions{Actor: "alice", KeyFingerprint: other, SigningKey: testSigning(t)}); err == nil ||
 		!strings.Contains(err.Error(), "SCANOPSIS_SECRET_KEY") {
 		t.Errorf("the refusal does not say how to fix it: %v", err)
 	}
@@ -896,9 +993,8 @@ VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, $1, '\x00'), (1, 'image'
 		{"current retention, shorter", plain, 7, 2, 7, true, testFingerprint(t)},
 		{"backup's retention", long, 90, 0, 120, true, testFingerprint(t)},
 		{"backup's short retention", short, 365, 2, 7, true, testFingerprint(t)},
-		{"other key", plain, 90, 1, 90, false, "0123"},
 	} {
-		p, err := PreviewRestore(ctx, c.file, c.fp, c.current, now)
+		p, err := PreviewRestore(ctx, c.file, c.fp, testSigning(t), c.current, now)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -914,9 +1010,42 @@ VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, $1, '\x00'), (1, 'image'
 		}
 	}
 
-	newer := rebuild(t, plain, func(m *Manifest) { m.Schema = store.LatestVersion() + 1 }, nil)
-	if p, err := PreviewRestore(ctx, newer, testFingerprint(t), 90, now); err != nil || p.SchemaOK {
-		t.Errorf("newer schema: SchemaOK %v, %v; want false", p.SchemaOK, err)
+	// A backup of another key is described from its manifest.
+	if p, err := PreviewRestore(ctx, plain, "0123", testSigning(t), 90, now); err != nil || p.KeyMatches || !p.SchemaOK || p.Info.KeyMatches ||
+		p.Info.Name != filepath.Base(plain) {
+		t.Errorf("other key: %+v, %v; want KeyMatches false and no error", p, err)
+	}
+	// So is one of a newer version, whose layout this version may not know:
+	// here it has a new table and a renamed scans column.
+	newer := rebuild(t, plain, func(m *Manifest) {
+		m.Schema = store.LatestVersion() + 1
+		m.Tables = append(m.Tables, TableSpec{Name: "future_table", Columns: []string{"id"}})
+		for i, tb := range m.Tables {
+			if tb.Name == "scans" {
+				m.Tables[i].Columns = slices.Clone(tb.Columns)
+				m.Tables[i].Columns[slices.Index(tb.Columns, "scanned_at")] = "scanned_on"
+			}
+		}
+	}, nil)
+	if p, err := PreviewRestore(ctx, newer, testFingerprint(t), testSigning(t), 90, now); err != nil || p.SchemaOK || !p.KeyMatches {
+		t.Errorf("newer schema: %+v, %v; want SchemaOK false and no error", p, err)
+	}
+	// The same layout at the current version is damaged.
+	odd := rebuild(t, plain, func(m *Manifest) {
+		for i, tb := range m.Tables {
+			if tb.Name == "scans" {
+				m.Tables[i].Columns = slices.Clone(tb.Columns)
+				m.Tables[i].Columns[slices.Index(tb.Columns, "scanned_at")] = "scanned_on"
+			}
+		}
+	}, nil)
+	if _, err := PreviewRestore(ctx, odd, testFingerprint(t), testSigning(t), 90, now); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("scans without scanned_at at the current version: err = %v, want ErrCorrupt", err)
+	}
+	// A matching fingerprint without the signature of this key is refused.
+	other := rebuildSigned(t, plain, bytes.Repeat([]byte{3}, 32), nil, nil)
+	if _, err := PreviewRestore(ctx, other, testFingerprint(t), testSigning(t), 90, now); !errors.Is(err, ErrSignature) {
+		t.Errorf("signed with another key: err = %v, want ErrSignature", err)
 	}
 
 	damaged := filepath.Join(t.TempDir(), filepath.Base(plain))
@@ -927,7 +1056,7 @@ VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, $1, '\x00'), (1, 'image'
 	}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := PreviewRestore(ctx, damaged, testFingerprint(t), 90, now); !errors.Is(err, ErrCorrupt) {
+	if _, err := PreviewRestore(ctx, damaged, testFingerprint(t), testSigning(t), 90, now); !errors.Is(err, ErrCorrupt) {
 		t.Errorf("damaged file: err = %v, want ErrCorrupt", err)
 	}
 }

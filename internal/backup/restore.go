@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,6 +55,7 @@ const (
 	stageSettings  = "settings"
 	stageSessions  = "sessions"
 	stageAudited   = "audited"
+	stageAnalyzed  = "analyzed"
 )
 
 // restoreSettings apply to the transaction of a restore. Loading a large
@@ -79,7 +81,13 @@ type RestoreOptions struct {
 	// KeyFingerprint is KeyFingerprint of the secret key this server runs
 	// with. The backup must have been made with the same key.
 	KeyFingerprint string
-	// Progress, if not nil, is called as the tables are loaded.
+	// SigningKey is SigningKey of the same secret key. The backup must carry
+	// a signature made with it (see ErrSignature).
+	SigningKey []byte
+	// Progress, if not nil, is called as the tables are loaded. It is
+	// called from a goroutine of the database driver while that goroutine
+	// streams the data to PostgreSQL, so it must return quickly and must
+	// not block: store the values and let another goroutine report them.
 	Progress func(Progress)
 
 	// testHook, if not nil, is called after every stage; an error it
@@ -154,6 +162,25 @@ func sameManifest(a, b Manifest) bool {
 
 var errChanged = corruptf("the file changed while it was being restored")
 
+// deflateMaxRatio is the most that deflate can expand its input: a stream
+// of n bytes decompresses to at most about 1032 times n.
+const deflateMaxRatio = 1032
+
+// expansionLimit is the decompressed size a backup file of fileSize bytes
+// can honestly have: deflate's largest expansion plus room for the headers,
+// never more than DefaultMaxBytes. A file that expands further is a
+// decompression bomb, and is stopped as soon as it passes the limit.
+func expansionLimit(fileSize int64) int64 {
+	const margin = 64 << 20
+	if fileSize < 0 {
+		fileSize = 0
+	}
+	if fileSize > (DefaultMaxBytes-margin)/deflateMaxRatio {
+		return DefaultMaxBytes
+	}
+	return fileSize*deflateMaxRatio + margin
+}
+
 // ctxReader fails reads once ctx is done, so reading a large file stops
 // when the caller gives up.
 type ctxReader struct {
@@ -171,8 +198,11 @@ func (c ctxReader) Read(p []byte) (int, error) {
 // Restore replaces the data of the database with the backup at path. It
 // reads and checks the whole file first and refuses, before writing
 // anything, a damaged file (ErrCorrupt and the other errors of Verify), a
-// backup made with another secret key (ErrKeyMismatch) and one made by a
-// newer version (ErrNewerSchema).
+// backup made with another secret key (ErrKeyMismatch, decided from the
+// fingerprint in the manifest, which gives the clearer message), a file
+// without a valid signature of this installation's key (ErrSignature: made
+// elsewhere, or changed after it was made) and one made by a newer version
+// (ErrNewerSchema).
 //
 // The restore then runs in one transaction: it drops the Scanopsis tables,
 // creates them again at the schema version of the backup, loads every
@@ -194,11 +224,19 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 	if o.testHook == nil {
 		o.testHook = func(string) error { return nil }
 	}
+	if len(o.SigningKey) == 0 {
+		return fmt.Errorf("restore backup: %w", errNoKey)
+	}
 	f, err := os.Open(path) //nolint:gosec // the caller resolves path in the backup folder
 	if err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
 	defer func() { _ = f.Close() }()
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("restore backup: %w", err)
+	}
+	limit := expansionLimit(fi.Size())
 	rewind := func() error {
 		_, err := f.Seek(0, io.SeekStart)
 		return err
@@ -216,7 +254,7 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 	if err := rewind(); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
-	verified, _, err := VerifyLimited(ctxReader{ctx, f}, nil, DefaultMaxBytes)
+	verified, _, err := VerifyLimited(ctxReader{ctx, f}, o.SigningKey, nil, limit)
 	if err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
@@ -229,13 +267,13 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 	if err := rewind(); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
-	if err := restoreTx(ctx, pool, f, filepath.Base(path), m, o); err != nil {
+	if err := restoreTx(ctx, pool, f, limit, filepath.Base(path), m, o); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
 	return nil
 }
 
-func restoreTx(ctx context.Context, pool *pgxpool.Pool, f io.Reader, name string, m Manifest, o RestoreOptions) error {
+func restoreTx(ctx context.Context, pool *pgxpool.Pool, f io.Reader, limit int64, name string, m Manifest, o RestoreOptions) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -271,10 +309,13 @@ func restoreTx(ctx context.Context, pool *pgxpool.Pool, f io.Reader, name string
 	if err := store.ReplayMigrations(ctx, tx, 0, m.Schema); err != nil {
 		return err
 	}
+	if err := sameTables(ctx, tx, m); err != nil {
+		return err
+	}
 	if err := o.testHook(stageSchema); err != nil {
 		return err
 	}
-	if err := load(ctx, tx, f, m, o.Progress); err != nil {
+	if err := load(ctx, tx, f, limit, o.SigningKey, m, o.Progress); err != nil {
 		return err
 	}
 	if err := o.testHook(stageLoaded); err != nil {
@@ -288,6 +329,10 @@ func restoreTx(ctx context.Context, pool *pgxpool.Pool, f io.Reader, name string
 	}
 	latest := store.LatestVersion()
 	if err := store.ReplayMigrations(ctx, tx, m.Schema, latest); err != nil {
+		return err
+	}
+	// The newer migrations may have added identity columns or rows.
+	if err := resetSequences(ctx, tx); err != nil {
 		return err
 	}
 	if err := o.testHook(stageMigrated); err != nil {
@@ -325,12 +370,73 @@ func restoreTx(ctx context.Context, pool *pgxpool.Pool, f io.Reader, name string
 	if err := o.testHook(stageAudited); err != nil {
 		return err
 	}
+	// Fresh tables have no statistics until autovacuum gets to them, and
+	// the first queries after a large restore would be planned blind.
+	if err := analyze(ctx, tx); err != nil {
+		return err
+	}
+	if err := o.testHook(stageAnalyzed); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+// sameTables checks, after the schema of the backup's version was created,
+// that the backup holds exactly the tables and columns a backup of that
+// version has, so a table cannot be left out and silently end up empty.
+func sameTables(ctx context.Context, tx pgx.Tx, m Manifest) error {
+	want, err := Tables(ctx, tx)
+	if err != nil {
+		return err
+	}
+	columns := func(t TableSpec) []string { return slices.Sorted(slices.Values(t.Columns)) }
+	have := make(map[string][]string, len(m.Tables))
+	for _, t := range m.Tables {
+		have[t.Name] = columns(t)
+	}
+	for _, t := range want {
+		cols, ok := have[t.Name]
+		if !ok {
+			return corruptf("table %s of database schema %d is missing from the backup", t.Name, m.Schema)
+		}
+		if !slices.Equal(cols, columns(t)) {
+			return corruptf("the columns of table %s do not match database schema %d", t.Name, m.Schema)
+		}
+		delete(have, t.Name)
+	}
+	if len(have) > 0 {
+		extra := slices.Sorted(maps.Keys(have))
+		return corruptf("table %s is not part of database schema %d", extra[0], m.Schema)
+	}
+	return nil
+}
+
+// analyze gathers planner statistics for the restored tables.
+func analyze(ctx context.Context, tx pgx.Tx) error {
+	tables, err := Tables(ctx, tx)
+	if err != nil {
+		return err
+	}
+	var schema string
+	if err := tx.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return err
+	}
+	names := make([]string, len(tables))
+	for i, t := range tables {
+		names[i] = pgx.Identifier{schema, t.Name}.Sanitize()
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, "ANALYZE "+strings.Join(names, ", ")); err != nil {
+		return fmt.Errorf("gather statistics: %w", err)
+	}
+	return nil
 }
 
 // load copies the tables of the backup in f into the tables of tx. The
 // manifest read again from f must be m, the one that was checked.
-func load(ctx context.Context, tx pgx.Tx, f io.Reader, m Manifest, progress func(Progress)) error {
+func load(ctx context.Context, tx pgx.Tx, f io.Reader, limit int64, signingKey []byte, m Manifest, progress func(Progress)) error {
 	var schema string
 	if err := tx.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
 		return err
@@ -371,7 +477,7 @@ func load(ctx context.Context, tx pgx.Tx, f io.Reader, m Manifest, progress func
 		report(t.Name)
 		return tag.RowsAffected(), nil
 	}
-	read, err := ReadTablesLimited(ctxReader{ctx, f}, DefaultMaxBytes, copyTable)
+	read, err := ReadTablesLimited(ctxReader{ctx, f}, signingKey, limit, copyTable)
 	if err != nil {
 		return err
 	}
@@ -482,13 +588,19 @@ func infoOf(name string, size int64, m Manifest, keyFingerprint string) Info {
 	}
 }
 
-// PreviewRestore reads and checks the whole backup at path, as Restore does
-// before it writes anything, and tells what a restore would do: whether it
-// is possible (SchemaOK, KeyMatches) and how much of the restored history
+// PreviewRestore tells what restoring the backup at path would do: whether
+// it is possible (SchemaOK, KeyMatches) and how much of the restored history
 // the next data clean-up removes. retentionDays is the retention period of
 // this server, used when the backup has no setting of its own, and now is
-// the time the clean-up counts back from. A damaged file is an error.
-func PreviewRestore(ctx context.Context, path string, keyFingerprint string, retentionDays int, now time.Time) (Preview, error) {
+// the time the clean-up counts back from.
+//
+// A backup that cannot be restored here, because a newer version or another
+// secret key made it, is described from its manifest alone, with SchemaOK or
+// KeyMatches false and no error: its layout may be one this version does not
+// know, and its signature cannot be checked. Any other backup is read and
+// checked in full, as Restore does before it writes anything; a damaged file
+// or one without a valid signature of signingKey (ErrSignature) is an error.
+func PreviewRestore(ctx context.Context, path string, keyFingerprint string, signingKey []byte, retentionDays int, now time.Time) (Preview, error) {
 	f, err := os.Open(path) //nolint:gosec // the caller resolves path in the backup folder
 	if err != nil {
 		return Preview{}, fmt.Errorf("check backup: %w", err)
@@ -496,6 +608,25 @@ func PreviewRestore(ctx context.Context, path string, keyFingerprint string, ret
 	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
+		return Preview{}, fmt.Errorf("check backup: %w", err)
+	}
+	m, err := ReadManifest(ctxReader{ctx, f})
+	if err != nil {
+		return Preview{}, fmt.Errorf("check backup: %w", err)
+	}
+	p := Preview{
+		Info:          infoOf(filepath.Base(path), fi.Size(), m, keyFingerprint),
+		SchemaOK:      m.Schema <= store.LatestVersion(),
+		KeyMatches:    keysMatch(m.KeyFingerprint, keyFingerprint),
+		RetentionDays: effectiveRetention(retentionDays),
+	}
+	if !p.SchemaOK || !p.KeyMatches {
+		return p, nil
+	}
+	if err := checkKnownTables(m); err != nil {
+		return Preview{}, fmt.Errorf("check backup: %w", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return Preview{}, fmt.Errorf("check backup: %w", err)
 	}
 
@@ -538,26 +669,20 @@ func PreviewRestore(ctx context.Context, path string, keyFingerprint string, ret
 		}
 		return c.rows, err
 	}
-	m, err := ReadTablesLimited(ctxReader{ctx, f}, DefaultMaxBytes, scan)
+	read, err := ReadTablesLimited(ctxReader{ctx, f}, signingKey, expansionLimit(fi.Size()), scan)
 	if err != nil {
 		return Preview{}, fmt.Errorf("check backup: %w", err)
 	}
-	if err := checkKnownTables(m); err != nil {
-		return Preview{}, fmt.Errorf("check backup: %w", err)
+	if !sameManifest(m, read) {
+		return Preview{}, fmt.Errorf("check backup: %w", corruptf("the file changed while it was being read"))
 	}
 
 	days := retentionDays
 	if haveDays {
 		days = backupDays
 	}
-	days = effectiveRetention(days)
-	p := Preview{
-		Info:                    infoOf(filepath.Base(path), fi.Size(), m, keyFingerprint),
-		SchemaOK:                m.Schema <= store.LatestVersion(),
-		KeyMatches:              keysMatch(m.KeyFingerprint, keyFingerprint),
-		ScansRemovedByRetention: ages.removed(days),
-		RetentionDays:           days,
-	}
+	p.RetentionDays = effectiveRetention(days)
+	p.ScansRemovedByRetention = ages.removed(days)
 	if ages.seen {
 		oldest := ages.oldest
 		p.OldestScanAt = &oldest

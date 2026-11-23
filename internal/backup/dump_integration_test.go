@@ -36,7 +36,7 @@ func newDumper(t *testing.T) (*Dumper, *pgxpool.Pool) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Dumper{Pool: pool, Dir: dir, App: "0.4.0", Commit: "abc", KeyFingerprint: "fp"}, pool
+	return &Dumper{Pool: pool, Dir: dir, App: "0.4.0", Commit: "abc", KeyFingerprint: "fp", SigningKey: testSigningKey}, pool
 }
 
 func allTables(t *testing.T, pool *pgxpool.Pool) []string {
@@ -113,7 +113,7 @@ func TestTablesIgnoreOtherApplications(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	m, err := ReadManifest(f)
 	if err != nil {
 		t.Fatal(err)
@@ -205,8 +205,8 @@ func TestDumpBasic(t *testing.T) {
 		t.Fatalf("file: %v %v", st, err)
 	}
 	f, _ := os.Open(p)
-	defer f.Close()
-	if _, _, err := Verify(f, nil); err != nil {
+	defer func() { _ = f.Close() }()
+	if _, _, err := Verify(f, testSigningKey, nil); err != nil {
 		t.Errorf("Verify: %v", err)
 	}
 	if list, _ := d.Dir.List(); len(list) != 1 || list[0].Name != info.Name {
@@ -227,7 +227,7 @@ func TestDumpConsistentUnderWrites(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		defer tx.Rollback(ctx)
+		defer func() { _ = tx.Rollback(ctx) }()
 		var id int64
 		err = tx.QueryRow(ctx, `INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, count_high, raw_report)
 VALUES ($1, 'image', 'app', $2, $2, 'main', false, 'c', 2, now(), $3, '\x1f8b') RETURNING id`, svc, i, perScan).Scan(&id)
@@ -297,11 +297,11 @@ func checkConsistent(t *testing.T, d *Dumper, name string, perScan int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	scans := map[string]int{} // id -> declared findings
 	found := map[string]int{} // scan id -> findings seen
 	var vulnScanIDs []string
-	_, err = ReadTables(f, func(tb TableSpec, data io.Reader) (int64, error) {
+	_, err = ReadTables(f, testSigningKey, func(tb TableSpec, data io.Reader) (int64, error) {
 		idCol := slices.Index(tb.Columns, "id")
 		scanCol := slices.Index(tb.Columns, "scan_id")
 		highCol := slices.Index(tb.Columns, "count_high")
@@ -309,7 +309,7 @@ func checkConsistent(t *testing.T, d *Dumper, name string, perScan int) {
 		var n int64
 		for {
 			rec, err := r.Read()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return n, nil
 			}
 			if err != nil {
@@ -524,7 +524,7 @@ func TestDumpOutlastsStatementTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	_, tr, err := Verify(f, nil)
+	_, tr, err := Verify(f, testSigningKey, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +573,7 @@ VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, '2026-03-04 05:06:07.123
 	}
 	defer func() { _ = f.Close() }()
 	got := map[string]string{}
-	_, err = ReadTables(f, func(tb TableSpec, data io.Reader) (int64, error) {
+	_, err = ReadTables(f, testSigningKey, func(tb TableSpec, data io.Reader) (int64, error) {
 		r := csv.NewReader(data)
 		var n int64
 		for {

@@ -74,12 +74,15 @@ func setLocal(ctx context.Context, tx pgx.Tx, stmts []string) error {
 	return nil
 }
 
-// Dumper takes backups of the database into a Dir.
+// Dumper takes backups of the database into a Dir. KeyFingerprint and
+// SigningKey are derived from the secret key of the installation with
+// KeyFingerprint and SigningKey.
 type Dumper struct {
 	Pool           *pgxpool.Pool
 	Dir            *Dir
 	App, Commit    string
 	KeyFingerprint string
+	SigningKey     []byte
 }
 
 // Dump writes a backup of the database into the folder and returns its
@@ -209,7 +212,7 @@ func (d *Dumper) write(ctx context.Context, tx pgx.Tx, schema, name string, m Ma
 		}
 		return tag.RowsAffected(), nil
 	}
-	if _, err := WriteArchive(ctx, bw, m, copyTable, progress); err != nil {
+	if _, err := WriteArchive(ctx, bw, m, d.SigningKey, copyTable, progress); err != nil {
 		if ew.err != nil {
 			return d.Dir.folderError(ew.err)
 		}

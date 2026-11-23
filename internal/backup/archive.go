@@ -9,6 +9,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -42,8 +43,9 @@ const NoLimit int64 = math.MaxInt64
 var defaultLimit = DefaultMaxBytes
 
 const (
-	manifestName = "manifest.json"
-	trailerName  = "checksums.json"
+	manifestName  = "manifest.json"
+	trailerName   = "checksums.json"
+	signatureName = "signature"
 
 	maxManifestSize = 1 << 20 // the manifest is read into memory
 	maxTrailerSize  = 4 << 20 // so is the trailer
@@ -76,6 +78,10 @@ var (
 	ErrCorrupt = errors.New("the file is damaged")
 	// ErrFormat means the backup uses a layout this version cannot read.
 	ErrFormat = errors.New("the backup format is not supported")
+	// ErrSignature means the signature of the backup is missing or does
+	// not match the signing key: the file was made with another secret key,
+	// or someone changed it after it was made.
+	ErrSignature = errors.New("the backup was not made by this installation's secret key, or it was changed after it was made")
 )
 
 // formatError is an ErrFormat that carries the offending version.
@@ -174,10 +180,14 @@ func chunkName(table string, seq int) string {
 }
 
 // WriteArchive writes a backup to w. It writes the manifest, then calls
-// copyTable for each table of m in order, and finally writes the trailer,
-// which it also returns. At most ChunkSize bytes of table data are held in
-// memory. progress may be nil.
-func WriteArchive(ctx context.Context, w io.Writer, m Manifest, copyTable TableCopier, progress func(Progress)) (Trailer, error) {
+// copyTable for each table of m in order, then the trailer, which it also
+// returns, and finally the signature made with signingKey (see SigningKey).
+// At most ChunkSize bytes of table data are held in memory. progress may be
+// nil.
+func WriteArchive(ctx context.Context, w io.Writer, m Manifest, signingKey []byte, copyTable TableCopier, progress func(Progress)) (Trailer, error) {
+	if len(signingKey) == 0 {
+		return Trailer{}, errNoKey
+	}
 	m.Format = FormatVersion
 	if err := checkTables(m.Tables); err != nil {
 		return Trailer{}, fmt.Errorf("write backup: %w", err)
@@ -188,11 +198,11 @@ func WriteArchive(ctx context.Context, w io.Writer, m Manifest, copyTable TableC
 	}
 	aw := &archiveWriter{ctx: ctx, tw: tar.NewWriter(gz), mod: m.CreatedAt, total: len(m.Tables), progress: progress}
 
-	body, err := json.Marshal(m)
+	manifestBody, err := json.Marshal(m)
 	if err != nil {
 		return Trailer{}, fmt.Errorf("write backup: encode manifest: %w", err)
 	}
-	if err := aw.entry(manifestName, body); err != nil {
+	if err := aw.entry(manifestName, manifestBody); err != nil {
 		return Trailer{}, err
 	}
 
@@ -217,11 +227,15 @@ func WriteArchive(ctx context.Context, w io.Writer, m Manifest, copyTable TableC
 		aw.report()
 	}
 
-	body, err = json.Marshal(trailer)
+	trailerBody, err := json.Marshal(trailer)
 	if err != nil {
 		return Trailer{}, fmt.Errorf("write backup: encode checksums: %w", err)
 	}
-	if err := aw.entry(trailerName, body); err != nil {
+	if err := aw.entry(trailerName, trailerBody); err != nil {
+		return Trailer{}, err
+	}
+	sig := hex.EncodeToString(sign(signingKey, manifestBody, trailerBody))
+	if err := aw.entry(signatureName, []byte(sig)); err != nil {
 		return Trailer{}, err
 	}
 	if err := aw.tw.Close(); err != nil {
@@ -356,6 +370,10 @@ type archiveReader struct {
 	src     *limitReader // the decompressed stream; everything read passes here
 	tr      *tar.Reader
 	pending *tar.Header
+
+	// The exact bytes of the manifest and the trailer, which the signature
+	// covers.
+	manifestBody, trailerBody []byte
 }
 
 // limitReader counts every byte taken from the decompressed stream and fails
@@ -449,6 +467,7 @@ func (a *archiveReader) manifest() (Manifest, error) {
 	if err != nil {
 		return Manifest{}, err
 	}
+	a.manifestBody = b
 	var m Manifest
 	if err := json.Unmarshal(b, &m); err != nil {
 		return Manifest{}, fmt.Errorf("%w: the manifest cannot be read", ErrNotBackup)
@@ -576,8 +595,12 @@ func (t *tableReader) Read(p []byte) (int, error) {
 
 // readAll walks a whole backup. With load nil it only checks the file; with
 // load it hands each table's data to load first. It returns the trailer
-// stored in the file after comparing it with what was read.
-func readAll(r io.Reader, progress func(int64), maxBytes int64, load func(TableSpec, io.Reader) (int64, error)) (Manifest, Trailer, error) {
+// stored in the file after comparing it with what was read and checking the
+// signature with signingKey.
+func readAll(r io.Reader, signingKey []byte, progress func(int64), maxBytes int64, load func(TableSpec, io.Reader) (int64, error)) (Manifest, Trailer, error) {
+	if len(signingKey) == 0 {
+		return Manifest{}, Trailer{}, errNoKey
+	}
 	a, err := openArchive(r, maxBytes)
 	if err != nil {
 		return Manifest{}, Trailer{}, err
@@ -629,10 +652,37 @@ func readAll(r io.Reader, progress func(int64), maxBytes int64, load func(TableS
 			return m, Trailer{}, corruptf("row count of table %s does not match (%d loaded, %d expected)", t.Name, have.Rows, want.Rows)
 		}
 	}
+	if err := a.signature(signingKey); err != nil {
+		return m, Trailer{}, err
+	}
 	if err := a.end(); err != nil {
 		return m, Trailer{}, err
 	}
 	return m, trailer, nil
+}
+
+// signature reads the signature, which must be the next entry, and checks it
+// against the manifest and the trailer.
+func (a *archiveReader) signature(signingKey []byte) error {
+	h, err := a.next()
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w (it has no signature)", ErrSignature)
+	}
+	if err != nil {
+		return err
+	}
+	if h.Name != signatureName {
+		return corruptf("unexpected entry %q", h.Name)
+	}
+	b, err := a.readBody(h, 2*sha256.Size)
+	if err != nil {
+		return err
+	}
+	got, err := hex.DecodeString(string(b))
+	if err != nil || !hmac.Equal(got, sign(signingKey, a.manifestBody, a.trailerBody)) {
+		return ErrSignature
+	}
+	return nil
 }
 
 // trailer reads checksums.json, which must be the next entry.
@@ -651,6 +701,7 @@ func (a *archiveReader) trailer() (Trailer, error) {
 	if err != nil {
 		return Trailer{}, err
 	}
+	a.trailerBody = b
 	var tr Trailer
 	dec := json.NewDecoder(bytes.NewReader(b))
 	if err := dec.Decode(&tr); err != nil {
@@ -659,11 +710,11 @@ func (a *archiveReader) trailer() (Trailer, error) {
 	return tr, nil
 }
 
-// end checks that nothing follows the trailer.
+// end checks that nothing follows the signature.
 func (a *archiveReader) end() error {
 	if _, err := a.next(); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return corruptf("there is an extra entry after the checksums")
+			return corruptf("there is an extra entry after the signature")
 		}
 		return err
 	}
@@ -678,11 +729,12 @@ func (a *archiveReader) end() error {
 }
 
 // Verify reads a whole backup and checks its order, entry names, checksums,
-// sizes and format version. progress, if not nil, is called with the number of
-// table bytes read so far. Row counts are not checked, since that needs the
-// data to be parsed.
-func Verify(r io.Reader, progress func(bytes int64)) (Manifest, Trailer, error) {
-	return readAll(r, progress, defaultLimit, nil)
+// sizes, format version and signature (with signingKey, see SigningKey; a
+// missing or wrong signature is ErrSignature). progress, if not nil, is
+// called with the number of table bytes read so far. Row counts are not
+// checked, since that needs the data to be parsed.
+func Verify(r io.Reader, signingKey []byte, progress func(bytes int64)) (Manifest, Trailer, error) {
+	return readAll(r, signingKey, progress, defaultLimit, nil)
 }
 
 // VerifyLimited is Verify with an explicit ceiling on the decompressed size of
@@ -691,37 +743,42 @@ func Verify(r io.Reader, progress func(bytes int64)) (Manifest, Trailer, error) 
 // how much a backup of this size may hold passes maxBytes; a file that expands
 // beyond it fails with ErrCorrupt. maxBytes must be positive; NoLimit removes
 // the ceiling.
-func VerifyLimited(r io.Reader, progress func(bytes int64), maxBytes int64) (Manifest, Trailer, error) {
+func VerifyLimited(r io.Reader, signingKey []byte, progress func(bytes int64), maxBytes int64) (Manifest, Trailer, error) {
 	if maxBytes <= 0 {
 		return Manifest{}, Trailer{}, errLimit
 	}
-	return readAll(r, progress, maxBytes, nil)
+	return readAll(r, signingKey, progress, maxBytes, nil)
 }
 
 // ReadTables reads a whole backup, passing the data of each table, as one
 // continuous reader, to load. load returns the number of rows it loaded.
-// Everything is compared with the trailer, which is stored after the data, so
-// a mismatch is reported (as ErrCorrupt) by the last step of ReadTables; the
-// caller must not make what load did permanent before ReadTables returns nil.
-func ReadTables(r io.Reader, load func(t TableSpec, data io.Reader) (rows int64, err error)) (Manifest, error) {
+// Everything is compared with the trailer, and the trailer with the
+// signature (made with signingKey), which are stored after the data, so a
+// mismatch is reported (as ErrCorrupt or ErrSignature) by the last step of
+// ReadTables; the caller must not make what load did permanent before
+// ReadTables returns nil.
+func ReadTables(r io.Reader, signingKey []byte, load func(t TableSpec, data io.Reader) (rows int64, err error)) (Manifest, error) {
 	if load == nil {
 		return Manifest{}, errors.New("read backup: no loader given")
 	}
-	m, _, err := readAll(r, nil, defaultLimit, load)
+	m, _, err := readAll(r, signingKey, nil, defaultLimit, load)
 	return m, err
 }
 
 // ReadTablesLimited is ReadTables with an explicit ceiling on the decompressed
 // size of the archive, as VerifyLimited has. maxBytes must be positive.
-func ReadTablesLimited(r io.Reader, maxBytes int64, load func(t TableSpec, data io.Reader) (rows int64, err error)) (Manifest, error) {
+func ReadTablesLimited(r io.Reader, signingKey []byte, maxBytes int64, load func(t TableSpec, data io.Reader) (rows int64, err error)) (Manifest, error) {
 	if load == nil {
 		return Manifest{}, errors.New("read backup: no loader given")
 	}
 	if maxBytes <= 0 {
 		return Manifest{}, errLimit
 	}
-	m, _, err := readAll(r, nil, maxBytes, load)
+	m, _, err := readAll(r, signingKey, nil, maxBytes, load)
 	return m, err
 }
 
-var errLimit = errors.New("read backup: the size limit must be positive")
+var (
+	errLimit = errors.New("read backup: the size limit must be positive")
+	errNoKey = errors.New("backup: no signing key given")
+)
