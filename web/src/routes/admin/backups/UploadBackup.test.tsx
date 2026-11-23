@@ -247,3 +247,128 @@ describe('upload a backup, check stopped', () => {
     expect(await screen.findByText('Backup uploaded')).toBeInTheDocument();
   });
 });
+
+describe('upload a backup, the page and the dialog', () => {
+  const checking = {
+    id: 'u1',
+    file_name: 'from-staging.tar.gz',
+    size: 10,
+    chunk_size: 4,
+    received: 10,
+    state: 'checking',
+  };
+
+  function leaving() {
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  it('puts the focus on choosing a file when the dialog opens', async () => {
+    mockFetch(api());
+    renderApp('/admin/backups');
+    const open = await screen.findByRole('button', { name: 'Upload a backup' });
+    await waitFor(() => expect(open).toBeEnabled());
+    fireEvent.click(open);
+    const dialog = await screen.findByRole('dialog', { name: 'Upload a backup' });
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Choose a file' })).toHaveFocus(),
+    );
+  });
+
+  it('refuses an empty file before sending anything', async () => {
+    const { calls } = mockFetch(api());
+    renderApp('/admin/backups');
+    const open = await screen.findByRole('button', { name: 'Upload a backup' });
+    await waitFor(() => expect(open).toBeEnabled());
+    fireEvent.click(open);
+    const dialog = await screen.findByRole('dialog', { name: 'Upload a backup' });
+    fireEvent.change(within(dialog).getByLabelText('Backup file'), {
+      target: { files: [new File([], 'empty.tar.gz')] },
+    });
+    expect(
+      await within(dialog).findByText(
+        'The file is empty, so it is not a backup. Choose another file.',
+      ),
+    ).toBeVisible();
+    expect(calls.some((c) => c.path === '/api/v1/admin/backup-uploads')).toBe(false);
+  });
+
+  it('warns before the page is left while the file is sent, not once it is checked', async () => {
+    let sendPart: (() => void) | undefined;
+    mockFetch(
+      api((call) => {
+        if (call.method === 'PUT' && call.path.endsWith('offset=4')) {
+          // The second part takes its time.
+          return new Promise((resolve) => {
+            sendPart = () => resolve(json(200, { ...checking, state: 'uploading', received: 8 }));
+          });
+        }
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+          return json(200, checking);
+        }
+        return undefined;
+      }),
+    );
+    const dialog = await chooseFile();
+    await waitFor(() => expect(sendPart).toBeDefined());
+    expect(leaving()).toBe(true);
+    sendPart?.();
+    await within(dialog).findByText(/Checking the backup/);
+    expect(leaving()).toBe(false);
+  });
+
+  it('closes while the server checks the file and says when the backup is listed', async () => {
+    let asked = 0;
+    const { calls } = mockFetch(
+      api((call) => {
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+          asked += 1;
+          return json(
+            200,
+            asked < 3 ? checking : { ...checking, state: 'ready', backup: uploaded },
+          );
+        }
+        return undefined;
+      }),
+    );
+    const dialog = await chooseFile();
+    await within(dialog).findByText(/Checking the backup/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close and keep checking' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Upload a backup' })).not.toBeInTheDocument(),
+    );
+    expect(await screen.findByText('Backup uploaded')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('keeps an interrupted upload when the dialog is closed, to resume it later', async () => {
+    let asked = 0;
+    const { calls } = mockFetch(
+      api((call) => {
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'GET') {
+          asked += 1;
+          return json(
+            200,
+            asked === 1
+              ? { ...checking, state: 'uploading' }
+              : { ...checking, state: 'ready', backup: uploaded },
+          );
+        }
+        return undefined;
+      }),
+    );
+    const dialog = await chooseFile();
+    await within(dialog).findByRole('button', { name: 'Resume upload' });
+    expect(leaving()).toBe(true);
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Upload a backup' })).not.toBeInTheDocument(),
+    );
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Upload a backup' }));
+    const again = await screen.findByRole('dialog', { name: 'Upload a backup' });
+    fireEvent.click(within(again).getByRole('button', { name: 'Resume upload' }));
+    expect(await screen.findByText('Backup uploaded')).toBeInTheDocument();
+  });
+});

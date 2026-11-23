@@ -577,7 +577,12 @@ a key kept apart from the secret key, as
 another installation that uses the same secret key. The browser sends it in parts of 8 MiB, so a large file
 passes a proxy and an interrupted upload resumes where it stopped. Scanopsis
 then reads the whole file and checks the signature, in the background, one
-file at a time; the dialog says **Checking the backup** until it is done. A
+file at a time; the dialog says **Checking the backup** until it is done.
+While the file is being sent, the browser asks before you leave the page,
+since leaving stops the upload. Once every byte was sent, **Close and keep
+checking** closes the dialog; a message says when the backup is in the list.
+An interrupted upload stays when you close the dialog: open it again and
+select **Resume upload**. An empty file is refused before anything is sent. A
 file from another secret key, from a newer version of Scanopsis or a damaged
 file is refused with the reason. **Cancel upload** also stops a check. At most
 two uploads can be open at once; an upload that receives nothing for 10

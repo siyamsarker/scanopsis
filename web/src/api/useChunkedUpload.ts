@@ -19,6 +19,9 @@ export interface UploadFile {
   size: number;
 }
 
+/** Why an empty file is not sent: no backup is empty. */
+export const EMPTY_FILE = 'The file is empty, so it is not a backup. Choose another file.';
+
 export type UploadPhase =
   | { kind: 'idle' }
   | { kind: 'uploading'; file: UploadFile; sent: number }
@@ -59,6 +62,22 @@ export function useChunkedUpload<R>(
   });
 
   useEffect(() => () => controller.current?.abort(PAGE_LEFT), []);
+
+  // Leaving the page while parts are being sent, or with an upload that can
+  // still be resumed, gives that upload up: the browser asks first. Once
+  // every byte was sent, the server checks the file without the page.
+  const unsent =
+    (phase.kind === 'uploading' && phase.sent < phase.file.size) || phase.kind === 'interrupted';
+  useEffect(() => {
+    if (!unsent) return;
+    function ask(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      // Older browsers ask only when returnValue is set.
+      event.returnValue = '';
+    }
+    window.addEventListener('beforeunload', ask);
+    return () => window.removeEventListener('beforeunload', ask);
+  }, [unsent]);
 
   /** Runs one upload or follow and turns its end into a phase. */
   async function settle(
@@ -114,6 +133,10 @@ export function useChunkedUpload<R>(
   }
 
   function run(file: File, resume?: { id: string; sent: number }) {
+    if (file.size === 0) {
+      setPhase({ kind: 'failed', file, message: EMPTY_FILE });
+      return;
+    }
     const progress: { sentAll: boolean; id?: string } = { sentAll: false, id: resume?.id };
     setPhase({ kind: 'uploading', file, sent: resume?.sent ?? 0 });
     return settle(

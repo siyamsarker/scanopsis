@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { FileArchive } from 'lucide-react';
-import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type Ref } from 'react';
 import type { ChunkedUpload } from '../api/useChunkedUpload';
 import { formatBytes } from '../format';
 import { Problem } from '../routes/admin/kit';
@@ -45,10 +45,13 @@ function Progress({ sent, total }: { sent: number; total: number }) {
 export function BackupFileDrop({
   upload,
   note,
+  chooseRef,
 }: {
   upload: ChunkedUpload;
   /** A line under the drop zone, for a file chosen earlier. */
   note?: string;
+  /** The "Choose a file" button, so a dialog can put the focus on it. */
+  chooseRef?: Ref<HTMLButtonElement>;
 }) {
   const { phase, input, start, pick } = upload;
   const [over, setOver] = useState(false);
@@ -104,7 +107,12 @@ export function BackupFileDrop({
         >
           <FileArchive size={28} strokeWidth={1.5} aria-hidden="true" className="text-text-muted" />
           <p className="text-body-s text-text">Drop the backup file here, or</p>
-          <button type="button" className={buttonClass('secondary', 'sm')} onClick={pick}>
+          <button
+            ref={chooseRef}
+            type="button"
+            className={buttonClass('secondary', 'sm')}
+            onClick={pick}
+          >
             Choose a file
           </button>
           <p className="mt-1 text-small text-text-muted">
