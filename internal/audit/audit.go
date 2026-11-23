@@ -57,6 +57,14 @@ const (
 	// Data retention. The actor is "retention"; the detail carries the
 	// period, the cutoffs and how many rows of each kind were deleted.
 	ActionRetentionDeleted = "retention.deleted"
+
+	// Backups. backup.created details carry "name", "kind" and "size";
+	// backup.failed carries "kind" and "error"; backup.restore_failed
+	// carries "name" and "error". The actor is who started the job, or
+	// "scheduler" for scheduled backups.
+	ActionBackupCreated       = "backup.created"
+	ActionBackupFailed        = "backup.failed"
+	ActionBackupRestoreFailed = "backup.restore_failed"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.

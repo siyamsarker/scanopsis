@@ -432,7 +432,7 @@ func TestAdvisoryLockStopsASecondRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := holder.Exec(context.Background(), "SELECT pg_advisory_lock($1)", advisoryLockKey); err != nil {
+	if _, err := holder.Exec(context.Background(), "SELECT pg_advisory_lock($1)", AdvisoryLockKey); err != nil {
 		t.Fatal(err)
 	}
 	res := f.job1(newSettings(30)).RunOnce(context.Background())
@@ -442,7 +442,7 @@ func TestAdvisoryLockStopsASecondRun(t *testing.T) {
 	if f.count("scans") != 2 || f.count("sonar_deliveries") != 1 || f.count("audit_log") != 1 {
 		t.Fatal("a run without the lock deleted rows")
 	}
-	if _, err := holder.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", advisoryLockKey); err != nil {
+	if _, err := holder.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", AdvisoryLockKey); err != nil {
 		t.Fatal(err)
 	}
 	holder.Release()

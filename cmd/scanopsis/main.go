@@ -25,6 +25,10 @@ import (
 	"syscall"
 	"time"
 
+	// The container image has no time zone database; the backup schedule
+	// reads its time zone from this copy.
+	_ "time/tzdata"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 

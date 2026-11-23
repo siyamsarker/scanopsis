@@ -59,9 +59,11 @@ const (
 	runInterval = 24 * time.Hour
 )
 
-// advisoryLockKey is the PostgreSQL advisory lock that lets one instance
-// run the job at a time. It differs from the SonarQube sync's key.
-const advisoryLockKey int64 = 0x53434e5254 // "SCNRT"
+// AdvisoryLockKey is the PostgreSQL advisory lock that lets one instance
+// run the job at a time. It differs from the SonarQube sync's key. It is
+// exported so a restore of a backup can hold it, which keeps the job from
+// running during the restore.
+const AdvisoryLockKey int64 = 0x53434e5254 // "SCNRT"
 
 // SettingsSource gives the current settings; *settings.Service satisfies it.
 // The retention period is read again at the start of every run.
@@ -151,7 +153,7 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 		return res
 	}
 	var locked bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", advisoryLockKey).Scan(&locked); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", AdvisoryLockKey).Scan(&locked); err != nil {
 		r.log.WarnContext(ctx, "data retention could not take its lock", "error", err)
 		conn.Release()
 		res.FailedSteps++
@@ -164,7 +166,7 @@ func (r *Retention) RunOnce(ctx context.Context) Result {
 		return res
 	}
 	defer func() {
-		if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", advisoryLockKey); err != nil {
+		if _, err := conn.Exec(context.WithoutCancel(ctx), "SELECT pg_advisory_unlock($1)", AdvisoryLockKey); err != nil {
 			// Closing the connection drops the lock.
 			_ = conn.Conn().Close(context.WithoutCancel(ctx))
 		}

@@ -76,7 +76,7 @@ func TestNewDefaults(t *testing.T) {
 	if r.batch != BatchSize || r.firstDelay != time.Minute || r.interval != 24*time.Hour {
 		t.Errorf("defaults: batch %d, first %v, interval %v", r.batch, r.firstDelay, r.interval)
 	}
-	if advisoryLockKey == 0x53434e5359 {
+	if AdvisoryLockKey == 0x53434e5359 {
 		t.Error("the lock key must differ from the SonarQube sync's")
 	}
 }

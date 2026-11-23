@@ -18,9 +18,10 @@ import (
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
-// advisoryLockKey is the PostgreSQL advisory lock that lets one instance sync
-// at a time.
-const advisoryLockKey int64 = 0x53434e5359 // "SCNSY"
+// AdvisoryLockKey is the PostgreSQL advisory lock that lets one instance sync
+// at a time. It is exported so a restore of a backup can hold it, which
+// keeps a sync from running during the restore.
+const AdvisoryLockKey int64 = 0x53434e5359 // "SCNSY"
 
 // maxTransportErrors is how many calls in a row may fail without an answer
 // from SonarQube (a timeout, a refused or reset connection) before a sync
@@ -87,7 +88,7 @@ func (s *Sonar) lockSync(ctx context.Context) (unlock func(), ok bool) {
 		return nil, false
 	}
 	var locked bool
-	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", advisoryLockKey).Scan(&locked); err != nil || !locked {
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", AdvisoryLockKey).Scan(&locked); err != nil || !locked {
 		_ = conn.Close(context.WithoutCancel(ctx))
 		return nil, false
 	}
