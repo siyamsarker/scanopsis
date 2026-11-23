@@ -21,6 +21,7 @@ import { backupDate, CONFIRM_PHRASE, retentionWarning } from '../admin/backups/m
 import { Problem } from '../admin/kit';
 import { AuthField } from '../auth/fields';
 import { setupMessage } from './messages';
+import { SetupTokenHint } from './SetupTokenHint';
 
 const steps = ['Setup token', 'Backup file', 'Restore'];
 
@@ -332,15 +333,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           value={token}
           onChange={(e) => setToken(e.target.value)}
           className={monoInputClass}
-          hint={
-            <>
-              Printed in the server log at start-up, for example by{' '}
-              <code className="rounded-[4px] bg-sunken px-1 font-mono text-text">
-                docker logs scanopsis
-              </code>
-              .
-            </>
-          }
+          hint={<SetupTokenHint />}
         />
         {step.error ? <Problem>{step.error}</Problem> : null}
         <div className="flex flex-wrap gap-2">

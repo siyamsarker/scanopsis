@@ -14,6 +14,7 @@ import { Problem } from './admin/kit';
 import { AuthField, PasswordField, PasswordRules, passwordChecks } from './auth/fields';
 import { RestoreFromBackup } from './setup/RestoreFromBackup';
 import { setupMessage } from './setup/messages';
+import { SetupTokenHint } from './setup/SetupTokenHint';
 
 export const passwordRules = 'At least 12 characters, and not your username.';
 
@@ -77,15 +78,7 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
           value={token}
           onChange={(e) => setToken(e.target.value)}
           className={monoInputClass}
-          hint={
-            <>
-              Printed in the server log at start-up, for example by{' '}
-              <code className="rounded-[4px] bg-sunken px-1 font-mono text-text">
-                docker logs scanopsis
-              </code>
-              .
-            </>
-          }
+          hint={<SetupTokenHint />}
         />
         <AuthField
           id="username"

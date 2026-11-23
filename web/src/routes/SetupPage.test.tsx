@@ -54,7 +54,7 @@ describe('setup page', () => {
     const token = screen.getByLabelText('Setup token');
     expect(token).toHaveClass('font-mono');
     expect(token).toHaveAccessibleDescription(
-      'Printed in the server log at start-up, for example by docker logs scanopsis.',
+      'Printed in the server log at start-up. In deploy/compose, run docker compose logs scanopsis and copy the setup_token value.',
     );
 
     const rules = () =>
