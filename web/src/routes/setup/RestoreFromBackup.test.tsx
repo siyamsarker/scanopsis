@@ -8,7 +8,13 @@ import { apiError, json, mockFetch, renderApp, type Handler } from '../../test-u
 
 configure({ asyncUtilTimeout: 5000 });
 
-afterEach(() => hideRestoreOverlay());
+afterEach(() => {
+  hideRestoreOverlay();
+  sessionStorage.clear();
+});
+
+/** Where the setup screen keeps the upload being checked across a reload. */
+const SAVED = 'scanopsis.setup-restore-upload';
 
 const preview: RestorePreview = {
   info: {
@@ -398,5 +404,141 @@ describe('restore from the setup screen', () => {
     expect(zone).toHaveAttribute('data-over');
     fireEvent.dragLeave(zone);
     expect(zone).not.toHaveAttribute('data-over');
+  });
+});
+
+describe('restore from the setup screen, across a reload', () => {
+  const checking = () => ({ ...upload, received: 10, state: 'checking' });
+
+  it('remembers the upload while the server checks it', async () => {
+    mockFetch(api({ required: true, outcome: checking }));
+    renderApp('/setup');
+    await openRestore();
+    enterToken();
+    await sendFile();
+    await screen.findByText(/Checking the backup/);
+    await waitFor(() =>
+      expect(JSON.parse(sessionStorage.getItem(SAVED) ?? 'null')).toEqual({
+        id: 'u1',
+        name: 'old-host.tar.gz',
+        size: 10,
+      }),
+    );
+  });
+
+  it('follows the check of the file sent before the reload once the token is entered', async () => {
+    sessionStorage.setItem(SAVED, JSON.stringify({ id: 'u1', name: 'old-host.tar.gz', size: 10 }));
+    let asked = 0;
+    const { calls } = mockFetch(
+      api({ required: true, outcome: () => (++asked > 1 ? ready() : checking()) }),
+    );
+    renderApp('/setup?start=restore');
+    await screen.findByRole('heading', { name: 'Restore from a backup' });
+    enterToken('tok-123');
+    expect(await screen.findByText(/Checking the backup/)).toBeVisible();
+    expect(screen.getByText('old-host.tar.gz')).toBeVisible();
+    expect(
+      await screen.findByRole('heading', { name: 'Review the backup' }, { timeout: 10_000 }),
+    ).toBeVisible();
+    const polls = calls.filter(
+      (c) => c.method === 'GET' && c.path === '/api/v1/setup/restore/uploads/u1',
+    );
+    expect(polls.length).toBe(2);
+    expect(polls[0].headers['x-setup-token']).toBe('tok-123');
+    expect(calls.some((c) => c.method === 'PUT' || c.path.endsWith('/complete'))).toBe(false);
+  });
+
+  it('forgets the upload once it was refused', async () => {
+    sessionStorage.setItem(SAVED, JSON.stringify({ id: 'u1', name: 'old-host.tar.gz', size: 10 }));
+    mockFetch(api({ required: true, outcome: () => refused('newer_schema', 'Newer.') }));
+    renderApp('/setup?start=restore');
+    await screen.findByRole('heading', { name: 'Restore from a backup' });
+    enterToken();
+    expect(await screen.findByText(/made by a newer version of Scanopsis/)).toBeVisible();
+    expect(sessionStorage.getItem(SAVED)).toBeNull();
+  });
+
+  it('asks for the file when the server no longer knows the upload', async () => {
+    sessionStorage.setItem(SAVED, JSON.stringify({ id: 'u1', name: 'old-host.tar.gz', size: 10 }));
+    const world = mockFetch(async (call) => {
+      if (call.path === '/api/v1/setup/restore/uploads/u1' && call.method === 'GET') {
+        return apiError(404, 'not_found', 'No upload with this id is in progress.');
+      }
+      return api({ required: true })(call);
+    });
+    renderApp('/setup?start=restore');
+    await screen.findByRole('heading', { name: 'Restore from a backup' });
+    enterToken();
+    expect(await screen.findByText('Drop the backup file here, or')).toBeVisible();
+    expect(sessionStorage.getItem(SAVED)).toBeNull();
+    expect(world.calls.some((c) => c.method === 'DELETE')).toBe(false);
+  });
+
+  it('leaves the check running when the page goes away, and stops it on Cancel upload', async () => {
+    const { calls } = mockFetch(async (call) =>
+      call.method === 'DELETE'
+        ? new Response(null, { status: 204 })
+        : api({ required: true, outcome: checking })(call),
+    );
+    const first = renderApp('/setup');
+    await openRestore();
+    enterToken();
+    await sendFile();
+    await screen.findByText(/Checking the backup/);
+    first.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false);
+    expect(sessionStorage.getItem(SAVED)).not.toBeNull();
+
+    // The page again, as after a reload: it picks the check up, and
+    // cancelling it stops it and says so.
+    renderApp('/setup?start=restore');
+    await screen.findByRole('heading', { name: 'Restore from a backup' });
+    enterToken();
+    await screen.findByText(/Checking the backup/);
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel upload' }));
+    expect(await screen.findByText('Upload cancelled')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'The check of the file was stopped. If it had already finished, the file stays in the backup folder.',
+      ),
+    ).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        calls.some((c) => c.method === 'DELETE' && c.path === '/api/v1/setup/restore/uploads/u1'),
+      ).toBe(true),
+    );
+    expect(sessionStorage.getItem(SAVED)).toBeNull();
+    expect(await screen.findByText('Drop the backup file here, or')).toBeVisible();
+  });
+
+  it('asks for the file again when the check of the earlier upload stopped', async () => {
+    sessionStorage.setItem(SAVED, JSON.stringify({ id: 'u1', name: 'old-host.tar.gz', size: 10 }));
+    mockFetch(api({ required: true, outcome: () => ({ ...upload, received: 10 }) }));
+    renderApp('/setup?start=restore');
+    await screen.findByRole('heading', { name: 'Restore from a backup' });
+    enterToken();
+    expect(
+      await screen.findByText(
+        'The check of the file stopped before it ended, for example because Scanopsis restarted. Choose the file again to upload it again.',
+      ),
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Choose another file' })).toBeVisible();
+  });
+
+  it('forgets the upload once the restore starts', async () => {
+    mockFetch(api({ required: true }));
+    renderApp('/setup');
+    await openRestore();
+    enterToken();
+    await sendFile();
+    await screen.findByRole('heading', { name: 'Review the backup' });
+    expect(sessionStorage.getItem(SAVED)).not.toBeNull();
+    fireEvent.change(screen.getByLabelText('Type RESTORE to confirm'), {
+      target: { value: 'RESTORE' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Restore backup' }));
+    await screen.findByRole('alertdialog', { name: 'Restoring a backup' });
+    expect(sessionStorage.getItem(SAVED)).toBeNull();
   });
 });

@@ -13,6 +13,8 @@ export interface RecordedCall {
   /** Path and query string, without the origin. */
   path: string;
   body: unknown;
+  /** The request headers, by lower-case name. */
+  headers: Record<string, string>;
 }
 
 export type Handler = (call: RecordedCall) => Response | undefined | Promise<Response | undefined>;
@@ -41,6 +43,7 @@ export function mockFetch(handler: Handler) {
       method: request.method,
       path: url.pathname + url.search,
       body: text ? JSON.parse(text) : undefined,
+      headers: Object.fromEntries(request.headers.entries()),
     };
     calls.push(call);
     const response = await handler(call);

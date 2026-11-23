@@ -10,10 +10,11 @@ import { api, ApiError, unwrap } from '../../api/client';
 import { setupKey } from '../../api/hooks';
 import { showRestoreOverlay } from '../../api/restoreMode';
 import { BUSY_DELAY_MS, patiently, readyPart, restUploadEndpoints } from '../../api/upload';
-import { useChunkedUpload } from '../../api/useChunkedUpload';
+import { useChunkedUpload, type UploadFile } from '../../api/useChunkedUpload';
 import { AuthShell } from '../../components/AuthShell';
 import { BackupFileDrop } from '../../components/BackupFileDrop';
 import { Spinner } from '../../components/ConfirmDialog';
+import { toast } from '../../components/Toast';
 import { formatBytes } from '../../format';
 import { buttonClass, monoInputClass } from '../../ui';
 import { backupDate, CONFIRM_PHRASE, retentionWarning } from '../admin/backups/model';
@@ -40,6 +41,48 @@ type Step =
   | { kind: 'already' };
 
 const labelClass = 'text-body-s font-medium text-text';
+
+/**
+ * The upload whose every byte was sent, kept for this browser tab so that a
+ * reload during the check picks it up again once the token is entered,
+ * instead of asking for a large file once more. The server keeps the outcome
+ * of a check for a day.
+ */
+const SAVED_UPLOAD = 'scanopsis.setup-restore-upload';
+
+interface SavedUpload extends UploadFile {
+  id: string;
+}
+
+function readSaved(): SavedUpload | null {
+  try {
+    const saved: unknown = JSON.parse(sessionStorage.getItem(SAVED_UPLOAD) ?? 'null');
+    if (
+      saved &&
+      typeof saved === 'object' &&
+      'id' in saved &&
+      'name' in saved &&
+      'size' in saved &&
+      typeof saved.id === 'string' &&
+      typeof saved.name === 'string' &&
+      typeof saved.size === 'number'
+    ) {
+      return { id: saved.id, name: saved.name, size: saved.size };
+    }
+  } catch {
+    // Storage that cannot be read or holds something else: start afresh.
+  }
+  return null;
+}
+
+function save(upload: SavedUpload | null) {
+  try {
+    if (upload) sessionStorage.setItem(SAVED_UPLOAD, JSON.stringify(upload));
+    else sessionStorage.removeItem(SAVED_UPLOAD);
+  } catch {
+    // Without storage, a reload asks for the file again.
+  }
+}
 
 /**
  * Restores a backup on a new installation, before any administrator exists:
@@ -69,6 +112,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
   /** An answer that ends the restore path: a wrong token, or a setup finished meanwhile. */
   function handleCommon(err: unknown): boolean {
     if (err instanceof ApiError && err.code === 'setup_done') {
+      save(null);
       setStep({ kind: 'already' });
       return true;
     }
@@ -79,13 +123,20 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
     return false;
   }
 
+  // The upload followed is one sent before a reload.
+  const following = useRef(false);
   const upload = useChunkedUpload(endpoints, {
+    onChecking: (id, file) => save({ id, name: file.name, size: file.size }),
     onDone: (preview, uploadId) => {
+      following.current = false;
       setReplaced(false);
       setStep({ kind: 'review', preview, uploadId });
     },
     onError: (err) => {
+      const followed = following.current;
+      following.current = false;
       if (err instanceof ApiError && err.status === 422) {
+        save(null);
         const reason: Refusal | null =
           err.code === 'key_mismatch' ? 'key' : err.code === 'newer_schema' ? 'schema' : null;
         if (reason) {
@@ -93,11 +144,28 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           return true;
         }
       }
+      // A reload went past the check: the server no longer knows the upload.
+      if (err instanceof ApiError && err.status === 404 && followed) {
+        save(null);
+        return true;
+      }
       return handleCommon(err);
     },
     describe: setupMessage,
   });
   const { phase } = upload;
+
+  /** Stops the upload; while the server checks the file, says what that means. */
+  function cancelUpload() {
+    save(null);
+    following.current = false;
+    if (upload.cancel()) {
+      toast.info('Upload cancelled', {
+        description:
+          'The check of the file was stopped. If it had already finished, the file stays in the backup folder.',
+      });
+    }
+  }
 
   async function checkToken(event: FormEvent) {
     event.preventDefault();
@@ -119,6 +187,12 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
         BUSY_DELAY_MS,
       );
       setStep({ kind: 'file' });
+      // A file sent before a reload: follow its check instead of asking again.
+      const saved = readSaved();
+      following.current = saved !== null;
+      if (saved && upload.phase.kind === 'idle') {
+        upload.follow(saved.id, { name: saved.name, size: saved.size });
+      }
     } catch (err) {
       if (abort.signal.aborted) return;
       if (!handleCommon(err)) setStep({ kind: 'token', error: setupMessage(err) });
@@ -165,7 +239,10 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
           <button
             type="button"
             className={buttonClass('ghost')}
-            onClick={() => setStep({ kind: 'file' })}
+            onClick={() => {
+              save(null);
+              setStep({ kind: 'file' });
+            }}
           >
             Choose another file
           </button>
@@ -182,6 +259,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
         uploadId={step.uploadId}
         onRefused={handleCommon}
         onBack={() => {
+          save(null);
           setReplaced(true);
           setStep({ kind: 'file' });
         }}
@@ -207,7 +285,14 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
             </button>
           ) : null}
           {phase.kind === 'failed' ? (
-            <button type="button" className={buttonClass('primary')} onClick={upload.chooseAnother}>
+            <button
+              type="button"
+              className={buttonClass('primary')}
+              onClick={() => {
+                save(null);
+                upload.chooseAnother();
+              }}
+            >
               Choose another file
             </button>
           ) : null}
@@ -220,11 +305,7 @@ export function RestoreFromBackup({ onBack }: { onBack: () => void }) {
               Back
             </button>
           ) : (
-            <button
-              type="button"
-              className={buttonClass('secondary')}
-              onClick={() => upload.cancel()}
-            >
+            <button type="button" className={buttonClass('secondary')} onClick={cancelUpload}>
               {phase.kind === 'failed' ? 'Start over' : 'Cancel upload'}
             </button>
           )}
@@ -324,6 +405,7 @@ function Review({
           body: { token, upload_id: uploadId, confirm: CONFIRM_PHRASE },
         }),
       );
+      save(null);
       showRestoreOverlay();
     } catch (err) {
       setPending(false);
