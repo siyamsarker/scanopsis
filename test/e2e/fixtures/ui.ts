@@ -36,18 +36,22 @@ export async function choose(page: Page, label: string, option: string | RegExp)
 
 /**
  * Collects Content Security Policy violations reported in the console of
- * every page of a browser context. The flows assert that none happened.
+ * every page of a browser context into `sink`, by default the list shared by
+ * the main flows; a spec file with its own stack passes its own list.
  */
 export const cspViolations: string[] = [];
 
-export function watchCsp(context: BrowserContext): BrowserContext {
+export function watchCsp(
+  context: BrowserContext,
+  sink: string[] = cspViolations,
+): BrowserContext {
   context.on('console', (message) => {
     const text = message.text();
-    if (/Content Security Policy/i.test(text)) cspViolations.push(text);
+    if (/Content Security Policy/i.test(text)) sink.push(text);
   });
   context.on('weberror', (error) => {
     const text = String(error.error());
-    if (/Content Security Policy/i.test(text)) cspViolations.push(text);
+    if (/Content Security Policy/i.test(text)) sink.push(text);
   });
   return context;
 }

@@ -31,13 +31,17 @@ export const backupStack: Stack = {
 export const emptyService = 'scanopsis-empty';
 
 /** Runs `docker compose` against a test stack and returns standard output. */
-export function compose(args: string[], stack: Stack = mainStack): Promise<string> {
+export function compose(
+  args: string[],
+  stack: Stack = mainStack,
+  timeoutMs = 0,
+): Promise<string> {
   const baseArgs = ['compose', '-p', stack.project, '-f', stack.file];
   return new Promise((resolve, reject) => {
     execFile(
       'docker',
       [...baseArgs, ...args],
-      { maxBuffer: 16 * 1024 * 1024 },
+      { maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs },
       (error, stdout, stderr) => {
         if (error) {
           reject(new Error(`docker compose ${args.join(' ')} failed:\n${stderr || error.message}`));

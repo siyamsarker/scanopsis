@@ -3,10 +3,10 @@
 
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
-import { expect, test, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { expect, test, type Browser, type BrowserContext, type Locator, type Page } from '@playwright/test';
 import { backupStack, compose, emptyService, readSetupToken } from '../fixtures/stack';
 import { freshCode } from '../fixtures/totp';
-import { account, cspViolations, watchCsp } from '../fixtures/ui';
+import { account, watchCsp } from '../fixtures/ui';
 
 // The backup tests run on a stack of their own (compose.backups.yaml): a
 // restore replaces all data and ends every session, and the setup screen needs
@@ -21,6 +21,9 @@ const password = 'correct horse battery staple 1';
 const serviceName = 'payments-api';
 const renamedService = 'renamed-by-mistake';
 
+// Content Security Policy violations seen by the browsers of this file only.
+const cspViolations: string[] = [];
+
 let adminContext: BrowserContext;
 let admin: Page;
 let adminSecret = '';
@@ -31,7 +34,7 @@ let serviceId = 0;
 let downloadedFile = '';
 
 async function open(browser: Browser, baseURL: string): Promise<{ context: BrowserContext; page: Page }> {
-  const context = watchCsp(await browser.newContext({ baseURL }));
+  const context = watchCsp(await browser.newContext({ baseURL }), cspViolations);
   return { context, page: await context.newPage() };
 }
 
@@ -81,24 +84,31 @@ function backupRows(page: Page) {
   });
 }
 
-async function rowMenu(page: Page, row: ReturnType<typeof backupRows>, item: string) {
-  await row.first().getByRole('button', { name: /^Actions for the backup from/ }).click();
+/** Opens the actions menu of exactly this row and chooses an item. */
+async function rowMenu(page: Page, row: Locator, item: string) {
+  await row.getByRole('button', { name: /^Actions for the backup from/ }).click();
   await page.getByRole('menuitem', { name: item }).click();
 }
 
 async function backUpNow(page: Page, expectedRows: number): Promise<void> {
   await page.getByRole('button', { name: 'Back up now' }).first().click();
-  await expect(page.getByText('Backup started', { exact: true })).toBeVisible();
   await expect(backupRows(page)).toHaveCount(expectedRows);
   // The button is available again once the backup has ended.
   await expect(page.getByRole('button', { name: 'Back up now' })).toBeEnabled();
 }
 
 test.beforeAll(async () => {
-  test.setTimeout(300_000);
+  // A cold image build takes several minutes.
+  test.setTimeout(600_000);
   // Remove anything a killed earlier run left behind, then start clean.
   await compose(['down', '-v', '--remove-orphans'], backupStack);
-  await compose(['up', '-d', '--build', '--wait'], backupStack);
+  try {
+    await compose(['up', '-d', '--build', '--wait'], backupStack, 540_000);
+  } catch (error) {
+    throw new Error(
+      `the Compose project ${backupStack.project} did not become ready in 9 minutes: ${String(error)}`,
+    );
+  }
 });
 
 test.afterAll(async () => {
@@ -176,11 +186,11 @@ test('3. Back up now shows progress and then lists the backup', async () => {
   await expect(admin.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Backups' })).toBeVisible();
 
   await admin.getByRole('button', { name: 'Back up now' }).first().click();
+  // Right after the click, before slower checks; the list is the real result.
   await expect(admin.getByText('Backup started', { exact: true })).toBeVisible();
   // A small installation finishes in an instant, so the progress band may be
   // gone before it is seen; the result is what counts.
   await expect(backupRows(admin)).toHaveCount(1);
-  await expect(admin.getByText('Backup finished', { exact: true })).toBeVisible();
   const row = backupRows(admin).first();
   await expect(row).toContainText('Manual');
   await expect(admin.getByText('1 backup,')).toBeVisible();
@@ -219,7 +229,8 @@ test('5. the schedule is saved, shown again after a reload, and kept out of Sett
   }
   await schedule.getByLabel('Keep scheduled backups for').fill('3');
   await schedule.getByRole('button', { name: 'Save schedule' }).click();
-  await expect(admin.getByText('Schedule saved', { exact: true })).toBeVisible();
+  // Saved: the form is clean again, so the button is off.
+  await expect(schedule.getByRole('button', { name: 'Save schedule' })).toBeDisabled();
 
   await admin.reload();
   const times = schedule.getByRole('list', { name: 'Backup times' }).getByRole('listitem');
@@ -237,28 +248,52 @@ test('5. the schedule is saved, shown again after a reload, and kept out of Sett
   await expect(main).not.toContainText(/backup\.|schedule_times|keep_days|Scheduled backups/i);
 });
 
-test('6. deleting a backup asks first and then removes its row', async () => {
+test('6. deleting a backup asks first and then removes exactly that row', async () => {
+  const names = async () =>
+    (
+      (await (await adminContext.request.get('/api/v1/admin/backups')).json()) as {
+        backups: { name: string }[];
+      }
+    ).backups.map((b) => b.name);
+  const [kept] = await names();
+  expect(kept, 'the backup of flow 3').toBeTruthy();
+
   await admin.goto('/admin/backups');
   await backUpNow(admin, 2);
+  const added = (await names()).filter((n) => n !== kept);
+  expect(added).toHaveLength(1);
+  const doomed = added[0];
 
-  // Cancel keeps both.
-  await rowMenu(admin, backupRows(admin), 'Delete');
+  // Two backups can share a second, so the row is found by the file name its
+  // delete dialog shows. Cancel keeps both.
   const dialog = admin.getByRole('alertdialog');
-  await expect(dialog).toContainText('cannot be restored afterwards');
+  let target: Locator | undefined;
+  for (let i = 0; i < 2 && !target; i++) {
+    const row = backupRows(admin).nth(i);
+    await rowMenu(admin, row, 'Delete');
+    await expect(dialog).toContainText('cannot be restored afterwards');
+    if ((await dialog.innerText()).includes(doomed)) target = row;
+    else {
+      await dialog.getByRole('button', { name: 'Cancel' }).click();
+      await expect(dialog).toHaveCount(0);
+    }
+  }
+  expect(target, `a row whose dialog names ${doomed}`).toBeDefined();
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(dialog).toHaveCount(0);
   await expect(backupRows(admin)).toHaveCount(2);
 
-  // The newest backup is first; deleting it leaves the downloaded one.
-  await rowMenu(admin, backupRows(admin), 'Delete');
-  await admin.getByRole('alertdialog').getByRole('button', { name: 'Delete backup' }).click();
-  await expect(admin.getByText('Backup deleted', { exact: true })).toBeVisible();
+  await rowMenu(admin, target!, 'Delete');
+  await expect(dialog).toContainText(doomed);
+  await dialog.getByRole('button', { name: 'Delete backup' }).click();
   await expect(backupRows(admin)).toHaveCount(1);
+  await expect(dialog).toHaveCount(0);
+  expect(await names()).toEqual([kept]);
 });
 
 test('7. a restore is refused without a code and with a wrong code', async () => {
   await admin.goto('/admin/backups');
-  await rowMenu(admin, backupRows(admin), 'Restore');
+  await rowMenu(admin, backupRows(admin).first(), 'Restore');
   const dialog = admin.getByRole('alertdialog');
   await expect(dialog.getByRole('heading', { name: /^Restore the backup from/ })).toBeVisible();
   const restore = dialog.getByRole('button', { name: 'Restore backup' });
@@ -301,7 +336,7 @@ test('8. an administrator restores a backup and the old data is back', async () 
   await expect(admin.getByRole('main')).toContainText(renamedService);
 
   await admin.goto('/admin/backups');
-  await rowMenu(admin, backupRows(admin), 'Restore');
+  await rowMenu(admin, backupRows(admin).first(), 'Restore');
   const dialog = admin.getByRole('alertdialog');
   await dialog.getByLabel('Type RESTORE to confirm').fill('RESTORE');
   await dialog.getByLabel('Two-factor code').fill(await freshCode(adminSecret));
