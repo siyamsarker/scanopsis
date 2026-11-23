@@ -1700,7 +1700,7 @@ Type: object
 | `kind` | [BackupKind](#backupkind) | no |  |
 | `message` | string | no | What happens or went wrong, in a sentence. |
 | `name` | string | no | For a backup, the new file once written; for a restore, the backup being restored. |
-| `percent` | integer (minimum 0, maximum 100) | yes | How far the job has come, counted in bytes: for a backup, the table data written against an estimate from the size of each table; for a restore, the file read by the check (the first 10%) and by the load. 100 only once the job is done. |
+| `percent` | integer (minimum 0, maximum 100) | yes | How far the job has come, counted in bytes: for a backup, the table data written against an estimate from the size of each table; for a restore, one scale for the whole job that only moves forward: the file read by the check (0 to 10%), the backup of the current data when it is taken (10 to 40%), and the file read by the load (the rest). 100 only once the job is done. |
 | `progress` | [JobProgress](#jobprogress) | yes |  |
 | `started_at` | string or null (date-time) | yes |  |
 | `state` | string (one of `idle`, `backing_up`, `restoring`, `done`, `failed`) | yes |  |

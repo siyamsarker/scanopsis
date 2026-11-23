@@ -1881,7 +1881,7 @@ export interface components {
             /** @description For a backup, the new file once written; for a restore, the backup being restored. */
             name?: string;
             progress: components["schemas"]["JobProgress"];
-            /** @description How far the job has come, counted in bytes: for a backup, the table data written against an estimate from the size of each table; for a restore, the file read by the check (the first 10%) and by the load. 100 only once the job is done. */
+            /** @description How far the job has come, counted in bytes: for a backup, the table data written against an estimate from the size of each table; for a restore, one scale for the whole job that only moves forward: the file read by the check (0 to 10%), the backup of the current data when it is taken (10 to 40%), and the file read by the load (the rest). 100 only once the job is done. */
             percent: number;
             /** @description What happens or went wrong, in a sentence. */
             message?: string;

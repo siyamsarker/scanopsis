@@ -181,6 +181,9 @@ type Service struct {
 	lockFn func(ctx context.Context, exclusive bool) (func(), error)
 	// verifyFile checks the whole backup file at path; tests replace it.
 	verifyFile func(ctx context.Context, path string) error
+	// onProgress, if not nil, is called after every progress report; tests
+	// set it.
+	onProgress func()
 	// expiring, if not nil, is called with the names expiry is about to
 	// delete.
 	expiring func(names []string)
@@ -563,7 +566,12 @@ func (s *Service) finish(fn func(*JobStatus)) {
 	s.jobs.Done()
 }
 
-func (s *Service) setProgress(p Progress) { s.progress.Store(&p) }
+func (s *Service) setProgress(p Progress) {
+	s.progress.Store(&p)
+	if s.onProgress != nil {
+		s.onProgress()
+	}
+}
 
 // usable reports why no job can run, or nil.
 func (s *Service) usable() error {
@@ -608,7 +616,7 @@ func (s *Service) backupJob(kind Kind, actor string, then func(context.Context))
 			return err
 		}
 		defer release()
-		if info, err = s.takeBackup(ctx, kind, actor); err != nil {
+		if info, err = s.takeBackup(ctx, kind, actor, s.setProgress); err != nil {
 			return err
 		}
 		if then != nil {
@@ -655,8 +663,8 @@ func (s *Service) stopped(err error) error {
 
 // takeBackup writes a backup under the job lock and audits it. The caller
 // records a failure.
-func (s *Service) takeBackup(ctx context.Context, kind Kind, actor string) (Info, error) {
-	info, err := s.dump(ctx, kind, actor, s.setProgress)
+func (s *Service) takeBackup(ctx context.Context, kind Kind, actor string, progress func(Progress)) (Info, error) {
+	info, err := s.dump(ctx, kind, actor, progress)
 	if err != nil {
 		return Info{}, err
 	}
@@ -897,6 +905,9 @@ func (s *Service) check(path string) (Kind, error) {
 func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSafety, keepHostSettings bool) {
 	ctx := s.ctx
 	var safety string
+	// safetyTaken tells the progress of the load, reported on a goroutine
+	// of the database driver, that the backup of the current data ran.
+	var safetyTaken atomic.Bool
 	before, _ := os.Stat(path)
 	// committed is set once the restore transaction has committed, or may
 	// have: from then on the database may hold the backup's data, whatever
@@ -918,7 +929,8 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 		}()
 		err = s.restore(ctx, s.o.Pool, path, RestoreOptions{
 			KeepHostSettings: keepHostSettings, Actor: actor, KeyFingerprint: s.o.KeyFingerprint,
-			SigningKey: s.o.Dumper.SigningKey, Progress: s.setProgress,
+			SigningKey: s.o.Dumper.SigningKey,
+			Progress:   func(p Progress) { s.setProgress(restoreJobWork(p, safetyTaken.Load())) },
 			// The whole file was checked first: the backup of the current
 			// data comes right before the replacement, so that little can
 			// change in between, and a damaged file costs no backup.
@@ -929,7 +941,8 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 				s.update(func(st *JobStatus) {
 					st.State, st.Kind, st.Message = JobBackingUp, KindBeforeRestore, "Backing up the current data before the restore."
 				})
-				info, err := s.takeBackup(ctx, KindBeforeRestore, actor)
+				// The bar goes on from the check: one scale for the job.
+				info, err := s.takeBackup(ctx, KindBeforeRestore, actor, func(p Progress) { s.setProgress(safetyWork(p)) })
 				if err = s.stopped(err); err != nil {
 					s.failed(ctx, KindBeforeRestore, actor, err)
 					if errors.Is(err, errStopped) {
@@ -938,9 +951,10 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 					return &publicError{msg: "The backup of the current data failed, so nothing was restored. " + message(err), err: err}
 				}
 				safety = info.Name
-				s.progress.Store(nil)
+				safetyTaken.Store(true)
+				s.setProgress(safetyWork(Progress{work: 1, workTotal: 1}))
 				s.update(func(st *JobStatus) {
-					st.State, st.Kind, st.Progress, st.Message = JobRestoring, kind, Progress{}, "Restoring the backup."
+					st.State, st.Kind, st.Message = JobRestoring, kind, "Restoring the backup."
 				})
 				return nil
 			},

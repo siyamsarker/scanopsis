@@ -1169,3 +1169,37 @@ func TestServiceRestoreRefusalSaysWhatToDo(t *testing.T) {
 		t.Errorf("audit = %+v", f)
 	}
 }
+
+// The bar of a restore moves forward only, through the check of the file,
+// the backup of the current data and the load.
+func TestServiceRestoreProgressMovesForward(t *testing.T) {
+	e := newSvcEnv(t, nil)
+	seedAll(t, e.pool)
+	name := e.backup(t)
+	var mu sync.Mutex
+	var percents []int
+	e.svc.onProgress = func() {
+		p := e.svc.Status().Percent
+		mu.Lock()
+		percents = append(percents, p)
+		mu.Unlock()
+	}
+	if _, err := e.svc.StartRestore(name, "local:alice", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.wait(t); st.State != JobDone {
+		t.Fatalf("status = %+v", st)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	last := 0
+	for i, p := range percents {
+		if p < last {
+			t.Fatalf("step %d: %d%% after %d%% (%v)", i, p, last, percents)
+		}
+		last = p
+	}
+	if len(percents) == 0 || last < 90 {
+		t.Errorf("percents = %v, want them to reach about 99", percents)
+	}
+}

@@ -98,3 +98,55 @@ func restoreWork(p Progress, read, size int64, loading bool) Progress {
 	}
 	return p
 }
+
+// jobScale is the work of a whole restore job, so its bar runs once from 0
+// to 100 through all its parts.
+const jobScale = 1_000_000
+
+// safetyShare is where the backup of the current data before a restore
+// ends, in percent: it runs from restoreCheckShare to here, and the load of
+// the backup takes the rest.
+const safetyShare = 40
+
+// fraction is how far p has come, from 0 to 1: by work when it is known,
+// else by tables.
+func (p Progress) fraction() float64 {
+	switch {
+	case p.workTotal > 0:
+		return min(max(float64(p.work)/float64(p.workTotal), 0), 1)
+	case p.TablesTotal > 0:
+		return min(max(float64(p.TablesDone)/float64(p.TablesTotal), 0), 1)
+	}
+	return 0
+}
+
+// span puts the fraction f into the part of the job scale from lo to hi
+// percent.
+func span(p Progress, f float64, lo, hi int64) Progress {
+	p.work = lo*jobScale/100 + int64(f*float64((hi-lo)*jobScale/100))
+	p.workTotal = jobScale
+	return p
+}
+
+// restoreJobWork puts the progress p of Restore (see restoreWork) onto the
+// scale of the whole restore job: the check of the file keeps the first
+// restoreCheckShare percent; the load takes the rest, or what is left
+// after the backup of the current data when one was taken (safety).
+func restoreJobWork(p Progress, safety bool) Progress {
+	f := p.fraction()
+	check := float64(restoreCheckShare) / 100
+	if f < check {
+		return span(p, f/check, 0, restoreCheckShare)
+	}
+	from := int64(restoreCheckShare)
+	if safety {
+		from = safetyShare
+	}
+	return span(p, (f-check)/(1-check), from, 100)
+}
+
+// safetyWork puts the progress p of the backup of the current data before
+// a restore onto the scale of the whole restore job.
+func safetyWork(p Progress) Progress {
+	return span(p, p.fraction(), restoreCheckShare, safetyShare)
+}

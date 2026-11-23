@@ -88,3 +88,26 @@ func TestRestoreWork(t *testing.T) {
 		}
 	}
 }
+
+func TestRestoreJobWork(t *testing.T) {
+	at := func(p Progress) int { return p.percent() }
+	check := func(read int64) Progress { return restoreWork(Progress{}, read, 1000, false) }
+	load := func(read int64) Progress { return restoreWork(Progress{}, read, 1000, true) }
+	dump := func(work int64) Progress { return Progress{work: work, workTotal: 100} }
+	// With the backup of the current data: check 0-10, backup 10-40, load 40-99.
+	steps := []int{
+		at(restoreJobWork(check(500), false)), at(restoreJobWork(check(1000), false)),
+		at(safetyWork(dump(0))), at(safetyWork(dump(50))), at(safetyWork(dump(100))),
+		at(restoreJobWork(load(0), true)), at(restoreJobWork(load(500), true)), at(restoreJobWork(load(1000), true)),
+	}
+	want := []int{5, 10, 10, 25, 40, 40, 70, 99}
+	for i := range want {
+		if steps[i] != want[i] {
+			t.Fatalf("percents = %v, want %v", steps, want)
+		}
+	}
+	// Without it, the load takes 10-99.
+	if got := at(restoreJobWork(load(500), false)); got != 55 {
+		t.Errorf("halfway through the load without the backup: %d%%, want 55", got)
+	}
+}
