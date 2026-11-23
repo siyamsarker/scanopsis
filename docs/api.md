@@ -84,7 +84,7 @@ Responses:
 | 400 | Invalid file name or size (code invalid_request). | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
-| 409 | Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished. | `application/json` [Error](#error) |
+| 409 | Two uploads are open already and none can make room yet (code too_many_uploads); the message says where to cancel one (the uploads field of the backup list) and when one can make room: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished. | `application/json` [Error](#error) |
 | 503 | The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring). | `application/json` [Error](#error) |
 | 507 | Not enough free space (code no_space; the message gives the numbers). | `application/json` [Error](#error) |
 
@@ -1630,6 +1630,7 @@ Type: object
 | `folder` | object | yes |  |
 | `job` | [JobStatus](#jobstatus) | yes |  |
 | `schedule` | [ScheduleStatus](#schedulestatus) | yes |  |
+| `uploads` | array of [OpenUpload](#openupload) | yes | The open uploads of the admin panel, the oldest first. Cancel one with DELETE /api/v1/admin/backup-uploads/{id}. |
 
 Properties of `disk`:
 
@@ -1749,6 +1750,21 @@ Type: [User](#user) + object
 | `role` | [Role](#role) | yes |  |
 | `source` | string (one of `gitlab`, `local`) | yes |  |
 | `username` | string | yes |  |
+
+### OpenUpload
+
+An upload of the admin panel that is open, for example one whose page was closed during the upload.
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `file_name` | string | yes |  |
+| `id` | string | yes |  |
+| `received` | integer (int64) | yes | Bytes stored so far. |
+| `size` | integer (int64) | yes |  |
+| `state` | string (one of `uploading`, `checking`) | yes | uploading while parts are sent, checking while the server checks the complete file. |
+| `updated_at` | string (date-time) | yes | When the last part arrived |
 
 ### Overview
 

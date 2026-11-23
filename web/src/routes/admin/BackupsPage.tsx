@@ -17,6 +17,7 @@ import { BackupProgress } from './backups/BackupProgress';
 import { asSentence, folderProblem, isRunning } from './backups/model';
 import { Notice, ScheduleFailedNotice } from './backups/notices';
 import { ScheduleForm } from './backups/ScheduleForm';
+import { UnfinishedUploads } from './backups/UnfinishedUploads';
 import { UploadBackup } from './backups/UploadBackup';
 
 /** Toasts for a backup this page saw running when it ends. */
@@ -63,7 +64,7 @@ function BackupsBody({ onBackUp, canBackUp }: { onBackUp: () => void; canBackUp:
     );
   }
 
-  const { backups: items, job, schedule, disk, folder } = backups.data;
+  const { backups: items, job, schedule, disk, folder, uploads } = backups.data;
   const running = isRunning(job);
   // A failed scheduled backup has its own notice; every other failed job, restores too, gets this one.
   const lastFailed =
@@ -91,6 +92,7 @@ function BackupsBody({ onBackUp, canBackUp }: { onBackUp: () => void; canBackUp:
         </Notice>
       ) : null}
       {running ? <BackupProgress job={job} /> : null}
+      <UnfinishedUploads uploads={uploads ?? []} />
 
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <section aria-labelledby={headingId} className="min-w-0">

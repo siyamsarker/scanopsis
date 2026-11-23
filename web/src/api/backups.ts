@@ -14,6 +14,7 @@ export type JobStatus = components['schemas']['JobStatus'];
 export type RestorePreview = components['schemas']['RestorePreview'];
 export type RestoreStatus = components['schemas']['RestoreStatus'];
 export type ScheduleStatus = components['schemas']['ScheduleStatus'];
+export type OpenUpload = components['schemas']['OpenUpload'];
 
 export const backupsKey = ['admin', 'backups'] as const;
 
@@ -147,4 +148,15 @@ export const adminUploadEndpoints: UploadEndpoints<BackupInfo> = restUploadEndpo
 /** The public restore status; answered while every other request is turned away. */
 export async function fetchRestoreStatus(signal?: AbortSignal): Promise<RestoreStatus> {
   return unwrap(await api.GET('/api/v1/restore/status', { signal }));
+}
+
+/** Cancels an open upload of the admin panel, such as one left behind by a closed page. */
+export function useCancelUpload() {
+  const queryClient = useQueryClient();
+  return useMutation<void, ApiError, string>({
+    mutationFn: async (id) => {
+      unwrap(await api.DELETE('/api/v1/admin/backup-uploads/{id}', { params: { path: { id } } }));
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: backupsKey }),
+  });
 }

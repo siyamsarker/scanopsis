@@ -455,6 +455,27 @@ describe('uploadInChunks', () => {
     expect(server.endpoints.complete).toHaveBeenCalledTimes(2);
     expect(server.endpoints.put).toHaveBeenCalledTimes(1);
   });
+
+  it('says Scanopsis restarted when the upload is gone while it is checked', async () => {
+    const server = fakeServer(4);
+    vi.mocked(server.endpoints.status).mockImplementationOnce(async () => {
+      // A restart forgets the uploads it held in memory.
+      throw new ApiError(404, 'not_found', 'No upload with this id is in progress.');
+    });
+    const error = await uploadInChunks(
+      file('abcd'),
+      server.endpoints,
+      () => {},
+      new AbortController().signal,
+      fast,
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ status: 404 });
+    expect((error as Error).message).toBe(
+      'Scanopsis restarted while the file was being checked. Upload it again.',
+    );
+    expect(server.endpoints.cancel).not.toHaveBeenCalled();
+  });
 });
 
 describe('followUpload', () => {

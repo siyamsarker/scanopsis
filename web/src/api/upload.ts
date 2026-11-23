@@ -91,6 +91,9 @@ export class UploadInterruptedError extends Error {
  */
 export const PAGE_LEFT = 'page-left';
 
+/** Why an upload is gone while the server checked it: the server forgot it in a restart. */
+export const UPLOAD_LOST = 'Scanopsis restarted while the file was being checked. Upload it again.';
+
 const RETRY_DELAYS_MS = [1000, 3000, 9000];
 export const BUSY_DELAY_MS = 2000;
 /** How often the server is asked about a file it checks, and the first time. */
@@ -212,6 +215,10 @@ async function awaitCheck<R>(
       failures = 0;
     } catch (err) {
       if (signal.aborted) throw abortError();
+      if (err instanceof ApiError && err.status === 404) {
+        // The server keeps uploads in memory: a restart forgot this one.
+        throw new ApiError(404, err.code, UPLOAD_LOST);
+      }
       if (!isTransient(err)) throw err;
       failures += 1;
       if (failures > delays.length) throw new UploadInterruptedError(id, size, size);

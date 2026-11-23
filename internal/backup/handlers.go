@@ -337,12 +337,14 @@ type listJSON struct {
 	Schedule ScheduleStatus `json:"schedule"`
 	Disk     diskJSON       `json:"disk"`
 	Folder   folderJSON     `json:"folder"`
+	Uploads  []OpenUpload   `json:"uploads"`
 }
 
 func (a *API) list(w http.ResponseWriter, _ *http.Request) {
 	out := listJSON{
 		Backups: []Info{}, Job: a.svc.Status(), Schedule: a.svc.Schedule(),
-		Folder: folderJSON{Path: a.o.FolderPath, OK: true},
+		Folder:  folderJSON{Path: a.o.FolderPath, OK: true},
+		Uploads: a.up.openOf(scopeAdmin, a.o.Now()),
 	}
 	fail := func(err error) {
 		out.Folder.OK = false

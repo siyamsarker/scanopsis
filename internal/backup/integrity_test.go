@@ -6,6 +6,8 @@ package backup
 import (
 	"context"
 	"net/http"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -92,5 +94,51 @@ func TestCheckedFilesAreNotReadAgain(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if n := reads.Load(); n != 0 {
 		t.Errorf("the uploaded backup was read %d times for the list", n)
+	}
+}
+
+// The list shows the open uploads of the admin panel, so an administrator
+// can cancel one that was left behind, and the refusal of a third upload
+// says so.
+func TestListShowsOpenUploads(t *testing.T) {
+	now := time.Date(2026, 11, 23, 10, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	e := newAPIEnv(t, func(o *APIOptions) {
+		o.Now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	})
+	a := e.startUpload("left-behind.tar.gz", 100)
+	e.send(a, make([]byte, 40), 0, 40)
+	mu.Lock()
+	now = now.Add(3 * time.Minute)
+	mu.Unlock()
+	b := e.startUpload("other-tab.tar.gz", 100)
+	if r := e.call("POST", "/api/v1/setup/restore/uploads", "", map[string]any{"token": "setup-token", "file_name": "setup.tar.gz", "size": 100}); r.status != http.StatusCreated {
+		t.Fatalf("setup upload = %d %s", r.status, r.body)
+	}
+
+	r := e.call("GET", "/api/v1/admin/backups", "admin", nil)
+	ups, _ := r.json(t)["uploads"].([]any)
+	if len(ups) != 2 {
+		t.Fatalf("uploads = %v, want the two of the admin panel", ups)
+	}
+	first, _ := ups[0].(map[string]any)
+	second, _ := ups[1].(map[string]any)
+	if first["id"] != a || first["file_name"] != "left-behind.tar.gz" || first["received"] != float64(40) ||
+		first["size"] != float64(100) || first["state"] != "uploading" || first["updated_at"] != "2026-11-23T10:00:00Z" {
+		t.Errorf("first upload = %v", first)
+	}
+	if second["id"] != b {
+		t.Errorf("second upload = %v, want the newer one second", second)
+	}
+
+	r = e.call("POST", adminUploads, "admin", map[string]any{"file_name": "c.tar.gz", "size": 100})
+	if r.status != http.StatusConflict || !strings.Contains(r.errorMessage(t), "Unfinished uploads on the Backups page") {
+		t.Errorf("third upload = %d %s", r.status, r.body)
+	}
+	if r := e.call("DELETE", adminUploads+"/"+a, "admin", nil); r.status != http.StatusNoContent {
+		t.Fatalf("cancel = %d %s", r.status, r.body)
+	}
+	if r := e.call("GET", "/api/v1/admin/backups", "admin", nil); len(r.json(t)["uploads"].([]any)) != 1 {
+		t.Errorf("uploads after cancelling one = %s", r.body)
 	}
 }

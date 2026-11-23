@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -65,8 +67,12 @@ var (
 
 // tooManyUploadsError is errTooManyUploads with the time until a new
 // upload can take the place of an idle one; wait is 0 when every open
-// upload is being checked.
-type tooManyUploadsError struct{ wait time.Duration }
+// upload is being checked. The admin panel lists the open uploads, so its
+// message says where to cancel one.
+type tooManyUploadsError struct {
+	wait  time.Duration
+	scope uploadScope
+}
 
 func (e *tooManyUploadsError) Error() string {
 	if e.wait <= 0 {
@@ -77,8 +83,12 @@ func (e *tooManyUploadsError) Error() string {
 	if minutes == 1 {
 		unit = "minute"
 	}
-	return fmt.Sprintf("%v, or try again in %d %s: an upload that receives nothing for %d minutes then makes room for a new one",
-		errTooManyUploads, minutes, unit, int(uploadReplaceIdle/time.Minute))
+	if e.scope == scopeAdmin {
+		return fmt.Sprintf("two uploads are already in progress, for example from a page that was closed during an upload. Cancel one under Unfinished uploads on the Backups page, or try again in %d %s: an upload that receives nothing for %d minutes then makes room for a new one",
+			minutes, unit, int(uploadReplaceIdle/time.Minute))
+	}
+	return fmt.Sprintf("two uploads are already in progress, for example from a page that was closed during an upload. Try again in %d %s: an upload that receives nothing for %d minutes then makes room for a new one",
+		minutes, unit, int(uploadReplaceIdle/time.Minute))
 }
 
 func (e *tooManyUploadsError) Is(target error) bool { return target == errTooManyUploads }
@@ -108,6 +118,7 @@ type upload struct {
 	received int64
 	path     string
 	busy     bool
+	started  time.Time
 	touched  time.Time
 
 	state UploadState
@@ -215,10 +226,10 @@ func (u *uploads) makeRoomLocked(scope uploadScope, now time.Time) error {
 		return nil
 	}
 	if oldest == nil {
-		return &tooManyUploadsError{}
+		return &tooManyUploadsError{scope: scope}
 	}
 	if idle := now.Sub(oldest.touched); idle <= uploadReplaceIdle {
-		return &tooManyUploadsError{wait: uploadReplaceIdle - idle}
+		return &tooManyUploadsError{wait: uploadReplaceIdle - idle, scope: scope}
 	}
 	_ = os.Remove(oldest.path) //nolint:gosec // the name is a random id
 	delete(u.open, oldest.id)
@@ -269,9 +280,48 @@ func (u *uploads) start(dir *Dir, scope uploadScope, fileName string, size int64
 	if u.open == nil {
 		u.open = map[string]*upload{}
 	}
-	up := &upload{id: id, scope: scope, fileName: fileName, size: size, path: path, touched: now, state: UploadUploading}
+	up := &upload{id: id, scope: scope, fileName: fileName, size: size, path: path, started: now, touched: now, state: UploadUploading}
 	u.open[id] = up
 	return up.status(), nil
+}
+
+// OpenUpload describes an upload that is open: parts are being received,
+// or the complete file is being checked. UpdatedAt is when the last part
+// arrived, or when the check started.
+type OpenUpload struct {
+	ID        string      `json:"id"`
+	FileName  string      `json:"file_name"`
+	Size      int64       `json:"size"`
+	Received  int64       `json:"received"`
+	State     UploadState `json:"state"`
+	UpdatedAt time.Time   `json:"updated_at"`
+}
+
+// openOf returns the open uploads of scope, the oldest first.
+func (u *uploads) openOf(scope uploadScope, now time.Time) []OpenUpload {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.expireLocked(now)
+	var ups []*upload
+	for _, up := range u.open {
+		if up.scope == scope {
+			ups = append(ups, up)
+		}
+	}
+	slices.SortFunc(ups, func(a, b *upload) int {
+		if c := a.started.Compare(b.started); c != 0 {
+			return c
+		}
+		return strings.Compare(a.id, b.id)
+	})
+	out := make([]OpenUpload, 0, len(ups))
+	for _, up := range ups {
+		out = append(out, OpenUpload{
+			ID: up.id, FileName: up.fileName, Size: up.size, Received: up.received,
+			State: up.state, UpdatedAt: up.touched.UTC(),
+		})
+	}
+	return out
 }
 
 // lookupLocked returns the open upload id of scope. The caller holds mu.

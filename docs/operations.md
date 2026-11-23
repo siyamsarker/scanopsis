@@ -581,7 +581,9 @@ file at a time; the dialog says **Checking the backup** until it is done. A
 file from another secret key, from a newer version of Scanopsis or a damaged
 file is refused with the reason. **Cancel upload** also stops a check. At most
 two uploads can be open at once; an upload that receives nothing for 10
-minutes makes room for a new one.
+minutes makes room for a new one. Uploads that were started but not finished,
+for example because the page was closed, are listed under **Unfinished
+uploads** on the Backups page, where **Cancel upload** frees them.
 
 Backups that Scanopsis cannot read are listed as **Cannot be read**; you can
 download and delete them, not restore them. A file that appears in the folder

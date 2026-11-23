@@ -1904,6 +1904,28 @@ export interface components {
             /** @description The backup schedule is on now. */
             enabled: boolean;
         };
+        /** @description An upload of the admin panel that is open, for example one whose page was closed during the upload. */
+        OpenUpload: {
+            id: string;
+            file_name: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: int64
+             * @description Bytes stored so far.
+             */
+            received: number;
+            /**
+             * @description uploading while parts are sent, checking while the server checks the complete file.
+             * @enum {string}
+             */
+            state: "uploading" | "checking";
+            /**
+             * Format: date-time
+             * @description When the last part arrived
+             */
+            updated_at: string;
+        };
         BackupList: {
             /** @description Newest first. */
             backups: components["schemas"]["BackupInfo"][];
@@ -1927,6 +1949,8 @@ export interface components {
                 /** @description Why the folder cannot be used and how to fix it. */
                 error?: string;
             };
+            /** @description The open uploads of the admin panel, the oldest first. Cancel one with DELETE /api/v1/admin/backup-uploads/{id}. */
+            uploads: components["schemas"]["OpenUpload"][];
         };
         RestorePreview: {
             info: components["schemas"]["BackupInfo"];
@@ -4335,7 +4359,7 @@ export interface operations {
             };
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
-            /** @description Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished. */
+            /** @description Two uploads are open already and none can make room yet (code too_many_uploads); the message says where to cancel one (the uploads field of the backup list) and when one can make room: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished. */
             409: {
                 headers: {
                     [name: string]: unknown;

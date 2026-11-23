@@ -83,6 +83,7 @@ function list(overrides: Partial<BackupList> = {}): BackupList {
     },
     disk: { free_bytes: 12.5 * 1024 ** 3, used_bytes: 20 * 1024 * 1024 },
     folder: { path: '/var/lib/scanopsis/backups', ok: true },
+    uploads: [],
     ...overrides,
   };
 }
@@ -371,6 +372,55 @@ describe('backups page', () => {
       'aria-disabled',
     );
     expect(menu).toHaveTextContent('Only a readable backup can be restored.');
+  });
+
+  it('lists unfinished uploads and cancels one', async () => {
+    const minute = 60 * 1000;
+    const { calls } = mockFetch(
+      api((call) => {
+        if (call.path === '/api/v1/admin/backup-uploads/u1' && call.method === 'DELETE') {
+          return noContent();
+        }
+        return call.path === '/api/v1/admin/backups'
+          ? json(
+              200,
+              list({
+                uploads: [
+                  {
+                    id: 'u1',
+                    file_name: 'left-behind.tar.gz',
+                    size: 100 * 1024 * 1024,
+                    received: 40 * 1024 * 1024,
+                    state: 'uploading',
+                    updated_at: new Date(Date.now() - 12 * minute).toISOString(),
+                  },
+                  {
+                    id: 'u2',
+                    file_name: 'being-checked.tar.gz',
+                    size: 1024,
+                    received: 1024,
+                    state: 'checking',
+                    updated_at: new Date(Date.now() - 2 * minute).toISOString(),
+                  },
+                ],
+              }),
+            )
+          : undefined;
+      }),
+    );
+    renderApp('/admin/backups');
+    const region = await screen.findByRole('region', { name: 'Unfinished uploads' });
+    expect(region).toHaveTextContent('left-behind.tar.gz');
+    expect(region).toHaveTextContent('40.0 MiB of 100.0 MiB received, last part 12 minutes ago');
+    expect(region).toHaveTextContent('being-checked.tar.gz');
+    expect(region).toHaveTextContent('Being checked, since 2 minutes ago');
+    fireEvent.click(
+      within(region).getByRole('button', { name: 'Cancel the upload of left-behind.tar.gz' }),
+    );
+    expect(await screen.findByText('Upload cancelled')).toBeInTheDocument();
+    expect(
+      calls.some((c) => c.method === 'DELETE' && c.path === '/api/v1/admin/backup-uploads/u1'),
+    ).toBe(true);
   });
 
   it('reports a failed restore of a scheduled backup', async () => {

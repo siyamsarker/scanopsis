@@ -1002,7 +1002,7 @@ paths:
         "400": { description: Invalid file name or size (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "409": { description: "Two uploads are open already and none can make room yet (code too_many_uploads); the message says when one can: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "Two uploads are open already and none can make room yet (code too_many_uploads); the message says where to cancel one (the uploads field of the backup list) and when one can make room: an upload that receives nothing for 10 minutes makes room, one being checked when its check has finished.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "503": { description: "The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "507": { description: Not enough free space (code no_space; the message gives the numbers)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   /api/v1/admin/backup-uploads/{id}:
@@ -2024,9 +2024,20 @@ components:
         error: { type: string, description: Why the last scheduled backup failed; empty after a success. }
         dismissed: { type: boolean, description: An administrator dismissed the failure of the last scheduled backup; the next scheduled run sets it back to false. }
         enabled: { type: boolean, description: The backup schedule is on now. }
+    OpenUpload:
+      type: object
+      description: An upload of the admin panel that is open, for example one whose page was closed during the upload.
+      required: [id, file_name, size, received, state, updated_at]
+      properties:
+        id: { type: string }
+        file_name: { type: string }
+        size: { type: integer, format: int64 }
+        received: { type: integer, format: int64, description: Bytes stored so far. }
+        state: { type: string, enum: [uploading, checking], description: "uploading while parts are sent, checking while the server checks the complete file." }
+        updated_at: { type: string, format: date-time, description: When the last part arrived, or the check started. }
     BackupList:
       type: object
-      required: [backups, job, schedule, disk, folder]
+      required: [backups, job, schedule, disk, folder, uploads]
       properties:
         backups: { type: array, items: { $ref: "#/components/schemas/BackupInfo" }, description: Newest first. }
         job: { $ref: "#/components/schemas/JobStatus" }
@@ -2044,6 +2055,7 @@ components:
             path: { type: string }
             ok: { type: boolean }
             error: { type: string, description: Why the folder cannot be used and how to fix it. }
+        uploads: { type: array, items: { $ref: "#/components/schemas/OpenUpload" }, description: "The open uploads of the admin panel, the oldest first. Cancel one with DELETE /api/v1/admin/backup-uploads/{id}." }
     RestorePreview:
       type: object
       required: [info, schema_ok, key_matches, scans_removed_by_retention, oldest_scan_at, retention_days]
