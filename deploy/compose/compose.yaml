@@ -16,6 +16,8 @@
 # plain folders next to this file. No Docker command (`docker compose down -v`,
 # `docker volume prune`, `docker system prune --volumes`) deletes a folder.
 # Create both before the first start (see docs/getting-started.md).
+# ./data/postgres must belong to user 70 (the user the PostgreSQL image runs
+# as) and ./backups to user 65532 (the user Scanopsis runs as).
 #
 # TLS: the port is published on the loopback interface only (set
 # SCANOPSIS_BIND and SCANOPSIS_PORT in .env to change that). Put a reverse

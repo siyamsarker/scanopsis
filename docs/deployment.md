@@ -529,6 +529,36 @@ webhook. Put this above `reverse_proxy` in the site block:
 To hide it, restrict it the same way, for example with
 `allow 10.0.0.0/8; deny all;` in a `location = /api/v1/version` block.
 
+### Let backups pass the proxy
+
+Backups cross the proxy in two ways:
+
+- **Uploads** go in parts of at most 8 MiB, one request each, so the proxy
+  limit `client_max_body_size 100m;` above is plenty. A proxy that limits the
+  body to less than 8 MiB (nginx allows 1 MiB by default) refuses the parts.
+- **Downloads** can be large files. Scanopsis serves them with `Range`
+  support and keeps a slow download going as long as it makes progress. nginx
+  buffers a proxied answer by default, which can fill its temporary folder
+  with a big file when the client is slow. For the download route you can turn
+  that off:
+
+  ```nginx
+  location ~ ^/api/v1/admin/backups/[^/]+/download$ {
+      proxy_pass $upstream;
+      proxy_buffering off;
+  }
+  ```
+
+  `proxy_max_temp_file_size 0;` is the other option: nginx then never writes
+  the answer to disk. A test proxied a 400 MB file through nginx 1.29 to a
+  client limited to 5 MB/s, once with the default settings and once with
+  `proxy_buffering off`. Both downloads were complete, and a `Range` request
+  answered `206`. That test used a plain file server behind nginx, not
+  Scanopsis, and no temporary file showed up. So the settings above
+  are a precaution that you do not need to apply to get a working download.
+  Watch the disk of the proxy during the first large download if you keep the
+  default.
+
 ### Set proxy timeouts
 
 Scanopsis reads a request within 30 seconds and writes the answer within 60.
@@ -651,6 +681,16 @@ Connect directly, or through a pooler in session mode. Scanopsis holds
 session-level advisory locks while it migrates and in background jobs. A
 pooler in transaction mode, such as PgBouncer with `pool_mode = transaction`,
 does not keep them. This follows from the code and was not tested.
+
+Backups and restores need more from the role. A restore drops and creates the
+Scanopsis tables, so the role in `secrets/database_url` must **own every
+Scanopsis table**. Owning the database is enough when Scanopsis created the
+tables. A table owned by another role, even a group role the user belongs to,
+makes a restore refuse with a message naming the table. A restore also
+refuses when another database object, such as a view or foreign key of another
+application, depends on a Scanopsis table. It touches no other table. A
+restore needs room in PostgreSQL for the old and the new data until it
+commits.
 
 ### Step 2. Write the database URL
 
@@ -823,8 +863,9 @@ limits as the Compose file. Create the three secret files first, like in
 in `secrets/database_url`. The names are examples.
 
 ```sh
+# 70 is the user the PostgreSQL image runs as; only it may open the database files.
 docker network create scanopsis-net
-install -d -m 700 data/postgres
+sudo install -d -m 700 -o 70 -g 70 data/postgres
 sudo install -d -m 700 -o 65532 -g 65532 backups
 
 docker run -d --name scanopsis-db --network scanopsis-net \
@@ -1198,7 +1239,10 @@ report and one secret report, and the default retention of 90 days:
 Retention also keeps the latest scans of each dashboard branch and of
 protected branches and tags beyond the period: well under 1 GB for 500
 services. Size the disk for the estimate plus 50% (index growth, write-ahead
-log, vacuum), and the same again for backups. Most pipelines scan less, so
+log, vacuum), and the same again for backups. The stored reports are most of every backup too, and
+scheduled backups are kept for 7 days by default. Figures for how long a backup or
+restore takes and how much memory they use are not measured yet; they will be
+added here. Most pipelines scan less, so
 your real figure is likely lower. The **Integrations** page shows your uploads
 per day. Shorten `retention.days` if you need less history.
 
@@ -1211,14 +1255,21 @@ You deploy a new version by building its image from its version branch, see
 [upgrade to the newest version](versions.md#upgrade-to-the-newest-version) for the
 build steps, and [roll back to the previous version](versions.md#roll-back-to-the-previous-version)
 for the way back. Schema changes run when the new version starts; there is no
-separate migration step. This is a recorded upgrade from 0.1.0 straight to
-0.3.0, the newest version. From 0.2.0 it looks the same, except that the
-schema version is already 10 and stays 10.
+separate migration step. The recorded run below
+upgraded from 0.1.0 straight to 0.3.0. 0.4.0 adds no migration, so an upgrade
+to 0.4.0 ends at the same schema version, 10; the version line in the output
+is the one of that run, and yours shows `v0.4.0` and another commit. From
+0.2.0 it looks the same, except that the schema version is already 10 and
+stays 10. Before an upgrade from a version before 0.4.0, also
+[move the database into a folder](versions.md#move-the-database-into-a-folder).
 
 ### Upgrade
 
-1. **Back up the database** (see [operations](operations.md#back-up-the-database)).
-   It is your only safe way back.
+1. **Back up the database.** From 0.4.0 on, use **Back up now** on the
+   Backups page (see [operations](operations.md#backup-and-restore)). If you
+   run an older version, use `pg_dump`
+   (see [operations](operations.md#back-up-the-database)). Either is your only
+   safe way back. The `pg_dump` command:
 
    ```sh
    (umask 077; docker compose exec -T db pg_dump -U scanopsis -d scanopsis \
@@ -1251,7 +1302,7 @@ schema version is already 10 and stays 10.
    SERVICE     STATUS
    db          Up 24 seconds (healthy)
    scanopsis   Up 10 seconds (healthy)
-   {"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}
+   {"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}   <- recorded with 0.3.0
      10
    ```
 

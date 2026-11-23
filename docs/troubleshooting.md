@@ -249,6 +249,28 @@ for the same project, at least a minute after the last try, up to five times.
 | `429` before the application's limit is reached | A proxy rate limit (`limit_req`) counts everyone behind one address together. | Raise the proxy limit or its `burst`. |
 | Answers are not compressed | No `gzip` (nginx) or `encode` (Caddy), or the client sends no `Accept-Encoding`. | Add it, see [check the proxy](deployment.md#check-the-proxy). |
 
+## Backups and restores
+
+Open the **Backups** page first: it shows the reason in a notice. The same
+words are in the server log and in the audit log. See
+[backup and restore](operations.md#backup-and-restore).
+
+| What you see | Cause | Fix |
+|---|---|---|
+| `the backup folder cannot be used: ... is not writable ...` or `... does not exist ...`; **Back up now** is disabled | The folder `backups` is missing, or the user 65532 that runs Scanopsis cannot write to it. | In `deploy/compose`: `sudo install -d -m 700 -o 65532 -g 65532 backups` (or `sudo chown 65532:65532 backups` for an existing folder), then restart Scanopsis: `docker compose restart scanopsis`. Check that the disk has free space and is not read-only. |
+| `not enough free space for a backup: a backup needs about ... and the backup folder has ... free` | The disk of `backups` has less than the estimated size plus 512 MiB. | Delete old backups on the Backups page, or free or add disk space. For a restore, tick **Skip the backup of the current state** only if you accept that the restore cannot be undone. |
+| `the backup was made with another secret key` | The backup belongs to an installation with another `secrets/secret_key`. | Put the key of the installation that made the backup into `secrets/secret_key`, and restart. On the setup screen, a restart prints a new setup token. |
+| `the backup was made by a newer version of Scanopsis` | You run an older version than the one that made the file. | Install the newer version first, see [versions](versions.md), then restore. |
+| `the backup was not made by this installation's secret key, or it was changed after it was made` | The signature is wrong: the file was changed, damaged in transfer, or made with another key. | Download the backup again from its source. If it is the right file, check the secret key. |
+| `the file is not a Scanopsis backup`, `the file is damaged` | The upload is not a backup, or it is incomplete. | Upload the original file again. |
+| An upload stops halfway | The network dropped. | The page offers **Resume upload**, which continues from the last part the server has. Parts are 8 MiB; a proxy that limits the body to less than that refuses them, see [deployment](deployment.md#reverse-proxy-and-tls). |
+| A restore is refused with `table ... belongs to role ..., not to ...` | With your own PostgreSQL, a Scanopsis table has another owner than the user in `secrets/database_url`. A group role the user belongs to is not enough. | Make that user the owner of every Scanopsis table, see [use an existing PostgreSQL](deployment.md#use-an-existing-postgresql). |
+| A restore is refused with `another database object depends on Scanopsis table ...` | Something else in the database, such as a view or foreign key of another application, uses a Scanopsis table. | Remove it, or restore into a database used only by Scanopsis. |
+| After a restore the page says `The backup was restored, but Scanopsis must restart to finish.` | The data was restored, but a step after it failed. The server stays in restore mode and answers `503 restoring`. | `docker compose restart scanopsis`, then sign in. |
+| `The restore failed and nothing was changed.` | A step before the commit failed; the database is as it was. | Read the server log (`docker compose logs scanopsis`) for the reason, fix it and try again. |
+| Many scans disappeared the day after a restore | The backup was old, and the daily clean-up removed scans older than the retention period. | Raise the retention period on the Settings page right after a restore, before the next daily clean-up. If the clean-up already ran, restore the same backup again and raise the period at once. |
+| A scheduled backup failed (banner) | One of the reasons above, most often the folder or the disk. | Fix it; the next scheduled run tries again, or select **Back up now**. |
+
 ## Containers and the host
 
 | What you see | Cause | Fix |

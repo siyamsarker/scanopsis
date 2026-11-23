@@ -475,23 +475,223 @@ and exit status 1. An unknown ID gives `there is no scan with ID 42`.
 
 ## Backup and restore
 
-Back up two things, and keep them apart:
+Scanopsis makes, keeps, downloads and restores backups itself. Open
+**Backups** in the Admin menu (administrators only). Keep two things, and keep
+them apart:
 
-| What | How | Where to keep it |
+| What | Where it lives | Where to keep a copy |
 |---|---|---|
-| The database | `pg_dump`, below | Your normal backup storage |
-| `secrets/secret_key` | Copy the file | A password manager or vault, not next to the database backups |
+| The backup files | The folder `backups` next to `compose.yaml` (`/var/lib/scanopsis/backups` in the container, set by `SCANOPSIS_BACKUP_DIR`) | Another host or your normal backup storage |
+| `secrets/secret_key` | `deploy/compose/secrets/secret_key` | A password manager or vault, not next to the backup files |
 
-The database holds users, settings, scans and the audit log. Its secrets, such
-as two-factor secrets and the GitLab client secret, are encrypted with the
-secret key, so a restored database works only with the same key. Also keep
-copies of `.env`, `compose.yaml` and the other two secret files, so you can
-rebuild the host.
+A restore works only with the secret key the backup was made with, so a
+backup without its key is of no use. Also keep copies of `.env`,
+`compose.yaml` and the other two secret files, so you can rebuild the host.
 
 A backup holds password hashes and encrypted secrets. Protect it like a
 secret. Take one before every upgrade.
 
-### Back up the database
+### What a backup contains
+
+A backup is one file with everything Scanopsis stores:
+
+- users, roles, two-factor secrets and recovery codes;
+- settings, including the saved secrets in their encrypted form;
+- services, scans and findings, with the original Trivy report of each scan
+  that still has one;
+- SonarQube analyses and deliveries;
+- the audit log.
+
+Sessions are not in it, because a restore signs everyone out anyway. The
+file is signed with a key derived from `secrets/secret_key`, so Scanopsis
+accepts only backups of its own installation.
+
+The file is called, for example,
+`scanopsis-backup-20261123T020000Z-scheduled-ab12cd.tar.gz`: the time in UTC,
+the kind and six random characters (the date and characters here are an
+example). The kinds are:
+
+| Kind | How it was made |
+|---|---|
+| Manual | **Back up now** |
+| Scheduled | The schedule |
+| Uploaded | **Upload a backup**, or a restore on the setup screen |
+| Before restore | Scanopsis saved the current data before a restore |
+
+The folder has mode 700 and belongs to user 65532, the user that runs
+Scanopsis; the files in it have mode 600.
+
+### Back up from the Backups page
+
+Select **Back up now**. The backup runs in the background, so you can leave
+the page; the page shows the table in progress and a bar, and the new file
+appears at the top of the list. The server keeps working during a backup, and
+the backup is a consistent snapshot of the database.
+
+Before it starts, Scanopsis checks the free space of the backup folder: it
+needs the estimated size of the backup plus 512 MiB. If there is less, the
+backup does not start and the message gives both numbers. Free space, or
+[watch the disk](#watch-the-database-disk) before it fills.
+
+### Schedule backups
+
+Scheduled backups are off by default. In the panel **Scheduled backups**:
+
+1. Turn the switch on.
+2. Add one or more times of day (24-hour `HH:MM`, at most 24 a day) and
+   choose the time zone. The default is `02:00` in UTC.
+3. Set how many days to keep scheduled backups, from 1 to 365 (default 7).
+4. Select **Save schedule**.
+
+After a scheduled backup succeeds, Scanopsis deletes the scheduled backups
+older than the keep period. It never deletes the newest scheduled backup, and
+it never deletes manual, uploaded or before-restore backups: those stay until
+you delete them.
+
+If a scheduled backup fails, administrators see a banner with the reason on
+the Backups page and on the portfolio page, and the audit log has the event
+**Backup failed**. The most common reasons are in
+[troubleshooting](troubleshooting.md#backups-and-restores).
+
+A schedule change is saved as a setting, so it appears in the audit log as
+**Settings changed** (`settings.changed`).
+
+### Download, upload and delete a backup
+
+Use the menu of a row to **Download** or **Delete** a backup. A download
+streams the file and resumes if your browser supports it. Copy backups off the
+host: a backup on the same disk does not help when the disk fails. A backup
+file is signed, not encrypted: encrypt copies before they leave the host, with
+a key kept apart from the secret key, as
+[encrypt your backups](#encrypt-your-backups) shows for `pg_dump` files.
+
+**Upload a backup** adds a file you downloaded earlier, for example from
+another installation. The browser sends it in parts of 8 MiB, so a large file
+passes a proxy and an interrupted upload resumes where it stopped. Scanopsis
+then reads the whole file and checks the signature. A file from another
+secret key, from a newer version of Scanopsis or a damaged file is refused
+with the reason.
+
+Backups that Scanopsis cannot read are listed as **Cannot be read**; you can
+delete them, not restore them. A backup made with another secret key shows
+**Made with another secret key** and cannot be restored here.
+
+### Restore a backup
+
+A restore replaces everything in Scanopsis with the backup. Do it in a quiet
+moment. You need an administrator account with two-factor authentication.
+
+1. In the menu of the backup, choose **Restore**. Scanopsis reads the whole
+   file first. The dialog then says that:
+   - everything is replaced by the backup, and everything that changed after
+     its date is lost;
+   - everyone is signed out, including you;
+   - pipeline uploads are turned away while the restore runs, and scans
+     uploaded in that time are not kept.
+2. If the backup holds scans older than the retention period, the dialog also
+   warns that the next daily clean-up removes up to that many scans. To keep
+   them, raise the retention period on the **Settings** page right after the
+   restore (see [data retention](#data-retention)).
+3. Type `RESTORE` (exactly, in capitals) and a current two-factor code, then
+   select **Restore backup**.
+
+Scanopsis first saves the current data as a before-restore backup, so you can
+go back. If the disk has no room for it, tick **Skip the backup of the
+current state** in the dialog. The restore then cannot be undone.
+
+While the restore runs, a full-screen page shows the progress. The API
+answers `503` with the code `restoring` and `Retry-After: 30`, except for
+`/api/v1/version` and `/api/v1/restore/status`; `/healthz`, `/readyz` and the
+web interface keep answering. Pipeline uploads are therefore turned away and
+not kept; the upload script from the
+[GitLab CI guide](integrations/gitlab-ci.md) treats `503` as a reason to
+retry for several minutes and then lets the job pass.
+
+The restore is all or nothing: it runs in one database transaction, so a
+failure leaves the data as it was and the page says so. When it ends, sign in
+again with an account from the backup. The backup schedule keeps the values
+this server had before the restore.
+
+A restore can commit and still not finish, for example when a step after the
+commit fails. The page then says that Scanopsis must restart, and the server
+stays in restore mode until it does:
+
+```sh
+docker compose restart scanopsis
+```
+
+Then do the [checks after a restore](#check-everything-after-a-restore).
+
+Restore needs disk space in PostgreSQL for the old and the new data until it
+commits.
+
+### Restore on a new host
+
+Use this after a disaster, or to move Scanopsis to another machine. You need
+a backup file and the **same** `secrets/secret_key` it was made with.
+
+1. Prepare the host as in the [getting started guide](getting-started.md):
+   build the image, create the secrets (with the old `secrets/secret_key`),
+   `.env` and the data folders. The other two secret files can be new, but
+   `secrets/database_url` must match `secrets/postgres_password`.
+2. Start Scanopsis and read the setup token from the log:
+
+   ```sh
+   docker compose up -d
+   docker compose logs scanopsis | grep setup_token
+   ```
+
+3. Open the address of Scanopsis. On the first screen choose **Restore from a
+   backup**, enter the setup token and choose the backup file. Scanopsis
+   uploads it in parts, checks it and shows its date, version and whether the
+   key matches.
+4. Type `RESTORE` and confirm. There is no two-factor code to enter, because
+   no account exists yet; the setup token proves your right instead. Wrong
+   tokens are limited per client address.
+5. When the screen says the restore finished, sign in with an account from the
+   backup. The backup schedule comes from the backup too.
+
+If the backup was made with another secret key, or by a newer version of
+Scanopsis, the screen says so and stops. Fix the cause (copy the right
+`secrets/secret_key`, or install the newer version) and restart Scanopsis.
+A restart prints a new setup token.
+
+The restored file stays in the `backups` folder as an uploaded backup.
+
+### Watch the database disk
+
+The database lives in the folder `data/postgres` next to `compose.yaml`, and
+the backups in `backups` next to it. Watch the disk that holds them; with the
+default layout, both are on the same disk. Alert at **70%** used (warning) and
+**85%** (critical):
+
+```sh
+docker compose exec -T db df -h /var/lib/postgresql
+```
+
+```text
+Filesystem                Size      Used Available Use% Mounted on
+/dev/vda1               126.3G     45.7G     74.2G  38% /etc/hostname
+```
+
+Read the `Use%` column; the mount name differs on your host.
+`du -sh data/postgres backups` in `deploy/compose` shows the size of the two
+folders (use `sudo`, because the database files belong to another user).
+
+Why these levels: a full disk stops PostgreSQL from writing, so uploads and
+sign-ins fail, and a full database needs free space to recover. Vacuum, the
+write-ahead log, backups and restores need room too, and retention does not
+hand space back at once. At 70% you still have time to add disk or shorten the
+[retention period](#change-the-retention-period). At 85%, act now.
+
+### Back up with pg_dump instead
+
+The Backups page is the way to back up Scanopsis. You can still back up the
+database with PostgreSQL's own tools, for example to fit an existing backup
+routine. A `pg_dump` file includes the sessions table, and it is not signed;
+restore it with `pg_restore`, as below, not on the Backups page.
+
+#### Back up the database
 
 ```sh
 (umask 077; docker compose exec -T db pg_dump -U scanopsis -d scanopsis \
@@ -527,7 +727,7 @@ Problems:
 Run the backup on a schedule, copy the files to another host, and test a
 restore now and then.
 
-### Encrypt your backups
+#### Encrypt your backups
 
 Encrypt a backup before it leaves the host. Keep the decryption key **apart
 from `SCANOPSIS_SECRET_KEY`**: whoever holds both the backup and the secret key
@@ -555,33 +755,7 @@ age -d -i backup-key.txt scanopsis-2026-11-22.dump.age | docker compose exec -T 
 It prints nothing and exits with 0. With GnuPG, use `gpg --encrypt --recipient`
 and `gpg --decrypt` instead (not tested).
 
-### Watch the database disk
-
-The database lives in the folder `data/postgres` next to `compose.yaml`, and
-the backups in `backups` next to it. Watch the disk that holds them; with the
-default layout, both are on the same disk. Alert at **70%** used (warning) and
-**85%** (critical):
-
-```sh
-docker compose exec -T db df -h /var/lib/postgresql
-```
-
-```text
-Filesystem                Size      Used Available Use% Mounted on
-/dev/vda1               126.3G     45.7G     74.2G  38% /etc/hostname
-```
-
-Read the `Use%` column; the mount name differs on your host.
-`du -sh data/postgres backups` in `deploy/compose` shows the size of the two
-folders (use `sudo`, because the database files belong to another user).
-
-Why these levels: a full disk stops PostgreSQL from writing, so uploads and
-sign-ins fail, and a full database needs free space to recover. Vacuum, the
-write-ahead log, backups and restores need room too, and retention does not
-hand space back at once. At 70% you still have time to add disk or shorten the
-[retention period](#change-the-retention-period). At 85%, act now.
-
-### Restore into the running installation
+#### Restore into the running installation
 
 Use this to go back to an earlier state.
 
@@ -618,7 +792,7 @@ Use this to go back to an earlier state.
 
 5. Sign in and do the [checks after a restore](#check-everything-after-a-restore).
 
-### Restore on a new host
+#### Restore a pg_dump backup on a new host
 
 Use this after a disaster, or to move Scanopsis to another machine.
 
@@ -661,7 +835,9 @@ If it goes wrong:
 A restore puts the database back to the moment of the backup. Do these checks
 every time.
 
-1. **Delete all sessions.** The backup holds the sessions that were valid when
+1. **Delete all sessions (only after a `pg_restore`).** A restore on the
+   Backups page or the setup screen already signs everyone out, because backups
+   hold no sessions. A `pg_dump` file holds the sessions that were valid when
    it was made, including ones you ended or that belonged to people you
    removed since. With Scanopsis stopped:
 
@@ -691,7 +867,9 @@ every time.
 3. **Read the end of the audit log** (see
    [read the audit log](#read-the-audit-log)). The newest entry marks the
    moment of the backup. If you restored because of a security incident, note
-   that time: you have no record of what happened after it.
+   that time: you have no record of what happened after it. A restore from the
+   Backups page or the setup screen adds the event **Backup restored**
+   (`backup.restored`) after the restored entries.
 
 ---
 

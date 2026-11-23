@@ -69,8 +69,10 @@ nvm use
    It prints the version, the commit and the Go version, for example:
 
    ```text
-   scanopsis v0.3.0 (commit 55748a2, go1.27.4)
+   scanopsis v0.4.0 (commit <commit>, <go version>)
    ```
+
+   The commit and the Go version are those of your build.
 
 3. Start a PostgreSQL database for development:
 
@@ -305,8 +307,8 @@ git diff scripts/apidocs/testdata/golden.md
      --security-opt no-new-privileges scanopsis:dev --version
    ```
 
-   It prints the version line, for example `scanopsis v0.3.0 (commit 55748a2,
-   go1.27.4)`.
+   It prints the version line, for example `scanopsis v0.4.0 (commit <commit>,
+   <go version>)`, with the commit and Go version of your build.
 
 3. To run the whole stack with a database, use the Compose deployment in
    `deploy/compose` and follow the [getting started guide](getting-started.md).
@@ -380,7 +382,7 @@ When you add a fixture, write down here how you made it.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | The browser shows "The web interface is not included in this build." | The binary was built with `go build` before the web interface was built. | Run `make build`, or `(cd web && npm run build)` before `go build`. |
-| `make image` fails with `VERSION and COMMIT may only contain A-Z a-z 0-9 . _ + -` | A build argument has other characters. | Pass a plain version, for example `make image VERSION=v0.3.0`. |
+| `make image` fails with `VERSION and COMMIT may only contain A-Z a-z 0-9 . _ + -` | A build argument has other characters. | Pass a plain version, for example `make image VERSION=v0.4.0`. |
 | `make check` fails in `headers` | A new source file has no SPDX header. | Add the header from CONTRIBUTING.md to the file it names. |
 | `make generate` fails with `openapi-typescript: command not found` | The web dependencies are missing. | Run `make web-install`, then `make generate` again. |
 | Integration tests fail with `start PostgreSQL container` | Docker is not running, or your user cannot reach the Docker socket. | Start Docker, or fix the socket permissions. |

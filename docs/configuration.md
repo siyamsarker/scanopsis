@@ -59,7 +59,7 @@ All variables start with `SCANOPSIS_`. An empty value counts as not set.
 | `SCANOPSIS_LISTEN_ADDR` | `:8080` | `:8080` | The address the server listens on. The image health check reads the port from it. |
 | `SCANOPSIS_TRUSTED_PROXIES` | empty | `172.18.0.1,10.0.0.0/8` | Reverse proxies whose `X-Forwarded-For` header Scanopsis believes: a comma-separated list of IP addresses or CIDR ranges. See [trust your reverse proxy](#trust-your-reverse-proxy). |
 | `SCANOPSIS_CA_FILE` | empty | `/etc/scanopsis/ca.pem` | A PEM file with extra certificate authorities to trust for GitLab and SonarQube. See [outgoing TLS connections](#outgoing-tls-connections). |
-| `SCANOPSIS_BACKUP_DIR` | `/var/lib/scanopsis/backups` | `/var/lib/scanopsis/backups` | The folder where backup files are kept. It must be an absolute path and writable by the user the container runs as. The Compose file mounts `./backups` here. |
+| `SCANOPSIS_BACKUP_DIR` | `/var/lib/scanopsis/backups` | `/var/lib/scanopsis/backups` | The folder where backup files are kept. It must be an absolute path and writable by the user the container runs as (user 65532 in the image). The Compose file mounts `./backups` here. See [backup and restore](operations.md#backup-and-restore). |
 | `SCANOPSIS_LOG_LEVEL` | `info` | `debug` | Log detail: `debug`, `info`, `warn` or `error`. |
 
 `SCANOPSIS_PUBLIC_URL` must be an absolute `http` or `https` URL without a
@@ -157,6 +157,22 @@ The [SonarQube guide](integrations/sonarqube.md) shows how to connect it.
 | `retention.days` | `SCANOPSIS_RETENTION_DAYS` | `90` | How many days scan history, SonarQube analyses and SonarQube deliveries are kept: a whole number from `7` to `3650`. The latest scans of the branch a service's dashboards show and of protected branches and tags, and the latest analysis of every service, are kept however old they are. |
 
 The [operations guide](operations.md) explains data retention in full.
+
+### Backups
+
+These four settings are on the **Backups** page, in the panel **Scheduled
+backups**, not on the Settings page. Changes are recorded in the audit log as
+`settings.changed`, like the others.
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `backup.schedule_enabled` | `false` | Turns scheduled backups on. |
+| `backup.schedule_times` | `["02:00"]` | The times of day for scheduled backups, as `HH:MM` in 24-hour time: 1 to 24 different entries. |
+| `backup.time_zone` | `UTC` | The time zone of those times, an IANA name such as `Europe/Berlin`. |
+| `backup.keep_days` | `7` | How many days scheduled backups are kept: a whole number from `1` to `365`. The newest scheduled backup is always kept. Other kinds of backup are never deleted automatically. |
+
+After a restore on the Backups page, these four keep the values the server had
+before the restore. A restore on the setup screen takes them from the backup.
 
 ### How to write values
 
@@ -262,7 +278,8 @@ Create the key once with `openssl rand -base64 32` and never change it.
 Keep a copy of the key in your password manager or secrets vault, apart from
 your database backups. A database backup cannot be fully used without the
 key, and a key stored next to the backup protects nothing. Note which backup
-the key belongs to.
+the key belongs to. Backups made by Scanopsis are signed with a key derived
+from it, so a restore needs the same key.
 
 ### If the key is lost or changed
 

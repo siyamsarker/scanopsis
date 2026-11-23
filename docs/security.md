@@ -23,13 +23,14 @@ For how the parts fit together, see the [architecture](architecture.md).
 | `SCANOPSIS_SECRET_KEY` | It decrypts every stored secret. | A mounted secret file, or the environment |
 | The setup token | It creates the first administrator. | The server log, until setup is done |
 | The audit log | Evidence of what happened. | `audit_log` table |
+| Backup files | One holds everything above except sessions: password hashes, encrypted secrets, scan data and the audit log. | The `backups` folder, and any copy you made |
 
 ## Who can do what
 
 | Actor | Trust | What they can do |
 |---|---|---|
 | Viewer | Signed in, two-factor verified | Read scan data and SonarQube results. |
-| Administrator | Signed in, two-factor verified | Everything a viewer can, plus settings, users, services and the audit log. |
+| Administrator | Signed in, two-factor verified | Everything a viewer can, plus settings, users, services, the audit log and backups (make, download, upload, delete, restore). |
 | CI job | Anyone who can run a job on your GitLab | Upload reports for its own project, if the project is allowed. |
 | SonarQube | Your SonarQube server | Send signed webhooks. Scanopsis reads from it with a read-only token. |
 | Network attacker | None | Reach the public address, read or change traffic without TLS, send forged requests. |
@@ -122,17 +123,40 @@ Each row names where the control lives, so you can check it in the code.
 | Client address | `X-Forwarded-For` is believed only from `SCANOPSIS_TRUSTED_PROXIES`, read from right to left. | `internal/clientip/clientip.go` |
 | Request limits | API bodies up to 1 MiB (uploads have their own limit), headers within 10 seconds, plus read and write timeouts. | `internal/httpapi/middleware.go`, `cmd/scanopsis/main.go` |
 
+### Backups
+
+| Control | What it does |
+|---|---|
+| Administrators only | Every backup route needs an administrator with a completed two-factor check. Viewers and CI jobs cannot list, download or restore a backup. |
+| Signed with a key from the secret key | A backup ends with an HMAC signature that covers its manifest and the checksum of every table. A restore refuses a file with a missing or wrong signature, so a file made or changed by someone without the secret key is not accepted. The fingerprint of the key in the manifest only gives the clearer message when a backup belongs to another key. |
+| Not encrypted | A backup holds password hashes (Argon2id), the encrypted secrets, scan data and the audit log. Anyone who reads the file can read all but the encrypted secrets, which need `secrets/secret_key`. Keep backups and the key apart, and encrypt copies that leave the host. |
+| Folder permissions | The `backups` folder has mode 700 and belongs to user 65532; each file has mode 600. |
+| Restore needs a typed confirmation | An administrator types `RESTORE` and a current two-factor code. Too many wrong codes end the administrator's sessions. On the setup screen, where no account exists, the setup token stands in; checking it is limited per client address. |
+| Restore signs everyone out | All sessions end. A restore refuses a backup of another secret key or of a newer version. |
+| Audited | See the list below. |
+
+The signature protects against changed or foreign files, not against an old
+file of your own installation: anyone who can write into the `backups` folder
+could put back an older backup of this installation, and an administrator
+could then restore it. Protect the folder as you protect the database.
+
 ### Audit log
 
 Sign-ins and failed sign-ins, role changes, disabled, enabled and deleted
 users, ended sessions, two-factor events (including `mfa.locked`), setting
 changes, service changes, rejected uploads, retention runs that deleted data,
-and every administration command go to the `audit_log` table, with actor,
+backup events and every administration command go to the `audit_log` table, with actor,
 action and a detail that never holds a secret. A `settings.changed` event
 lists each setting's value before and after; for a secret it records only
 that it changed. A failed sign-in for an unknown name is recorded as
 `local:unknown`, because it may be a password typed into the wrong field.
-Administrators read it on the **Audit log** page. Writing an event never
+The backup events are `backup.created`, `backup.failed`, `backup.downloaded`
+(with the byte range served; for a request with several ranges, the span from
+the first to the last byte), `backup.uploaded`, `backup.deleted`,
+`backup.restored`, `backup.restore_failed` and `backup.restore_incomplete`.
+A scheduled backup has the actor `scheduler`; an upload on the setup screen
+has the actor `setup`. A change of the backup schedule is a `settings.changed`
+event. Administrators read it on the **Audit log** page. Writing an event never
 blocks the action; a failure is logged instead. [Data retention](operations.md#data-retention)
 removes events after 365 days at the earliest.
 
@@ -218,12 +242,16 @@ Go through this when you deploy, and again after each upgrade.
    its files mode 644 (the container user must read them). Keep the
    directory, `.env` and backups out of version control and readable only by
    operators.
-4. **Back up the secret key apart from the database.** A backup without the
-   key is useless; a key next to the backup protects nothing.
-5. **Encrypt backups**, with a key kept apart from both. See
-   [encrypt your backups](operations.md#encrypt-your-backups).
-6. **After every restore, delete all sessions and check users and the audit
-   log.** A restore brings old sessions back. See
+4. **Back up the secret key apart from the backup files.** A backup without
+   the key cannot be restored; a key next to the backup protects nothing.
+5. **Turn on scheduled backups, copy the `backups` folder off the host and
+   encrypt the copies**, with a key kept apart from both. See
+   [backup and restore](operations.md#backup-and-restore) and
+   [encrypt your backups](operations.md#encrypt-your-backups). Keep the
+   `backups` folder writable only by Scanopsis and the operators.
+6. **After every restore, check users and the audit log.** A restore on the
+   Backups page signs everyone out, but it brings back the users as they were.
+   After a `pg_restore`, also delete all sessions. See
    [check everything after a restore](operations.md#check-everything-after-a-restore).
 7. **Restrict network paths.** Publish the port on loopback only (the Compose
    file does) and let only the proxy reach it. Allow the database port only

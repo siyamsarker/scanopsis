@@ -45,7 +45,7 @@ version branch, never `main`: `main` is development code.
    lines look like this:
 
    ```text
-   #24 unpacking to docker.io/library/scanopsis:v0.3.0 0.0s done
+   #24 unpacking to docker.io/library/scanopsis:v0.4.0 0.0s done
    #24 DONE 0.3s
    ```
 
@@ -116,13 +116,13 @@ Scanopsis keeps its two kinds of data in plain folders next to
 `compose.yaml`, not in Docker volumes. Create them in `deploy/compose`:
 
 ```sh
-install -d -m 700 data/postgres
+sudo install -d -m 700 -o 70 -g 70 data/postgres
 sudo install -d -m 700 -o 65532 -g 65532 backups
 ```
 
 | Folder | What it holds |
 | --- | --- |
-| `data/postgres` | The database. Mode 700, because it holds the database files and only its owner should read them. Docker creates the files inside it; leave its owner alone. |
+| `data/postgres` | The database. Mode 700, because it holds the database files. 70 is the user the PostgreSQL image runs as; only it may open the database files, so the folder must belong to it. Leave the owner alone afterwards. |
 | `backups` | The backup files Scanopsis writes. The container runs as user 65532, so that user must own the folder; `sudo install` sets owner and mode 700 in one step, which keeps other users on the host out. |
 
 Why folders: a Docker volume is deleted by `docker compose down -v`,
@@ -225,7 +225,7 @@ If this step fails:
 | `scanopsis-scanopsis-1` is `Restarting` | Run `docker compose logs scanopsis`. The server prints `configuration error:` and one line per problem, for example `SCANOPSIS_PUBLIC_URL is required, for example https://scanopsis.example.com`. Fix `.env` and run `docker compose up -d` again. |
 | The log says `SCANOPSIS_SECRET_KEY is not valid` | `secrets/secret_key` is not a base64 encoded 32-byte key. Create it again as in step 2. |
 | `curl` cannot connect | The container is not running, or another program uses port 8080 on the host. Run `docker compose ps`. |
-| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when `data/postgres` is first filled. If you changed the password after the first start and have not finished the setup yet, run `docker compose down`, delete the folder with `sudo rm -rf data/postgres`, create it again with `install -d -m 700 data/postgres`, and start again. This deletes all data. |
+| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when `data/postgres` is first filled. If you changed the password after the first start and have not finished the setup yet, run `docker compose down`, delete the folder with `sudo rm -rf data/postgres`, create it again with `sudo install -d -m 700 -o 70 -g 70 data/postgres`, and start again. This deletes all data. |
 
 ## Step 7. Get the setup token
 
@@ -323,8 +323,11 @@ recover access.
 3. Connect SonarQube: [SonarQube guide](integrations/sonarqube.md).
 4. Let your colleagues sign in with GitLab:
    [GitLab sign-in guide](integrations/gitlab-sso.md).
-5. Set up backups and learn the administration commands in the
-   [operations guide](operations.md). Once services exist, choose the branch
+5. Turn on scheduled backups: after your first sign-in, open **Backups** in
+   the Admin menu, switch on **Scheduled backups** and select **Save
+   schedule**. Copy `backups` and `secrets/secret_key` off the host, apart
+   from each other. The [operations guide](operations.md#backup-and-restore)
+   has the details, and the administration commands. Once services exist, choose the branch
    each dashboard shows there too.
 6. Look up any setting in the [configuration reference](configuration.md).
 

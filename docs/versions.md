@@ -77,11 +77,14 @@ Do this for a new installation.
 curl -s http://127.0.0.1:8080/api/v1/version
 ```
 
-It prints the version the image was built from. For 0.3.0:
+It prints the version the image was built from. The line looks like this
+(an example: the commit and the Go version on your build differ):
 
 ```text
-{"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}
+{"version":"v0.4.0","commit":"<commit>","go":"<go version>"}
 ```
+
+`version` must be `v0.4.0`.
 
 If `version` is not the one you expect, the container runs another image.
 Build the image again from the version branch.
@@ -97,14 +100,16 @@ change it finds missing.
 
 | You run | Database change | Read first |
 | --- | --- | --- |
-| 0.3.0 | See the list | [From 0.3.0](#from-030) |
-| 0.2.0 | None up to 0.3.0, then see the list | [From 0.2.0](#from-020) |
+| 0.3.0 | None. 0.4.0 adds no migration. | [From 0.3.0](#from-030) |
+| 0.2.0 | None up to 0.4.0 | [From 0.2.0](#from-020) |
 | 0.1.0 | Yes, applied when 0.4.0 starts | [From 0.1.0](#from-010) |
 
 1. Read [before you upgrade](#before-you-upgrade) for the version you run.
 
 2. Back up the database and the secret key, as the
-   [operations guide](operations.md) describes under "Backup and restore".
+   [operations guide](operations.md) describes under "Back up with pg_dump
+   instead" (the Backups page exists only from 0.4.0). If you run 0.4.0 and
+   upgrade later, use the Backups page.
 
 3. Get 0.4.0 in your existing clone and build it:
 
@@ -144,15 +149,16 @@ change it finds missing.
 7. [Check the running version](#check-the-running-version). It must show
    `v0.4.0`.
 
-8. Once 0.4.0 runs well and a backup exists, remove the old volume, if you
-   moved one. Until then it is your way back:
+8. Once 0.4.0 runs well and the backup you made before the upgrade (step 2)
+   still exists, remove the old volume, if you moved one. Until then it is
+   your way back:
 
    ```sh
    docker volume rm scanopsis_db-data
    ```
 
-The [deployment guide](deployment.md#upgrade-and-roll-back) shows a recorded
-upgrade from 0.1.0 to 0.4.0 with the output of each step.
+The [deployment guide](deployment.md#upgrade-and-roll-back) shows the output
+of each step in a recorded upgrade (made with 0.3.0).
 
 ### Move the database into a folder
 
@@ -160,7 +166,8 @@ Versions before 0.4.0 keep the database in the Docker volume
 `scanopsis_db-data`. A volume is deleted by `docker compose down -v` and by
 `docker volume prune`. From 0.4.0 the database lives in the folder
 `deploy/compose/data/postgres` and the backups in `deploy/compose/backups`,
-which no Docker command deletes. Move the data once, with the old version
+which no Docker cleanup command (`docker compose down -v`,
+`docker volume prune`, `docker system prune`) deletes. Move the data once, with the old version
 stopped. **Takes:** a few minutes, plus the copy. You need the free disk space
 for a second copy of the database.
 
@@ -173,7 +180,7 @@ for a second copy of the database.
    docker compose exec -T db psql -U scanopsis -d scanopsis -c "SELECT table_name, (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM %I', table_name), false, true, '')))[1]::text AS rows FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY 1"
    ```
 
-   Run against a database with sample data, it printed:
+   Run against a database with sample data (recorded with 0.3.0), it printed:
 
    ```text
        table_name    | rows
@@ -205,21 +212,23 @@ for a second copy of the database.
    `docker volume ls` shows it.
 
    ```sh
-   docker volume inspect scanopsis_db-data > /dev/null
-   install -d -m 700 data/postgres
-   sudo install -d -m 700 -o 65532 -g 65532 backups
+   # 70 is the user the PostgreSQL image runs as; only it may open the database files.
+   docker volume inspect scanopsis_db-data > /dev/null &&
+   sudo install -d -m 700 -o 70 -g 70 data/postgres &&
+   sudo install -d -m 700 -o 65532 -g 65532 backups &&
    docker run --rm -v scanopsis_db-data:/from -v "$PWD/data/postgres":/to \
      alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f \
      sh -c 'test -z "$(ls -A /to)" || { echo "data/postgres is not empty" >&2; exit 1; }; cp -a /from/. /to/'
    ```
 
-   Do not go on if the first command prints `no such volume`: without
-   it, `docker run` would create an empty volume and copy nothing. The copy
+   The commands are chained, so the block stops at the first one that fails.
+   If the first prints `no such volume`, do not go on: without the check,
+   `docker run` would create an empty volume and copy nothing. The copy
    refuses to run if `data/postgres` already holds files, so it never mixes
    two databases. Otherwise the commands print nothing and exit with 0. `cp -a`
    keeps the owners of the files, which the database needs. The folder
    `data/postgres` then holds one folder named `18`, the PostgreSQL major
-   version. `data/postgres` has mode 700 because it holds the database files.
+   version. `data/postgres` has mode 700 because it holds the database files, and belongs to user 70, the user the PostgreSQL image runs as; only it may open them.
 
 4. Start again. `compose.yaml` is the new one, and `SCANOPSIS_IMAGE` in `.env`
    still names your old image, so that the move is the only change:
@@ -245,18 +254,25 @@ network, and the database is still there after `docker compose up -d`.
 
 #### From 0.3.0
 
+- The database schema does not change: 0.4.0 adds no migration, and the last
+  one is still the one 0.3.0 has. Going back to 0.3.0 later needs no restore
+  for the schema, but remember that 0.3.0 reads the database only from the
+  Docker volume of its own `compose.yaml`.
 - The database lives in a folder now, not in the Docker volume. Follow
   [move the database into a folder](#move-the-database-into-a-folder) before
   you start 0.4.0.
 - Take over the new `compose.yaml`: longer stop times (2 minutes for the
   database, 30 seconds for Scanopsis), 256 MB of shared memory for the
   database, and the `backups` folder mounted into Scanopsis.
+- Backups and restores are new. After the first sign-in, open **Backups** in
+  the Admin menu and turn on scheduled backups; see
+  [back up from the Backups page](operations.md#back-up-from-the-backups-page).
 
 #### From 0.2.0
 
 Everything in [from 0.3.0](#from-030), and also:
 
-- The database does not change from 0.2.0 to 0.3.0. If you need to go back,
+- The database does not change from 0.2.0 to 0.4.0. If you need to go back,
   0.2.0 runs on the same database, without restoring the backup.
 - The web interface is new. Ask users to reload pages that are open during the
   upgrade.
@@ -332,7 +348,7 @@ the new version and `A.B.C` with the version it replaces.
 
    ```sh
    git switch main && git pull --ff-only
-   make check test-integration generate-check coverage perf e2e image-scan
+   make check test-integration generate-check coverage perf e2e image-scan dco commits
    ```
 
 2. Make the guides point to the new version. They always show the newest

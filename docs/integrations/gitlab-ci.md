@@ -303,7 +303,7 @@ short outage does not lose a scan. curl decides what to retry:
 | `408` `request_timeout` | The body did not arrive within 5 minutes. | Yes |
 | `429` | Too many uploads from one address (`too_many_requests`) or from one project (`project_rate_limited`), or the job is over its artifact limit (`job_artifact_limit`). | Yes, after `Retry-After`. For `job_artifact_limit`, `Retry-After` is an hour, so curl gives up. |
 | `500`, `502`, `504` | An error in Scanopsis, or a proxy that could not reach it. | Yes |
-| `503` | Scanopsis is busy (`busy`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`). All but the GitLab one carry `Retry-After`. | Yes |
+| `503` | Scanopsis is busy (`busy`), restoring a backup (`restoring`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`). All but the GitLab one carry `Retry-After`. A restore usually ends within the retry time; an upload that arrives while it runs is not kept. | Yes |
 | Connection refused, timeout | Scanopsis is down or restarting. | Yes (`--retry-connrefused`) |
 | `400`, `401`, `403`, `409`, `413`, `415`, `422` | The request itself is wrong. The same request gets the same answer. | No |
 

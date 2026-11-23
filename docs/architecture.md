@@ -17,8 +17,8 @@ Scanopsis has two parts that run:
 
 | Part | What it is | What it keeps |
 | --- | --- | --- |
-| Scanopsis | One Go binary. It serves the JSON API, the web interface (embedded in the binary) and the health probes, and it runs the background jobs. | Nothing on disk. Everything is in PostgreSQL, except a few things in memory, see [Run one server per database](#run-one-server-per-database). |
-| PostgreSQL | The only datastore: users, sessions, settings, services, scans, findings, SonarQube analyses and the audit log. | Everything. Back it up. |
+| Scanopsis | One Go binary. It serves the JSON API, the web interface (embedded in the binary) and the health probes, and it runs the background jobs. | The backup files, in the folder `/var/lib/scanopsis/backups`. Everything else is in PostgreSQL, except a few things in memory, see [Run one server per database](#run-one-server-per-database). |
+| PostgreSQL | The only datastore: users, sessions, settings, services, scans, findings, SonarQube analyses and the audit log. | Everything. Back it up, on the Backups page or with `pg_dump`. |
 
 The binary has two more modes: `scanopsis admin ...` for account recovery and
 report export (see [operations](operations.md)), and `scanopsis healthcheck`,
@@ -214,6 +214,7 @@ All jobs run inside the Scanopsis process. There is no separate worker.
 | SonarQube workers | All the time | Four workers process queued webhook deliveries. Up to 500 wait. A delivery that finds the queue full stays pending for the next sync. |
 | SonarQube sync | Every sync interval (default 15 minutes, at least 1 minute), checked every 10 seconds | Reads the newest analysis of every linked project. Marks deliveries pending for more than 10 minutes as interrupted. Stops early when SonarQube does not answer. Holds an advisory lock on a connection of its own, and no pooled connection while it calls SonarQube. |
 | Retention | One minute after start, then every 24 hours | Deletes scans, SonarQube analyses and deliveries older than the retention period (default 90 days), but keeps the current scans and the latest analysis of every service. Empties the stored original report of a scan that is not current after 30 days. Deletes audit events after 365 days, or after the retention period if that is longer. A run that deletes anything writes an audit event. See [operations](operations.md). |
+| Backup schedule | At the times set on the Backups page, in the time zone set there; the clock is checked at least once a minute | Takes a scheduled backup, then deletes scheduled backups older than the keep period, except the newest. The result of the last run is kept in the backup folder, so a failure survives a restart. |
 
 ## What "current" means
 
@@ -261,6 +262,55 @@ millions of findings:
 - A service overview reads all its numbers in one read-only transaction, so they
   all come from the same moment.
 
+
+## Backups and restores
+
+The package `internal/backup` writes, reads and restores backups. One job
+runs at a time, and the service refuses a second job with `busy`. A
+PostgreSQL advisory lock keeps it from overlapping with the retention job and
+the SonarQube sync, which a restore waits for. The jobs run in the background; the page and the API read their
+progress.
+
+**The archive.** A backup is a gzip-compressed tar file with a fixed order:
+
+1. `manifest.json` first: the version of Scanopsis, the time, the kind, a
+   fingerprint of the secret key, the schema version and the tables with their
+   columns.
+2. The tables, one after the other, as PostgreSQL CSV in `tables/<name>/`
+   files of at most 8 MiB. A table is never held in memory as a whole.
+3. `checksums.json`: the row count, size and SHA-256 of every table.
+4. `signature` last: an HMAC-SHA-256 over the manifest and the checksums,
+   keyed from `secrets/secret_key`. The checksums cover every table, so the
+   signature covers the whole file.
+
+A backup holds every Scanopsis table except `sessions` and the migration
+history. All tables are read in one read-only, repeatable-read transaction, so
+the backup is consistent while uploads continue.
+
+**The restore.** Scanopsis reads and verifies the whole file first (signature,
+checksums, key fingerprint, schema version, and limits on how far the file may
+expand). Then it changes the database in one transaction:
+
+1. drops the Scanopsis tables only, and nothing else in the database;
+2. replays the migrations up to the schema version of the backup;
+3. loads the table data and resets the sequences;
+4. replays the migrations that are newer than the backup;
+5. records the migration history, ends all sessions, writes the audit entry
+   and runs `ANALYZE`;
+6. commits.
+
+Migrations run inside this transaction, so a statement that cannot run in a
+transaction is not supported in a migration: it would make restores fail. The
+one exception is `CREATE INDEX CONCURRENTLY` and `DROP INDEX CONCURRENTLY`,
+which run without `CONCURRENTLY` here. A failure anywhere before the commit
+leaves the database as it was.
+
+**Restore mode.** From the start of a restore until it has finished, the API
+answers `503 restoring`, apart from the version and the restore status, so
+that nothing writes to tables that are being replaced. After the commit,
+Scanopsis refreshes what it holds in memory. If that fails, the server stays
+in restore mode and asks for a restart.
+
 ## Key design decisions
 
 | Decision | Why |
@@ -272,7 +322,7 @@ millions of findings:
 | **Settings start from the environment, then live in the database.** | A new deployment can start from a file. Afterwards administrators change settings without a restart, and an old environment file cannot quietly undo their changes. See [configuration](configuration.md). |
 | **Two-factor authentication for everyone.** | Scanopsis shows vulnerability data for every service, so every account, GitLab accounts too, enrols an authenticator app (TOTP). |
 | **One binary and one database.** | The load is small: a few thousand uploads a day. Fewer parts means less to run, secure and upgrade. |
-| **Secrets encrypted with one key from the environment.** | The database holds two-factor secrets and the credentials entered on the Settings page. A backup is useless without the key. See [configuration](configuration.md). |
+| **Secrets encrypted with one key from the environment.** | The database holds two-factor secrets and the credentials entered on the Settings page. A backup is useless without the key, and its signature is made with a key derived from it. See [configuration](configuration.md). |
 
 ### Run one server per database
 
@@ -285,7 +335,7 @@ The design supports one Scanopsis server per database, not more:
 - The SonarQube sync and the retention job use database advisory locks, so a
   second server does not corrupt data. That is a safety net, not support.
 
-For availability, rely on the container restart policy and on database backups.
+For availability, rely on the container restart policy and on backups. A second server on the same database would not know about a restore in progress.
 
 ---
 
