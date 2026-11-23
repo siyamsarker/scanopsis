@@ -653,9 +653,11 @@ describe('scheduled backups', () => {
     renderApp('/admin/backups');
     const form = await screen.findByRole('region', { name: 'Scheduled backups' });
     const filter = await within(form).findByRole('searchbox', { name: 'Filter time zones' });
+    expect(filter).toHaveAttribute('placeholder', 'Type a city, such as Berlin');
     fireEvent.change(filter, { target: { value: 'tokyo' } });
-    fireEvent.keyDown(filter, { key: 'Enter' });
-    expect(await within(form).findByText('1 time zone matches.')).toBeVisible();
+    expect(
+      await within(form).findByText('1 time zone matches. Press Enter to choose Asia/Tokyo.'),
+    ).toBeVisible();
     expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
     await chooseOption('Time zone', 'Asia/Tokyo');
     expect(within(form).getByRole('combobox', { name: 'Time zone' })).toHaveTextContent(
@@ -663,6 +665,22 @@ describe('scheduled backups', () => {
     );
     fireEvent.change(filter, { target: { value: 'no such place' } });
     expect(await within(form).findByText('No time zone matches.')).toBeVisible();
+  });
+
+  it('chooses the first matching time zone with Enter in the filter, without saving', async () => {
+    const { calls } = mockFetch(api());
+    renderApp('/admin/backups');
+    const form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    const filter = await within(form).findByRole('searchbox', { name: 'Filter time zones' });
+    fireEvent.change(filter, { target: { value: 'kolkata' } });
+    fireEvent.keyDown(filter, { key: 'Enter' });
+    await waitFor(() =>
+      expect(within(form).getByRole('combobox', { name: 'Time zone' })).toHaveTextContent(
+        'Asia/Kolkata',
+      ),
+    );
+    expect(within(form).getByRole('button', { name: 'Save schedule' })).toBeEnabled();
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
   });
 
   it('ties the keep-days problem to its field', async () => {

@@ -62,9 +62,18 @@ function ScheduleFields({
     () => timeZoneOptions(draft.zone, browser, zoneFilter),
     [draft.zone, browser, zoneFilter],
   );
-  const zoneMatchCount = zoneFilter.trim()
-    ? zones.filter((zone) => zoneMatches(zone.value, zoneFilter)).length
+  const zoneMatchList = zoneFilter.trim()
+    ? zones.filter((zone) => zoneMatches(zone.value, zoneFilter))
     : null;
+
+  /** Enter in the filter chooses the first zone that matches what was typed. */
+  function chooseFirstZone(typed: string) {
+    if (!typed.trim()) return;
+    const first = timeZoneOptions(draft.zone, browser, typed).find((zone) =>
+      zoneMatches(zone.value, typed),
+    );
+    if (first) change({ zone: first.value });
+  }
 
   const dirty =
     draft.enabled !== saved.enabled ||
@@ -244,29 +253,29 @@ function ScheduleFields({
         <span aria-hidden="true" className={labelClass}>
           Time zone
         </span>
-        {/* Enter in the filter narrows the list; it does not save the form. */}
+        {/* Enter in the filter chooses the first match; it does not save the form. */}
         <div
           className="flex flex-col gap-1.5"
           onKeyDown={(event) => {
-            if (event.key === 'Enter') event.preventDefault();
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            if (event.target instanceof HTMLInputElement) chooseFirstZone(event.target.value);
           }}
         >
           <SearchInput
             label="Filter time zones"
-            placeholder="Filter time zones, such as Berlin or New York"
+            placeholder="Type a city, such as Berlin"
             value={zoneFilter}
             onChange={setZoneFilter}
             delayMs={120}
             shortcutHint={false}
           />
           <p aria-live="polite" className="text-small text-text-muted empty:hidden">
-            {zoneMatchCount === null
+            {zoneMatchList === null
               ? ''
-              : zoneMatchCount === 0
+              : zoneMatchList.length === 0
                 ? 'No time zone matches.'
-                : zoneMatchCount === 1
-                  ? '1 time zone matches.'
-                  : `${zoneMatchCount} time zones match.`}
+                : `${zoneMatchList.length === 1 ? '1 time zone matches' : `${zoneMatchList.length} time zones match`}. Press Enter to choose ${zoneMatchList[0].label}.`}
           </p>
         </div>
         <Select

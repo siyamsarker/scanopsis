@@ -544,7 +544,8 @@ Scheduled backups are off by default. In the panel **Scheduled backups**:
 
 1. Turn the switch on.
 2. Add one or more times of day (24-hour `HH:MM`, at most 24 a day) and
-   choose the time zone. The default is `02:00` in UTC.
+   choose the time zone: type a city in the filter and press Enter to take
+   the first match, or pick one from the list. The default is `02:00` in UTC.
 3. Set how many days to keep scheduled backups, from 1 to 365 (default 7).
 4. Select **Save schedule**.
 
