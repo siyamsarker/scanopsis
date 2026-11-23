@@ -60,11 +60,13 @@ const (
 
 	// Backups. backup.created details carry "name", "kind" and "size";
 	// backup.failed carries "kind" and "error"; backup.restore_failed
-	// carries "name" and "error". The actor is who started the job, or
-	// "scheduler" for scheduled backups.
-	ActionBackupCreated       = "backup.created"
-	ActionBackupFailed        = "backup.failed"
-	ActionBackupRestoreFailed = "backup.restore_failed"
+	// and backup.restore_incomplete (the restore committed, but the server
+	// must restart to finish it) carry "name" and "error". The actor is
+	// who started the job, or "scheduler" for scheduled backups.
+	ActionBackupCreated           = "backup.created"
+	ActionBackupFailed            = "backup.failed"
+	ActionBackupRestoreFailed     = "backup.restore_failed"
+	ActionBackupRestoreIncomplete = "backup.restore_incomplete"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.

@@ -42,6 +42,10 @@ const statusFile = ".schedule-status.json"
 // jobs (data retention, the SonarQube sync) to finish.
 const defaultLockWait = 2 * time.Minute
 
+// restartMessage is the job message after a restore that committed but
+// could not finish.
+const restartMessage = "The backup was restored, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
+
 // closeTimeout bounds the closing of the lock connection.
 const closeTimeout = 5 * time.Second
 
@@ -61,6 +65,8 @@ var (
 	errClosed = errors.New("the server is shutting down")
 	// errInternal replaces a panic of a job.
 	errInternal = errors.New("an unexpected error stopped the job; see the server log for details")
+	// errNeedRestart means a restore committed but could not finish.
+	errNeedRestart = errors.New("a restore is waiting for Scanopsis to restart; restart it first")
 	// errStopped means the service was closed while the job ran.
 	errStopped = fmt.Errorf("stopped by a shutdown: %w", context.Canceled)
 )
@@ -154,7 +160,10 @@ type Service struct {
 	jobs   sync.WaitGroup
 
 	restoring atomic.Bool
-	progress  atomic.Pointer[Progress]
+	// needRestart is set when a restore committed but could not finish;
+	// restoring then stays true and no job starts until a restart.
+	needRestart atomic.Bool
+	progress    atomic.Pointer[Progress]
 
 	mu      sync.Mutex
 	running bool
@@ -246,6 +255,9 @@ func (s *Service) begin(st JobStatus) (JobStatus, error) {
 	if s.ctx.Err() != nil {
 		return JobStatus{}, errClosed
 	}
+	if s.needRestart.Load() {
+		return JobStatus{}, errNeedRestart
+	}
 	if s.running {
 		return JobStatus{}, ErrBusy
 	}
@@ -317,7 +329,7 @@ func (s *Service) StartBackup(kind Kind, actor string) (JobStatus, error) {
 func (s *Service) backupJob(kind Kind, actor string, then func(context.Context)) (Info, error) {
 	ctx := s.ctx
 	var info Info
-	err := s.guard(ctx, func() error {
+	err := s.guard(ctx, "a backup job stopped with a panic", func() error {
 		release, err := s.lock(ctx, false)
 		if err != nil {
 			return err
@@ -327,7 +339,7 @@ func (s *Service) backupJob(kind Kind, actor string, then func(context.Context))
 			return err
 		}
 		if then != nil {
-			_ = s.guard(ctx, func() error { then(ctx); return nil })
+			_ = s.guard(ctx, "deleting expired scheduled backups stopped with a panic", func() error { then(ctx); return nil })
 		}
 		return nil
 	})
@@ -345,22 +357,24 @@ func (s *Service) backupJob(kind Kind, actor string, then func(context.Context))
 	return info, err
 }
 
-// guard runs fn and turns a panic into errInternal, logged with its stack.
+// guard runs fn and turns a panic into errInternal, logged as what with its
+// stack.
 // The deferred calls of fn, which release the locks, run on the way.
-func (s *Service) guard(ctx context.Context, fn func() error) (err error) {
+func (s *Service) guard(ctx context.Context, what string, fn func() error) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			s.o.Log.ErrorContext(ctx, "a backup job stopped with a panic", "panic", r, "stack", string(debug.Stack()))
+			s.o.Log.ErrorContext(ctx, what, "panic", r, "stack", string(debug.Stack()))
 			err = errInternal
 		}
 	}()
 	return fn()
 }
 
-// stopped replaces err with errStopped when the job ended because the
-// service was closed: a shutdown is not a failure of the job.
+// stopped replaces err with errStopped when it is the cancellation that
+// a closed service caused: a shutdown is not a failure of the job. Any
+// other error, even during a shutdown, stays a failure.
 func (s *Service) stopped(err error) error {
-	if err != nil && s.ctx.Err() != nil {
+	if s.ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
 		return errStopped
 	}
 	return err
@@ -406,7 +420,11 @@ func message(err error) string {
 // and returns at once. Unless skipSafety is set, a backup of the current
 // data (kind before-restore) is taken first. keepHostSettings keeps this
 // server's backup settings (see RestoreOptions). The data is replaced in
-// one transaction; Restoring is true only while that runs.
+// one transaction; Restoring is true from its start until AfterRestore has
+// finished. When the transaction committed but AfterRestore then failed,
+// panicked or was cancelled, the server still holds state from before the
+// restore: Restoring stays true, no new job starts, the job fails with a
+// message asking for a restart, and backup.restore_incomplete is audited.
 func (s *Service) StartRestore(name string, actor string, skipSafety bool, keepHostSettings bool) (JobStatus, error) {
 	if actor == "" {
 		return JobStatus{}, errors.New("restore backup: no actor given")
@@ -456,7 +474,10 @@ func (s *Service) check(path string) (Kind, error) {
 func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSafety, keepHostSettings bool) {
 	ctx := s.ctx
 	var safety string
-	err := s.guard(ctx, func() error {
+	// committed is set once the restore transaction has committed: from
+	// then on the database holds the backup's data, whatever happens next.
+	var committed bool
+	err := s.guard(ctx, "a restore job stopped with a panic", func() error {
 		release, err := s.lock(ctx, true)
 		if err != nil {
 			return err
@@ -479,29 +500,37 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 			st.State, st.Kind, st.Progress, st.Message = JobRestoring, kind, Progress{}, "Restoring the backup."
 		})
 		s.restoring.Store(true)
-		defer s.restoring.Store(false)
+		// Restore mode ends here only when the data was not replaced, or
+		// when the server has reloaded everything it keeps in memory.
+		defer func() {
+			if !committed {
+				s.restoring.Store(false)
+			}
+		}()
 		if err := s.restore(ctx, s.o.Pool, path, RestoreOptions{
 			KeepHostSettings: keepHostSettings, Actor: actor, KeyFingerprint: s.o.KeyFingerprint,
 			SigningKey: s.o.Dumper.SigningKey, Progress: s.setProgress,
 		}); err != nil {
 			return err
 		}
+		committed = true
 		s.o.Log.InfoContext(ctx, "backup restored", "name", name, "actor", actor, "backup_before", safety)
 		if s.o.AfterRestore != nil {
 			if err := s.o.AfterRestore(ctx); err != nil {
-				s.o.Log.ErrorContext(ctx, "the backup was restored, but the server could not reload its state", "name", name, "error", err)
-				return &afterError{err}
+				return err
 			}
 		}
+		s.restoring.Store(false)
 		return nil
 	})
+	if committed && err != nil {
+		s.incomplete(ctx, name, kind, actor, err)
+		return
+	}
 	err = s.stopped(err)
 	if err != nil {
-		var after *afterError
-		if !errors.As(err, &after) {
-			s.o.Log.ErrorContext(ctx, "restore failed", "name", name, "actor", actor, "error", err)
-			s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupRestoreFailed, map[string]any{"name": name, "error": message(err)})
-		}
+		s.o.Log.ErrorContext(ctx, "restore failed", "name", name, "actor", actor, "error", err)
+		s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupRestoreFailed, map[string]any{"name": name, "error": message(err)})
 	}
 	s.finish(func(st *JobStatus) {
 		st.Kind, st.Name = kind, name
@@ -516,11 +545,20 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 	})
 }
 
-// afterError is a failure after the data was restored.
-type afterError struct{ err error }
-
-func (e *afterError) Error() string {
-	return fmt.Sprintf("the backup was restored, but the server could not reload its settings (%v); restart Scanopsis", e.err)
+// incomplete ends a restore whose transaction committed but whose
+// follow-up (AfterRestore) failed, panicked or was cancelled. The server
+// still holds settings and caches from before the restore, so it must not
+// serve again: restore mode stays on and no new job starts until the
+// process is restarted, which reads everything from the restored
+// database.
+func (s *Service) incomplete(ctx context.Context, name string, kind Kind, actor string, err error) {
+	s.needRestart.Store(true)
+	s.o.Log.ErrorContext(ctx, "the backup was restored, but Scanopsis must restart to finish", "name", name, "actor", actor, "error", err)
+	s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupRestoreIncomplete, map[string]any{"name": name, "error": err.Error()})
+	s.finish(func(st *JobStatus) {
+		st.Kind, st.Name = kind, name
+		st.State, st.Message = JobFailed, restartMessage
+	})
 }
 
 // lock takes the job's advisory lock, and for a restore the locks of the
@@ -614,7 +652,12 @@ func (s *Service) next(p plan, now time.Time) time.Time {
 
 // Run runs the backup schedule until ctx ends. The end of ctx also cancels
 // a running job, scheduled or not, and Run returns once it has stopped
-// (Close); a job stopped that way is not recorded as failed. Run follows the
+// (Close). A backup stopped that way leaves no file and is neither audited
+// as backup.failed nor recorded as a failed scheduled run. A restore stopped
+// before its transaction committed is rolled back and audited as
+// backup.restore_failed; one stopped after the commit is audited as
+// backup.restore_incomplete and keeps restore mode on until a restart (see
+// StartRestore). Run follows the
 // settings: a change of the schedule takes effect at once. A time missed
 // while the server was down is not caught up. A time that comes while
 // another job runs waits for it; times that pass during a long backup lead

@@ -910,3 +910,110 @@ func TestServiceJobPanic(t *testing.T) {
 		t.Errorf("restore after the panic = %+v", st)
 	}
 }
+
+// restartMessageWant is the job message after a restore that committed but
+// could not be finished.
+const restartMessageWant = "The backup was restored, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
+
+// checkIncomplete checks the state after a restore that committed and then
+// failed: restore mode stays on, the job says to restart, and the failure
+// is audited as backup.restore_incomplete, never as backup.restore_failed.
+func checkIncomplete(t *testing.T, e *svcEnv, name, errText string) {
+	t.Helper()
+	st := e.wait(t)
+	if st.State != JobFailed || st.Message != restartMessageWant || st.Name != name {
+		t.Errorf("status = %+v", st)
+	}
+	if !e.svc.Restoring() {
+		t.Error("restore mode ended although the server still runs with the state from before the restore")
+	}
+	if f := e.audit.of(audit.ActionBackupRestoreFailed); len(f) != 0 {
+		t.Errorf("a committed restore was audited as failed: %+v", f)
+	}
+	inc := e.audit.of(audit.ActionBackupRestoreIncomplete)
+	if len(inc) != 1 || inc[0].actor != "local:alice" || inc[0].detail["name"] != name ||
+		!strings.Contains(fmt.Sprint(inc[0].detail["error"]), errText) {
+		t.Errorf("restore_incomplete audit = %+v", inc)
+	}
+	if _, err := e.svc.StartBackup(KindManual, "local:alice"); err == nil {
+		t.Error("a backup started while Scanopsis waits for a restart")
+	}
+	if n := e.count(t, `SELECT count(*) FROM services`); n != 1 {
+		t.Errorf("%d services, want the restored 1", n)
+	}
+}
+
+func restoredEnv(t *testing.T) (*svcEnv, string) {
+	t.Helper()
+	e := newSvcEnv(t, nil)
+	mustExec(t, e.pool, `INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual')`)
+	name := e.backup(t)
+	mustExec(t, e.pool, `INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('orders-api', 'example/orders-api', 'manual')`)
+	return e, name
+}
+
+func TestServiceAfterRestoreFails(t *testing.T) {
+	e, name := restoredEnv(t)
+	e.svc.o.AfterRestore = func(context.Context) error { return errors.New("reload settings: connection reset") }
+	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
+		t.Fatal(err)
+	}
+	checkIncomplete(t, e, name, "connection reset")
+}
+
+func TestServiceAfterRestorePanics(t *testing.T) {
+	e, name := restoredEnv(t)
+	e.svc.o.AfterRestore = func(context.Context) error { panic("boom") }
+	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
+		t.Fatal(err)
+	}
+	checkIncomplete(t, e, name, errInternal.Error())
+}
+
+// TestServiceShutdownAfterCommit checks that a shutdown after the restore
+// committed is never reported as "nothing was changed".
+func TestServiceShutdownAfterCommit(t *testing.T) {
+	e, name := restoredEnv(t)
+	reloading := make(chan struct{})
+	e.svc.o.AfterRestore = func(ctx context.Context) error {
+		close(reloading)
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reloading:
+	case <-time.After(30 * time.Second):
+		t.Fatal("AfterRestore was not called")
+	}
+	e.svc.Close()
+	checkIncomplete(t, e, name, "context canceled")
+	if st := e.svc.Status(); strings.Contains(st.Message, "nothing was changed") {
+		t.Errorf("status = %+v", st)
+	}
+}
+
+// TestServiceFailureDuringShutdown checks that only a cancellation counts
+// as stopped by the shutdown: another error at that moment is a failure.
+func TestServiceFailureDuringShutdown(t *testing.T) {
+	e := newSvcEnv(t, nil)
+	writing := make(chan struct{})
+	e.svc.dump = func(ctx context.Context, _ Kind, _ string, _ func(Progress)) (Info, error) {
+		close(writing)
+		<-ctx.Done()
+		return Info{}, errors.New("take backup: the disk failed")
+	}
+	if _, err := e.svc.StartBackup(KindManual, "local:alice"); err != nil {
+		t.Fatal(err)
+	}
+	<-writing
+	e.svc.Close()
+	if st := e.wait(t); st.State != JobFailed || st.Message != "the disk failed" {
+		t.Errorf("status = %+v", st)
+	}
+	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["error"] != "the disk failed" {
+		t.Errorf("audit = %+v", f)
+	}
+}
