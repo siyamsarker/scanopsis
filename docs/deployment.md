@@ -40,7 +40,7 @@ users and CI jobs -> reverse proxy (HTTPS, port 443) -> Scanopsis (HTTP, port 80
 
 Scanopsis publishes no container image. You build it from a version branch
 with `make image` in the repository root, see
-[deploy a version](versions.md#deploy-a-version).
+[install the newest version](versions.md#install-the-newest-version).
 
 `compose.yaml` comes with safe defaults:
 
@@ -1185,11 +1185,12 @@ so they do not slow down as reports pile up.
 ## Upgrade and roll back
 
 You deploy a new version by building its image from its version branch, see
-[upgrade to a newer version](versions.md#upgrade-to-a-newer-version) for the
+[upgrade to the newest version](versions.md#upgrade-to-the-newest-version) for the
 build steps, and [roll back to the previous version](versions.md#roll-back-to-the-previous-version)
 for the way back. Schema changes run when the new version starts; there is no
-separate migration step. This is what an upgrade from 0.1.0 to 0.2.0 looked
-like.
+separate migration step. This is a recorded upgrade from 0.1.0 straight to
+0.3.0, the newest version. From 0.2.0 it looks the same, except that the
+schema version is already 10 and stays 10.
 
 ### Upgrade
 
@@ -1212,8 +1213,9 @@ like.
    ```
 
 3. **Switch the image.** Set `SCANOPSIS_IMAGE` in `.env` to the new image and
-   run `docker compose up -d`. Compose recreates `scanopsis` and leaves the
-   database alone. Scanopsis applies the migrations, then listens.
+   run `docker compose up -d`. Compose recreates `scanopsis`, and `db` too if
+   you took over new `db` settings from the new `compose.yaml`; the data stays
+   in its volume. Scanopsis applies the migrations, then listens.
 4. **Check it.** After about 30 seconds:
 
    ```sh
@@ -1226,7 +1228,7 @@ like.
    SERVICE     STATUS
    db          Up 24 seconds (healthy)
    scanopsis   Up 10 seconds (healthy)
-   {"version":"v0.2.0","commit":"a58b46d","go":"go1.27.4"}
+   {"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}
      10
    ```
 

@@ -29,10 +29,11 @@ instead of clicking through job logs and SonarQube projects.
 
 ![The service dashboard of payments-api in the dark theme: a risk ring around the risk score with the failed quality gate, a one-line verdict of what changed since the previous pipeline, and the pipeline strip with new and fixed findings per pipeline, gate results and coverage on new code](docs/images/service-dark.png)
 
-> **Status:** the newest version is **0.3.0** (branch `release/0.3.0`, tag
-> `v0.3.0`). It is an early version: every feature below works and is tested
-> end to end, but the accuracy check against real pipeline data is still
-> open. Deploy a version branch, never `main`, which is development code.
+> **Status:** install **0.3.0**, the newest version (branch `release/0.3.0`,
+> tag `v0.3.0`). It is an early version: every feature below works and is
+> tested end to end, but the accuracy check against real pipeline data is
+> still open. Deploy the version branch, never `main`, which is development
+> code.
 
 **Contents:** [Why Scanopsis](#why-scanopsis) · [Principles](#principles) ·
 [Use cases](#use-cases) · [How it works](#how-it-works) · [Features](#features) ·
@@ -173,9 +174,8 @@ Node.js 26 as well.
 
 ## Quick start
 
-Scanopsis publishes no container image. You build it from a **version
-branch** (`release/X.Y.Z`), never from `main`. Here with the newest version,
-0.3.0:
+Scanopsis publishes no container image. You build it from the newest
+**version branch**, `release/0.3.0`, never from `main`:
 
 ```sh
 git clone --branch release/0.3.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
@@ -188,8 +188,8 @@ Then:
 
 1. Create the secret files in `secrets/` (database URL, database password,
    encryption key).
-2. Copy `.env.example` to `.env` and set `SCANOPSIS_PUBLIC_URL` and
-   `SCANOPSIS_IMAGE=scanopsis:v0.3.0`.
+2. Copy `.env.example` to `.env` and set `SCANOPSIS_PUBLIC_URL`. It already
+   runs the image you built, `scanopsis:v0.3.0`.
 3. Run `docker compose up -d`.
 4. Read the one-time setup token from the log and create the first
    administrator in the browser.
@@ -224,12 +224,17 @@ takes about 15 minutes. Then connect your pipelines with the
 
 ## Versions and upgrading
 
-Each version is a branch `release/X.Y.Z` with a tag `vX.Y.Z`, and never
-changes once published. `main` is development code. To upgrade, back up,
-build the new version's image and point `SCANOPSIS_IMAGE` at it. The new
-version updates the database when it starts. The
-[versions guide](docs/versions.md) has the steps, what to check before you
-upgrade, and how to roll back.
+The newest version is **0.3.0**. Each version is a branch, such as
+`release/0.3.0`, with a tag, such as `v0.3.0`, and never changes once
+published. `main` is development code.
+
+Already running Scanopsis? Upgrade to 0.3.0 from any older version in one
+step: back up, build the 0.3.0 image and point `SCANOPSIS_IMAGE` at it. It
+updates the database when it starts. The [versions guide](docs/versions.md)
+lists what to check for the version you run, and how to roll back.
+
+The branches of older versions (0.1.0 and 0.2.0) stay on GitHub only as a
+record. They receive no fixes, so do not install them.
 
 ## Security
 

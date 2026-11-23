@@ -262,7 +262,7 @@ Go through this when you deploy, and again after each upgrade.
 21. **Alert on the database disk at 70% and 85%.** A full disk stops the
     database. See [watch the database disk](operations.md#watch-the-database-disk).
 22. **Stay current.** Build the newest version branch, see
-    [upgrade to a newer version](versions.md#upgrade-to-a-newer-version).
+    [upgrade to the newest version](versions.md#upgrade-to-the-newest-version).
     Never deploy `main`.
 
 ## Report a vulnerability

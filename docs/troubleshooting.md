@@ -233,7 +233,7 @@ for the same project, at least a minute after the last try, up to five times.
 | "Not available" for coverage, duplication or a rating | SonarQube did not report that value. Scanopsis never shows 0 for an unknown value. | Check the project in SonarQube, for example that tests produced a coverage report. |
 | Old scans are gone | [Data retention](operations.md#data-retention) deleted them. | Raise `retention.days` if you need more history. |
 | A link to GitLab is plain text | The link is not `http` or `https`, or the GitLab URL is not set. | Set the GitLab URL. |
-| A blank page, or "The web interface is not included in this build." | The binary was built without the web interface. | Build the image with `make image`, see [deploy a version](versions.md#deploy-a-version). |
+| A blank page, or "The web interface is not included in this build." | The binary was built without the web interface. | Build the image with `make image`, see [install the newest version](versions.md#install-the-newest-version). |
 
 ## Reverse proxy and TLS
 

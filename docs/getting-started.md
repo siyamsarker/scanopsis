@@ -25,42 +25,41 @@ if you use it, your SonarQube.
 ## Step 1. Build the image
 
 Scanopsis publishes no container image, so you build one from a version
-branch. Always deploy a version branch, never `main`: `main` is development
-code. Replace `X.Y.Z` with the newest version, for example `0.3.0` (see
-[find the newest version](versions.md#find-the-newest-version)).
+branch. This guide uses **0.3.0**, the newest version. Always deploy a
+version branch, never `main`: `main` is development code.
 
 1. Clone the version branch:
 
    ```sh
-   git clone --branch release/X.Y.Z --depth 1 https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/0.3.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    ```
 
 2. Build the image with a tag that names the version:
 
    ```sh
-   make image IMAGE=scanopsis:vX.Y.Z
+   make image IMAGE=scanopsis:v0.3.0
    ```
 
    The first build downloads dependencies and takes a few minutes. The last
    lines look like this:
 
    ```text
-   #24 unpacking to docker.io/library/scanopsis:vX.Y.Z 0.0s done
+   #24 unpacking to docker.io/library/scanopsis:v0.3.0 0.0s done
    #24 DONE 0.3s
    ```
 
 3. Check that the image exists:
 
    ```sh
-   docker image ls scanopsis:vX.Y.Z
+   docker image ls scanopsis:v0.3.0
    ```
 
-   You see one line with the repository `scanopsis` and the tag `vX.Y.Z`.
+   You see one line with the repository `scanopsis` and the tag `v0.3.0`.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, the version
 string has unusual characters. Pass a plain one, for example
-`make image IMAGE=scanopsis:v1.0.0 VERSION=1.0.0`. If it fails while
+`make image IMAGE=scanopsis:v0.3.0 VERSION=v0.3.0`. If it fails while
 downloading, check the network access and proxy settings of Docker on the
 host.
 
@@ -129,9 +128,10 @@ Never commit the `secrets` directory or the `.env` file.
    The cookies are set for this address, so always open Scanopsis with exactly
    this host name. Another name makes sign-in fail.
 
-3. Set `SCANOPSIS_IMAGE` to the image tag from step 1, for example
-   `SCANOPSIS_IMAGE=scanopsis:vX.Y.Z`. Compose runs exactly this image, and an
-   [upgrade](versions.md#upgrade-to-a-newer-version) later changes only this
+3. Check that `SCANOPSIS_IMAGE` names the image from step 1:
+   `SCANOPSIS_IMAGE=scanopsis:v0.3.0`, which `.env.example` already sets.
+   Compose runs exactly this image, and an
+   [upgrade](versions.md#upgrade-to-the-newest-version) later changes only this
    line.
 
 Check that Compose accepts the files:
