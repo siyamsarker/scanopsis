@@ -59,10 +59,14 @@ func folderProblem(msg, path string, cause error) error {
 	return &publicError{msg: msg, err: fmt.Errorf("%w: %s: %w", ErrFolder, path, cause)}
 }
 
-// writeProblem is folderProblem for a failed write: a full disk says so.
+// writeProblem is folderProblem for a failed write: a full disk and a
+// folder that went away say so.
 func writeProblem(path string, cause error) error {
-	if errors.Is(cause, syscall.ENOSPC) || errors.Is(cause, syscall.EDQUOT) {
+	switch {
+	case errors.Is(cause, syscall.ENOSPC), errors.Is(cause, syscall.EDQUOT):
 		return folderProblem(folderFullMessage, path, cause)
+	case errors.Is(cause, os.ErrNotExist):
+		return folderProblem(folderMissingMessage, path, cause)
 	}
 	return folderProblem(folderNotWritableMessage, path, cause)
 }
@@ -75,6 +79,9 @@ const (
 	// are received before they are checked.
 	UploadDir = ".uploads"
 	partial   = ".partial"
+	// probeEvery is how often Usable checks again that the folder can be
+	// written.
+	probeEvery = 5 * time.Second
 )
 
 var fileName = regexp.MustCompile(`^scanopsis-backup-([0-9]{8}T[0-9]{6}Z)-(manual|scheduled|uploaded|before-restore)-[a-z0-9]{6}\.tar\.gz$`)
@@ -135,6 +142,13 @@ type Dir struct {
 
 	mu    sync.Mutex
 	cache map[string]cached
+
+	// probeMu guards the last check that the folder can be written; it is
+	// repeated at most every probeEvery.
+	probeMu    sync.Mutex
+	probedAt   time.Time
+	probeErr   error
+	probeEvery time.Duration
 }
 
 // OpenDir checks that path is a writable folder, removes partial files and
@@ -154,7 +168,10 @@ func OpenDir(path string, keyFingerprint string) (*Dir, error) {
 		return nil, err
 	}
 
-	d := &Dir{path: path, fingerprint: keyFingerprint, freeBytes: func() (uint64, error) { return statfsFree(path) }, cache: map[string]cached{}}
+	d := &Dir{
+		path: path, fingerprint: keyFingerprint, freeBytes: func() (uint64, error) { return statfsFree(path) },
+		cache: map[string]cached{}, probeEvery: probeEvery, probedAt: time.Now(),
+	}
 	d.sweep(time.Now())
 	return d, nil
 }
@@ -403,4 +420,17 @@ func syncDir(path string) error {
 		err = cerr
 	}
 	return err
+}
+
+// Usable reports why the folder cannot be written now, as a folderProblem,
+// or nil. It creates and removes a file in the folder, at most once every
+// probeEvery; in between it gives the last answer. The folder can change
+// while the server runs, for example when a volume is mounted read-only.
+func (d *Dir) Usable() error {
+	d.probeMu.Lock()
+	defer d.probeMu.Unlock()
+	if now := time.Now(); d.probedAt.IsZero() || now.Sub(d.probedAt) >= d.probeEvery {
+		d.probeErr, d.probedAt = probeWrite(d.path), now
+	}
+	return d.probeErr
 }

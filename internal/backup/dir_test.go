@@ -183,3 +183,29 @@ func TestDumpNoSpaceMessage(t *testing.T) {
 		t.Errorf("message = %v", err)
 	}
 }
+
+func TestDirUsableChecksAtMostEveryFewSeconds(t *testing.T) {
+	d, err := OpenDir(t.TempDir(), "fp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Usable(); err != nil {
+		t.Fatalf("Usable = %v", err)
+	}
+	if err := os.RemoveAll(d.Root()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Usable(); err != nil {
+		t.Errorf("Usable checked again within %v: %v", d.probeEvery, err)
+	}
+	d.probeEvery = 0
+	if err := d.Usable(); !errors.Is(err, ErrFolder) || message(err) != folderMissingMessage {
+		t.Errorf("Usable of a removed folder = %v (%q)", err, message(err))
+	}
+	entries, _ := os.ReadDir(filepath.Dir(d.Root()))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".write-test-") {
+			t.Errorf("the check left %s behind", e.Name())
+		}
+	}
+}

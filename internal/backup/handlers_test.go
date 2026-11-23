@@ -1095,3 +1095,47 @@ func TestDownloadDetail(t *testing.T) {
 		}
 	}
 }
+
+// TestFolderTurnsUnwritable checks that a folder that can no longer be
+// written while the server runs is shown on the list, with Back up now and
+// uploads refused, and that the list notices once it is fixed.
+func TestFolderTurnsUnwritable(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	e.dir.probeEvery = 0 // check on every request
+	root := e.dir.Root()
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chmod(root, 0o700) }()
+	if f, err := os.CreateTemp(root, "x"); err == nil { // running as root
+		_ = f.Close()
+		t.Skip("folder permissions do not apply to this user")
+	}
+	folder := func() map[string]any {
+		t.Helper()
+		r := e.call("GET", "/api/v1/admin/backups", "admin", nil)
+		f, _ := r.json(t)["folder"].(map[string]any)
+		return f
+	}
+	if f := folder(); f["ok"] != false || f["error"] != folderNotWritableMessage {
+		t.Errorf("folder of an unwritable folder = %v", f)
+	}
+	for _, c := range []struct {
+		method, path string
+		body         any
+	}{
+		{"POST", "/api/v1/admin/backups", nil},
+		{"POST", adminUploads, map[string]any{"file_name": "a.tar.gz", "size": 10}},
+	} {
+		r := e.call(c.method, c.path, "admin", c.body)
+		if r.status != http.StatusServiceUnavailable || r.errorCode(t) != "folder_unavailable" || r.errorMessage(t) != folderNotWritableMessage {
+			t.Errorf("%s %s = %d %s", c.method, c.path, r.status, r.body)
+		}
+	}
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if f := folder(); f["ok"] != true || f["error"] != nil {
+		t.Errorf("folder once fixed = %v", f)
+	}
+}

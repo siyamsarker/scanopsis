@@ -360,6 +360,9 @@ func (a *API) list(w http.ResponseWriter, _ *http.Request) {
 		httpapi.WriteJSON(w, http.StatusOK, out)
 		return
 	}
+	if err := dir.Usable(); err != nil {
+		fail(err)
+	}
 	if list, err := dir.List(); err != nil {
 		fail(err)
 	} else {
@@ -380,6 +383,10 @@ func (a *API) create(w http.ResponseWriter, r *http.Request) {
 	_, name := actor(r)
 	if a.dir() == nil {
 		a.folderUnavailable(w)
+		return
+	}
+	if err := a.dir().Usable(); err != nil {
+		a.jobError(w, err)
 		return
 	}
 	if err := a.svc.CheckSpace(r.Context()); err != nil {
@@ -901,6 +908,10 @@ func (a *API) startUpload(w http.ResponseWriter, r *http.Request, scope uploadSc
 	dir := a.dir()
 	if dir == nil {
 		a.folderUnavailable(w)
+		return
+	}
+	if err := dir.Usable(); err != nil {
+		a.jobError(w, err)
 		return
 	}
 	st, err := a.up.start(dir, scope, *body.FileName, *body.Size, a.o.Now())

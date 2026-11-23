@@ -775,8 +775,11 @@ export interface paths {
          *     read from the folder, newest first. A file whose manifest cannot be
          *     read is listed with `readable` false so it can be deleted; one made by
          *     a newer version of Scanopsis has `newer_version` true. When the
-         *     folder cannot be used, `folder.ok` is false, `folder.error` says why
-         *     and how to fix it, and the list is empty.
+         *     folder cannot be used, `folder.ok` is false and `folder.error` says
+         *     why and how to fix it. Whether the folder can be written is checked
+         *     again at most every few seconds, so a folder that stops being
+         *     writable while the server runs shows here too; a folder that cannot
+         *     be read gives an empty list.
          */
         get: operations["listBackups"];
         put?: never;
@@ -4008,7 +4011,7 @@ export interface operations {
                     "application/json": components["schemas"]["Error"];
                 };
             };
-            /** @description The backup folder cannot be used (code folder_unavailable; the message names the folder and the fix), the server is busy (code busy) or a backup is being restored (code restoring). */
+            /** @description The backup folder cannot be used (code folder_unavailable; the message says why and how to fix it), the server is busy (code busy) or a backup is being restored (code restoring). */
             503: {
                 headers: {
                     [name: string]: unknown;
