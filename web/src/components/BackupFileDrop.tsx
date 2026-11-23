@@ -87,7 +87,12 @@ export function BackupFileDrop({
             event.preventDefault();
             setOver(true);
           }}
-          onDragLeave={() => setOver(false)}
+          onDragLeave={(event) => {
+            // Moving onto the button or a line inside the zone is still over it.
+            const to = event.relatedTarget;
+            if (to instanceof Node && event.currentTarget.contains(to)) return;
+            setOver(false);
+          }}
           onDrop={(event) => {
             event.preventDefault();
             setOver(false);

@@ -405,6 +405,20 @@ describe('restore from the setup screen', () => {
     fireEvent.dragLeave(zone);
     expect(zone).not.toHaveAttribute('data-over');
   });
+
+  it('keeps the drop zone marked while the file moves over its own parts', async () => {
+    mockFetch(api({ required: true }));
+    renderApp('/setup');
+    await openRestore();
+    enterToken();
+    const zone = (await screen.findByText('Drop the backup file here, or')).parentElement!;
+    const button = within(zone).getByRole('button', { name: 'Choose a file' });
+    fireEvent.dragOver(zone);
+    fireEvent(zone, new MouseEvent('dragleave', { bubbles: true, relatedTarget: button }));
+    expect(zone).toHaveAttribute('data-over');
+    fireEvent(zone, new MouseEvent('dragleave', { bubbles: true, relatedTarget: document.body }));
+    expect(zone).not.toHaveAttribute('data-over');
+  });
 });
 
 describe('restore from the setup screen, across a reload', () => {
