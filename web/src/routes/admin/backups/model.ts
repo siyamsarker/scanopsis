@@ -170,10 +170,6 @@ export function canRestore(phrase: string, code: string): boolean {
 
 // ---- The restore screen ----
 
-/** The server's sentence for a restore that failed before it changed anything. */
-export const RESTORE_FAILED_MESSAGE =
-  'The restore failed and nothing was changed. The server log has the reason.';
-
 export type OverlayView =
   | { kind: 'running'; percent: number; message: string }
   | { kind: 'done'; message: string }
@@ -182,9 +178,9 @@ export type OverlayView =
   | { kind: 'idle' };
 
 /**
- * What the restore screen shows for a status. A failed restore with any
- * other message than the plain failure committed the data and waits for a
- * restart: the server stays in restore mode, so there is no way back.
+ * What the restore screen shows for a status. A failed restore that committed
+ * the data and waits for a restart (restart_required) has no way back: the
+ * server turns every request away until it restarts.
  */
 export function overlayView(status: RestoreStatus): OverlayView {
   switch (status.state) {
@@ -194,9 +190,9 @@ export function overlayView(status: RestoreStatus): OverlayView {
     case 'done':
       return { kind: 'done', message: status.message };
     case 'failed':
-      return status.message === RESTORE_FAILED_MESSAGE
-        ? { kind: 'failed', message: status.message }
-        : { kind: 'restart', message: status.message };
+      return status.restart_required
+        ? { kind: 'restart', message: status.message }
+        : { kind: 'failed', message: status.message };
     default:
       return { kind: 'idle' };
   }

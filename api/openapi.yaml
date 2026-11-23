@@ -1983,13 +1983,13 @@ components:
         skip_safety_backup: { type: boolean, default: false, description: Do not back up the current data first. }
     RestoreStatus:
       type: object
-      required: [state, percent, message, finished_at]
+      required: [state, percent, message, finished_at, restart_required]
       properties:
         state: { type: string, enum: [idle, backing_up, restoring, done, failed] }
         percent: { type: integer, minimum: 0, maximum: 100 }
         message: { type: string, description: "What happens, in a sentence; names no backup or account." }
         finished_at: { type: [string, "null"], format: date-time }
-        restart_required: { type: boolean, description: "Always sent. True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart." }
+        restart_required: { type: boolean, description: "True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart." }
     UploadStart:
       type: object
       required: [file_name, size]

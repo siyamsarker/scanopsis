@@ -60,7 +60,8 @@ function ScheduleFields({
     draft.enabled !== saved.enabled ||
     draft.zone !== saved.zone ||
     draft.keepDays !== saved.keepDays ||
-    draft.times.join() !== saved.times.join();
+    draft.times.join() !== saved.times.join() ||
+    newTime.trim() !== '';
 
   const serverProblems: Partial<Record<Field, string>> = {};
   if (update.error instanceof SettingsValidationError) {
@@ -98,7 +99,20 @@ function ScheduleFields({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    const found = scheduleProblems(draft);
+    // A time typed but not added yet is meant to be saved too.
+    let times = draft.times;
+    const typed = newTime.trim();
+    if (typed) {
+      const problem = newTimeProblem(typed, times);
+      if (problem) {
+        setTimeProblem(problem);
+        return;
+      }
+      times = [...times, typed].sort();
+      setDraft((prev) => ({ ...prev, times }));
+      setNewTime('');
+    }
+    const found = scheduleProblems({ ...draft, times });
     if (Object.keys(found).length > 0) {
       setProblems(found);
       return;
@@ -106,7 +120,7 @@ function ScheduleFields({
     update.mutate(
       {
         [KEYS.enabled]: draft.enabled,
-        [KEYS.times]: draft.times,
+        [KEYS.times]: times,
         [KEYS.zone]: draft.zone,
         [KEYS.keepDays]: Number(draft.keepDays.trim()),
       },
@@ -114,7 +128,7 @@ function ScheduleFields({
         onSuccess: () =>
           toast.success('Schedule saved', {
             description: draft.enabled
-              ? `Backups run at ${draft.times.join(', ')} (${draft.zone}).`
+              ? `Backups run at ${times.join(', ')} (${draft.zone}).`
               : 'Scheduled backups are off.',
           }),
       },
@@ -123,6 +137,7 @@ function ScheduleFields({
 
   const timesHint = `${id}-times-hint`;
   const keepHint = `${id}-keep-hint`;
+  const keepError = `${id}-keep-error`;
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-6">
@@ -237,13 +252,13 @@ function ScheduleFields({
             max={KEEP_DAYS_MAX}
             value={draft.keepDays}
             aria-invalid={shown.keepDays ? true : undefined}
-            aria-describedby={keepHint}
+            aria-describedby={shown.keepDays ? `${keepError} ${keepHint}` : keepHint}
             onChange={(e) => change({ keepDays: e.target.value })}
             className={`${monoInputClass} w-24!`}
           />
           <span className="text-body-s text-text-muted">days</span>
         </span>
-        {shown.keepDays ? <Problem>{shown.keepDays}</Problem> : null}
+        {shown.keepDays ? <Problem id={keepError}>{shown.keepDays}</Problem> : null}
         <p id={keepHint} className="text-small text-text-muted">
           The newest scheduled backup is always kept.
         </p>

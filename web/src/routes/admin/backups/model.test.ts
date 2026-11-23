@@ -1,7 +1,7 @@
 // Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
-import type { BackupInfo, JobStatus, RestorePreview } from '../../../api/backups';
+import type { BackupInfo, JobStatus, RestorePreview, RestoreStatus } from '../../../api/backups';
 import {
   canRestore,
   folderProblem,
@@ -171,40 +171,34 @@ describe('restore', () => {
 });
 
 describe('overlayView', () => {
+  const status = (overrides: Partial<RestoreStatus>): RestoreStatus => ({
+    state: 'idle',
+    percent: 0,
+    message: '',
+    finished_at: null,
+    restart_required: false,
+    ...overrides,
+  });
+
   it('maps each restore state', () => {
     expect(
-      overlayView({
-        state: 'restoring',
-        percent: 40,
-        message: 'Restoring a backup.',
-        finished_at: null,
-      }),
+      overlayView(status({ state: 'restoring', percent: 40, message: 'Restoring a backup.' })),
     ).toMatchObject({ kind: 'running', percent: 40 });
+    expect(overlayView(status({ state: 'backing_up', percent: 5 })).kind).toBe('running');
+    expect(overlayView(status({ state: 'done', percent: 100 })).kind).toBe('done');
+    expect(overlayView(status({ state: 'idle' })).kind).toBe('idle');
+  });
+
+  it('tells a restore that needs a restart by the flag, not by its wording', () => {
+    expect(overlayView(status({ state: 'failed', message: 'Any other sentence.' }))).toEqual({
+      kind: 'failed',
+      message: 'Any other sentence.',
+    });
     expect(
-      overlayView({ state: 'backing_up', percent: 5, message: 'Saving.', finished_at: null }).kind,
-    ).toBe('running');
-    expect(overlayView({ state: 'done', percent: 100, message: 'x', finished_at: null }).kind).toBe(
-      'done',
-    );
-    expect(
-      overlayView({
-        state: 'failed',
-        percent: 0,
-        message: 'The restore failed and nothing was changed. The server log has the reason.',
-        finished_at: null,
-      }).kind,
-    ).toBe('failed');
-    expect(
-      overlayView({
-        state: 'failed',
-        percent: 100,
-        message: 'The backup was restored, but Scanopsis must restart to finish.',
-        finished_at: null,
-      }).kind,
-    ).toBe('restart');
-    expect(overlayView({ state: 'idle', percent: 0, message: '', finished_at: null }).kind).toBe(
-      'idle',
-    );
+      overlayView(
+        status({ state: 'failed', percent: 100, message: 'Restart it.', restart_required: true }),
+      ),
+    ).toEqual({ kind: 'restart', message: 'Restart it.' });
   });
 });
 

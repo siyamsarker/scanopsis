@@ -1872,8 +1872,8 @@ export interface components {
             message: string;
             /** Format: date-time */
             finished_at: string | null;
-            /** @description Always sent. True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart. */
-            restart_required?: boolean;
+            /** @description True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart. */
+            restart_required: boolean;
         };
         UploadStart: {
             /** @description The name of the file being uploaded; kept as original_name. */

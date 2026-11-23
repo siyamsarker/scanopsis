@@ -38,8 +38,7 @@ export function BackupProgress({ job }: { job: JobStatus }) {
               {value}%
               {job.started_at ? (
                 <>
-                  {' '}
-                  <span aria-hidden="true">·</span> <When at={job.started_at} prefix="started" />
+                  , <When at={job.started_at} prefix="started" />
                 </>
               ) : null}
             </p>

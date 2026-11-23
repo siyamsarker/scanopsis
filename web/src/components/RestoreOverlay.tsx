@@ -6,6 +6,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { fetchRestoreStatus } from '../api/backups';
+import { ApiError, type Me } from '../api/client';
+import { meKey } from '../api/hooks';
 import { hideRestoreOverlay } from '../api/restoreMode';
 import { overlayView, type OverlayView } from '../routes/admin/backups/model';
 import { buttonClass } from '../ui';
@@ -53,7 +55,7 @@ function Progress({ percent }: { percent: number }) {
  * while the restore runs.
  *
  * - done: "Go to sign-in" (`onSignIn`), since every session ended;
- * - failed before anything changed: `onBack` with `backLabel`;
+ * - failed before anything changed: the server's sentence, then `onBack` with `backLabel`;
  * - restored but waiting for a restart: the server's instruction, and no way
  *   back, because the server turns every request away until it restarts.
  */
@@ -74,7 +76,8 @@ export function RestoreOverlay({
   pollMs?: number;
 }) {
   const [view, setView] = useState<OverlayView | null>(null);
-  const [offline, setOffline] = useState(false);
+  // Why the last status request failed: no answer, or an error answer.
+  const [trouble, setTrouble] = useState<'network' | 'error' | null>(null);
   const headingId = useId();
   const action = useRef<HTMLButtonElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -87,15 +90,15 @@ export function RestoreOverlay({
       try {
         const next = overlayView(await fetchRestoreStatus(controller.signal));
         if (stopped) return;
-        setOffline(false);
+        setTrouble(null);
         setView(next);
         // A finished restore does not change again; a restart is waited for, slowly.
         if (next.kind === 'done' || next.kind === 'failed' || next.kind === 'idle') return;
         timer = setTimeout(() => void poll(), next.kind === 'running' ? pollMs : pollMs * 5);
-      } catch {
+      } catch (err) {
         if (stopped) return;
         // The server may be restarting: keep asking.
-        setOffline(true);
+        setTrouble(err instanceof ApiError ? 'error' : 'network');
         timer = setTimeout(() => void poll(), pollMs * 2);
       }
     }
@@ -184,19 +187,16 @@ export function RestoreOverlay({
                 </>
               ) : null}
               {view?.kind === 'done' ? <p>Sign in with an account from the backup.</p> : null}
-              {view?.kind === 'failed' ? (
-                <>
-                  <p>Nothing was changed.</p>
-                  <p className="mt-2 text-body-s">{view.message}</p>
-                </>
-              ) : null}
+              {view?.kind === 'failed' ? <p>{view.message}</p> : null}
               {view?.kind === 'restart' ? <p>{view.message}</p> : null}
               {view?.kind === 'idle' ? (
                 <p>Scanopsis is not restoring a backup any more. Reload the page to go on.</p>
               ) : null}
-              {offline ? (
+              {trouble ? (
                 <p className="mt-3 text-body-s">
-                  Scanopsis does not answer at the moment. Trying again.
+                  {trouble === 'network'
+                    ? 'Scanopsis is not answering right now. Trying again.'
+                    : 'Scanopsis answered with an error. Trying again.'}
                 </p>
               ) : null}
             </div>
@@ -211,13 +211,17 @@ export function RestoreOverlay({
 
 /**
  * The restore screen for the signed-in application: after a restore everyone
- * signs in again, and a failed restore leads back to the Backups page.
+ * signs in again. A failed restore leads admins back to the Backups page and
+ * everyone else to the portfolio. The role comes from the cache, since the
+ * server answers no account request while it restores.
  */
 export function RestoreOverlayHost() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const isAdmin = queryClient.getQueryData<Me | null>(meKey)?.role === 'admin';
   return (
     <RestoreOverlay
+      backLabel={isAdmin ? 'Back to Backups' : 'Back to the portfolio'}
       onSignIn={() => {
         hideRestoreOverlay();
         queryClient.clear();
@@ -226,7 +230,7 @@ export function RestoreOverlayHost() {
       onBack={() => {
         hideRestoreOverlay();
         void queryClient.invalidateQueries();
-        void navigate('/admin/backups');
+        void navigate(isAdmin ? '/admin/backups' : '/');
       }}
     />
   );

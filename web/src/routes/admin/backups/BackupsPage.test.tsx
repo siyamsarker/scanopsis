@@ -239,6 +239,32 @@ describe('backups page', () => {
     ).toBeVisible();
   });
 
+  it('reports a failed restore of a scheduled backup', async () => {
+    mockFetch(
+      api((call) =>
+        call.path === '/api/v1/admin/backups'
+          ? json(
+              200,
+              list({
+                job: {
+                  ...idle,
+                  state: 'failed',
+                  type: 'restore',
+                  kind: 'scheduled',
+                  name: scheduled.name,
+                  message: 'restore: the backup file is truncated',
+                },
+              }),
+            )
+          : undefined,
+      ),
+    );
+    renderApp('/admin/backups');
+    const notice = await screen.findByRole('region', { name: 'Last job failed' });
+    expect(notice).toHaveTextContent('The last restore did not finish. Nothing was changed.');
+    expect(notice).toHaveTextContent('restore: the backup file is truncated');
+  });
+
   it('backs up now, shows the progress and then the new backup', async () => {
     const created = backup({
       name: 'scanopsis-backup-20261123T120000Z-manual-zzz999.tar.gz',
@@ -376,6 +402,41 @@ describe('scheduled backups', () => {
     });
   });
 
+  it('saves a typed time without Add time, or says what is wrong with it', async () => {
+    const { calls } = mockFetch(
+      api((call) =>
+        call.path === '/api/v1/settings' && call.method === 'PATCH'
+          ? json(200, { items: scheduleSettings })
+          : undefined,
+      ),
+    );
+    renderApp('/admin/backups');
+    const form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    const time = await within(form).findByRole('textbox', { name: 'Add a time' });
+    fireEvent.change(time, { target: { value: '7:5' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Save schedule' }));
+    expect(within(form).getByText('Use a 24-hour time such as 02:00.')).toBeVisible();
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+    fireEvent.change(time, { target: { value: '07:05' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Save schedule' }));
+    expect(await screen.findByText('Schedule saved')).toBeInTheDocument();
+    expect(calls.find((c) => c.method === 'PATCH')?.body).toMatchObject({
+      'backup.schedule_times': ['02:00', '07:05'],
+    });
+  });
+
+  it('ties the keep-days problem to its field', async () => {
+    mockFetch(api());
+    renderApp('/admin/backups');
+    const form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    const keep = await within(form).findByRole('spinbutton', {
+      name: 'Keep scheduled backups for',
+    });
+    fireEvent.change(keep, { target: { value: '400' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Save schedule' }));
+    expect(keep).toHaveAccessibleDescription(/Use a whole number from 1 to 365\./);
+  });
+
   it('needs at least one time', async () => {
     mockFetch(api());
     renderApp('/admin/backups');
@@ -494,6 +555,7 @@ describe('restore', () => {
           percent: 60,
           message: 'Restoring a backup.',
           finished_at: null,
+          restart_required: false,
         });
       }
       if (restoring && call.path !== '/api/v1/restore/status') {
@@ -577,6 +639,7 @@ describe('restore mode', () => {
             percent: 10,
             message: 'Saving the current data before the restore.',
             finished_at: null,
+            restart_required: false,
           });
         }
         if (call.path === '/api/v1/admin/backups') {

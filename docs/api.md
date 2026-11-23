@@ -1842,7 +1842,7 @@ Type: object
 | `finished_at` | string or null (date-time) | yes |  |
 | `message` | string | yes | What happens, in a sentence; names no backup or account. |
 | `percent` | integer (minimum 0, maximum 100) | yes |  |
-| `restart_required` | boolean | no | Always sent. True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart. |
+| `restart_required` | boolean | yes | True only when the restore replaced the data but Scanopsis must restart to finish it (state failed). The API stays in restore mode until the restart. |
 | `state` | string (one of `idle`, `backing_up`, `restoring`, `done`, `failed`) | yes |  |
 
 ### Role

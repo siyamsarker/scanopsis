@@ -65,7 +65,9 @@ function BackupsBody({ onBackUp, canBackUp }: { onBackUp: () => void; canBackUp:
 
   const { backups: items, job, schedule, disk, folder } = backups.data;
   const running = isRunning(job);
-  const lastFailed = job.state === 'failed' && job.kind !== 'scheduled' ? job : null;
+  // A failed scheduled backup has its own notice; every other failed job, restores too, gets this one.
+  const lastFailed =
+    job.state === 'failed' && !(job.type === 'backup' && job.kind === 'scheduled') ? job : null;
 
   return (
     <div className="flex flex-col gap-6">
