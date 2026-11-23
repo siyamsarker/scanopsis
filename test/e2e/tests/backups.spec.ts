@@ -213,6 +213,65 @@ test('4. a downloaded backup is a gzip tar that starts with manifest.json', asyn
   expect(firstTarEntry(downloadedFile)).toBe('manifest.json');
 });
 
+test('4a. an uploaded backup is checked in the background, then listed', async () => {
+  expect(downloadedFile, 'the download flow ran').not.toBe('');
+  await admin.goto('/admin/backups');
+  await expect(backupRows(admin)).toHaveCount(1);
+  await admin.getByRole('button', { name: 'Upload a backup' }).click();
+  const dialog = admin.getByRole('dialog', { name: 'Upload a backup' });
+  await dialog.getByLabel('Backup file').setInputFiles(downloadedFile);
+  // Once every part has arrived, the server checks the file in the background
+  // and the page asks for the outcome.
+  await expect(dialog.getByText(/Checking the backup/)).toBeVisible();
+  await expect(admin.getByText('Backup uploaded', { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(dialog).toHaveCount(0);
+  await expect(backupRows(admin)).toHaveCount(2);
+  const uploaded = backupRows(admin).filter({ hasText: 'Uploaded' });
+  await expect(uploaded).toHaveCount(1);
+  const original = downloadedFile.split('/').pop()!;
+  await expect(uploaded).toContainText(original);
+
+  // The same check over the API: complete answers 202 while the file is
+  // checked, and the upload's state gives the outcome.
+  const size = readFileSync(downloadedFile).length;
+  const started = await adminContext.request.post('/api/v1/admin/backup-uploads', {
+    data: { file_name: 'api-copy.tar.gz', size },
+  });
+  expect(started.status(), await started.text()).toBe(201);
+  const { id } = (await started.json()) as { id: string };
+  const part = await adminContext.request.put(`/api/v1/admin/backup-uploads/${id}?offset=0`, {
+    data: readFileSync(downloadedFile),
+    headers: { 'Content-Type': 'application/octet-stream' },
+  });
+  expect(part.status(), await part.text()).toBe(200);
+  const completed = await adminContext.request.post(`/api/v1/admin/backup-uploads/${id}/complete`);
+  expect(completed.status(), await completed.text()).toBe(202);
+  expect(((await completed.json()) as { state: string }).state).toBe('checking');
+  let outcome: { state: string; backup?: { name: string } } = { state: 'checking' };
+  await expect
+    .poll(
+      async () => {
+        outcome = await (await adminContext.request.get(`/api/v1/admin/backup-uploads/${id}`)).json();
+        return outcome.state;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe('ready');
+  // Both copies go again, so the flows below start from the one backup.
+  const listed = (
+    (await (await adminContext.request.get('/api/v1/admin/backups')).json()) as {
+      backups: { name: string; kind: string }[];
+    }
+  ).backups.filter((b) => b.kind === 'uploaded');
+  expect(listed.map((b) => b.name)).toContain(outcome.backup?.name);
+  for (const b of listed) {
+    const deleted = await adminContext.request.delete(`/api/v1/admin/backups/${b.name}`);
+    expect(deleted.status(), await deleted.text()).toBe(204);
+  }
+  await admin.reload();
+  await expect(backupRows(admin)).toHaveCount(1);
+});
+
 test('5. the schedule is saved, shown again after a reload, and kept out of Settings', async () => {
   await admin.goto('/admin/backups');
   const schedule = admin.getByRole('region', { name: 'Scheduled backups' });
@@ -299,6 +358,11 @@ test('7. a restore is refused without a code and with a wrong code', async () =>
   const restore = dialog.getByRole('button', { name: 'Restore backup' });
   const phrase = dialog.getByLabel('Type RESTORE to confirm');
   const code = dialog.getByLabel('Two-factor code');
+  // The server reads the whole file in the background first.
+  await expect(dialog.getByRole('status')).toContainText('Checking the backup…');
+  await expect(restore).toBeDisabled();
+  await expect(phrase).toBeVisible({ timeout: 60_000 });
+  await expect(dialog).toContainText('Made byroot');
 
   // Nothing typed, the phrase alone and the code alone do not enable it.
   await expect(restore).toBeDisabled();
@@ -384,6 +448,7 @@ test('9. a backup is restored on the setup screen of an empty installation', asy
     await expect(page.getByRole('heading', { name: 'Choose the backup file' })).toBeVisible();
 
     await page.getByLabel('Backup file').setInputFiles(downloadedFile);
+    await expect(page.getByText(/Checking the backup/)).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Review the backup' })).toBeVisible({
       timeout: 60_000,
     });
