@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -200,6 +201,23 @@ func expansionLimit(fileSize int64) int64 {
 	return fileSize*deflateMaxRatio + margin
 }
 
+// readCounter counts the bytes read from r. n may be read by another
+// goroutine; onRead, if not nil, is called after every read.
+type readCounter struct {
+	r      io.Reader
+	n      atomic.Int64
+	onRead func()
+}
+
+func (c *readCounter) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n.Add(int64(n))
+	if c.onRead != nil {
+		c.onRead()
+	}
+	return n, err
+}
+
 // ctxReader fails reads once ctx is done, so reading a large file stops
 // when the caller gives up.
 type ctxReader struct {
@@ -259,8 +277,18 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 		return fmt.Errorf("restore backup: %w", err)
 	}
 	limit := expansionLimit(fi.Size())
+	// The progress is the share of the file read: once by the check, once
+	// by the load.
+	src := &readCounter{r: f}
+	loading, progress := false, o.Progress
+	report := func(p Progress) {
+		if progress != nil {
+			progress(restoreWork(p, src.n.Load(), fi.Size(), loading))
+		}
+	}
 	rewind := func() error {
 		_, err := f.Seek(0, io.SeekStart)
+		src.n.Store(0)
 		return err
 	}
 
@@ -276,7 +304,9 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 	if err := rewind(); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
-	verified, _, err := VerifyLimited(ctxReader{ctx, f}, o.SigningKey, nil, limit)
+	src.onRead = func() { report(Progress{}) }
+	verified, _, err := VerifyLimited(ctxReader{ctx, src}, o.SigningKey, nil, limit)
+	src.onRead = nil
 	if err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
@@ -297,7 +327,9 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 	if o.BeforeReplace != nil {
 		o.BeforeReplace()
 	}
-	if err := restoreTx(ctx, pool, f, limit, filepath.Base(path), m, o); err != nil {
+	loading = true
+	o.Progress = report
+	if err := restoreTx(ctx, pool, src, limit, filepath.Base(path), m, o); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
 	}
 	return nil

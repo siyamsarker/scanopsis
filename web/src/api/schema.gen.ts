@@ -1876,6 +1876,7 @@ export interface components {
             /** @description For a backup, the new file once written; for a restore, the backup being restored. */
             name?: string;
             progress: components["schemas"]["JobProgress"];
+            /** @description How far the job has come, counted in bytes: for a backup, the table data written against an estimate from the size of each table; for a restore, the file read by the check (the first 10%) and by the load. 100 only once the job is done. */
             percent: number;
             /** @description What happens or went wrong, in a sentence. */
             message?: string;
@@ -1952,6 +1953,7 @@ export interface components {
         RestoreStatus: {
             /** @enum {string} */
             state: "idle" | "backing_up" | "restoring" | "done" | "failed";
+            /** @description How far the restore has come, counted in bytes of the file read (see JobStatus). */
             percent: number;
             /** @description What happens, in a sentence; names no backup or account. */
             message: string;

@@ -511,6 +511,10 @@ func TestRestoreRoundTrip(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	got := snapshot(t, pool)
+	checkWorkGrows(t, steps)
+	if first, last := steps[0].percent(), steps[len(steps)-1].percent(); first > restoreCheckShare || last < 90 {
+		t.Errorf("progress went from %d%% to %d%%, want the check up to %d%% and the load to about 99%%", first, last, restoreCheckShare)
+	}
 
 	if len(want["sessions"]) == 0 || len(got["sessions"]) != 0 {
 		t.Errorf("sessions: %d before the backup, %d after the restore; want some, then none", len(want["sessions"]), len(got["sessions"]))

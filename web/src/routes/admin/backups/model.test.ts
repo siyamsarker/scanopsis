@@ -90,6 +90,27 @@ describe('jobs', () => {
     ).toBe('Copying scans, 3 of 12 tables, 3.0 MiB so far');
     expect(jobDetail(job({ state: 'backing_up' }))).toBe('Starting');
   });
+
+  it('says what a restore does before it loads tables, and loads them', () => {
+    expect(
+      jobDetail(
+        job({
+          state: 'restoring',
+          type: 'restore',
+          message: 'Checking the backup before the restore.',
+        }),
+      ),
+    ).toBe('Checking the backup before the restore.');
+    expect(
+      jobDetail(
+        job({
+          state: 'restoring',
+          type: 'restore',
+          progress: { table: 'scans', tables_done: 3, tables_total: 12, bytes: 1024 * 1024 },
+        }),
+      ),
+    ).toBe('Loading scans, 3 of 12 tables, 1.0 MiB so far');
+  });
 });
 
 describe('schedule validation', () => {

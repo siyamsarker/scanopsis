@@ -524,8 +524,10 @@ Scanopsis; the files in it have mode 600.
 ### Back up from the Backups page
 
 Select **Back up now**. The backup runs in the background, so you can leave
-the page; the page shows the table in progress and a bar, and the new file
-appears at the top of the list. The server keeps working during a backup, and
+the page; the page shows a bar that moves with the data written so far, the
+table in progress, and the new file at the top of the list once it is done.
+The share is an estimate made from the size of each table, so the bar can
+pause just short of the end of a table that holds more than expected. The server keeps working during a backup, and
 the backup is a consistent snapshot of the database.
 
 Before it starts, Scanopsis checks the free space of the backup folder: it

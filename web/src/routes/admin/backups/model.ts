@@ -41,12 +41,16 @@ export function isRunning(job: JobStatus | undefined): boolean {
   return job?.state === 'backing_up' || job?.state === 'restoring';
 }
 
-/** The progress of a job in one line: the table being copied, tables done of all, size so far. */
+/**
+ * The progress of a job in one line, under the percentage the server counts
+ * in bytes: the table being copied or loaded, tables done of all, size so
+ * far. Before the first table, what the job does.
+ */
 export function jobDetail(job: JobStatus): string {
   const { table, tables_done, tables_total, bytes } = job.progress;
-  if (!table && tables_total === 0) return 'Starting';
+  if (!table && tables_total === 0) return job.message || 'Starting';
   const parts = [];
-  if (table) parts.push(`Copying ${table}`);
+  if (table) parts.push(`${job.type === 'restore' ? 'Loading' : 'Copying'} ${table}`);
   if (tables_total > 0)
     parts.push(`${formatInt(tables_done)} of ${countOf(tables_total, 'table')}`);
   parts.push(`${formatBytes(bytes)} so far`);

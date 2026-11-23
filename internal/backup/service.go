@@ -353,11 +353,10 @@ func (s *Service) Status() JobStatus {
 	if p := s.progress.Load(); p != nil && (st.State == JobBackingUp || st.State == JobRestoring) {
 		st.Progress = *p
 	}
-	switch {
-	case st.State == JobDone:
+	if st.State == JobDone {
 		st.Percent = 100
-	case st.Progress.TablesTotal > 0:
-		st.Percent = min(st.Progress.TablesDone*100/st.Progress.TablesTotal, 99)
+	} else {
+		st.Percent = st.Progress.percent()
 	}
 	return st
 }

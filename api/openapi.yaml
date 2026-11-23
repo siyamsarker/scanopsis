@@ -2007,7 +2007,7 @@ components:
         kind: { $ref: "#/components/schemas/BackupKind" }
         name: { type: string, description: "For a backup, the new file once written; for a restore, the backup being restored." }
         progress: { $ref: "#/components/schemas/JobProgress" }
-        percent: { type: integer, minimum: 0, maximum: 100 }
+        percent: { type: integer, minimum: 0, maximum: 100, description: "How far the job has come, counted in bytes: for a backup, the table data written against an estimate from the size of each table; for a restore, the file read by the check (the first 10%) and by the load. 100 only once the job is done." }
         message: { type: string, description: "What happens or went wrong, in a sentence." }
         started_at: { type: [string, "null"], format: date-time }
         finished_at: { type: [string, "null"], format: date-time }
@@ -2063,7 +2063,7 @@ components:
       required: [state, percent, message, finished_at, restart_required]
       properties:
         state: { type: string, enum: [idle, backing_up, restoring, done, failed] }
-        percent: { type: integer, minimum: 0, maximum: 100 }
+        percent: { type: integer, minimum: 0, maximum: 100, description: "How far the restore has come, counted in bytes of the file read (see JobStatus)." }
         message: { type: string, description: "What happens, in a sentence; names no backup or account." }
         finished_at: { type: [string, "null"], format: date-time }
         restart_required: { type: boolean, description: "True only when the restore replaced the data, or may have (PostgreSQL did not confirm the commit), and Scanopsis must restart to finish it (state failed). The message says which. The API stays in restore mode until the restart." }

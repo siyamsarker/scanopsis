@@ -120,8 +120,15 @@ func (d *Dumper) Dump(ctx context.Context, kind Kind, actor string, progress fun
 	if err := tx.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
 		return Info{}, fmt.Errorf("take backup: %w", err)
 	}
-	if err := d.checkSpace(ctx, tx, schema, tables); err != nil {
+	sizes, err := d.checkSpace(ctx, tx, schema, tables)
+	if err != nil {
 		return Info{}, err
+	}
+	if progress != nil {
+		// The bar moves with the data written, against an estimate made
+		// from the size of each table.
+		estimate, report := newBackupEstimate(sizes), progress
+		progress = func(p Progress) { report(estimate.apply(p)) }
 	}
 
 	now := time.Now().UTC().Truncate(time.Second)
@@ -152,28 +159,38 @@ func (d *Dumper) CheckSpace(ctx context.Context) error {
 	if err := d.Pool.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
 		return fmt.Errorf("take backup: %w", err)
 	}
-	return d.checkSpace(ctx, d.Pool, schema, tables)
+	_, err = d.checkSpace(ctx, d.Pool, schema, tables)
+	return err
 }
 
-func (d *Dumper) checkSpace(ctx context.Context, db store.DBTX, schema string, tables []TableSpec) error {
+// checkSpace refuses a backup that would not fit the folder, and returns
+// the size PostgreSQL stores for each of tables, in their order.
+func (d *Dumper) checkSpace(ctx context.Context, db store.DBTX, schema string, tables []TableSpec) ([]int64, error) {
 	names := make([]string, len(tables))
 	for i, t := range tables {
 		names[i] = t.Name
 	}
-	var size int64
-	err := db.QueryRow(ctx, `SELECT coalesce(sum(pg_table_size(format('%I.%I', $1::text, n)::regclass)), 0)::bigint FROM unnest($2::text[]) n`, schema, names).Scan(&size)
+	var sizes []int64
+	err := db.QueryRow(ctx, `SELECT coalesce(array_agg(pg_table_size(format('%I.%I', $1::text, n)::regclass) ORDER BY i), '{}')::bigint[] FROM unnest($2::text[]) WITH ORDINALITY AS t(n, i)`, schema, names).Scan(&sizes)
 	if err != nil {
-		return fmt.Errorf("take backup: estimate size: %w", err)
+		return nil, fmt.Errorf("take backup: estimate size: %w", err)
+	}
+	if len(sizes) != len(tables) {
+		return nil, fmt.Errorf("take backup: estimate size: %d sizes for %d tables", len(sizes), len(tables))
+	}
+	var size int64
+	for _, s := range sizes {
+		size += max(s, 0)
 	}
 	have, err := d.Dir.FreeBytes()
 	if err != nil {
-		return fmt.Errorf("take backup: %w", err)
+		return nil, fmt.Errorf("take backup: %w", err)
 	}
-	need := uint64(max(size, 0)) + spaceMargin //nolint:gosec // clamped to zero or more
+	need := uint64(size) + spaceMargin //nolint:gosec // a sum of sizes of zero or more
 	if have < need {
-		return fmt.Errorf("take backup: %w", &spaceError{need: need, have: have})
+		return nil, fmt.Errorf("take backup: %w", &spaceError{need: need, have: have})
 	}
-	return nil
+	return sizes, nil
 }
 
 // folderError reports a failure to write into the backup folder.

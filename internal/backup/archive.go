@@ -131,6 +131,13 @@ type Progress struct {
 	TablesTotal int    `json:"tables_total"`
 	// Bytes is the amount of table data written so far, for all tables.
 	Bytes int64 `json:"bytes"`
+
+	// current is the table data written so far for the table being
+	// copied.
+	current int64
+	// work of workTotal is how far the job has come, in units of the job
+	// (see backupEstimate and restoreWork); zero workTotal means unknown.
+	work, workTotal int64
 }
 
 // TableCopier writes the CSV data of one table to w and returns the number of
@@ -333,7 +340,7 @@ func (a *archiveWriter) finish() error {
 
 func (a *archiveWriter) report() {
 	if a.progress != nil {
-		a.progress(Progress{Table: a.table, TablesDone: a.done, TablesTotal: a.total, Bytes: a.allBytes + a.tableBytes})
+		a.progress(Progress{Table: a.table, TablesDone: a.done, TablesTotal: a.total, Bytes: a.allBytes + a.tableBytes, current: a.tableBytes})
 	}
 }
 

@@ -199,6 +199,7 @@ func TestDumpBasic(t *testing.T) {
 	if len(steps) == 0 {
 		t.Error("no progress reported")
 	}
+	checkWorkGrows(t, steps)
 	p, _ := d.Dir.Path(info.Name)
 	st, err := os.Stat(p)
 	if err != nil || st.Mode().Perm() != 0o600 {
@@ -601,5 +602,18 @@ VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, '2026-03-04 05:06:07.123
 		if got[k] != want {
 			t.Errorf("%s in the backup = %q, want %q", k, got[k], want)
 		}
+	}
+}
+
+// checkWorkGrows fails unless every step measures the work in bytes and
+// the work never goes back.
+func checkWorkGrows(t *testing.T, steps []Progress) {
+	t.Helper()
+	var last int64
+	for i, p := range steps {
+		if p.workTotal <= 0 || p.work < last || p.work > p.workTotal {
+			t.Fatalf("step %d of %d: work %d of %d after %d", i, len(steps), p.work, p.workTotal, last)
+		}
+		last = p.work
 	}
 }

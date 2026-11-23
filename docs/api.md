@@ -1698,7 +1698,7 @@ Type: object
 | `kind` | [BackupKind](#backupkind) | no |  |
 | `message` | string | no | What happens or went wrong, in a sentence. |
 | `name` | string | no | For a backup, the new file once written; for a restore, the backup being restored. |
-| `percent` | integer (minimum 0, maximum 100) | yes |  |
+| `percent` | integer (minimum 0, maximum 100) | yes | How far the job has come, counted in bytes: for a backup, the table data written against an estimate from the size of each table; for a restore, the file read by the check (the first 10%) and by the load. 100 only once the job is done. |
 | `progress` | [JobProgress](#jobprogress) | yes |  |
 | `started_at` | string or null (date-time) | yes |  |
 | `state` | string (one of `idle`, `backing_up`, `restoring`, `done`, `failed`) | yes |  |
@@ -1896,7 +1896,7 @@ Type: object
 |---|---|---|---|
 | `finished_at` | string or null (date-time) | yes |  |
 | `message` | string | yes | What happens, in a sentence; names no backup or account. |
-| `percent` | integer (minimum 0, maximum 100) | yes |  |
+| `percent` | integer (minimum 0, maximum 100) | yes | How far the restore has come, counted in bytes of the file read (see JobStatus). |
 | `restart_required` | boolean | yes | True only when the restore replaced the data, or may have (PostgreSQL did not confirm the commit), and Scanopsis must restart to finish it (state failed). The message says which. The API stays in restore mode until the restart. |
 | `state` | string (one of `idle`, `backing_up`, `restoring`, `done`, `failed`) | yes |  |
 
