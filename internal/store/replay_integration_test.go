@@ -376,51 +376,6 @@ func TestReplayRollsBack(t *testing.T) {
 	}
 }
 
-// databaseWithRole creates a database and a login role, both called name:
-// the database belongs to the administrator of the server, and the role only
-// gets CREATE on its public schema, as "Use an existing PostgreSQL" in
-// docs/deployment.md allows. It returns pools on the database as the
-// administrator and as the role.
-func databaseWithRole(t *testing.T, name string) (owner, role *pgxpool.Pool) {
-	t.Helper()
-	ctx := context.Background()
-	admin := storetest.New(t)
-	for _, q := range []string{
-		`CREATE ROLE ` + name + ` LOGIN PASSWORD 'role-secret'`,
-		`CREATE DATABASE ` + name,
-	} {
-		if _, err := admin.Exec(ctx, q); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() {
-		for _, q := range []string{`DROP DATABASE ` + name + ` WITH (FORCE)`, `DROP ROLE ` + name} {
-			if _, err := admin.Exec(context.Background(), q); err != nil {
-				t.Errorf("clean up: %v", err)
-			}
-		}
-	})
-	cfg := admin.Config().Copy()
-	cfg.ConnConfig.Database = name
-	owner, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(owner.Close)
-	if _, err := owner.Exec(ctx, `GRANT CREATE ON SCHEMA public TO `+name); err != nil {
-		t.Fatal(err)
-	}
-	cfg = cfg.Copy()
-	cfg.ConnConfig.User = name
-	cfg.ConnConfig.Password = "role-secret"
-	role, err = pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(role.Close)
-	return owner, role
-}
-
 // TestDropApplicationTablesNarrowGrant runs as a role that only has CREATE
 // on the public schema of a database it does not own, as "Use an existing
 // PostgreSQL" in docs/deployment.md allows: goose migrates, then dropping
@@ -431,7 +386,7 @@ func databaseWithRole(t *testing.T, name string) (owner, role *pgxpool.Pool) {
 func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	owner, narrow := databaseWithRole(t, "replay_narrow")
+	owner, narrow := storetest.NarrowRole(t, "replay_narrow")
 	// A table of another role, which the drop must leave alone.
 	for _, q := range []string{
 		`CREATE TABLE other_app (note text)`,
@@ -545,7 +500,7 @@ func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 func TestDropApplicationTablesForeignOwner(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	owner, role := databaseWithRole(t, "replay_foreign")
+	owner, role := storetest.NarrowRole(t, "replay_foreign")
 	if err := store.Migrate(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
