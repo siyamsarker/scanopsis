@@ -5,6 +5,7 @@ package backup
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -35,28 +36,45 @@ var fileName = regexp.MustCompile(`^scanopsis-backup-([0-9]{8}T[0-9]{6}Z)-(manua
 
 // Info describes one backup file.
 type Info struct {
-	Name       string
-	Kind       Kind
-	Size       int64
-	CreatedAt  time.Time
-	CreatedBy  string
-	AppVersion string
-	Schema     int64
+	Name       string    `json:"name"`
+	Kind       Kind      `json:"kind"`
+	Size       int64     `json:"size"`
+	CreatedAt  time.Time `json:"created_at"`
+	CreatedBy  string    `json:"created_by"`
+	AppVersion string    `json:"app_version"`
+	Schema     int64     `json:"schema"`
 	// KeyMatches is true when the backup was made with the secret key this
 	// server runs with, so its encrypted values can be read after a restore.
-	KeyMatches bool
+	KeyMatches bool `json:"key_matches"`
+	// Readable is false when the manifest of the file cannot be read; the
+	// file is listed with the kind and time of its name so it can be
+	// deleted, and cannot be restored.
+	Readable bool `json:"readable"`
 	// UploadedAt and OriginalName describe an uploaded file; they are nil and
 	// empty for backups made here.
-	UploadedAt   *time.Time
-	OriginalName string
+	UploadedAt   *time.Time `json:"uploaded_at"`
+	OriginalName string     `json:"original_name"`
 }
 
 type cached struct {
-	size  int64
-	mtime time.Time
-	m     Manifest
-	ok    bool
+	size   int64
+	mtime  time.Time
+	m      Manifest
+	ok     bool
+	upload uploadMeta
 }
+
+// uploadMeta is kept next to an uploaded backup, in a hidden file named
+// after it, so the list can tell when the file arrived and what it was
+// called. The backup file itself is never changed.
+type uploadMeta struct {
+	UploadedAt   time.Time `json:"uploaded_at"`
+	OriginalName string    `json:"original_name"`
+}
+
+// metaName is the name of the file that holds the uploadMeta of the backup
+// called name.
+func metaName(name string) string { return "." + name + ".json" }
 
 // Dir is the folder that holds backup files.
 type Dir struct {
@@ -112,6 +130,15 @@ func (d *Dir) sweep(now time.Time) {
 	}
 	remove(d.path, func(n string) bool { return strings.HasSuffix(n, partial) })
 	remove(filepath.Join(d.path, UploadDir), func(string) bool { return true })
+	// The upload details of a backup that was removed by hand.
+	remove(d.path, func(n string) bool {
+		name, ok := strings.CutSuffix(strings.TrimPrefix(n, "."), ".json")
+		if !ok || !strings.HasPrefix(n, ".") || !fileName.MatchString(name) {
+			return false
+		}
+		_, err := os.Stat(filepath.Join(d.path, name))
+		return errors.Is(err, os.ErrNotExist)
+	})
 }
 
 // Root returns the folder path.
@@ -148,6 +175,7 @@ func (d *Dir) Delete(name string) error {
 	if err := os.Remove(p); err != nil {
 		return fmt.Errorf("delete backup: %w", err)
 	}
+	_ = os.Remove(filepath.Join(d.path, metaName(name))) //nolint:gosec // name matched fileName in Path
 	d.mu.Lock()
 	delete(d.cache, name)
 	d.mu.Unlock()
@@ -241,6 +269,9 @@ func (d *Dir) info(name string, fi os.FileInfo) Info {
 			_ = f.Close()
 			c.m, c.ok = m, err == nil
 		}
+		if b, err := os.ReadFile(filepath.Join(d.path, metaName(name))); err == nil { //nolint:gosec // name matched fileName
+			_ = json.Unmarshal(b, &c.upload)
+		}
 		d.mu.Lock()
 		d.cache[name] = c
 		d.mu.Unlock()
@@ -250,9 +281,62 @@ func (d *Dir) info(name string, fi os.FileInfo) Info {
 
 func (d *Dir) build(name string, size int64, c cached) Info {
 	sub := fileName.FindStringSubmatch(name)
-	if !c.ok {
+	var info Info
+	if c.ok {
+		info = infoOf(name, size, c.m, d.fingerprint)
+	} else {
 		at, _ := time.Parse("20060102T150405Z", sub[1])
-		return Info{Name: name, Kind: Kind(sub[2]), Size: size, CreatedAt: at}
+		info = Info{Name: name, Kind: Kind(sub[2]), Size: size, CreatedAt: at}
 	}
-	return infoOf(name, size, c.m, d.fingerprint)
+	if info.Kind == KindUploaded && !c.upload.UploadedAt.IsZero() {
+		at := c.upload.UploadedAt
+		info.UploadedAt, info.OriginalName = &at, c.upload.OriginalName
+	}
+	return info
+}
+
+// adopt moves the checked upload at src, a file inside the folder, into the
+// folder as a backup of kind uploaded, and records when it arrived and the
+// name it had. It returns the new backup's description.
+func (d *Dir) adopt(src, originalName string, at time.Time) (Info, error) {
+	name := d.NewName(KindUploaded, at)
+	final := filepath.Join(d.path, name)
+	meta := filepath.Join(d.path, metaName(name))
+	// The details come first, so a listed upload always has them.
+	if err := writeFileAtomic(meta, uploadMeta{UploadedAt: at.UTC(), OriginalName: originalName}); err != nil {
+		return Info{}, d.writeError(err)
+	}
+	if err := os.Rename(src, final); err != nil {
+		_ = os.Remove(meta)
+		return Info{}, d.writeError(err)
+	}
+	if err := syncDir(d.path); err != nil {
+		// Without a synced folder the rename may be lost after a crash.
+		_ = os.Remove(final)
+		_ = os.Remove(meta)
+		return Info{}, d.writeError(err)
+	}
+	fi, err := os.Stat(final)
+	if err != nil {
+		return Info{}, d.writeError(err)
+	}
+	return d.info(name, fi), nil
+}
+
+// writeError reports a failure to write into the folder.
+func (d *Dir) writeError(err error) error {
+	return fmt.Errorf("%w: %s could not be written (%w); make sure it is writable for the user the server runs as (uid 65532 in the container image) and has free space", ErrFolder, d.path, err)
+}
+
+// syncDir makes the entries of the folder at path durable.
+func syncDir(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // the backup folder
+	if err != nil {
+		return err
+	}
+	err = dir.Sync()
+	if cerr := dir.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }

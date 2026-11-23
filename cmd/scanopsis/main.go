@@ -258,7 +258,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		Secure:               cfg.Secure(),
 	}
 	catalogService := catalog.New(pool, conf, rec, log)
-	backups, err := newBackupService(cfg, pool, conf, rec, log, func(ctx context.Context) error {
+	backups, folderErr, err := newBackupService(cfg, pool, conf, rec, log, func(ctx context.Context) error {
 		// A restore replaced the database under the running server: read
 		// the settings again and drop what was computed from the old data.
 		// Sessions are read from the database on every request, so the ones
@@ -275,6 +275,14 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	// Ends running backup jobs and waits for them, also when start-up fails
 	// below; Run does the same when ctx ends.
 	defer backups.Close()
+	// API requests are turned away while a restore replaces the data.
+	deps.Restoring = backups.Restoring
+	backupAPI := backup.NewAPI(backup.APIOptions{
+		Service: backups, FolderPath: cfg.BackupDir, FolderErr: folderErr,
+		Audit: rec, Log: log, ClientIP: resolver.IP,
+		CheckCode: mfa.CheckCode, CheckSetupToken: setup.CheckToken,
+		RetentionDays: func() int { return conf.Current().RetentionDays },
+	})
 	sonarQube := sonar.New(pool, conf, sonar.Options{HTTPClient: httpClient, Logger: log, Audit: rec, ClientIP: resolver.IP})
 	features, err := mergeFeatures(
 		ingest.New(pool, conf, rec, ingest.Options{
@@ -288,6 +296,7 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		findings.New(pool, conf, log).Handlers(),
 		sonarQube.Handlers(),
 		auditlog.New(pool, log).Handlers(),
+		backupAPI.Handlers(),
 	)
 	if err != nil {
 		return err
@@ -317,16 +326,16 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 // newBackupService opens the backup folder and returns the backup service.
 // A folder that cannot be used is not fatal: the server starts, logs one
 // warning that names the folder and the fix, and every backup and restore
-// then fails with that reason. A secret key that cannot give a fingerprint or
-// a signing key stops the start.
-func newBackupService(cfg *config.Config, pool *pgxpool.Pool, conf *settings.Service, rec auth.AuditRecorder, log *slog.Logger, afterRestore func(context.Context) error) (*backup.Service, error) {
+// then fails with that reason, which is returned as folderErr. A secret key
+// that cannot give a fingerprint or a signing key stops the start.
+func newBackupService(cfg *config.Config, pool *pgxpool.Pool, conf *settings.Service, rec auth.AuditRecorder, log *slog.Logger, afterRestore func(context.Context) error) (svc *backup.Service, folderErr error, err error) {
 	fingerprint, err := backup.KeyFingerprint(cfg.SecretKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	signingKey, err := backup.SigningKey(cfg.SecretKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	o := backup.ServiceOptions{
 		Pool:           pool,
@@ -342,8 +351,9 @@ func newBackupService(cfg *config.Config, pool *pgxpool.Pool, conf *settings.Ser
 	case errors.Is(err, backup.ErrFolder):
 		log.Warn("backups are unavailable until the backup folder is fixed; fix it and restart Scanopsis",
 			"folder", cfg.BackupDir, "error", err)
+		folderErr = err
 	case err != nil:
-		return nil, err
+		return nil, nil, err
 	default:
 		o.Dir = dir
 		o.Dumper = &backup.Dumper{
@@ -351,7 +361,7 @@ func newBackupService(cfg *config.Config, pool *pgxpool.Pool, conf *settings.Ser
 			KeyFingerprint: fingerprint, SigningKey: signingKey,
 		}
 	}
-	return backup.NewService(o), nil
+	return backup.NewService(o), folderErr, nil
 }
 
 // mergeFeatures combines the handlers of the feature packages, keyed by
@@ -515,17 +525,13 @@ func resolveCommit() string {
 // is logged as a warning and is not an error.
 func serve(ctx context.Context, ln net.Listener, h http.Handler, log *slog.Logger, grace time.Duration) error {
 	var inflight atomic.Int64
-	srv := &http.Server{
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			inflight.Add(1)
-			defer inflight.Add(-1)
-			h.ServeHTTP(w, r)
-		}),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	// The backup download and upload parts extend these timeouts for their
+	// own requests.
+	srv := httpapi.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		inflight.Add(1)
+		defer inflight.Add(-1)
+		h.ServeHTTP(w, r)
+	}))
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
 

@@ -63,10 +63,17 @@ const (
 	// and backup.restore_incomplete (the restore committed, but the server
 	// must restart to finish it) carry "name" and "error". The actor is
 	// who started the job, or "scheduler" for scheduled backups.
+	// backup.uploaded carries "name", "original_name" and "size" (the
+	// actor is "setup" for an upload on the setup screen);
+	// backup.downloaded carries "name", "size" and, for a part of the file,
+	// "range"; backup.deleted carries "name" and "size".
 	ActionBackupCreated           = "backup.created"
 	ActionBackupFailed            = "backup.failed"
 	ActionBackupRestoreFailed     = "backup.restore_failed"
 	ActionBackupRestoreIncomplete = "backup.restore_incomplete"
+	ActionBackupUploaded          = "backup.uploaded"
+	ActionBackupDownloaded        = "backup.downloaded"
+	ActionBackupDeleted           = "backup.deleted"
 )
 
 // Inserter is the query the recorder needs; *store.Queries implements it.

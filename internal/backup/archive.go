@@ -126,11 +126,11 @@ type Trailer struct {
 
 // Progress tells how far WriteArchive has come.
 type Progress struct {
-	Table       string
-	TablesDone  int
-	TablesTotal int
+	Table       string `json:"table"`
+	TablesDone  int    `json:"tables_done"`
+	TablesTotal int    `json:"tables_total"`
 	// Bytes is the amount of table data written so far, for all tables.
-	Bytes int64
+	Bytes int64 `json:"bytes"`
 }
 
 // TableCopier writes the CSV data of one table to w and returns the number of

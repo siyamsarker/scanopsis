@@ -56,6 +56,8 @@ const maxWait = time.Minute
 var (
 	// ErrBusy means a backup or restore job is already running.
 	ErrBusy = errors.New("a backup or restore is already running")
+	// ErrInUse means the backup is the one the running restore reads.
+	ErrInUse = errors.New("the backup is being restored; wait until the restore has finished")
 	// ErrMaintenance means another maintenance job held its lock for longer
 	// than a restore waits.
 	ErrMaintenance = errors.New("another maintenance job is running; try again in a few minutes")
@@ -83,6 +85,15 @@ const (
 	JobFailed    JobState = "failed"
 )
 
+// JobType tells a backup job from a restore job.
+type JobType string
+
+// Job types.
+const (
+	JobTypeBackup  JobType = "backup"
+	JobTypeRestore JobType = "restore"
+)
+
 // JobStatus describes the current or last job. For a backup, Kind and Name
 // describe the new file once it is written; for a restore, they describe
 // the backup being restored (while the backup before the restore runs,
@@ -90,6 +101,7 @@ const (
 // sentence for people.
 type JobStatus struct {
 	State      JobState   `json:"state"`
+	Type       JobType    `json:"type,omitempty"`
 	Kind       Kind       `json:"kind,omitempty"`
 	Name       string     `json:"name,omitempty"`
 	Progress   Progress   `json:"progress"`
@@ -237,9 +249,78 @@ func (s *Service) Status() JobStatus {
 	return st
 }
 
-// Restoring reports whether a restore is replacing the data right now. The
-// server turns requests away while it is true.
+// Restoring reports whether a restore is replacing the data right now, or
+// replaced it and waits for a restart. The server turns requests away while
+// it is true.
 func (s *Service) Restoring() bool { return s.restoring.Load() }
+
+// The messages of RestoreStatus. They name no file, account or folder,
+// since anyone may read them.
+const (
+	restoreBackingUpMessage = "Saving the current data before the restore."
+	restoreRunningMessage   = "Restoring a backup."
+	restoreDoneMessage      = "Restore finished. Sign in with an account from the backup."
+	restoreFailedMessage    = "The restore failed and nothing was changed. The server log has the reason."
+)
+
+// RestoreStatus is the state of the current or last restore, as anyone may
+// see it: no names, accounts or folders.
+type RestoreStatus struct {
+	State      JobState   `json:"state"`
+	Percent    int        `json:"percent"`
+	Message    string     `json:"message"`
+	FinishedAt *time.Time `json:"finished_at"`
+}
+
+// RestoreStatus returns the state of the current or last restore. When the
+// last job was a backup, or there was none, the state is idle.
+func (s *Service) RestoreStatus() RestoreStatus {
+	return publicRestore(s.Status(), s.needRestart.Load())
+}
+
+func publicRestore(st JobStatus, needRestart bool) RestoreStatus {
+	if st.Type != JobTypeRestore {
+		return RestoreStatus{State: JobIdle}
+	}
+	out := RestoreStatus{State: st.State, Percent: st.Percent, FinishedAt: st.FinishedAt}
+	switch {
+	case st.State == JobBackingUp:
+		out.Message = restoreBackingUpMessage
+	case st.State == JobRestoring:
+		out.Message = restoreRunningMessage
+	case st.State == JobDone:
+		out.Message = restoreDoneMessage
+	case needRestart:
+		out.Message = restartMessage
+	default:
+		out.Message = restoreFailedMessage
+	}
+	return out
+}
+
+// Delete deletes the backup called name. It refuses, with ErrInUse, the
+// backup the running restore reads. A file still being written has a name
+// of its own (it ends in .partial) and is never listed.
+func (s *Service) Delete(name string) error {
+	if s.o.Dir == nil {
+		return s.usable()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running && s.status.Type == JobTypeRestore && s.status.Name == name {
+		return ErrInUse
+	}
+	return s.o.Dir.Delete(name)
+}
+
+// CheckSpace refuses, with ErrNoSpace and the numbers, a backup that would
+// not fit the folder now.
+func (s *Service) CheckSpace(ctx context.Context) error {
+	if err := s.usable(); err != nil {
+		return err
+	}
+	return s.o.Dumper.CheckSpace(ctx)
+}
 
 // Schedule returns the outcome of the last scheduled backup.
 func (s *Service) Schedule() ScheduleStatus {
@@ -315,7 +396,7 @@ func (s *Service) StartBackup(kind Kind, actor string) (JobStatus, error) {
 	if err := s.usable(); err != nil {
 		return JobStatus{}, err
 	}
-	st, err := s.begin(JobStatus{State: JobBackingUp, Kind: kind, Message: "Taking a backup."})
+	st, err := s.begin(JobStatus{State: JobBackingUp, Type: JobTypeBackup, Kind: kind, Message: "Taking a backup."})
 	if err != nil {
 		return JobStatus{}, err
 	}
@@ -404,13 +485,13 @@ func (s *Service) failed(ctx context.Context, kind Kind, actor string, err error
 }
 
 // message is the text of err for people: the reason without the package's
-// "take backup: " and "restore backup: " prefixes.
+// "take backup: ", "restore backup: " and "check backup: " prefixes.
 func message(err error) string {
 	if errors.Is(err, context.Canceled) {
 		return "Scanopsis stopped before the job finished; nothing was changed."
 	}
 	m := err.Error()
-	for _, p := range []string{"take backup: ", "restore backup: "} {
+	for _, p := range []string{"take backup: ", "restore backup: ", "check backup: "} {
 		m = strings.TrimPrefix(m, p)
 	}
 	return m
@@ -440,9 +521,9 @@ func (s *Service) StartRestore(name string, actor string, skipSafety bool, keepH
 	if err != nil {
 		return JobStatus{}, err
 	}
-	first := JobStatus{State: JobRestoring, Kind: kind, Name: name, Message: "Waiting for other maintenance jobs to finish."}
+	first := JobStatus{State: JobRestoring, Type: JobTypeRestore, Kind: kind, Name: name, Message: "Waiting for other maintenance jobs to finish."}
 	if !skipSafety {
-		first = JobStatus{State: JobBackingUp, Kind: KindBeforeRestore, Name: name, Message: "Waiting for other maintenance jobs to finish."}
+		first = JobStatus{State: JobBackingUp, Type: JobTypeRestore, Kind: KindBeforeRestore, Name: name, Message: "Waiting for other maintenance jobs to finish."}
 	}
 	st, err := s.begin(first)
 	if err != nil {
@@ -734,7 +815,7 @@ func (s *Service) scheduled(ctx context.Context) {
 		if err := s.wait(ctx); err != nil {
 			return
 		}
-		_, err := s.begin(JobStatus{State: JobBackingUp, Kind: KindScheduled, Message: "Taking a scheduled backup."})
+		_, err := s.begin(JobStatus{State: JobBackingUp, Type: JobTypeBackup, Kind: KindScheduled, Message: "Taking a scheduled backup."})
 		if err == nil {
 			break
 		}

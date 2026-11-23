@@ -140,13 +140,28 @@ func (d *Dumper) Dump(ctx context.Context, kind Kind, actor string, progress fun
 	return d.Dir.info(name, fi), nil
 }
 
-func (d *Dumper) checkSpace(ctx context.Context, tx pgx.Tx, schema string, tables []TableSpec) error {
+// CheckSpace refuses, with ErrNoSpace and the numbers, a backup that would
+// not fit the folder, so a request can be answered at once. Dump checks
+// again when it runs.
+func (d *Dumper) CheckSpace(ctx context.Context) error {
+	tables, err := Tables(ctx, d.Pool)
+	if err != nil {
+		return fmt.Errorf("take backup: %w", err)
+	}
+	var schema string
+	if err := d.Pool.QueryRow(ctx, `SELECT current_schema()`).Scan(&schema); err != nil {
+		return fmt.Errorf("take backup: %w", err)
+	}
+	return d.checkSpace(ctx, d.Pool, schema, tables)
+}
+
+func (d *Dumper) checkSpace(ctx context.Context, db store.DBTX, schema string, tables []TableSpec) error {
 	names := make([]string, len(tables))
 	for i, t := range tables {
 		names[i] = t.Name
 	}
 	var size int64
-	err := tx.QueryRow(ctx, `SELECT coalesce(sum(pg_table_size(format('%I.%I', $1::text, n)::regclass)), 0)::bigint FROM unnest($2::text[]) n`, schema, names).Scan(&size)
+	err := db.QueryRow(ctx, `SELECT coalesce(sum(pg_table_size(format('%I.%I', $1::text, n)::regclass)), 0)::bigint FROM unnest($2::text[]) n`, schema, names).Scan(&size)
 	if err != nil {
 		return fmt.Errorf("take backup: estimate size: %w", err)
 	}

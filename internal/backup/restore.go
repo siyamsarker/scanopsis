@@ -97,24 +97,24 @@ type RestoreOptions struct {
 
 // Preview describes what restoring a backup would do.
 type Preview struct {
-	Info Info
+	Info Info `json:"info"`
 	// SchemaOK is false when the backup was made by a newer version of
 	// Scanopsis, which this version cannot restore.
-	SchemaOK bool
+	SchemaOK bool `json:"schema_ok"`
 	// KeyMatches is false when the backup was made with another secret key,
 	// which this server refuses to restore.
-	KeyMatches bool
+	KeyMatches bool `json:"key_matches"`
 	// ScansRemovedByRetention is the number of scans in the backup that are
 	// older than RetentionDays counted back from now: the next data
 	// clean-up after the restore deletes them, apart from the latest scans
 	// it always keeps.
-	ScansRemovedByRetention int64
+	ScansRemovedByRetention int64 `json:"scans_removed_by_retention"`
 	// OldestScanAt is the time of the oldest scan in the backup; nil when
 	// it has none.
-	OldestScanAt *time.Time
+	OldestScanAt *time.Time `json:"oldest_scan_at"`
 	// RetentionDays is the retention period the restored installation will
 	// have: the backup's own setting when it has one, else the current one.
-	RetentionDays int
+	RetentionDays int `json:"retention_days"`
 }
 
 // keysMatch reports whether a backup made with the key of fingerprint
@@ -585,6 +585,7 @@ func infoOf(name string, size int64, m Manifest, keyFingerprint string) Info {
 	return Info{
 		Name: name, Kind: kind, Size: size, CreatedAt: m.CreatedAt, CreatedBy: m.CreatedBy,
 		AppVersion: m.AppVersion, Schema: m.Schema, KeyMatches: keysMatch(m.KeyFingerprint, keyFingerprint),
+		Readable: true,
 	}
 }
 

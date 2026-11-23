@@ -99,10 +99,18 @@ func TestDirSweepsStaleFiles(t *testing.T) {
 	oldUpload := mk(filepath.Join(UploadDir, "u1"), old)
 	youngUpload := mk(filepath.Join(UploadDir, "u2"), young)
 	other := mk("notes.txt", old)
+	const kept, gone = "scanopsis-backup-20261120T020000Z-uploaded-abc123.tar.gz", "scanopsis-backup-20261120T020000Z-uploaded-zzz999.tar.gz"
+	mk(kept, old)
+	keptMeta := mk(metaName(kept), old)
+	orphanMeta := mk(metaName(gone), old)
+	status := mk(statusFile, old)
 	if _, err := OpenDir(root, "fp"); err != nil {
 		t.Fatal(err)
 	}
-	for p, want := range map[string]bool{oldPartial: false, youngPartial: true, oldUpload: false, youngUpload: true, other: true} {
+	for p, want := range map[string]bool{
+		oldPartial: false, youngPartial: true, oldUpload: false, youngUpload: true, other: true,
+		keptMeta: true, orphanMeta: false, status: true,
+	} {
 		_, err := os.Stat(p)
 		if (err == nil) != want {
 			t.Errorf("%s exists = %v, want %v", filepath.Base(p), err == nil, want)
