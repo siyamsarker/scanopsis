@@ -566,7 +566,7 @@ a key kept apart from the secret key, as
 [encrypt your backups](#encrypt-your-backups) shows for `pg_dump` files.
 
 **Upload a backup** adds a file you downloaded earlier, for example from
-another installation. The browser sends it in parts of 8 MiB, so a large file
+another installation that uses the same secret key. The browser sends it in parts of 8 MiB, so a large file
 passes a proxy and an interrupted upload resumes where it stopped. Scanopsis
 then reads the whole file and checks the signature. A file from another
 secret key, from a newer version of Scanopsis or a damaged file is refused
@@ -574,7 +574,9 @@ with the reason.
 
 Backups that Scanopsis cannot read are listed as **Cannot be read**; you can
 delete them, not restore them. A backup made with another secret key shows
-**Made with another secret key** and cannot be restored here.
+**Made with another secret key** and cannot be restored here. To use it, set
+up a new installation with that secret key and restore it on the setup
+screen, as in [restore on a new host](#restore-on-a-new-host).
 
 ### Restore a backup
 
@@ -652,9 +654,10 @@ a backup file and the **same** `secrets/secret_key` it was made with.
    backup. The backup schedule comes from the backup too.
 
 If the backup was made with another secret key, or by a newer version of
-Scanopsis, the screen says so and stops. Fix the cause (copy the right
-`secrets/secret_key`, or install the newer version) and restart Scanopsis.
-A restart prints a new setup token.
+Scanopsis, the screen says so and stops. Fix the cause on this new installation, which has no data yet: use the
+`secrets/secret_key` the backup was made with, or install the newer version,
+and restart Scanopsis. A restart prints a new setup token. Never change the
+secret key of an installation that is in use.
 
 The restored file stays in the `backups` folder as an uploaded backup.
 

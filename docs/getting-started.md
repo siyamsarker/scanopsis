@@ -126,7 +126,8 @@ sudo install -d -m 700 -o 65532 -g 65532 backups
 | `backups` | The backup files Scanopsis writes. The container runs as user 65532, so that user must own the folder; `sudo install` sets owner and mode 700 in one step, which keeps other users on the host out. |
 
 Why folders: a Docker volume is deleted by `docker compose down -v`,
-`docker volume prune` and `docker system prune --volumes`. No Docker command
+`docker volume prune` and `docker system prune --volumes`. No Docker cleanup
+command (`docker compose down -v`, `docker volume prune`, `docker system prune`)
 deletes a folder, so a slip at the command line cannot take your scans with
 it. Both folders are ignored by Git. Back them up with the rest of the
 host, as the [operations guide](operations.md) describes.

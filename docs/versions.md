@@ -218,7 +218,9 @@ for a second copy of the database.
    sudo install -d -m 700 -o 65532 -g 65532 backups &&
    docker run --rm -v scanopsis_db-data:/from -v "$PWD/data/postgres":/to \
      alpine:3.22@sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f \
-     sh -c 'test -z "$(ls -A /to)" || { echo "data/postgres is not empty" >&2; exit 1; }; cp -a /from/. /to/'
+     sh -c 'test -z "$(ls -A /to)" || { echo "data/postgres is not empty" >&2; exit 1; }; cp -a /from/. /to/' &&
+   sudo chown 70:70 data/postgres &&
+   sudo chmod 700 data/postgres
    ```
 
    The commands are chained, so the block stops at the first one that fails.
@@ -226,7 +228,9 @@ for a second copy of the database.
    `docker run` would create an empty volume and copy nothing. The copy
    refuses to run if `data/postgres` already holds files, so it never mixes
    two databases. Otherwise the commands print nothing and exit with 0. `cp -a`
-   keeps the owners of the files, which the database needs. The folder
+   keeps the owners of the files, which the database needs; the last two
+   commands set the folder itself back to user 70 and mode 700, because the
+   copy can carry over the owner and mode of the volume's top folder. The folder
    `data/postgres` then holds one folder named `18`, the PostgreSQL major
    version. `data/postgres` has mode 700 because it holds the database files, and belongs to user 70, the user the PostgreSQL image runs as; only it may open them.
 
@@ -256,8 +260,9 @@ network, and the database is still there after `docker compose up -d`.
 
 - The database schema does not change: 0.4.0 adds no migration, and the last
   one is still the one 0.3.0 has. Going back to 0.3.0 later needs no restore
-  for the schema, but remember that 0.3.0 reads the database only from the
-  Docker volume of its own `compose.yaml`.
+  for the schema. Which storage a version uses is decided by the
+  `compose.yaml` you run it with: with the `compose.yaml` of 0.3.0, the
+  database is the old Docker volume.
 - The database lives in a folder now, not in the Docker volume. Follow
   [move the database into a folder](#move-the-database-into-a-folder) before
   you start 0.4.0.

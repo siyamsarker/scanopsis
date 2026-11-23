@@ -262,7 +262,6 @@ millions of findings:
 - A service overview reads all its numbers in one read-only transaction, so they
   all come from the same moment.
 
-
 ## Backups and restores
 
 The package `internal/backup` writes, reads and restores backups. One job

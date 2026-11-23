@@ -1302,7 +1302,7 @@ stays 10. Before an upgrade from a version before 0.4.0, also
    SERVICE     STATUS
    db          Up 24 seconds (healthy)
    scanopsis   Up 10 seconds (healthy)
-   {"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}   <- recorded with 0.3.0
+   {"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}
      10
    ```
 

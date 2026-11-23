@@ -127,10 +127,10 @@ Each row names where the control lives, so you can check it in the code.
 
 | Control | What it does |
 |---|---|
-| Administrators only | Every backup route needs an administrator with a completed two-factor check. Viewers and CI jobs cannot list, download or restore a backup. |
+| Administrators only | Every route under `/api/v1/admin/` (list, make, download, upload, delete and restore backups) needs an administrator with a completed two-factor check. Viewers and CI jobs cannot use them. The routes under `/api/v1/setup/restore` (the setup-screen restore, its uploads and its token check) need no session: they need the setup token, work only while no administrator exists, and are limited per client address. `/api/v1/restore/status` is public and returns only a fixed sentence per state. |
 | Signed with a key from the secret key | A backup ends with an HMAC signature that covers its manifest and the checksum of every table. A restore refuses a file with a missing or wrong signature, so a file made or changed by someone without the secret key is not accepted. The fingerprint of the key in the manifest only gives the clearer message when a backup belongs to another key. |
 | Not encrypted | A backup holds password hashes (Argon2id), the encrypted secrets, scan data and the audit log. Anyone who reads the file can read all but the encrypted secrets, which need `secrets/secret_key`. Keep backups and the key apart, and encrypt copies that leave the host. |
-| Folder permissions | The `backups` folder has mode 700 and belongs to user 65532; each file has mode 600. |
+| Folder permissions | Each backup file has mode 600. The folder should have mode 700 and belong to user 65532, as the guides say; that is an operator step, because Scanopsis neither sets nor checks the permissions of the folder. |
 | Restore needs a typed confirmation | An administrator types `RESTORE` and a current two-factor code. Too many wrong codes end the administrator's sessions. On the setup screen, where no account exists, the setup token stands in; checking it is limited per client address. |
 | Restore signs everyone out | All sessions end. A restore refuses a backup of another secret key or of a newer version. |
 | Audited | See the list below. |
