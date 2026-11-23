@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +42,9 @@ const statusFile = ".schedule-status.json"
 // jobs (data retention, the SonarQube sync) to finish.
 const defaultLockWait = 2 * time.Minute
 
+// closeTimeout bounds the closing of the lock connection.
+const closeTimeout = 5 * time.Second
+
 // maxWait is the longest the scheduler sleeps before it looks at the clock
 // again, so a clock that is set or jumps is noticed within a minute.
 const maxWait = time.Minute
@@ -55,6 +59,10 @@ var (
 	errOtherInstance = errors.New("another Scanopsis instance is running a backup or restore on this database; try again when it has finished")
 	// errClosed means the server is shutting down.
 	errClosed = errors.New("the server is shutting down")
+	// errInternal replaces a panic of a job.
+	errInternal = errors.New("an unexpected error stopped the job; see the server log for details")
+	// errStopped means the service was closed while the job ran.
+	errStopped = fmt.Errorf("stopped by a shutdown: %w", context.Canceled)
 )
 
 // JobState is the state of the backup or restore job.
@@ -137,6 +145,9 @@ type Service struct {
 	lockWait time.Duration
 	dump     func(ctx context.Context, kind Kind, actor string, progress func(Progress)) (Info, error)
 	restore  func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error
+	// expiring, if not nil, is called with the names expiry is about to
+	// delete.
+	expiring func(names []string)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -188,8 +199,16 @@ func NewService(o ServiceOptions) *Service {
 // Close cancels the running job, if any, and waits for it to end. A
 // cancelled backup leaves no file; a cancelled restore changes nothing.
 func (s *Service) Close() {
-	s.cancel()
+	s.stop()
 	s.jobs.Wait()
+}
+
+// stop cancels the jobs' context. It holds mu, so begin either claims the
+// slot (and adds to jobs) before Close waits, or sees the service closed.
+func (s *Service) stop() {
+	s.mu.Lock()
+	s.cancel()
+	s.mu.Unlock()
 }
 
 // Status returns the state of the current or last job.
@@ -288,22 +307,34 @@ func (s *Service) StartBackup(kind Kind, actor string) (JobStatus, error) {
 	if err != nil {
 		return JobStatus{}, err
 	}
-	go func() { _, _ = s.backupJob(kind, actor) }()
+	go func() { _, _ = s.backupJob(kind, actor, nil) }()
 	return st, nil
 }
 
-// backupJob runs a backup in the job slot begin claimed.
-func (s *Service) backupJob(kind Kind, actor string) (Info, error) {
+// backupJob runs a backup in the job slot begin claimed. then, if not nil,
+// runs after a successful backup while the job still holds the slot and
+// its lock.
+func (s *Service) backupJob(kind Kind, actor string, then func(context.Context)) (Info, error) {
 	ctx := s.ctx
-	info, err := func() (Info, error) {
+	var info Info
+	err := s.guard(ctx, func() error {
 		release, err := s.lock(ctx, false)
 		if err != nil {
-			s.failed(ctx, kind, actor, err)
-			return Info{}, err
+			return err
 		}
 		defer release()
-		return s.takeBackup(ctx, kind, actor)
-	}()
+		if info, err = s.takeBackup(ctx, kind, actor); err != nil {
+			return err
+		}
+		if then != nil {
+			_ = s.guard(ctx, func() error { then(ctx); return nil })
+		}
+		return nil
+	})
+	err = s.stopped(err)
+	if err != nil {
+		s.failed(ctx, kind, actor, err)
+	}
 	s.finish(func(st *JobStatus) {
 		if err != nil {
 			st.State, st.Message = JobFailed, message(err)
@@ -314,20 +345,46 @@ func (s *Service) backupJob(kind Kind, actor string) (Info, error) {
 	return info, err
 }
 
-// takeBackup writes a backup under the job lock and records the outcome.
+// guard runs fn and turns a panic into errInternal, logged with its stack.
+// The deferred calls of fn, which release the locks, run on the way.
+func (s *Service) guard(ctx context.Context, fn func() error) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			s.o.Log.ErrorContext(ctx, "a backup job stopped with a panic", "panic", r, "stack", string(debug.Stack()))
+			err = errInternal
+		}
+	}()
+	return fn()
+}
+
+// stopped replaces err with errStopped when the job ended because the
+// service was closed: a shutdown is not a failure of the job.
+func (s *Service) stopped(err error) error {
+	if err != nil && s.ctx.Err() != nil {
+		return errStopped
+	}
+	return err
+}
+
+// takeBackup writes a backup under the job lock and audits it. The caller
+// records a failure.
 func (s *Service) takeBackup(ctx context.Context, kind Kind, actor string) (Info, error) {
 	info, err := s.dump(ctx, kind, actor, s.setProgress)
 	if err != nil {
-		s.failed(ctx, kind, actor, err)
 		return Info{}, err
 	}
-	s.o.Audit.Record(ctx, actor, audit.ActionBackupCreated, map[string]any{"name": info.Name, "kind": info.Kind, "size": info.Size})
+	s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupCreated, map[string]any{"name": info.Name, "kind": info.Kind, "size": info.Size})
 	s.o.Log.InfoContext(ctx, "backup taken", "name", info.Name, "kind", info.Kind, "size", info.Size, "actor", actor)
 	return info, nil
 }
 
-// failed records a backup that could not be taken.
+// failed records a backup that could not be taken. A backup stopped by a
+// shutdown is only logged.
 func (s *Service) failed(ctx context.Context, kind Kind, actor string, err error) {
+	if errors.Is(err, errStopped) {
+		s.o.Log.InfoContext(ctx, "backup stopped because Scanopsis is shutting down", "kind", kind, "actor", actor)
+		return
+	}
 	s.o.Log.ErrorContext(ctx, "backup failed", "kind", kind, "actor", actor, "error", err)
 	s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupFailed, map[string]any{"kind": kind, "error": message(err)})
 }
@@ -399,7 +456,7 @@ func (s *Service) check(path string) (Kind, error) {
 func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSafety, keepHostSettings bool) {
 	ctx := s.ctx
 	var safety string
-	err := func() error {
+	err := s.guard(ctx, func() error {
 		release, err := s.lock(ctx, true)
 		if err != nil {
 			return err
@@ -408,7 +465,11 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 		if !skipSafety {
 			s.update(func(st *JobStatus) { st.Message = "Backing up the current data before the restore." })
 			info, err := s.takeBackup(ctx, KindBeforeRestore, actor)
-			if err != nil {
+			if err = s.stopped(err); err != nil {
+				s.failed(ctx, KindBeforeRestore, actor, err)
+				if errors.Is(err, errStopped) {
+					return err
+				}
 				return fmt.Errorf("the backup of the current data failed, so nothing was restored: %s", message(err))
 			}
 			safety = info.Name
@@ -433,7 +494,8 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 			}
 		}
 		return nil
-	}()
+	})
+	err = s.stopped(err)
 	if err != nil {
 		var after *afterError
 		if !errors.As(err, &after) {
@@ -470,7 +532,13 @@ func (s *Service) lock(ctx context.Context, exclusive bool) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to the database: %w", err)
 	}
-	release := func() { _ = conn.Close(context.WithoutCancel(ctx)) }
+	release := func() {
+		// Closing the connection drops its locks, also when the database
+		// cannot be reached in time.
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), closeTimeout)
+		defer cancel()
+		_ = conn.Close(cctx)
+	}
 	var ok bool
 	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", AdvisoryLockKey).Scan(&ok); err != nil {
 		release()
@@ -544,14 +612,18 @@ func (s *Service) next(p plan, now time.Time) time.Time {
 	return NextRun(now, strings.Split(p.times, ","), loc)
 }
 
-// Run runs the backup schedule until ctx ends, then cancels a running job
-// and waits for it (Close). It follows the settings: a change of the
-// schedule takes effect at once. A time missed while the server was down is
-// not caught up. A time that comes while another job runs waits for it;
-// times that pass during a long backup lead to one more backup, not to one
-// per time.
+// Run runs the backup schedule until ctx ends. The end of ctx also cancels
+// a running job, scheduled or not, and Run returns once it has stopped
+// (Close); a job stopped that way is not recorded as failed. Run follows the
+// settings: a change of the schedule takes effect at once. A time missed
+// while the server was down is not caught up. A time that comes while
+// another job runs waits for it; times that pass during a long backup lead
+// to one more backup, not to one per time, unless the schedule changed
+// meanwhile.
 func (s *Service) Run(ctx context.Context) {
 	defer s.Close()
+	// The end of ctx also stops a job that is running, scheduled or not.
+	defer context.AfterFunc(ctx, s.stop)()
 	changed := make(chan struct{}, 1)
 	s.o.Settings.OnChange(func(settings.Snapshot) {
 		select {
@@ -567,6 +639,17 @@ func (s *Service) Run(ctx context.Context) {
 		}
 		if !next.IsZero() && !s.now().Before(next) {
 			s.scheduled(ctx)
+			// A change during the run applies before any catch-up run, so
+			// a schedule turned off meanwhile stays off.
+			select {
+			case <-changed:
+				if p := planOf(s.o.Settings.Current()); p != cur {
+					cur = p
+					next = s.next(cur, s.now())
+					continue
+				}
+			default:
+			}
 			after := s.next(cur, next)
 			if now := s.now(); !after.IsZero() && !after.After(now) {
 				after = now
@@ -616,26 +699,28 @@ func (s *Service) scheduled(ctx context.Context) {
 			return
 		}
 	}
-	_, err := s.backupJob(KindScheduled, ScheduleActor)
-	if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+	_, err := s.backupJob(KindScheduled, ScheduleActor, s.expire)
+	if errors.Is(err, errStopped) {
 		return // shutting down: not a failure of the schedule
-	}
-	if err == nil {
-		s.expire(ctx)
 	}
 	s.recordSchedule(at, err)
 }
 
 // expire deletes the scheduled backups older than the keep-days setting.
 // It runs only after a successful scheduled backup, so failing backups
-// never thin out the ones that are left.
+// never thin out the ones that are left, and inside that backup's job, so
+// no restore can start from a file it deletes.
 func (s *Service) expire(ctx context.Context) {
 	list, err := s.o.Dir.List()
 	if err != nil {
 		s.o.Log.WarnContext(ctx, "could not list backups to delete expired ones", "error", err)
 		return
 	}
-	for _, name := range Expired(list, s.now(), s.o.Settings.Current().BackupKeepDays) {
+	expired := Expired(list, s.now(), s.o.Settings.Current().BackupKeepDays)
+	if s.expiring != nil {
+		s.expiring(expired)
+	}
+	for _, name := range expired {
 		if err := s.o.Dir.Delete(name); err != nil {
 			s.o.Log.WarnContext(ctx, "could not delete an expired backup", "name", name, "error", err)
 			continue

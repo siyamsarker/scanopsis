@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -741,5 +742,171 @@ func TestServiceFailedScheduledRecorded(t *testing.T) {
 	}
 	if st := e.svc.Status(); st.State != JobFailed || st.Kind != KindScheduled {
 		t.Errorf("job status = %+v", st)
+	}
+}
+
+// TestServiceShutdownDuringScheduledRun checks that ending Run's context
+// stops a scheduled backup that is being written: Run returns promptly, no
+// partial file stays behind, and a shutdown is not recorded as a failed
+// scheduled backup.
+func TestServiceShutdownDuringScheduledRun(t *testing.T) {
+	e := newSvcEnv(t, scheduleSeeds("03:00"))
+	writing := make(chan struct{})
+	var once sync.Once
+	real := e.svc.dump
+	e.svc.dump = func(ctx context.Context, kind Kind, actor string, progress func(Progress)) (Info, error) {
+		return real(ctx, kind, actor, func(p Progress) {
+			progress(p)
+			once.Do(func() {
+				close(writing)
+				<-ctx.Done() // hold the partial file open until the shutdown
+			})
+		})
+	}
+	clock := newFakeClock(utc("2026-11-23T01:59:30Z"))
+	e.svc.now = clock.Now
+	e.svc.newTimer = clock.newTimer
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { e.svc.Run(ctx); close(done) }()
+	clock.fire(clock.next(t), utc("2026-11-23T02:00:00Z"))
+	select {
+	case <-writing:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the scheduled backup did not start")
+	}
+	if len(partials(t, e.dir.Root())) != 1 {
+		t.Fatalf("no partial file while writing: %v", partials(t, e.dir.Root()))
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after its context ended")
+	}
+	if p := partials(t, e.dir.Root()); len(p) != 0 {
+		t.Errorf("partial files left: %v", p)
+	}
+	if s := e.svc.Schedule(); s.LastRunAt != nil {
+		t.Errorf("a shutdown was recorded as a scheduled run: %+v", s)
+	}
+	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 0 {
+		t.Errorf("a shutdown was audited as a failed backup: %+v", f)
+	}
+	if _, err := os.Stat(filepath.Join(e.dir.Root(), statusFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("status file written: %v", err)
+	}
+	if st := e.svc.Status(); st.State != JobFailed || st.Message != "Scanopsis stopped before the job finished; nothing was changed." {
+		t.Errorf("status = %+v", st)
+	}
+}
+
+// TestServiceScheduleOffDuringRun checks that times which pass during a
+// long scheduled backup lead to one more backup, unless the schedule is
+// turned off meanwhile.
+func TestServiceScheduleOffDuringRun(t *testing.T) {
+	for _, off := range []bool{false, true} {
+		e := newSvcEnv(t, scheduleSeeds("03:00", "03:30"))
+		release := make(chan struct{})
+		var started atomic.Int32
+		real := e.svc.dump
+		e.svc.dump = func(ctx context.Context, kind Kind, actor string, progress func(Progress)) (Info, error) {
+			if started.Add(1) == 1 {
+				<-release
+			}
+			return real(ctx, kind, actor, progress)
+		}
+		clock := newFakeClock(utc("2026-11-23T01:59:30Z"))
+		e.startScheduler(t, clock)
+		clock.fire(clock.next(t), utc("2026-11-23T02:00:00Z"))
+		for started.Load() == 0 {
+			time.Sleep(5 * time.Millisecond)
+		}
+		// 03:30 Berlin (02:30 UTC) passes while the first backup runs.
+		clock.set(utc("2026-11-23T02:45:00Z"))
+		if off {
+			e.patchSettings(t, `{"backup.schedule_enabled":false}`)
+		}
+		close(release)
+		want := 2
+		if off {
+			want = 1
+		}
+		e.waitScheduled(t, want)
+		time.Sleep(200 * time.Millisecond)
+		if n := len(e.audit.of(audit.ActionBackupCreated)); n != want {
+			t.Errorf("off=%v: %d scheduled backups, want %d", off, n, want)
+		}
+	}
+}
+
+// TestServiceExpiryHoldsTheJob checks that expired backups are deleted
+// while the scheduled job still holds the job slot, so no restore can
+// start from a file that is about to go.
+func TestServiceExpiryHoldsTheJob(t *testing.T) {
+	e := newSvcEnv(t, scheduleSeeds("03:00"))
+	old := oldBackup(t, e.dir, KindScheduled, utc("2026-10-01T02:00:00Z"))
+	var state atomic.Value
+	var busyErr atomic.Value
+	e.svc.expiring = func(names []string) {
+		if !slices.Contains(names, old) {
+			t.Errorf("expiring %v, want %s among them", names, old)
+		}
+		state.Store(e.svc.Status().State)
+		_, err := e.svc.StartBackup(KindManual, "local:alice")
+		busyErr.Store(fmt.Sprint(err))
+	}
+	clock := newFakeClock(utc("2026-11-23T01:59:30Z"))
+	e.startScheduler(t, clock)
+	clock.fire(clock.next(t), utc("2026-11-23T02:00:00Z"))
+	if s := e.waitScheduled(t, 1); !s.OK {
+		t.Fatalf("schedule = %+v", s)
+	}
+	if state.Load() != JobBackingUp || busyErr.Load() != ErrBusy.Error() {
+		t.Errorf("during expiry: state %v, StartBackup err %v", state.Load(), busyErr.Load())
+	}
+	if slices.Contains(names(t, e.dir), old) {
+		t.Error("the expired backup is still there")
+	}
+}
+
+// TestServiceJobPanic checks that a panic in a job ends it as failed,
+// releases its locks and leaves the service usable.
+func TestServiceJobPanic(t *testing.T) {
+	e := newSvcEnv(t, nil)
+	name := e.backup(t)
+	real := e.svc.dump
+	e.svc.dump = func(context.Context, Kind, string, func(Progress)) (Info, error) { panic("boom") }
+	if _, err := e.svc.StartBackup(KindManual, "local:alice"); err != nil {
+		t.Fatal(err)
+	}
+	st := e.wait(t)
+	if st.State != JobFailed || st.Message != errInternal.Error() {
+		t.Errorf("status = %+v", st)
+	}
+	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["error"] != errInternal.Error() {
+		t.Errorf("audit = %+v", f)
+	}
+
+	realRestore := e.svc.restore
+	e.svc.dump = real
+	e.svc.restore = func(context.Context, *pgxpool.Pool, string, RestoreOptions) error { panic("boom") }
+	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.wait(t); st.State != JobFailed || st.Message != errInternal.Error() || e.svc.Restoring() {
+		t.Errorf("restore status = %+v, restoring %v", st, e.svc.Restoring())
+	}
+	if f := e.audit.of(audit.ActionBackupRestoreFailed); len(f) != 1 {
+		t.Errorf("audit = %+v", f)
+	}
+	// The locks went with the job: both kinds of job run again.
+	e.svc.restore = realRestore
+	e.backup(t)
+	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.wait(t); st.State != JobDone {
+		t.Errorf("restore after the panic = %+v", st)
 	}
 }
