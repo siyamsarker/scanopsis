@@ -557,8 +557,9 @@ and `gpg --decrypt` instead (not tested).
 
 ### Watch the database disk
 
-The database lives in the Docker volume `db-data`, on the disk that holds
-Docker's data (usually `/var/lib/docker`). Alert at **70%** used (warning) and
+The database lives in the folder `data/postgres` next to `compose.yaml`, and
+the backups in `backups` next to it. Watch the disk that holds them; with the
+default layout, both are on the same disk. Alert at **70%** used (warning) and
 **85%** (critical):
 
 ```sh
@@ -571,7 +572,8 @@ Filesystem                Size      Used Available Use% Mounted on
 ```
 
 Read the `Use%` column; the mount name differs on your host.
-`docker system df -v` shows the size of the volume itself.
+`du -sh data/postgres backups` in `deploy/compose` shows the size of the two
+folders (use `sudo`, because the database files belong to another user).
 
 Why these levels: a full disk stops PostgreSQL from writing, so uploads and
 sign-ins fail, and a full database needs free space to recover. Vacuum, the

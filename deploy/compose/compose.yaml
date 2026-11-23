@@ -6,10 +6,16 @@
 # Run all commands in this directory. The guide is docs/getting-started.md.
 #
 # Image: Scanopsis publishes no container image. Build one from the newest
-# version branch, release/0.3.0, with `make image IMAGE=scanopsis:v0.3.0` in
+# version branch, release/0.4.0, with `make image IMAGE=scanopsis:v0.4.0` in
 # the repository root (docs/versions.md). The file named .env next to this
-# one sets SCANOPSIS_IMAGE=scanopsis:v0.3.0, as .env.example does. SCANOPSIS_IMAGE is required, so Compose never
-# falls back to an unpinned image.
+# one sets SCANOPSIS_IMAGE=scanopsis:v0.4.0, as .env.example does.
+# SCANOPSIS_IMAGE is required, so Compose never falls back to an unpinned
+# image.
+#
+# Data: the database lives in ./data/postgres and the backups in ./backups,
+# plain folders next to this file. No Docker command (`docker compose down -v`,
+# `docker volume prune`, `docker system prune --volumes`) deletes a folder.
+# Create both before the first start (see docs/getting-started.md).
 #
 # TLS: the port is published on the loopback interface only (set
 # SCANOPSIS_BIND and SCANOPSIS_PORT in .env to change that). Put a reverse
@@ -41,7 +47,10 @@ services:
     secrets:
       - postgres_password
     volumes:
-      - db-data:/var/lib/postgresql
+      # A host folder, not a named volume, so that no Docker command can
+      # delete the data. PostgreSQL 18 keeps its files in a versioned
+      # subfolder (18/docker) below this path.
+      - ./data/postgres:/var/lib/postgresql
     # Only Scanopsis can reach the database; it has no route to other networks.
     networks:
       - backend
@@ -59,6 +68,13 @@ services:
       - no-new-privileges:true
     logging: *logging
     pids_limit: 200
+    # PostgreSQL gets two minutes to stop cleanly (checkpoint and close the
+    # files) before Compose kills it. The default of 10 seconds is too short
+    # for a busy database.
+    stop_grace_period: 2m
+    # The default shared memory of a container is 64 MB, which parallel
+    # queries and large sorts can exhaust.
+    shm_size: 256mb
     # The data directory is the only place the database writes to, apart from
     # its socket directory and temporary files.
     read_only: true
@@ -91,6 +107,10 @@ services:
     secrets:
       - database_url
       - secret_key
+    volumes:
+      # Backups are written here. The folder belongs to user 65532, which
+      # runs Scanopsis (see docs/getting-started.md).
+      - ./backups:/var/lib/scanopsis/backups
     networks:
       - backend
       - frontend
@@ -102,8 +122,9 @@ services:
     security_opt:
       - no-new-privileges:true
     # The application finishes running requests within 15 seconds when it is
-    # stopped. Compose kills it after 20 seconds.
-    stop_grace_period: 20s
+    # stopped, and a running backup needs time to finish its file. Compose
+    # kills it after 30 seconds.
+    stop_grace_period: 30s
     logging: *logging
     pids_limit: 100
     # A limit for the container. Raise it if the container is killed for
@@ -123,6 +144,3 @@ networks:
   frontend:
   backend:
     internal: true
-
-volumes:
-  db-data:

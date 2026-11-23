@@ -51,8 +51,9 @@ with `make image` in the repository root, see
 | Container logs | `json-file`, 5 files of 10 MB per service | The `x-logging` block at the top. |
 | Memory | 512 MB for `scanopsis`, with `GOMEMLIMIT=400MiB` | `mem_limit` and `GOMEMLIMIT`. |
 | Process limit | 100 for `scanopsis`, 200 for `db` | `pids_limit`. |
-| Stop grace period | 20 seconds | Scanopsis finishes running requests within 15 seconds. |
-| Root file system | Read-only for both services | The database writes only to its volume and two `tmpfs` mounts. |
+| Stop grace period | 30 seconds for `scanopsis`, 2 minutes for `db` | Scanopsis finishes running requests within 15 seconds; the database needs time for a clean shutdown. `stop_grace_period`. |
+| Data | The folders `data/postgres` and `backups` | The `volumes:` lines of `db` and `scanopsis`. |
+| Root file system | Read-only for both services | The database writes only to `data/postgres` and two `tmpfs` mounts. |
 
 Both services also drop all Linux capabilities (the database keeps the five
 its start script needs) and set `no-new-privileges`. The database sits on the
@@ -706,8 +707,8 @@ does not help here):
 
 ### Step 3. Remove the bundled database
 
-`compose.external-db.yaml` removes the `db` service, its password secret and
-its volume, and puts Scanopsis on the `frontend` network only, which can reach
+`compose.external-db.yaml` removes the `db` service and its password secret,
+and puts Scanopsis on the `frontend` network only, which can reach
 your server. It needs Docker Compose 2.24 or later.
 
 1. If you use `sslrootcert`, open `compose.external-db.yaml` and uncomment the
@@ -770,9 +771,8 @@ your server. It needs Docker Compose 2.24 or later.
     scanopsis | t   | TLSv1.3
    ```
 
-The old volume with the bundled data stays on the host. Remove it with
-`docker volume rm <project>_db-data` only once you are sure you moved
-everything you need.
+The folder `data/postgres` with the bundled data stays on the host. Delete it
+only once you are sure you moved everything you need.
 
 ### Move your data from the bundled database
 
@@ -824,19 +824,22 @@ in `secrets/database_url`. The names are examples.
 
 ```sh
 docker network create scanopsis-net
-docker volume create scanopsis-db-data
+mkdir -p data/postgres backups
+sudo chown 65532:65532 backups
+chmod 700 backups
 
 docker run -d --name scanopsis-db --network scanopsis-net \
   -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \
   -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
   -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro" \
-  -v scanopsis-db-data:/var/lib/postgresql \
+  --stop-timeout 120 --shm-size 256m \
+  -v "$PWD/data/postgres:/var/lib/postgresql" \
   postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
 
 docker run -d --name scanopsis --network scanopsis-net \
   --restart unless-stopped \
   --read-only --cap-drop ALL --security-opt no-new-privileges:true \
-  --pids-limit 100 --memory 512m --stop-timeout 20 \
+  --pids-limit 100 --memory 512m --stop-timeout 30 \
   --log-opt max-size=10m --log-opt max-file=5 \
   -p 127.0.0.1:8080:8080 \
   -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
@@ -844,7 +847,8 @@ docker run -d --name scanopsis --network scanopsis-net \
   -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
   -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
   -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
-  scanopsis:v0.3.0
+  -v "$PWD/backups:/var/lib/scanopsis/backups" \
+  scanopsis:v0.4.0
 ```
 
 The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`. Wait
@@ -903,8 +907,13 @@ Scanopsis needs no operator and no custom resources. Run it as one pod:
 - Probes: `/healthz` for liveness (the process runs) and `/readyz` for
   readiness (the database answers). A startup probe gives the first start of a
   new version, with its migrations, time.
-- A `terminationGracePeriodSeconds` of 20, above the 15 seconds Scanopsis
-  needs to finish its requests.
+- A `terminationGracePeriodSeconds` of 30, above the 15 seconds Scanopsis
+  needs to finish its requests and the time a running backup needs to close
+  its file.
+- A second `PersistentVolumeClaim` for the backups, mounted at
+  `/var/lib/scanopsis/backups`. `fsGroup: 65532` makes the volume writable for
+  the user that runs Scanopsis. Keep the backups on storage that is not the
+  database's own, and copy them off the cluster.
 - An Ingress or Gateway that follows the [proxy rules](#reverse-proxy-and-tls):
   `Host` unchanged, `X-Forwarded-For` set, a body of up to 100 MB, Scanopsis at
   the root of its own host name. Set `SCANOPSIS_TRUSTED_PROXIES` to the
@@ -918,6 +927,16 @@ passes `kubectl apply --dry-run=client` with kubectl 1.37.2, but it was not
 run on a cluster, so check the probes and the first start in yours.
 
 ```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scanopsis-backups
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -934,7 +953,7 @@ spec:
       labels:
         app: scanopsis
     spec:
-      terminationGracePeriodSeconds: 20
+      terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -944,7 +963,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: scanopsis
-          image: registry.example.com/platform/scanopsis:v0.3.0
+          image: registry.example.com/platform/scanopsis:v0.4.0
           ports:
             - name: http
               containerPort: 8080
@@ -989,11 +1008,16 @@ spec:
             - name: secrets
               mountPath: /run/secrets/scanopsis
               readOnly: true
+            - name: backups
+              mountPath: /var/lib/scanopsis/backups
       volumes:
         - name: secrets
           secret:
             secretName: scanopsis
             defaultMode: 0440
+        - name: backups
+          persistentVolumeClaim:
+            claimName: scanopsis-backups
 ---
 apiVersion: v1
 kind: Service
@@ -1215,7 +1239,7 @@ schema version is already 10 and stays 10.
 3. **Switch the image.** Set `SCANOPSIS_IMAGE` in `.env` to the new image and
    run `docker compose up -d`. Compose recreates `scanopsis`, and `db` too if
    you took over new `db` settings from the new `compose.yaml`; the data stays
-   in its volume. Scanopsis applies the migrations, then listens.
+   in `data/postgres`. Scanopsis applies the migrations, then listens.
 4. **Check it.** After about 30 seconds:
 
    ```sh

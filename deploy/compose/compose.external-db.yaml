@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Override for an existing PostgreSQL server. It removes the bundled `db`
-# service, its password secret and its volume. Use it together with
-# compose.yaml:
+# service and its password secret. Scanopsis keeps its ./backups mount. Use it
+# together with compose.yaml:
 #
 #   docker compose -f compose.yaml -f compose.external-db.yaml up -d
 #
@@ -25,6 +25,3 @@ services:
 
 secrets:
   postgres_password: !reset null
-
-volumes:
-  db-data: !reset null

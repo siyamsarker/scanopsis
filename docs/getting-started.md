@@ -25,20 +25,20 @@ if you use it, your SonarQube.
 ## Step 1. Build the image
 
 Scanopsis publishes no container image, so you build one from a version
-branch. This guide uses **0.3.0**, the newest version. Always deploy a
+branch. This guide uses **0.4.0**, the newest version. Always deploy a
 version branch, never `main`: `main` is development code.
 
 1. Clone the version branch:
 
    ```sh
-   git clone --branch release/0.3.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/0.4.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    ```
 
 2. Build the image with a tag that names the version:
 
    ```sh
-   make image IMAGE=scanopsis:v0.3.0
+   make image IMAGE=scanopsis:v0.4.0
    ```
 
    The first build downloads dependencies and takes a few minutes. The last
@@ -52,14 +52,14 @@ version branch, never `main`: `main` is development code.
 3. Check that the image exists:
 
    ```sh
-   docker image ls scanopsis:v0.3.0
+   docker image ls scanopsis:v0.4.0
    ```
 
-   You see one line with the repository `scanopsis` and the tag `v0.3.0`.
+   You see one line with the repository `scanopsis` and the tag `v0.4.0`.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, the version
 string has unusual characters. Pass a plain one, for example
-`make image IMAGE=scanopsis:v0.3.0 VERSION=v0.3.0`. If it fails while
+`make image IMAGE=scanopsis:v0.4.0 VERSION=v0.4.0`. If it fails while
 downloading, check the network access and proxy settings of Docker on the
 host.
 
@@ -110,7 +110,29 @@ SonarQube secrets cannot be read. See [the secret key](configuration.md#the-secr
 
 Never commit the `secrets` directory or the `.env` file.
 
-## Step 3. Create the configuration file
+## Step 3. Create the data folders
+
+Scanopsis keeps its two kinds of data in plain folders next to
+`compose.yaml`, not in Docker volumes. Create them in `deploy/compose`:
+
+```sh
+mkdir -p data/postgres backups
+sudo chown 65532:65532 backups
+chmod 700 backups
+```
+
+| Folder | What it holds |
+| --- | --- |
+| `data/postgres` | The database. Docker creates the files inside it; leave its owner alone. |
+| `backups` | The backup files Scanopsis writes. The container runs as user 65532, so that user must own the folder; mode 700 keeps other users on the host out. |
+
+Why folders: a Docker volume is deleted by `docker compose down -v`,
+`docker volume prune` and `docker system prune --volumes`. No Docker command
+deletes a folder, so a slip at the command line cannot take your scans with
+it. Both folders are ignored by Git. Back them up with the rest of the
+host, as the [operations guide](operations.md) describes.
+
+## Step 4. Create the configuration file
 
 1. Copy the example file:
 
@@ -129,7 +151,7 @@ Never commit the `secrets` directory or the `.env` file.
    this host name. Another name makes sign-in fail.
 
 3. Check that `SCANOPSIS_IMAGE` names the image from step 1:
-   `SCANOPSIS_IMAGE=scanopsis:v0.3.0`, which `.env.example` already sets.
+   `SCANOPSIS_IMAGE=scanopsis:v0.4.0`, which `.env.example` already sets.
    Compose runs exactly this image, and an
    [upgrade](versions.md#upgrade-to-the-newest-version) later changes only this
    line.
@@ -145,7 +167,7 @@ You see `config-ok`. If Compose says
 has no `SCANOPSIS_IMAGE` line. This check does not look into `secrets`; a
 missing secret file shows up in the next step.
 
-## Step 4. Start Scanopsis
+## Step 5. Start Scanopsis
 
 ```sh
 docker compose up -d
@@ -164,7 +186,7 @@ If Compose ends with `invalid mount config for type "bind": bind source path
 does not exist`, the path in the message is a secret file you did not create.
 Create it as in step 2 and run `docker compose up -d` again.
 
-## Step 5. Check that it is healthy
+## Step 6. Check that it is healthy
 
 1. Wait about 30 seconds, then list the containers:
 
@@ -204,9 +226,9 @@ If this step fails:
 | `scanopsis-scanopsis-1` is `Restarting` | Run `docker compose logs scanopsis`. The server prints `configuration error:` and one line per problem, for example `SCANOPSIS_PUBLIC_URL is required, for example https://scanopsis.example.com`. Fix `.env` and run `docker compose up -d` again. |
 | The log says `SCANOPSIS_SECRET_KEY is not valid` | `secrets/secret_key` is not a base64 encoded 32-byte key. Create it again as in step 2. |
 | `curl` cannot connect | The container is not running, or another program uses port 8080 on the host. Run `docker compose ps`. |
-| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when the volume is first created. If you changed the password after the first start and have not finished the setup yet, run `docker compose down -v` to delete the database volume and start again. This deletes all data. |
+| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when `data/postgres` is first filled. If you changed the password after the first start and have not finished the setup yet, run `docker compose down`, delete the folder with `sudo rm -rf data/postgres`, create it again with `mkdir data/postgres`, and start again. This deletes all data. |
 
-## Step 6. Get the setup token
+## Step 7. Get the setup token
 
 While no administrator exists, Scanopsis writes a one-time setup token to its
 log at every start. Only someone who can read the log can create the first
@@ -226,13 +248,13 @@ Copy the value of `setup_token`. If the container restarted, use the last
 line: only the token from the latest start works.
 
 If the command prints nothing, an administrator already exists. Go to
-[step 8](#step-8-sign-in-again).
+[step 9](#step-9-sign-in-again).
 
-## Step 7. Complete the setup in the browser
+## Step 8. Complete the setup in the browser
 
 1. Open the `setup_url` from the log. You see **Set up Scanopsis**.
 2. Fill in the form:
-   - **Setup token**: the token from step 6.
+   - **Setup token**: the token from step 7.
    - **Username**: for example `root`. This becomes a local account with the
      admin role.
    - **Password** and **Confirm password**: at least 12 characters, not the
@@ -269,7 +291,7 @@ You can also finish the setup without a browser, for automation:
 `password` answers `204` and starts a session. The browser path is the
 supported one.
 
-## Step 8. Sign in again
+## Step 9. Sign in again
 
 1. Sign out with the button in the navigation bar.
 2. On the sign-in page, enter your username and password and select
