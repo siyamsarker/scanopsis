@@ -44,7 +44,7 @@ function BackupsBody({ onBackUp, canBackUp }: { onBackUp: () => void; canBackUp:
 
   if (backups.isPending) {
     return (
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="panel overflow-hidden">
           <SkeletonTable rows={4} columns={5} />
         </div>
@@ -92,7 +92,7 @@ function BackupsBody({ onBackUp, canBackUp }: { onBackUp: () => void; canBackUp:
       ) : null}
       {running ? <BackupProgress job={job} /> : null}
 
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
         <section aria-labelledby={headingId} className="min-w-0">
           <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-1 pb-3">
             <h2 id={headingId} className="text-h3 font-semibold tracking-tight text-text">
