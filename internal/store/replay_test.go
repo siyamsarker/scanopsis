@@ -4,6 +4,7 @@
 package store
 
 import (
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -141,5 +142,60 @@ func TestEmbeddedMigrations(t *testing.T) {
 				t.Errorf("migration %s: %q changed to %q", ms[v-1].name, s, w)
 			}
 		}
+	}
+}
+
+// otherObjects matches CREATE statements for kinds of objects that are
+// neither tables nor what belongs to a table (indexes, constraints, identity
+// sequences). DropApplicationTables drops tables only, so such an object
+// would survive it and make the replay fail, or be left behind.
+var otherObjects = regexp.MustCompile(`(?i)\bCREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|UNLOGGED|RECURSIVE|CONSTRAINT)\s+)?` +
+	`(MATERIALIZED\s+VIEW|VIEW|SEQUENCE|FUNCTION|PROCEDURE|TYPE|DOMAIN|TRIGGER|EXTENSION|RULE|AGGREGATE|SCHEMA)\b`)
+
+// TestMigrationsCreateOnlyTables fails when a migration starts to create an
+// object that DropApplicationTables does not remove, so a restore does not
+// break silently once that migration exists.
+func TestMigrationsCreateOnlyTables(t *testing.T) {
+	t.Parallel()
+	ms, err := embeddedMigrations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range ms {
+		for _, s := range m.up {
+			if kind := otherObjects.FindStringSubmatch(s); kind != nil {
+				t.Errorf("migration %s creates a %s: DropApplicationTables drops only tables and must be extended "+
+					"to drop that kind of object first, or a restore fails:\n%s", m.name, strings.ToUpper(kind[1]), s)
+			}
+		}
+	}
+	for _, s := range []string{"CREATE VIEW v AS SELECT 1;", "create or replace function f() returns int as 'select 1' language sql;",
+		"CREATE MATERIALIZED VIEW m AS SELECT 1;", "CREATE SEQUENCE s;", "CREATE TYPE t AS ENUM ('a');",
+		"CREATE CONSTRAINT TRIGGER tr AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION f();", "CREATE EXTENSION pg_trgm;",
+		"DO $$ BEGIN EXECUTE 'CREATE DOMAIN d AS int'; END $$;"} {
+		if !otherObjects.MatchString(s) {
+			t.Errorf("otherObjects does not match %q", s)
+		}
+	}
+	for _, s := range []string{"CREATE TABLE t (id int);", "CREATE UNIQUE INDEX i ON t (a);", "ALTER TABLE t ADD COLUMN id bigint GENERATED ALWAYS AS IDENTITY;"} {
+		if otherObjects.MatchString(s) {
+			t.Errorf("otherObjects matches %q", s)
+		}
+	}
+}
+
+func TestApplicationTables(t *testing.T) {
+	t.Parallel()
+	tables, err := applicationTables()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"users", "sessions", "audit_log", "settings", "services", "scans", "vulnerabilities", "goose_db_version"} {
+		if !slices.Contains(tables, want) {
+			t.Errorf("applicationTables() = %v, lacks %s", tables, want)
+		}
+	}
+	if !slices.IsSorted(tables) || len(slices.Compact(slices.Clone(tables))) != len(tables) {
+		t.Errorf("applicationTables() = %v, want sorted names without duplicates", tables)
 	}
 }

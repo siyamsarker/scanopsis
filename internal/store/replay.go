@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // A restore recreates the schema inside one transaction: it drops the tables
@@ -169,24 +170,80 @@ func RecordGooseVersions(ctx context.Context, tx pgx.Tx, upTo int64) error {
 	return nil
 }
 
-// DropApplicationTables drops, in tx and with CASCADE, every table that the
-// current role owns in the schema the migrations create their tables in
-// (current_schema(): public unless the database URL sets another
-// search_path), and goose's version table there. Tables of other roles in
-// that schema are left alone.
+// ownTables selects the oid, schema and name of every table that the current
+// role owns in the current schema.
+const ownTables = `
+	SELECT c.oid, n.nspname, c.relname FROM pg_class c
+	JOIN pg_namespace n ON n.oid = c.relnamespace
+	WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
+	  AND c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)`
+
+// DropApplicationTables drops, in tx, every table that the current role owns
+// in the schema the migrations create their tables in (current_schema():
+// public unless the database URL sets another search_path), goose's version
+// table included. Tables of other roles in that schema are left alone.
+//
+// It drops nothing and returns an error when a Scanopsis table there belongs
+// to another role (the replay would then fail on it), or when an object
+// outside these tables, such as another application's view or foreign key,
+// depends on one of them: the tables are dropped without CASCADE, so such an
+// object is never removed with them.
 func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
-	rows, err := tx.Query(ctx, `
-		SELECT n.nspname, c.relname FROM pg_class c
+	names, err := applicationTables()
+	if err != nil {
+		return err
+	}
+	var table, tableOwner, user string
+	err = tx.QueryRow(ctx, `
+		SELECT c.relname, pg_get_userbyid(c.relowner), current_user FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p')
-		  AND (c.relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) OR c.relname = 'goose_db_version')
-		ORDER BY c.relname`)
+		WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p') AND c.relname = ANY($1)
+		  AND c.relowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user)
+		ORDER BY c.relname LIMIT 1`, names).Scan(&table, &tableOwner, &user)
+	switch {
+	case err == nil:
+		return fmt.Errorf("table %s belongs to role %s, not to %s: the database user in secrets/database_url must own all Scanopsis tables",
+			table, tableOwner, user)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("check table owners: %w", err)
+	}
+
+	// A normal dependency on one of the tables blocks the drop, unless the
+	// dependent object belongs to one of the tables itself (a foreign key
+	// between two of them, for example).
+	var object string
+	err = tx.QueryRow(ctx, `
+		WITH own AS (`+ownTables+`)
+		SELECT r.relname, pg_describe_object(d.classid, d.objid, d.objsubid)
+		FROM pg_depend d JOIN pg_class r ON r.oid = d.refobjid
+		WHERE d.refclassid = 'pg_class'::regclass AND d.deptype = 'n'
+		  AND d.refobjid IN (SELECT oid FROM own)
+		  AND NOT coalesce((CASE d.classid
+		        WHEN 'pg_constraint'::regclass THEN (SELECT conrelid FROM pg_constraint WHERE oid = d.objid)
+		        WHEN 'pg_rewrite'::regclass THEN (SELECT ev_class FROM pg_rewrite WHERE oid = d.objid)
+		        WHEN 'pg_attrdef'::regclass THEN (SELECT adrelid FROM pg_attrdef WHERE oid = d.objid)
+		        WHEN 'pg_trigger'::regclass THEN (SELECT tgrelid FROM pg_trigger WHERE oid = d.objid)
+		        WHEN 'pg_policy'::regclass THEN (SELECT polrelid FROM pg_policy WHERE oid = d.objid)
+		        WHEN 'pg_class'::regclass THEN coalesce((SELECT indrelid FROM pg_index WHERE indexrelid = d.objid), d.objid)
+		      END) IN (SELECT oid FROM own), false)
+		ORDER BY 1, 2 LIMIT 1`).Scan(&table, &object)
+	switch {
+	case err == nil:
+		return fmt.Errorf("another database object depends on Scanopsis table %s (%s); remove it or restore into a database used only by Scanopsis",
+			table, object)
+	case !errors.Is(err, pgx.ErrNoRows):
+		return fmt.Errorf("check objects that depend on the tables: %w", err)
+	}
+
+	rows, err := tx.Query(ctx, ownTables+` ORDER BY c.relname`)
 	if err != nil {
 		return fmt.Errorf("list tables to drop: %w", err)
 	}
 	tables, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (string, error) {
+		var oid uint32
 		var schema, name string
-		err := row.Scan(&schema, &name)
+		err := row.Scan(&oid, &schema, &name)
+		// Qualified, so a temporary table of the same name cannot be meant.
 		return pgx.Identifier{schema, name}.Sanitize(), err
 	})
 	if err != nil {
@@ -195,10 +252,39 @@ func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 	if len(tables) == 0 {
 		return nil
 	}
-	if _, err := tx.Exec(ctx, "DROP TABLE IF EXISTS "+strings.Join(tables, ", ")+" CASCADE"); err != nil {
+	// One statement, so the tables may depend on each other.
+	if _, err := tx.Exec(ctx, "DROP TABLE "+strings.Join(tables, ", ")); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "2BP01" { // dependent_objects_still_exist
+			return fmt.Errorf("another database object depends on a Scanopsis table (%s); remove it or restore into a database used only by Scanopsis: %w",
+				pgErr.Detail, err)
+		}
 		return fmt.Errorf("drop tables: %w", err)
 	}
 	return nil
+}
+
+// createTable matches the start of a CREATE TABLE statement and captures the
+// table name.
+var createTable = regexp.MustCompile(`(?i)^CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)\b`)
+
+// applicationTables returns, sorted, the names of the tables the embedded
+// migrations create, and goose's version table.
+func applicationTables() ([]string, error) {
+	ms, err := embeddedMigrations()
+	if err != nil {
+		return nil, err
+	}
+	tables := []string{"goose_db_version"}
+	for _, m := range ms {
+		for _, stmt := range m.up {
+			if name := createTable.FindStringSubmatch(stmt); name != nil {
+				tables = append(tables, strings.ToLower(name[1]))
+			}
+		}
+	}
+	slices.Sort(tables)
+	return slices.Compact(tables), nil
 }
 
 // concurrentIndex matches CONCURRENTLY right after the keywords of a CREATE

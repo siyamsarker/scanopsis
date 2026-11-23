@@ -376,42 +376,64 @@ func TestReplayRollsBack(t *testing.T) {
 	}
 }
 
-// TestDropApplicationTablesNarrowGrant runs as a role that only has CREATE
-// on the public schema of a database it does not own, as "Use an existing
-// PostgreSQL" in docs/deployment.md allows: goose migrates, then dropping
-// the tables and replaying the migrations succeed in one transaction, leave
-// the same schema, and keep a table of another role.
-func TestDropApplicationTablesNarrowGrant(t *testing.T) {
-	t.Parallel()
+// databaseWithRole creates a database and a login role, both called name:
+// the database belongs to the administrator of the server, and the role only
+// gets CREATE on its public schema, as "Use an existing PostgreSQL" in
+// docs/deployment.md allows. It returns pools on the database as the
+// administrator and as the role.
+func databaseWithRole(t *testing.T, name string) (owner, role *pgxpool.Pool) {
+	t.Helper()
 	ctx := context.Background()
 	admin := storetest.New(t)
 	for _, q := range []string{
-		`CREATE ROLE replay_narrow LOGIN PASSWORD 'narrow-secret'`,
-		`CREATE DATABASE replay_narrow`,
+		`CREATE ROLE ` + name + ` LOGIN PASSWORD 'role-secret'`,
+		`CREATE DATABASE ` + name,
 	} {
 		if _, err := admin.Exec(ctx, q); err != nil {
 			t.Fatal(err)
 		}
 	}
 	t.Cleanup(func() {
-		for _, q := range []string{`DROP DATABASE replay_narrow WITH (FORCE)`, `DROP ROLE replay_narrow`} {
+		for _, q := range []string{`DROP DATABASE ` + name + ` WITH (FORCE)`, `DROP ROLE ` + name} {
 			if _, err := admin.Exec(context.Background(), q); err != nil {
 				t.Errorf("clean up: %v", err)
 			}
 		}
 	})
-
-	// As the administrator, in the new database: grant CREATE on public and
-	// create a table the role does not own.
 	cfg := admin.Config().Copy()
-	cfg.ConnConfig.Database = "replay_narrow"
+	cfg.ConnConfig.Database = name
 	owner, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(owner.Close)
+	if _, err := owner.Exec(ctx, `GRANT CREATE ON SCHEMA public TO `+name); err != nil {
+		t.Fatal(err)
+	}
+	cfg = cfg.Copy()
+	cfg.ConnConfig.User = name
+	cfg.ConnConfig.Password = "role-secret"
+	role, err = pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(role.Close)
+	return owner, role
+}
+
+// TestDropApplicationTablesNarrowGrant runs as a role that only has CREATE
+// on the public schema of a database it does not own, as "Use an existing
+// PostgreSQL" in docs/deployment.md allows: goose migrates, then dropping
+// the tables and replaying the migrations succeed in one transaction, leave
+// the same schema, and keep a table of another role. While an object of
+// another role depends on a Scanopsis table, the drop is refused and
+// nothing changes.
+func TestDropApplicationTablesNarrowGrant(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	owner, narrow := databaseWithRole(t, "replay_narrow")
+	// A table of another role, which the drop must leave alone.
 	for _, q := range []string{
-		`GRANT CREATE ON SCHEMA public TO replay_narrow`,
 		`CREATE TABLE other_app (note text)`,
 		`INSERT INTO other_app VALUES ('kept')`,
 		`GRANT SELECT ON other_app TO replay_narrow`,
@@ -421,14 +443,6 @@ func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 		}
 	}
 
-	cfg = cfg.Copy()
-	cfg.ConnConfig.User = "replay_narrow"
-	cfg.ConnConfig.Password = "narrow-secret"
-	narrow, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(narrow.Close)
 	var super, ownsDB, canCreate bool
 	if err := narrow.QueryRow(ctx, `
 		SELECT r.rolsuper, d.datdba = r.oid, has_schema_privilege('public', 'CREATE')
@@ -446,6 +460,35 @@ func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 	if _, err := narrow.Exec(ctx, `INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'shop/payments-api', 'manual')`); err != nil {
 		t.Fatal(err)
 	}
+
+	// Objects of another role that depend on a Scanopsis table: the drop is
+	// refused with the table named, and the rollback keeps everything.
+	for _, dep := range []struct{ create, check, drop string }{
+		{`CREATE VIEW other_view AS SELECT name FROM services`, `SELECT name FROM other_view`, `DROP VIEW other_view`},
+		{`CREATE TABLE other_ref (service_id bigint REFERENCES services (id)); INSERT INTO other_ref SELECT id FROM services`,
+			`SELECT s.name FROM other_ref r JOIN services s ON s.id = r.service_id`, `DROP TABLE other_ref`},
+	} {
+		if _, err := owner.Exec(ctx, dep.create); err != nil {
+			t.Fatal(err)
+		}
+		err := pgx.BeginFunc(ctx, narrow, func(tx pgx.Tx) error { return store.DropApplicationTables(ctx, tx) })
+		for _, want := range []string{
+			"another database object depends on Scanopsis table services",
+			"remove it or restore into a database used only by Scanopsis",
+		} {
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("drop with %q: error %v, want one containing %q", dep.create, err, want)
+			}
+		}
+		var name string
+		if err := owner.QueryRow(ctx, dep.check).Scan(&name); err != nil || name != "payments-api" {
+			t.Errorf("after the refused drop, %q: %q, %v", dep.check, name, err)
+		}
+		if _, err := owner.Exec(ctx, dep.drop); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	before := catalog(t, narrow)
 	rowsBefore := gooseRows(t, narrow)
 
@@ -484,4 +527,39 @@ func TestDropApplicationTablesNarrowGrant(t *testing.T) {
 		t.Errorf("table of another role after the drop: %q, %v", note, err)
 	}
 	gooseAppliesNothing(t, narrow)
+}
+
+// TestDropApplicationTablesForeignOwner checks that the drop is refused, with
+// the table and its owner named, when Scanopsis tables in the schema belong
+// to another role than the one connected, for example because an
+// administrator ran the first migration. Without the check the drop would
+// skip them and the replay would fail on "already exists".
+func TestDropApplicationTablesForeignOwner(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	owner, role := databaseWithRole(t, "replay_foreign")
+	if err := store.Migrate(ctx, owner); err != nil {
+		t.Fatal(err)
+	}
+	var admin string
+	if err := owner.QueryRow(ctx, `SELECT current_user`).Scan(&admin); err != nil {
+		t.Fatal(err)
+	}
+	before := catalog(t, owner)
+	err := pgx.BeginFunc(ctx, role, func(tx pgx.Tx) error {
+		if err := store.DropApplicationTables(ctx, tx); err != nil {
+			return err
+		}
+		return store.ReplayMigrations(ctx, tx, 0, store.LatestVersion())
+	})
+	for _, want := range []string{
+		"table audit_log belongs to role " + admin,
+		"replay_foreign",
+		"the database user in secrets/database_url must own all Scanopsis tables",
+	} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("drop as another role: error %v, want one containing %q", err, want)
+		}
+	}
+	sameCatalog(t, "before", before, "after the refused drop", catalog(t, owner))
 }
