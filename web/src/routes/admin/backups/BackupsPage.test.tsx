@@ -251,6 +251,10 @@ describe('backups page', () => {
         /^The scheduled backup at 23 Nov 2026, \d\d:\d\d .+ failed\. Disk full\.$/,
       ),
     ).toBeVisible();
+    // The line next to the schedule switch says so too, and may wrap.
+    const form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    const line = await within(form).findByText(/^Last scheduled backup failed/);
+    expect(line.closest('.whitespace-nowrap')).toBeNull();
   });
 
   it('dismisses the failed scheduled backup until the next run', async () => {

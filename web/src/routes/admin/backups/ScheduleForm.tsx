@@ -12,7 +12,8 @@ import { ErrorState, Skeleton } from '../../../components/states';
 import { Switch } from '../../../components/Switch';
 import { toast } from '../../../components/Toast';
 import { buttonClass, monoInputClass } from '../../../ui';
-import { Problem, When } from '../kit';
+import { formatExactTime, relativeTime } from '../../../format';
+import { Problem } from '../kit';
 import {
   browserTimeZone,
   currentZoneName,
@@ -151,13 +152,23 @@ function ScheduleFields({
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <label htmlFor={`${id}-enabled`} className="sr-only">
             Scheduled backups
           </label>
+          {/* Wraps before the switch on narrow panels. */}
           <p id={`${id}-enabled-hint`} className="text-body-s text-text-muted">
             {lastRun?.last_run_at ? (
-              <When at={lastRun.last_run_at} prefix="Last scheduled backup" />
+              <>
+                {lastRun.ok ? 'Last scheduled backup ' : 'Last scheduled backup failed '}
+                <time
+                  dateTime={lastRun.last_run_at}
+                  title={formatExactTime(lastRun.last_run_at)}
+                  className="whitespace-nowrap"
+                >
+                  {relativeTime(lastRun.last_run_at)}
+                </time>
+              </>
             ) : (
               'No scheduled backup has run yet.'
             )}
