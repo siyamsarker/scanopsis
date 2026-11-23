@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -33,6 +34,8 @@ type Config struct {
 	// CAFile is an optional PEM bundle trusted in addition to the system
 	// roots for outgoing TLS connections (GitLab, SonarQube).
 	CAFile string
+	// BackupDir is the absolute path of the folder that holds backup files.
+	BackupDir string
 	// SecretKey is the 32-byte key that encrypts secrets stored in the
 	// database (see package secretbox).
 	SecretKey []byte
@@ -68,6 +71,10 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		ListenAddr:  l.str("LISTEN_ADDR", ":8080"),
 		DatabaseURL: l.secret("DATABASE_URL"),
 		CAFile:      l.str("CA_FILE", ""),
+		BackupDir:   l.str("BACKUP_DIR", "/var/lib/scanopsis/backups"),
+	}
+	if !path.IsAbs(c.BackupDir) {
+		l.fail("BACKUP_DIR", fmt.Sprintf("must be an absolute path, got %q", c.BackupDir))
 	}
 	c.PublicURL = l.publicURL("PUBLIC_URL")
 	c.LogLevel = l.logLevel("LOG_LEVEL")

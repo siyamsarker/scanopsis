@@ -271,3 +271,24 @@ func TestSessionAbsoluteAloneUsesTheDefaultIdle(t *testing.T) {
 		t.Errorf("20m absolute: %v", err)
 	}
 }
+
+func TestConfigBackupDir(t *testing.T) {
+	c, err := load(t, minimal(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BackupDir != "/var/lib/scanopsis/backups" {
+		t.Errorf("default BackupDir = %q", c.BackupDir)
+	}
+	c, err = load(t, with(minimal(), "SCANOPSIS_BACKUP_DIR", " /data/backups "), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.BackupDir != "/data/backups" {
+		t.Errorf("BackupDir = %q", c.BackupDir)
+	}
+	_, err = load(t, with(minimal(), "SCANOPSIS_BACKUP_DIR", "backups"), nil)
+	if err == nil || !strings.Contains(err.Error(), "SCANOPSIS_BACKUP_DIR") || !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("relative path error = %v", err)
+	}
+}

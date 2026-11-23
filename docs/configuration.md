@@ -59,6 +59,7 @@ All variables start with `SCANOPSIS_`. An empty value counts as not set.
 | `SCANOPSIS_LISTEN_ADDR` | `:8080` | `:8080` | The address the server listens on. The image health check reads the port from it. |
 | `SCANOPSIS_TRUSTED_PROXIES` | empty | `172.18.0.1,10.0.0.0/8` | Reverse proxies whose `X-Forwarded-For` header Scanopsis believes: a comma-separated list of IP addresses or CIDR ranges. See [trust your reverse proxy](#trust-your-reverse-proxy). |
 | `SCANOPSIS_CA_FILE` | empty | `/etc/scanopsis/ca.pem` | A PEM file with extra certificate authorities to trust for GitLab and SonarQube. See [outgoing TLS connections](#outgoing-tls-connections). |
+| `SCANOPSIS_BACKUP_DIR` | `/var/lib/scanopsis/backups` | `/var/lib/scanopsis/backups` | The folder where backup files are kept. It must be an absolute path and writable by the user the container runs as. The Compose file mounts `./backups` here. |
 | `SCANOPSIS_LOG_LEVEL` | `info` | `debug` | Log detail: `debug`, `info`, `warn` or `error`. |
 
 `SCANOPSIS_PUBLIC_URL` must be an absolute `http` or `https` URL without a
