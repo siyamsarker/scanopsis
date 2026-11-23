@@ -2034,7 +2034,7 @@ components:
         size: { type: integer, format: int64 }
         received: { type: integer, format: int64, description: Bytes stored so far. }
         state: { type: string, enum: [uploading, checking], description: "uploading while parts are sent, checking while the server checks the complete file." }
-        updated_at: { type: string, format: date-time, description: When the last part arrived, or the check started. }
+        updated_at: { type: string, format: date-time, description: "When the last part arrived, or the check started." }
     BackupList:
       type: object
       required: [backups, job, schedule, disk, folder, uploads]

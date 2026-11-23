@@ -1764,7 +1764,7 @@ Type: object
 | `received` | integer (int64) | yes | Bytes stored so far. |
 | `size` | integer (int64) | yes |  |
 | `state` | string (one of `uploading`, `checking`) | yes | uploading while parts are sent, checking while the server checks the complete file. |
-| `updated_at` | string (date-time) | yes | When the last part arrived |
+| `updated_at` | string (date-time) | yes | When the last part arrived, or the check started. |
 
 ### Overview
 

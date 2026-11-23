@@ -1922,7 +1922,7 @@ export interface components {
             state: "uploading" | "checking";
             /**
              * Format: date-time
-             * @description When the last part arrived
+             * @description When the last part arrived, or the check started.
              */
             updated_at: string;
         };
