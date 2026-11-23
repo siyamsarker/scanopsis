@@ -762,6 +762,328 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/backups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the backups, the current or last job, the backup schedule's last run and the folder (admin only).
+         * @description The files in the backup folder are the source of truth: the list is
+         *     read from the folder, newest first. A file whose manifest cannot be
+         *     read is listed with `readable` false so it can be deleted. When the
+         *     folder cannot be used, `folder.ok` is false, `folder.error` says why
+         *     and how to fix it, and the list is empty.
+         */
+        get: operations["listBackups"];
+        put?: never;
+        /**
+         * Start a manual backup (admin only).
+         * @description The backup runs in the background; follow it with `job` in the list.
+         *     Audited as backup.created when it is written, or backup.failed.
+         */
+        post: operations["createBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete a backup (admin only).
+         * @description Audited as backup.deleted with the name and size.
+         */
+        delete: operations["deleteBackup"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/{name}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download a backup file (admin only).
+         * @description Sends the file as `application/gzip` with `Content-Disposition:
+         *     attachment`, `Content-Length` and range support: a `Range` request
+         *     resumes an interrupted download (206). The download may take as long
+         *     as the client keeps reading; it is cut off only after 60 seconds
+         *     without progress. Not counted by the concurrency limit. Audited as
+         *     backup.downloaded with the name, the size and the range, if any.
+         */
+        get: operations["downloadBackup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/{name}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Check a backup in full and tell what restoring it would do (admin only).
+         * @description Reads the whole file and checks its checksums and signature, as a
+         *     restore does before it changes anything. A backup made by a newer
+         *     version or with another secret key is described from its manifest
+         *     with `schema_ok` or `key_matches` false. `scans_removed_by_retention`
+         *     is how many of the backup's scans the next data clean-up deletes
+         *     under the retention period the restored installation will have.
+         */
+        get: operations["previewRestore"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backups/{name}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace all data with a backup (admin only).
+         * @description Needs the phrase RESTORE and a current two-factor code of the
+         *     administrator. Unless `skip_safety_backup` is true, a backup of the
+         *     current data (kind before-restore) is taken first. The restore then
+         *     runs in the background in one database transaction; while it replaces
+         *     the data, the API answers 503 with the code restoring. Every session
+         *     ends, this one too. The backup schedule and keep-days of this server
+         *     are kept. Follow it with GET /api/v1/restore/status.
+         */
+        post: operations["restoreBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup-uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start uploading a backup file (admin only).
+         * @description Send the file in parts with PUT, then complete the upload. At most two
+         *     uploads may be open at once; one without a part for an hour is
+         *     dropped. The file must fit the free space of the backup folder less
+         *     512 MiB and less what other open uploads still need.
+         */
+        post: operations["startBackupUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup-uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How much of an upload the server has (admin only).
+         * @description After a dropped connection, ask this and send the next part from `received`.
+         */
+        get: operations["getBackupUpload"];
+        /**
+         * Send one part of an upload (admin only).
+         * @description The body is the raw bytes of the file from `offset`, at most
+         *     `chunk_size` (8 MiB) of them. `offset` must equal `received`. A part
+         *     may take up to 5 minutes to arrive. A part that fails (a dropped
+         *     connection, a timeout) is not kept: send it again from the same
+         *     offset. Not counted by the concurrency limit.
+         */
+        put: operations["putBackupUploadChunk"];
+        post?: never;
+        /** Cancel an upload and delete what was received (admin only). */
+        delete: operations["cancelBackupUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/backup-uploads/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a fully received upload and add it to the backups (admin only).
+         * @description Reads the whole file and checks its manifest, checksums and signature.
+         *     A file that passes joins the list as a backup of kind uploaded, with
+         *     its original name; audited as backup.uploaded. A file that fails is
+         *     deleted and the message says why. The body may be empty.
+         */
+        post: operations["completeBackupUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/restore/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start uploading a backup on the setup screen of a new installation.
+         * @description Only while no administrator exists, with the setup token; otherwise
+         *     409 setup_done. Works as POST /api/v1/admin/backup-uploads; the
+         *     uploads of the setup screen are separate from those of the admin
+         *     panel.
+         */
+        post: operations["startSetupRestoreUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/restore/uploads/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How much of a setup upload the server has.
+         * @description The setup token goes in the X-Setup-Token header.
+         */
+        get: operations["getSetupRestoreUpload"];
+        /**
+         * Send one part of a setup upload.
+         * @description Works as PUT /api/v1/admin/backup-uploads/{id}; the setup token goes in the X-Setup-Token header.
+         */
+        put: operations["putSetupRestoreUploadChunk"];
+        post?: never;
+        /**
+         * Cancel a setup upload and delete what was received.
+         * @description The setup token goes in the X-Setup-Token header.
+         */
+        delete: operations["cancelSetupRestoreUpload"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/restore/uploads/{id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check a fully received setup upload and tell what restoring it would do.
+         * @description Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete
+         *     does, adds it to the backup folder as kind uploaded and returns the
+         *     preview of the restore. Use the upload id to restore it.
+         */
+        post: operations["completeSetupRestoreUpload"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/setup/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore an uploaded backup into a new installation.
+         * @description Only while no administrator exists, with the setup token and the
+         *     phrase RESTORE. No backup of the empty database is taken first, and
+         *     the backup's own schedule settings are kept. The restore runs in the
+         *     background; follow it with GET /api/v1/restore/status. Afterwards the
+         *     administrators of the backup sign in, and the setup endpoints answer
+         *     409 setup_done.
+         */
+        post: operations["restoreSetupBackup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/restore/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * State of the current or last restore. Answers during a restore.
+         * @description Public, so the web interface can show progress while every other API
+         *     request is answered 503 restoring. It names no backup, account or
+         *     folder. The state is idle when the last job was not a restore. After a
+         *     restore that needs a restart, the state is failed and the message
+         *     says to restart Scanopsis.
+         */
+        get: operations["getRestoreStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1409,8 +1731,242 @@ export interface components {
                 };
             };
         };
+        /** @enum {string} */
+        BackupKind: "manual" | "scheduled" | "uploaded" | "before-restore";
+        BackupInfo: {
+            name: string;
+            kind: components["schemas"]["BackupKind"];
+            /**
+             * Format: int64
+             * @description Bytes.
+             */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When the data was backed up.
+             */
+            created_at: string;
+            /** @description Who started the backup: an account (source:username), scheduler or setup. */
+            created_by: string;
+            /** @description Version of Scanopsis that made the backup. */
+            app_version: string;
+            /**
+             * Format: int64
+             * @description Database schema version of the backup.
+             */
+            schema: number;
+            /** @description The backup was made with the secret key this server runs with. Only such a backup can be restored. */
+            key_matches: boolean;
+            /** @description False when the manifest cannot be read: the backup can be deleted but not restored, and only name, kind, size and created_at are known. */
+            readable: boolean;
+            /**
+             * Format: date-time
+             * @description When an uploaded backup arrived.
+             */
+            uploaded_at: string | null;
+            /** @description The file name an uploaded backup had; empty for other kinds. */
+            original_name: string;
+        };
+        JobProgress: {
+            /** @description Table being copied. */
+            table: string;
+            tables_done: number;
+            tables_total: number;
+            /**
+             * Format: int64
+             * @description Table data copied so far.
+             */
+            bytes: number;
+        };
+        /** @description The current or last backup or restore job. A finished job stays done or failed until the next one starts. */
+        JobStatus: {
+            /** @enum {string} */
+            state: "idle" | "backing_up" | "restoring" | "done" | "failed";
+            /**
+             * @description Absent while idle.
+             * @enum {string}
+             */
+            type?: "backup" | "restore";
+            kind?: components["schemas"]["BackupKind"];
+            /** @description For a backup, the new file once written; for a restore, the backup being restored. */
+            name?: string;
+            progress: components["schemas"]["JobProgress"];
+            percent: number;
+            /** @description What happens or went wrong, in a sentence. */
+            message?: string;
+            /** Format: date-time */
+            started_at: string | null;
+            /** Format: date-time */
+            finished_at: string | null;
+        };
+        ScheduleStatus: {
+            /**
+             * Format: date-time
+             * @description When the last scheduled backup ran; null before the first.
+             */
+            last_run_at: string | null;
+            ok: boolean;
+            /** @description Why the last scheduled backup failed; empty after a success. */
+            error: string;
+        };
+        BackupList: {
+            /** @description Newest first. */
+            backups: components["schemas"]["BackupInfo"][];
+            job: components["schemas"]["JobStatus"];
+            schedule: components["schemas"]["ScheduleStatus"];
+            disk: {
+                /**
+                 * Format: int64
+                 * @description Free space in the backup folder.
+                 */
+                free_bytes: number;
+                /**
+                 * Format: int64
+                 * @description Total size of the backups.
+                 */
+                used_bytes: number;
+            };
+            folder: {
+                path: string;
+                ok: boolean;
+                /** @description Why the folder cannot be used and how to fix it. */
+                error?: string;
+            };
+        };
+        RestorePreview: {
+            info: components["schemas"]["BackupInfo"];
+            /** @description False when a newer version of Scanopsis made the backup. */
+            schema_ok: boolean;
+            /** @description False when another secret key made the backup. */
+            key_matches: boolean;
+            /**
+             * Format: int64
+             * @description Scans of the backup that the next data clean-up deletes.
+             */
+            scans_removed_by_retention: number;
+            /** Format: date-time */
+            oldest_scan_at: string | null;
+            /** @description The retention period the restored installation will have. */
+            retention_days: number;
+        };
+        RestoreRequest: {
+            /** @constant */
+            confirm: "RESTORE";
+            /** @description A current TOTP code of the administrator. Recovery codes are not accepted. */
+            code: string;
+            /**
+             * @description Do not back up the current data first.
+             * @default false
+             */
+            skip_safety_backup: boolean;
+        };
+        RestoreStatus: {
+            /** @enum {string} */
+            state: "idle" | "backing_up" | "restoring" | "done" | "failed";
+            percent: number;
+            /** @description What happens, in a sentence; names no backup or account. */
+            message: string;
+            /** Format: date-time */
+            finished_at: string | null;
+        };
+        UploadStart: {
+            /** @description The name of the file being uploaded; kept as original_name. */
+            file_name: string;
+            /**
+             * Format: int64
+             * @description Size of the whole file in bytes.
+             */
+            size: number;
+        };
+        SetupUploadStart: {
+            /** @description The one-time setup token from the server log. */
+            token: string;
+            file_name: string;
+            /** Format: int64 */
+            size: number;
+        };
+        SetupTokenBody: {
+            /** @description The one-time setup token from the server log. */
+            token: string;
+        };
+        SetupRestoreRequest: {
+            /** @description The one-time setup token from the server log. */
+            token: string;
+            /** @description Id of a completed setup upload. */
+            upload_id: string;
+            /** @constant */
+            confirm: "RESTORE";
+        };
+        UploadStatus: {
+            /** @description 128-bit random id in hex. */
+            id: string;
+            file_name: string;
+            /** Format: int64 */
+            size: number;
+            /** @description The largest part the server takes (8 MiB). */
+            chunk_size: number;
+            /**
+             * Format: int64
+             * @description Bytes stored so far; the next part starts here.
+             */
+            received: number;
+        };
+        UploadError: {
+            error: {
+                /** @example offset_mismatch */
+                code: string;
+                message: string;
+                /**
+                 * Format: int64
+                 * @description For offset_mismatch and upload_incomplete, the bytes the server has.
+                 */
+                received?: number;
+            };
+        };
     };
     responses: {
+        /** @description The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. */
+        BusyOrRestoring: {
+            headers: {
+                /** @description Seconds to wait before retrying. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. */
+        Restoring: {
+            headers: {
+                /** @description Seconds to wait before retrying. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Wrong setup token (code invalid_setup_token). */
+        InvalidSetupToken: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. */
+        TooManyAttempts: {
+            headers: {
+                /** @description Seconds to wait before retrying. */
+                "Retry-After"?: number;
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
         /** @description The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After. */
         Busy: {
             headers: {
@@ -1441,7 +1997,16 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        /** @description File name of a backup, as listed. */
+        BackupName: string;
+        /** @description Id of an open upload. */
+        UploadID: string;
+        /** @description Where the part starts in the file; must equal `received`. */
+        UploadOffset: number;
+        /** @description The one-time setup token from the server log. */
+        SetupToken: string;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -3270,6 +3835,964 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             503: components["responses"]["Busy"];
+        };
+    };
+    listBackups: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Backups and status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupList"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            503: components["responses"]["BusyOrRestoring"];
+        };
+    };
+    createBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backup started. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatus"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description A backup or restore is already running (code busy). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The backup folder cannot be used (code folder_unavailable; the message names the folder and the fix), the server is busy (code busy) or a backup is being restored (code restoring). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The backup folder has too little free space for a backup of the database and 512 MiB to spare (code no_space; the message gives both numbers). */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File name of a backup, as listed. */
+                name: components["parameters"]["BackupName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No backup with this name (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The backup is being restored (code in_use). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["BusyOrRestoring"];
+        };
+    };
+    downloadBackup: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description A byte range, for example bytes=1048576- to resume. */
+                Range?: string;
+            };
+            path: {
+                /** @description File name of a backup, as listed. */
+                name: components["parameters"]["BackupName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The whole file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            /** @description The requested range. */
+            206: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": string;
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No backup with this name (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The range is outside the file. */
+            416: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            503: components["responses"]["BusyOrRestoring"];
+        };
+    };
+    previewRestore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File name of a backup, as listed. */
+                name: components["parameters"]["BackupName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preview. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestorePreview"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No backup with this name (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The file is damaged, not a Scanopsis backup, of an unknown format or not signed by this installation's key (code invalid_backup; the message says why). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["BusyOrRestoring"];
+        };
+    };
+    restoreBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description File name of a backup, as listed. */
+                name: components["parameters"]["BackupName"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description The restore started. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatus"];
+                };
+            };
+            /** @description Malformed body (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description No valid session, or too many wrong two-factor codes ended it (code unauthenticated); sign in again. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            /** @description No backup with this name (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description A job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema); the message says how to fix it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description confirm is not RESTORE (code confirmation_required), the two-factor code is missing, wrong or used (code invalid_code), or the file cannot be read as a backup (code invalid_backup). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Too many code attempts (code too_many_attempts). Retry-After gives seconds. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["BusyOrRestoring"];
+        };
+    };
+    startBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UploadStart"];
+            };
+        };
+        responses: {
+            /** @description The upload is open. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            /** @description Invalid file name or size (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description Two uploads are open already (code too_many_uploads). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not enough free space (code no_space; the message gives the numbers). */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["Restoring"];
+        };
+    };
+    putBackupUploadChunk: {
+        parameters: {
+            query: {
+                /** @description Where the part starts in the file; must equal `received`. */
+                offset: components["parameters"]["UploadOffset"];
+            };
+            header?: never;
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The part was stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            /** @description Invalid offset, a part past the size given at the start, or a part that was cut off (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The part did not arrive within 5 minutes (code request_timeout). */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadError"];
+                };
+            };
+            /** @description The part is larger than chunk_size (code payload_too_large). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["Restoring"];
+            /** @description The backup folder is full (code no_space). */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    cancelBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["Restoring"];
+        };
+    };
+    completeBackupUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The backup was added. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackupInfo"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadError"];
+                };
+            };
+            /** @description The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). The message says why and how to fix it. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            503: components["responses"]["Restoring"];
+        };
+    };
+    startSetupRestoreUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupUploadStart"];
+            };
+        };
+        responses: {
+            /** @description The upload is open. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            /** @description Invalid request (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["InvalidSetupToken"];
+            /** @description Setup is complete (code setup_done), or two uploads are open already (code too_many_uploads). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyAttempts"];
+            /** @description The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Not enough free space (code no_space). */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getSetupRestoreUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The one-time setup token from the server log. */
+                "X-Setup-Token": components["parameters"]["SetupToken"];
+            };
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The upload. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            403: components["responses"]["InvalidSetupToken"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Setup is complete (code setup_done). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyAttempts"];
+            503: components["responses"]["Restoring"];
+        };
+    };
+    putSetupRestoreUploadChunk: {
+        parameters: {
+            query: {
+                /** @description Where the part starts in the file; must equal `received`. */
+                offset: components["parameters"]["UploadOffset"];
+            };
+            header: {
+                /** @description The one-time setup token from the server log. */
+                "X-Setup-Token": components["parameters"]["SetupToken"];
+            };
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+            };
+        };
+        responses: {
+            /** @description The part was stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadStatus"];
+                };
+            };
+            /** @description Invalid offset, a part past the size given at the start, or a part that was cut off (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["InvalidSetupToken"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description The part did not arrive within 5 minutes (code request_timeout). */
+            408: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadError"];
+                };
+            };
+            /** @description The part is larger than chunk_size (code payload_too_large). */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyAttempts"];
+            503: components["responses"]["Restoring"];
+            /** @description The backup folder is full (code no_space). */
+            507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    cancelSetupRestoreUpload: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The one-time setup token from the server log. */
+                "X-Setup-Token": components["parameters"]["SetupToken"];
+            };
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cancelled. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["InvalidSetupToken"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Setup is complete (code setup_done). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyAttempts"];
+            503: components["responses"]["Restoring"];
+        };
+    };
+    completeSetupRestoreUpload: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Id of an open upload. */
+                id: components["parameters"]["UploadID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupTokenBody"];
+            };
+        };
+        responses: {
+            /** @description The backup was added. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestorePreview"];
+                };
+            };
+            /** @description Malformed body (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["InvalidSetupToken"];
+            /** @description No upload with this id is open (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Setup is complete (code setup_done), not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadError"];
+                };
+            };
+            /** @description The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyAttempts"];
+            503: components["responses"]["Restoring"];
+        };
+    };
+    restoreSetupBackup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRestoreRequest"];
+            };
+        };
+        responses: {
+            /** @description The restore started. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreStatus"];
+                };
+            };
+            /** @description Malformed body (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["InvalidSetupToken"];
+            /** @description No completed upload with this id (code not_found). */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Setup is complete (code setup_done), a job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description confirm is not RESTORE (code confirmation_required). */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyAttempts"];
+            503: components["responses"]["BusyOrRestoring"];
+        };
+    };
+    getRestoreStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreStatus"];
+                };
+            };
         };
     };
 }

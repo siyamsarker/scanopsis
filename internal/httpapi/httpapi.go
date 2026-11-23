@@ -101,6 +101,12 @@ type Deps struct {
 	MaxConcurrent int
 	BusyWait      time.Duration // zero means DefaultBusyWait
 
+	// Restoring, when set, reports whether a backup is being restored. While
+	// it is true every request below /api/ except the version and the
+	// restore status is answered 503 restoring; the probes and the web
+	// interface keep working.
+	Restoring func() bool
+
 	Assets fs.FS // built web interface rooted at index.html; nil when not built
 	Build  BuildInfo
 	Secure bool // the public URL is https
@@ -181,6 +187,28 @@ func (s *server) routes() []route {
 		{"GET", "/api/v1/admin/audit", s.requireAdmin(s.feature("listAuditEvents"))},
 		{"GET", "/api/v1/admin/integrations/trivy", s.requireAdmin(s.feature("getTrivyIntegration"))},
 		{"GET", "/api/v1/admin/integrations/sonarqube", s.requireAdmin(s.feature("getSonarIntegration"))},
+
+		// Backups. The download and the upload parts bound their own
+		// transfer (see limitedAPIPath); the setup routes check the setup
+		// token and answer only while no administrator exists.
+		{"GET", "/api/v1/admin/backups", s.requireAdmin(s.feature("listBackups"))},
+		{"POST", "/api/v1/admin/backups", s.requireAdmin(s.feature("createBackup"))},
+		{"DELETE", "/api/v1/admin/backups/{name}", s.requireAdmin(s.feature("deleteBackup"))},
+		{"GET", "/api/v1/admin/backups/{name}/download", s.requireAdmin(s.feature("downloadBackup"))},
+		{"GET", "/api/v1/admin/backups/{name}/preview", s.requireAdmin(s.feature("previewRestore"))},
+		{"POST", "/api/v1/admin/backups/{name}/restore", s.requireAdmin(s.feature("restoreBackup"))},
+		{"POST", "/api/v1/admin/backup-uploads", s.requireAdmin(s.feature("startBackupUpload"))},
+		{"GET", "/api/v1/admin/backup-uploads/{id}", s.requireAdmin(s.feature("getBackupUpload"))},
+		{"PUT", "/api/v1/admin/backup-uploads/{id}", s.requireAdmin(s.feature("putBackupUploadChunk"))},
+		{"DELETE", "/api/v1/admin/backup-uploads/{id}", s.requireAdmin(s.feature("cancelBackupUpload"))},
+		{"POST", "/api/v1/admin/backup-uploads/{id}/complete", s.requireAdmin(s.feature("completeBackupUpload"))},
+		{"POST", "/api/v1/setup/restore/uploads", s.feature("startSetupRestoreUpload")},
+		{"GET", "/api/v1/setup/restore/uploads/{id}", s.feature("getSetupRestoreUpload")},
+		{"PUT", "/api/v1/setup/restore/uploads/{id}", s.feature("putSetupRestoreUploadChunk")},
+		{"DELETE", "/api/v1/setup/restore/uploads/{id}", s.feature("cancelSetupRestoreUpload")},
+		{"POST", "/api/v1/setup/restore/uploads/{id}/complete", s.feature("completeSetupRestoreUpload")},
+		{"POST", "/api/v1/setup/restore", s.feature("restoreSetupBackup")},
+		{"GET", "/api/v1/restore/status", s.feature("getRestoreStatus")},
 		{"DELETE", "/api/v1/users/{id}/mfa", s.requireAdmin(http.HandlerFunc(s.resetMFA))},
 		{"GET", "/api/v1/users", s.requireAdmin(http.HandlerFunc(s.listUsers))},
 		{"PATCH", "/api/v1/users/{id}", s.requireAdmin(http.HandlerFunc(s.updateUser))},
@@ -205,8 +233,29 @@ func (s *server) handler(routes []route) http.Handler {
 	var h http.Handler = mux
 	h = s.limitConcurrency(h)
 	h = limitBody(h) // outside the limiter: the body it buffers is already bounded
+	h = s.restoreGate(h)
 	h = csrf.Handler(h)
 	h = s.securityHeaders(h)
 	h = s.logRequests(h)
 	return s.recoverPanics(h)
+}
+
+// Timeouts of the HTTP server. Handlers that move large bodies (the backup
+// download and the upload parts) extend them for their own request.
+const (
+	ReadHeaderTimeout = 10 * time.Second
+	ReadTimeout       = 30 * time.Second
+	WriteTimeout      = 60 * time.Second
+	IdleTimeout       = 120 * time.Second
+)
+
+// NewServer returns an HTTP server for h with the timeouts above.
+func NewServer(h http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           h,
+		ReadHeaderTimeout: ReadHeaderTimeout,
+		ReadTimeout:       ReadTimeout,
+		WriteTimeout:      WriteTimeout,
+		IdleTimeout:       IdleTimeout,
+	}
 }

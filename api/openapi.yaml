@@ -3,7 +3,7 @@
 openapi: 3.1.0
 info:
   title: Scanopsis API
-  version: 0.3.0
+  version: 0.4.0
   license:
     name: Apache-2.0
     identifier: Apache-2.0
@@ -21,7 +21,13 @@ info:
     `Retry-After` header (seconds). Nothing was done: retry the request.
     One client address may hold at most a quarter of the slots, so one client
     cannot use them all.
-    The probes, the web interface and the Trivy upload are not counted.
+    The probes, the web interface, the Trivy upload, the backup download and
+    the parts of backup uploads are not counted.
+
+    While a backup is being restored, every API request except
+    GET /api/v1/version and GET /api/v1/restore/status is answered `503`
+    with the code `restoring` and `Retry-After: 30`. The probes and the web
+    interface keep working.
 servers:
   - url: /
 tags:
@@ -36,6 +42,7 @@ tags:
   - name: scans
   - name: findings
   - name: admin
+  - name: backups
 
 paths:
   /healthz:
@@ -819,6 +826,373 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
 
         "503": { $ref: "#/components/responses/Busy" }
+  /api/v1/admin/backups:
+    get:
+      tags: [backups]
+      summary: List the backups, the current or last job, the backup schedule's last run and the folder (admin only).
+      description: |
+        The files in the backup folder are the source of truth: the list is
+        read from the folder, newest first. A file whose manifest cannot be
+        read is listed with `readable` false so it can be deleted. When the
+        folder cannot be used, `folder.ok` is false, `folder.error` says why
+        and how to fix it, and the list is empty.
+      operationId: listBackups
+      responses:
+        "200": { description: Backups and status., content: { application/json: { schema: { $ref: "#/components/schemas/BackupList" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
+    post:
+      tags: [backups]
+      summary: Start a manual backup (admin only).
+      description: |
+        The backup runs in the background; follow it with `job` in the list.
+        Audited as backup.created when it is written, or backup.failed.
+      operationId: createBackup
+      responses:
+        "202": { description: The backup started., content: { application/json: { schema: { $ref: "#/components/schemas/JobStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: A backup or restore is already running (code busy)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: "The backup folder cannot be used (code folder_unavailable; the message names the folder and the fix), the server is busy (code busy) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "507": { description: "The backup folder has too little free space for a backup of the database and 512 MiB to spare (code no_space; the message gives both numbers).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/admin/backups/{name}:
+    delete:
+      tags: [backups]
+      summary: Delete a backup (admin only).
+      description: Audited as backup.deleted with the name and size.
+      operationId: deleteBackup
+      parameters:
+        - $ref: "#/components/parameters/BackupName"
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No backup with this name (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: The backup is being restored (code in_use)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
+  /api/v1/admin/backups/{name}/download:
+    get:
+      tags: [backups]
+      summary: Download a backup file (admin only).
+      description: |
+        Sends the file as `application/gzip` with `Content-Disposition:
+        attachment`, `Content-Length` and range support: a `Range` request
+        resumes an interrupted download (206). The download may take as long
+        as the client keeps reading; it is cut off only after 60 seconds
+        without progress. Not counted by the concurrency limit. Audited as
+        backup.downloaded with the name, the size and the range, if any.
+      operationId: downloadBackup
+      parameters:
+        - $ref: "#/components/parameters/BackupName"
+        - { name: Range, in: header, required: false, description: "A byte range, for example bytes=1048576- to resume.", schema: { type: string } }
+      responses:
+        "200": { description: The whole file., content: { application/gzip: { schema: { type: string, format: binary } } } }
+        "206": { description: The requested range., content: { application/gzip: { schema: { type: string, format: binary } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No backup with this name (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "416": { description: The range is outside the file. }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
+  /api/v1/admin/backups/{name}/preview:
+    get:
+      tags: [backups]
+      summary: Check a backup in full and tell what restoring it would do (admin only).
+      description: |
+        Reads the whole file and checks its checksums and signature, as a
+        restore does before it changes anything. A backup made by a newer
+        version or with another secret key is described from its manifest
+        with `schema_ok` or `key_matches` false. `scans_removed_by_retention`
+        is how many of the backup's scans the next data clean-up deletes
+        under the retention period the restored installation will have.
+      operationId: previewRestore
+      parameters:
+        - $ref: "#/components/parameters/BackupName"
+      responses:
+        "200": { description: The preview., content: { application/json: { schema: { $ref: "#/components/schemas/RestorePreview" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No backup with this name (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "The file is damaged, not a Scanopsis backup, of an unknown format or not signed by this installation's key (code invalid_backup; the message says why).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
+  /api/v1/admin/backups/{name}/restore:
+    post:
+      tags: [backups]
+      summary: Replace all data with a backup (admin only).
+      description: |
+        Needs the phrase RESTORE and a current two-factor code of the
+        administrator. Unless `skip_safety_backup` is true, a backup of the
+        current data (kind before-restore) is taken first. The restore then
+        runs in the background in one database transaction; while it replaces
+        the data, the API answers 503 with the code restoring. Every session
+        ends, this one too. The backup schedule and keep-days of this server
+        are kept. Follow it with GET /api/v1/restore/status.
+      operationId: restoreBackup
+      parameters:
+        - $ref: "#/components/parameters/BackupName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RestoreRequest" }
+      responses:
+        "202": { description: The restore started., content: { application/json: { schema: { $ref: "#/components/schemas/JobStatus" } } } }
+        "400": { description: Malformed body (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { description: "No valid session, or too many wrong two-factor codes ended it (code unauthenticated); sign in again.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No backup with this name (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "A job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema); the message says how to fix it.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: "confirm is not RESTORE (code confirmation_required), the two-factor code is missing, wrong or used (code invalid_code), or the file cannot be read as a backup (code invalid_backup).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { description: Too many code attempts (code too_many_attempts). Retry-After gives seconds., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
+  /api/v1/admin/backup-uploads:
+    post:
+      tags: [backups]
+      summary: Start uploading a backup file (admin only).
+      description: |
+        Send the file in parts with PUT, then complete the upload. At most two
+        uploads may be open at once; one without a part for an hour is
+        dropped. The file must fit the free space of the backup folder less
+        512 MiB and less what other open uploads still need.
+      operationId: startBackupUpload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UploadStart" }
+      responses:
+        "201": { description: The upload is open., content: { application/json: { schema: { $ref: "#/components/schemas/UploadStatus" } } } }
+        "400": { description: Invalid file name or size (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { description: Two uploads are open already (code too_many_uploads)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { description: "The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "507": { description: Not enough free space (code no_space; the message gives the numbers)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/admin/backup-uploads/{id}:
+    get:
+      tags: [backups]
+      summary: How much of an upload the server has (admin only).
+      description: After a dropped connection, ask this and send the next part from `received`.
+      operationId: getBackupUpload
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+      responses:
+        "200": { description: The upload., content: { application/json: { schema: { $ref: "#/components/schemas/UploadStatus" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Restoring" }
+    put:
+      tags: [backups]
+      summary: Send one part of an upload (admin only).
+      description: |
+        The body is the raw bytes of the file from `offset`, at most
+        `chunk_size` (8 MiB) of them. `offset` must equal `received`. A part
+        may take up to 5 minutes to arrive. A part that fails (a dropped
+        connection, a timeout) is not kept: send it again from the same
+        offset. Not counted by the concurrency limit.
+      operationId: putBackupUploadChunk
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+        - $ref: "#/components/parameters/UploadOffset"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200": { description: The part was stored., content: { application/json: { schema: { $ref: "#/components/schemas/UploadStatus" } } } }
+        "400": { description: "Invalid offset, a part past the size given at the start, or a part that was cut off (code invalid_request).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "408": { description: The part did not arrive within 5 minutes (code request_timeout)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
+        "413": { description: The part is larger than chunk_size (code payload_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Restoring" }
+        "507": { description: The backup folder is full (code no_space)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [backups]
+      summary: Cancel an upload and delete what was received (admin only).
+      operationId: cancelBackupUpload
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+      responses:
+        "204": { description: Cancelled. }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Restoring" }
+  /api/v1/admin/backup-uploads/{id}/complete:
+    post:
+      tags: [backups]
+      summary: Check a fully received upload and add it to the backups (admin only).
+      description: |
+        Reads the whole file and checks its manifest, checksums and signature.
+        A file that passes joins the list as a backup of kind uploaded, with
+        its original name; audited as backup.uploaded. A file that fails is
+        deleted and the message says why. The body may be empty.
+      operationId: completeBackupUpload
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+      responses:
+        "201": { description: The backup was added., content: { application/json: { schema: { $ref: "#/components/schemas/BackupInfo" } } } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "Not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
+        "422": { description: "The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). The message says why and how to fix it.", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "503": { $ref: "#/components/responses/Restoring" }
+  /api/v1/setup/restore/uploads:
+    post:
+      tags: [setup]
+      summary: Start uploading a backup on the setup screen of a new installation.
+      description: |
+        Only while no administrator exists, with the setup token; otherwise
+        409 setup_done. Works as POST /api/v1/admin/backup-uploads; the
+        uploads of the setup screen are separate from those of the admin
+        panel.
+      operationId: startSetupRestoreUpload
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetupUploadStart" }
+      responses:
+        "201": { description: The upload is open., content: { application/json: { schema: { $ref: "#/components/schemas/UploadStatus" } } } }
+        "400": { description: Invalid request (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { $ref: "#/components/responses/InvalidSetupToken" }
+        "409": { description: "Setup is complete (code setup_done), or two uploads are open already (code too_many_uploads).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+        "503": { description: "The backup folder cannot be used (code folder_unavailable), the server is busy (code busy) or a backup is being restored (code restoring).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "507": { description: Not enough free space (code no_space)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+  /api/v1/setup/restore/uploads/{id}:
+    get:
+      tags: [setup]
+      summary: How much of a setup upload the server has.
+      description: The setup token goes in the X-Setup-Token header.
+      operationId: getSetupRestoreUpload
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+        - $ref: "#/components/parameters/SetupToken"
+      responses:
+        "200": { description: The upload., content: { application/json: { schema: { $ref: "#/components/schemas/UploadStatus" } } } }
+        "403": { $ref: "#/components/responses/InvalidSetupToken" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Setup is complete (code setup_done)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+        "503": { $ref: "#/components/responses/Restoring" }
+    put:
+      tags: [setup]
+      summary: Send one part of a setup upload.
+      description: Works as PUT /api/v1/admin/backup-uploads/{id}; the setup token goes in the X-Setup-Token header.
+      operationId: putSetupRestoreUploadChunk
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+        - $ref: "#/components/parameters/UploadOffset"
+        - $ref: "#/components/parameters/SetupToken"
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200": { description: The part was stored., content: { application/json: { schema: { $ref: "#/components/schemas/UploadStatus" } } } }
+        "400": { description: "Invalid offset, a part past the size given at the start, or a part that was cut off (code invalid_request).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { $ref: "#/components/responses/InvalidSetupToken" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "408": { description: The part did not arrive within 5 minutes (code request_timeout)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "Setup is complete (code setup_done), offset is not where the received data ends (code offset_mismatch; `received` gives it), or another part is still being received (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
+        "413": { description: The part is larger than chunk_size (code payload_too_large)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+        "503": { $ref: "#/components/responses/Restoring" }
+        "507": { description: The backup folder is full (code no_space)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    delete:
+      tags: [setup]
+      summary: Cancel a setup upload and delete what was received.
+      description: The setup token goes in the X-Setup-Token header.
+      operationId: cancelSetupRestoreUpload
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+        - $ref: "#/components/parameters/SetupToken"
+      responses:
+        "204": { description: Cancelled. }
+        "403": { $ref: "#/components/responses/InvalidSetupToken" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: Setup is complete (code setup_done)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+        "503": { $ref: "#/components/responses/Restoring" }
+  /api/v1/setup/restore/uploads/{id}/complete:
+    post:
+      tags: [setup]
+      summary: Check a fully received setup upload and tell what restoring it would do.
+      description: |
+        Checks the file in full, as POST /api/v1/admin/backup-uploads/{id}/complete
+        does, adds it to the backup folder as kind uploaded and returns the
+        preview of the restore. Use the upload id to restore it.
+      operationId: completeSetupRestoreUpload
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/UploadID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetupTokenBody" }
+      responses:
+        "201": { description: The backup was added., content: { application/json: { schema: { $ref: "#/components/schemas/RestorePreview" } } } }
+        "400": { description: Malformed body (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { $ref: "#/components/responses/InvalidSetupToken" }
+        "404": { description: No upload with this id is open (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "Setup is complete (code setup_done), not all of the file was received (code upload_incomplete; `received` gives how much), or a part is still being received (code upload_busy).", content: { application/json: { schema: { $ref: "#/components/schemas/UploadError" } } } }
+        "422": { description: "The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+        "503": { $ref: "#/components/responses/Restoring" }
+  /api/v1/setup/restore:
+    post:
+      tags: [setup]
+      summary: Restore an uploaded backup into a new installation.
+      description: |
+        Only while no administrator exists, with the setup token and the
+        phrase RESTORE. No backup of the empty database is taken first, and
+        the backup's own schedule settings are kept. The restore runs in the
+        background; follow it with GET /api/v1/restore/status. Afterwards the
+        administrators of the backup sign in, and the setup endpoints answer
+        409 setup_done.
+      operationId: restoreSetupBackup
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetupRestoreRequest" }
+      responses:
+        "202": { description: The restore started., content: { application/json: { schema: { $ref: "#/components/schemas/RestoreStatus" } } } }
+        "400": { description: Malformed body (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { $ref: "#/components/responses/InvalidSetupToken" }
+        "404": { description: No completed upload with this id (code not_found)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "409": { description: "Setup is complete (code setup_done), a job is running (code busy), or the backup was made with another secret key (code key_mismatch) or by a newer version (code newer_schema).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "422": { description: confirm is not RESTORE (code confirmation_required)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
+  /api/v1/restore/status:
+    get:
+      tags: [backups]
+      summary: State of the current or last restore. Answers during a restore.
+      description: |
+        Public, so the web interface can show progress while every other API
+        request is answered 503 restoring. It names no backup, account or
+        folder. The state is idle when the last job was not a restore. After a
+        restore that needs a restart, the state is failed and the message
+        says to restart Scanopsis.
+      operationId: getRestoreStatus
+      security: []
+      responses:
+        "200": { description: The state., content: { application/json: { schema: { $ref: "#/components/schemas/RestoreStatus" } } } }
 components:
   securitySchemes:
     ciIdToken:
@@ -831,7 +1205,50 @@ components:
       in: cookie
       name: __Host-scanopsis_session
       description: Named scanopsis_session when the public URL uses plain HTTP.
+  parameters:
+    BackupName:
+      name: name
+      in: path
+      required: true
+      description: File name of a backup, as listed.
+      schema: { type: string, pattern: '^scanopsis-backup-[0-9]{8}T[0-9]{6}Z-(manual|scheduled|uploaded|before-restore)-[a-z0-9]{6}\.tar\.gz$' }
+    UploadID:
+      name: id
+      in: path
+      required: true
+      description: Id of an open upload.
+      schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+    UploadOffset:
+      name: offset
+      in: query
+      required: true
+      description: Where the part starts in the file; must equal `received`.
+      schema: { type: integer, format: int64, minimum: 0 }
+    SetupToken:
+      name: X-Setup-Token
+      in: header
+      required: true
+      description: The one-time setup token from the server log.
+      schema: { type: string }
   responses:
+    BusyOrRestoring:
+      description: "The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After."
+      headers:
+        Retry-After: { description: Seconds to wait before retrying., schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Restoring:
+      description: A backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After.
+      headers:
+        Retry-After: { description: Seconds to wait before retrying., schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    InvalidSetupToken:
+      description: Wrong setup token (code invalid_setup_token).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    TooManyAttempts:
+      description: Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds.
+      headers:
+        Retry-After: { description: Seconds to wait before retrying., schema: { type: integer } }
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Busy:
       description: The server is serving as many requests as it can and none became free within a few seconds (code busy). Nothing was done; retry after the number of seconds in Retry-After.
       headers:
@@ -1474,5 +1891,147 @@ components:
               type: object
               additionalProperties: { type: string }
               description: Problem per setting key.
+    BackupKind:
+      type: string
+      enum: [manual, scheduled, uploaded, before-restore]
+    BackupInfo:
+      type: object
+      required: [name, kind, size, created_at, created_by, app_version, schema, key_matches, readable, uploaded_at, original_name]
+      properties:
+        name: { type: string }
+        kind: { $ref: "#/components/schemas/BackupKind" }
+        size: { type: integer, format: int64, description: Bytes. }
+        created_at: { type: string, format: date-time, description: When the data was backed up. }
+        created_by: { type: string, description: "Who started the backup: an account (source:username), scheduler or setup." }
+        app_version: { type: string, description: Version of Scanopsis that made the backup. }
+        schema: { type: integer, format: int64, description: Database schema version of the backup. }
+        key_matches: { type: boolean, description: The backup was made with the secret key this server runs with. Only such a backup can be restored. }
+        readable: { type: boolean, description: "False when the manifest cannot be read: the backup can be deleted but not restored, and only name, kind, size and created_at are known." }
+        uploaded_at: { type: [string, "null"], format: date-time, description: When an uploaded backup arrived. }
+        original_name: { type: string, description: The file name an uploaded backup had; empty for other kinds. }
+    JobProgress:
+      type: object
+      required: [table, tables_done, tables_total, bytes]
+      properties:
+        table: { type: string, description: Table being copied. }
+        tables_done: { type: integer }
+        tables_total: { type: integer }
+        bytes: { type: integer, format: int64, description: Table data copied so far. }
+    JobStatus:
+      type: object
+      description: The current or last backup or restore job. A finished job stays done or failed until the next one starts.
+      required: [state, progress, percent, started_at, finished_at]
+      properties:
+        state: { type: string, enum: [idle, backing_up, restoring, done, failed] }
+        type: { type: string, enum: [backup, restore], description: Absent while idle. }
+        kind: { $ref: "#/components/schemas/BackupKind" }
+        name: { type: string, description: "For a backup, the new file once written; for a restore, the backup being restored." }
+        progress: { $ref: "#/components/schemas/JobProgress" }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        message: { type: string, description: "What happens or went wrong, in a sentence." }
+        started_at: { type: [string, "null"], format: date-time }
+        finished_at: { type: [string, "null"], format: date-time }
+    ScheduleStatus:
+      type: object
+      required: [last_run_at, ok, error]
+      properties:
+        last_run_at: { type: [string, "null"], format: date-time, description: When the last scheduled backup ran; null before the first. }
+        ok: { type: boolean }
+        error: { type: string, description: Why the last scheduled backup failed; empty after a success. }
+    BackupList:
+      type: object
+      required: [backups, job, schedule, disk, folder]
+      properties:
+        backups: { type: array, items: { $ref: "#/components/schemas/BackupInfo" }, description: Newest first. }
+        job: { $ref: "#/components/schemas/JobStatus" }
+        schedule: { $ref: "#/components/schemas/ScheduleStatus" }
+        disk:
+          type: object
+          required: [free_bytes, used_bytes]
+          properties:
+            free_bytes: { type: integer, format: int64, description: Free space in the backup folder. }
+            used_bytes: { type: integer, format: int64, description: Total size of the backups. }
+        folder:
+          type: object
+          required: [path, ok]
+          properties:
+            path: { type: string }
+            ok: { type: boolean }
+            error: { type: string, description: Why the folder cannot be used and how to fix it. }
+    RestorePreview:
+      type: object
+      required: [info, schema_ok, key_matches, scans_removed_by_retention, oldest_scan_at, retention_days]
+      properties:
+        info: { $ref: "#/components/schemas/BackupInfo" }
+        schema_ok: { type: boolean, description: False when a newer version of Scanopsis made the backup. }
+        key_matches: { type: boolean, description: False when another secret key made the backup. }
+        scans_removed_by_retention: { type: integer, format: int64, description: Scans of the backup that the next data clean-up deletes. }
+        oldest_scan_at: { type: [string, "null"], format: date-time }
+        retention_days: { type: integer, description: The retention period the restored installation will have. }
+    RestoreRequest:
+      type: object
+      required: [confirm, code]
+      additionalProperties: false
+      properties:
+        confirm: { type: string, const: RESTORE }
+        code: { type: string, description: A current TOTP code of the administrator. Recovery codes are not accepted. }
+        skip_safety_backup: { type: boolean, default: false, description: Do not back up the current data first. }
+    RestoreStatus:
+      type: object
+      required: [state, percent, message, finished_at]
+      properties:
+        state: { type: string, enum: [idle, backing_up, restoring, done, failed] }
+        percent: { type: integer, minimum: 0, maximum: 100 }
+        message: { type: string, description: "What happens, in a sentence; names no backup or account." }
+        finished_at: { type: [string, "null"], format: date-time }
+    UploadStart:
+      type: object
+      required: [file_name, size]
+      additionalProperties: false
+      properties:
+        file_name: { type: string, minLength: 1, maxLength: 255, description: The name of the file being uploaded; kept as original_name. }
+        size: { type: integer, format: int64, minimum: 1, description: Size of the whole file in bytes. }
+    SetupUploadStart:
+      type: object
+      required: [token, file_name, size]
+      additionalProperties: false
+      properties:
+        token: { type: string, description: The one-time setup token from the server log. }
+        file_name: { type: string, minLength: 1, maxLength: 255 }
+        size: { type: integer, format: int64, minimum: 1 }
+    SetupTokenBody:
+      type: object
+      required: [token]
+      additionalProperties: false
+      properties:
+        token: { type: string, description: The one-time setup token from the server log. }
+    SetupRestoreRequest:
+      type: object
+      required: [token, upload_id, confirm]
+      additionalProperties: false
+      properties:
+        token: { type: string, description: The one-time setup token from the server log. }
+        upload_id: { type: string, description: Id of a completed setup upload. }
+        confirm: { type: string, const: RESTORE }
+    UploadStatus:
+      type: object
+      required: [id, file_name, size, chunk_size, received]
+      properties:
+        id: { type: string, description: 128-bit random id in hex. }
+        file_name: { type: string }
+        size: { type: integer, format: int64 }
+        chunk_size: { type: integer, description: The largest part the server takes (8 MiB). }
+        received: { type: integer, format: int64, description: Bytes stored so far; the next part starts here. }
+    UploadError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: offset_mismatch }
+            message: { type: string }
+            received: { type: integer, format: int64, description: "For offset_mismatch and upload_incomplete, the bytes the server has." }
 security:
   - session: []

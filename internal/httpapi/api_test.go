@@ -86,7 +86,24 @@ var rbacRoutes = []struct {
 	{"GET", "/api/v1/search/vulnerabilities?id=CVE-2024-3094", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "204", "204"}},
 	{"GET", "/api/v1/admin/audit", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
 	{"GET", "/api/v1/admin/integrations/trivy", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
-	{"GET", "/api/v1/admin/integrations/sonarqube", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/admin/integrations/sonarqube", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}}, {"GET", "/api/v1/admin/backups", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"POST", "/api/v1/admin/backups", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/admin/backups/scanopsis-backup-20261123T100000Z-manual-abc123.tar.gz/download", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"DELETE", "/api/v1/admin/backups/scanopsis-backup-20261123T100000Z-manual-abc123.tar.gz", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/admin/backups/scanopsis-backup-20261123T100000Z-manual-abc123.tar.gz/preview", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"POST", "/api/v1/admin/backups/scanopsis-backup-20261123T100000Z-manual-abc123.tar.gz/restore", "{}", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"POST", "/api/v1/admin/backup-uploads", "{}", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"GET", "/api/v1/admin/backup-uploads/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"PUT", "/api/v1/admin/backup-uploads/3?offset=0", "x", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"DELETE", "/api/v1/admin/backup-uploads/3", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"POST", "/api/v1/admin/backup-uploads/3/complete", "", [6]string{"401:unauthenticated", "403:mfa_enrollment_required", "403:mfa_required", "403:password_change_required", "403:forbidden", "204"}},
+	{"POST", "/api/v1/setup/restore/uploads", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"GET", "/api/v1/setup/restore/uploads/3", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"PUT", "/api/v1/setup/restore/uploads/3?offset=0", "x", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"DELETE", "/api/v1/setup/restore/uploads/3", "", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/setup/restore/uploads/3/complete", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/setup/restore", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"GET", "/api/v1/restore/status", "", [6]string{"204", "204", "204", "204", "204", "204"}},
 }
 
 func TestRBACMatrix(t *testing.T) {
@@ -122,8 +139,10 @@ func TestRBACMatrixCoversEveryRoute(t *testing.T) {
 	// Guards the matrix above: every registered route must appear in it.
 	covered := map[string]bool{}
 	ids := regexp.MustCompile(`/[0-9]+(/|$)`)
+	names := regexp.MustCompile(`/scanopsis-backup-[^/]+`)
 	for _, tt := range rbacRoutes {
 		path, _, _ := strings.Cut(tt.target, "?")
+		path = names.ReplaceAllString(path, "/{name}")
 		covered[tt.method+" "+ids.ReplaceAllString(path, "/{id}$1")] = true
 	}
 	s := &server{}
@@ -504,6 +523,10 @@ var featureIDs = []string{
 	"listEarlierScans",
 	"listServiceVulnerabilities", "listServiceSecrets", "getServiceTrends", "getServiceSonar",
 	"searchVulnerabilities", "getTrivyIntegration", "getSonarIntegration", "listAuditEvents",
+	"listBackups", "createBackup", "downloadBackup", "deleteBackup", "previewRestore", "restoreBackup",
+	"startBackupUpload", "getBackupUpload", "putBackupUploadChunk", "cancelBackupUpload", "completeBackupUpload",
+	"startSetupRestoreUpload", "getSetupRestoreUpload", "putSetupRestoreUploadChunk", "cancelSetupRestoreUpload",
+	"completeSetupRestoreUpload", "restoreSetupBackup", "getRestoreStatus",
 }
 
 func TestFeatureNotEnabled(t *testing.T) {

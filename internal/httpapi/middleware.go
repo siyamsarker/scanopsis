@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/siyamsarker/scanopsis/internal/auth"
@@ -111,6 +112,31 @@ func limitBody(next http.Handler) http.Handler {
 		// Scan reports are larger; the ingest handler applies its own limit.
 		if limitedAPIPath(r.URL.Path) && r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, maxAPIBody)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// restoreRetryAfter is the Retry-After value, in seconds, of an answer
+// during a restore.
+const restoreRetryAfter = "30"
+
+// restoreGate turns API requests away while a backup is being restored: the
+// data they would read or write is being replaced. The version and the
+// restore status stay available, so the web interface can show what is
+// happening; the probes and the web interface are outside /api/.
+func (s *server) restoreGate(next http.Handler) http.Handler {
+	if s.Restoring == nil {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		if strings.HasPrefix(p, "/api/") && p != "/api/v1/version" && p != "/api/v1/restore/status" && s.Restoring() {
+			abortUnreadBody(w, r)
+			w.Header().Set("Retry-After", restoreRetryAfter)
+			writeError(w, http.StatusServiceUnavailable, "restoring",
+				"A backup is being restored. Try again in a few minutes.")
+			return
 		}
 		next.ServeHTTP(w, r)
 	})

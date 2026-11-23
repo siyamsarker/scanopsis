@@ -42,14 +42,31 @@ const (
 	// so neither limitBody nor the concurrency limit applies to it.
 	ingestPrefix = "/api/v1/ingest/"
 	uploadPath   = ingestPrefix + "trivy"
+
+	// The parts of a backup upload are up to 8 MiB and may arrive slowly,
+	// and a download can take far longer than a request should hold a slot.
+	// Their handlers bound the body and the time themselves.
+	backupUploadsPrefix = "/api/v1/admin/backup-uploads/"
+	setupUploadsPrefix  = "/api/v1/setup/restore/uploads/"
+	backupsPrefix       = "/api/v1/admin/backups/"
+	downloadSuffix      = "/download"
 )
 
 // limitedAPIPath reports whether the generic limits of the API apply to a
 // path: the body limit of limitBody and the concurrency limit. They apply to
-// everything below /api/ except the upload paths, whose handler does its own.
+// everything below /api/ except the transfer paths (the Trivy upload, the
+// backup upload parts and the backup download), whose handlers do their own.
 // Both use this one test, so no path is left without either.
 func limitedAPIPath(path string) bool {
-	return strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, ingestPrefix)
+	switch {
+	case !strings.HasPrefix(path, "/api/"),
+		strings.HasPrefix(path, ingestPrefix),
+		strings.HasPrefix(path, backupUploadsPrefix),
+		strings.HasPrefix(path, setupUploadsPrefix),
+		strings.HasPrefix(path, backupsPrefix) && strings.HasSuffix(path, downloadSuffix):
+		return false
+	}
+	return true
 }
 
 // bodyReadTimeout is how long reading a body may take. A client that has
