@@ -339,7 +339,7 @@ func TestServiceLockAcrossInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := e.wait(t)
-	if st.State != JobFailed || !strings.Contains(st.Message, "another Scanopsis instance") {
+	if st.State != JobFailed || !strings.Contains(st.Message, "Another Scanopsis instance") {
 		t.Errorf("status = %+v", st)
 	}
 	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["kind"] != KindManual {
@@ -372,7 +372,7 @@ func TestServiceRestoreWaitsForMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := e.wait(t)
-	if st.State != JobFailed || st.Message != "another maintenance job is running; try again in a few minutes" || e.svc.Restoring() {
+	if st.State != JobFailed || st.Message != "Another maintenance job is running; try again in a few minutes." || e.svc.Restoring() {
 		t.Fatalf("status = %+v", st)
 	}
 	if restoreCalls.Load() != 0 || len(e.audit.of(audit.ActionBackupCreated)) != 1 {
@@ -488,18 +488,18 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 	e.svc.restore = func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error {
 		o.BeforeReplace()
 		restoreRestoring.Store(e.svc.Restoring())
-		return errors.New("restore backup: the file is damaged")
+		return fmt.Errorf("restore backup: %w", corruptf("the file ends too early"))
 	}
 	restoreRestoring.Store(false)
 	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
 		t.Fatal(err)
 	}
 	st = e.wait(t)
-	if st.State != JobFailed || !strings.Contains(st.Message, "the file is damaged") || e.svc.Restoring() || !restoreRestoring.Load() {
+	if st.State != JobFailed || !strings.Contains(st.Message, "The file is damaged") || e.svc.Restoring() || !restoreRestoring.Load() {
 		t.Errorf("failed restore: %+v, restoring %v", st, e.svc.Restoring())
 	}
 	if f := e.audit.of(audit.ActionBackupRestoreFailed); len(f) != 1 || f[0].detail["name"] != name ||
-		!strings.Contains(f[0].detail["error"].(string), "the file is damaged") {
+		!strings.Contains(f[0].detail["error"].(string), "The file is damaged") {
 		t.Errorf("audit = %+v", f)
 	}
 	if e.after.Load() != 1 {
@@ -512,13 +512,13 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 		return realRestore(ctx, pool, path, o)
 	}
 	e.svc.dump = func(context.Context, Kind, string, func(Progress)) (Info, error) {
-		return Info{}, errors.New("take backup: not enough free space for a backup")
+		return Info{}, fmt.Errorf("take backup: %w", &spaceError{need: 2 << 30, have: 1 << 30})
 	}
 	if _, err := e.svc.StartRestore(name, "local:alice", false, true); err != nil {
 		t.Fatal(err)
 	}
 	st = e.wait(t)
-	if st.State != JobFailed || !strings.Contains(st.Message, "not enough free space") || e.svc.Restoring() {
+	if st.State != JobFailed || !strings.Contains(st.Message, "Not enough free space") || e.svc.Restoring() {
 		t.Errorf("failed safety backup: %+v", st)
 	}
 	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["kind"] != KindBeforeRestore {
@@ -818,7 +818,7 @@ func TestServiceFailedScheduledRecorded(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	s := e.svc.Schedule()
-	if s.OK || s.LastRunAt == nil || !strings.Contains(s.Error, folder) || !s.Enabled || s.Dismissed {
+	if s.OK || s.LastRunAt == nil || s.Error != folderNotWritableMessage || !s.Enabled || s.Dismissed {
 		t.Fatalf("schedule status = %+v", s)
 	}
 	// Turning the schedule off hides the failure.
@@ -831,7 +831,7 @@ func TestServiceFailedScheduledRecorded(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT actor, detail FROM audit_log WHERE action = 'backup.failed'`).Scan(&actor, &detail); err != nil {
 		t.Fatal(err)
 	}
-	if actor != "scheduler" || detail["kind"] != "scheduled" || !strings.Contains(detail["error"].(string), folder) {
+	if actor != "scheduler" || detail["kind"] != "scheduled" || detail["error"] != folderNotWritableMessage {
 		t.Errorf("audit row: %s %v", actor, detail)
 	}
 	if st := e.svc.Status(); st.State != JobFailed || st.Kind != KindScheduled {
@@ -975,10 +975,10 @@ func TestServiceJobPanic(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := e.wait(t)
-	if st.State != JobFailed || st.Message != errInternal.Error() {
+	if st.State != JobFailed || st.Message != message(errInternal) {
 		t.Errorf("status = %+v", st)
 	}
-	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["error"] != errInternal.Error() {
+	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["error"] != message(errInternal) {
 		t.Errorf("audit = %+v", f)
 	}
 
@@ -988,7 +988,7 @@ func TestServiceJobPanic(t *testing.T) {
 	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
 		t.Fatal(err)
 	}
-	if st := e.wait(t); st.State != JobFailed || st.Message != errInternal.Error() || e.svc.Restoring() {
+	if st := e.wait(t); st.State != JobFailed || st.Message != message(errInternal) || e.svc.Restoring() {
 		t.Errorf("restore status = %+v, restoring %v", st, e.svc.Restoring())
 	}
 	if f := e.audit.of(audit.ActionBackupRestoreFailed); len(f) != 1 {
@@ -1133,17 +1133,17 @@ func TestServiceFailureDuringShutdown(t *testing.T) {
 	e.svc.dump = func(ctx context.Context, _ Kind, _ string, _ func(Progress)) (Info, error) {
 		close(writing)
 		<-ctx.Done()
-		return Info{}, errors.New("take backup: the disk failed")
+		return Info{}, fmt.Errorf("take backup: %w", &spaceError{need: 2 << 30, have: 1 << 30})
 	}
 	if _, err := e.svc.StartBackup(KindManual, "local:alice"); err != nil {
 		t.Fatal(err)
 	}
 	<-writing
 	e.svc.Close()
-	if st := e.wait(t); st.State != JobFailed || st.Message != "the disk failed" {
+	if st := e.wait(t); st.State != JobFailed || !strings.HasPrefix(st.Message, "Not enough free space") {
 		t.Errorf("status = %+v", st)
 	}
-	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["error"] != "the disk failed" {
+	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || !strings.HasPrefix(f[0].detail["error"].(string), "Not enough free space") {
 		t.Errorf("audit = %+v", f)
 	}
 }

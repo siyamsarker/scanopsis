@@ -253,9 +253,15 @@ export function overlayView(status: RestoreStatus): OverlayView {
  * that already says so: "/srv/backups does not exist; create it ...".
  */
 export function folderProblem(error: string | undefined): string {
-  const text = (error ?? '').trim().replace(/^the backup folder cannot be used:\s*/i, '');
-  if (!text) return 'Scanopsis cannot write to it. Check that it exists and is writable.';
-  const sentence = text.charAt(0).toUpperCase() + text.slice(1);
+  const text = asSentence((error ?? '').replace(/^\s*the backup folder cannot be used:\s*/i, ''));
+  return text || 'Scanopsis cannot write to it. Check that it exists and is writable.';
+}
+
+/** A reason from the server as a sentence: capital first letter, full stop at the end. */
+export function asSentence(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return '';
+  const sentence = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
   return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`;
 }
 
@@ -270,5 +276,5 @@ export function scheduleAlertShown(schedule: ScheduleStatus | undefined): boolea
 
 /** The banner text for a scheduled backup that failed. */
 export function scheduleFailure(lastRunAt: string, error: string): string {
-  return `The scheduled backup at ${formatExactTime(lastRunAt)} failed: ${error || 'the reason is in the server log.'}`;
+  return `The scheduled backup at ${formatExactTime(lastRunAt)} failed. ${asSentence(error) || 'The reason is in the server log.'}`;
 }

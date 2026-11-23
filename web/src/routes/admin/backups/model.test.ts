@@ -3,6 +3,7 @@
 
 import type { BackupInfo, JobStatus, RestorePreview, RestoreStatus } from '../../../api/backups';
 import {
+  asSentence,
   blockedReason,
   canRestore,
   folderProblem,
@@ -280,11 +281,23 @@ describe('folder and schedule notices', () => {
   });
 
   it('names the time and the reason of a failed scheduled backup', () => {
-    expect(scheduleFailure('2026-11-23T02:00:00Z', 'disk full')).toMatch(
-      /^The scheduled backup at 23 Nov 2026, .+ failed: disk full$/,
+    expect(
+      scheduleFailure(
+        '2026-11-23T02:00:00Z',
+        'Scanopsis cannot write to the backup folder. Make it writable.',
+      ),
+    ).toMatch(
+      /^The scheduled backup at 23 Nov 2026, .+ failed\. Scanopsis cannot write to the backup folder\. Make it writable\.$/,
     );
     expect(scheduleFailure('2026-11-23T02:00:00Z', '')).toMatch(
-      /failed: the reason is in the server log\.$/,
+      /failed\. The reason is in the server log\.$/,
     );
+  });
+
+  it('makes a reason from an older server a sentence', () => {
+    expect(scheduleFailure('2026-11-23T02:00:00Z', 'disk full')).toMatch(/failed\. Disk full\.$/);
+    expect(asSentence('the disk is full')).toBe('The disk is full.');
+    expect(asSentence('Done!')).toBe('Done!');
+    expect(asSentence('  ')).toBe('');
   });
 });

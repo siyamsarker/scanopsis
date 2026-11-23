@@ -22,6 +22,51 @@ import (
 // message names the folder and says how to fix it.
 var ErrFolder = errors.New("the backup folder cannot be used")
 
+// The sentences for people about a backup folder that cannot be used. They
+// name no file: the Backups page shows the folder next to them, and the
+// server log has the details.
+const (
+	folderMissingMessage     = "The backup folder does not exist. Create it and make it writable for the user the server runs as (uid 65532 in the container image), or mount a volume there."
+	folderNotDirMessage      = "The backup folder is not a folder. Set SCANOPSIS_BACKUP_DIR to a folder."
+	folderUnreadableMessage  = "Scanopsis cannot read the backup folder. Check that it exists, is mounted and may be read by the user the server runs as (uid 65532 in the container image)."
+	folderNotWritableMessage = "Scanopsis cannot write to the backup folder. Make it writable for the user the server runs as (uid 65532 in the container image), and check that the disk has free space and is not read-only."
+	folderFullMessage        = "The backup folder is full. Free some space, then try again."
+)
+
+// publicError is an error with a sentence for people (the Backups page, the
+// audit log) next to the error with every detail, which only the server
+// log shows.
+type publicError struct {
+	msg string
+	err error
+}
+
+func (e *publicError) Error() string {
+	if e.err == nil {
+		return e.msg
+	}
+	return e.msg + " (" + e.err.Error() + ")"
+}
+
+func (e *publicError) Unwrap() error { return e.err }
+
+// folderProblem is ErrFolder for the folder at path with the sentence msg,
+// keeping cause for the log.
+func folderProblem(msg, path string, cause error) error {
+	if cause == nil {
+		return &publicError{msg: msg, err: fmt.Errorf("%w: %s", ErrFolder, path)}
+	}
+	return &publicError{msg: msg, err: fmt.Errorf("%w: %s: %w", ErrFolder, path, cause)}
+}
+
+// writeProblem is folderProblem for a failed write: a full disk says so.
+func writeProblem(path string, cause error) error {
+	if errors.Is(cause, syscall.ENOSPC) || errors.Is(cause, syscall.EDQUOT) {
+		return folderProblem(folderFullMessage, path, cause)
+	}
+	return folderProblem(folderNotWritableMessage, path, cause)
+}
+
 const (
 	// staleAfter is how old a partial or upload file must be before OpenDir
 	// removes it: a transfer that old is not running any more.
@@ -99,22 +144,34 @@ func OpenDir(path string, keyFingerprint string) (*Dir, error) {
 	st, err := os.Stat(path)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		return nil, fmt.Errorf("%w: %s does not exist; create it and make it writable for the user the server runs as (uid 65532 in the container image), or mount a volume there", ErrFolder, path)
+		return nil, folderProblem(folderMissingMessage, path, err)
 	case err != nil:
-		return nil, fmt.Errorf("%w: %s: %w", ErrFolder, path, err)
+		return nil, folderProblem(folderUnreadableMessage, path, err)
 	case !st.IsDir():
-		return nil, fmt.Errorf("%w: %s is not a folder; set SCANOPSIS_BACKUP_DIR to a folder", ErrFolder, path)
+		return nil, folderProblem(folderNotDirMessage, path, nil)
 	}
-	probe, err := os.CreateTemp(path, ".write-test-*")
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s is not writable (%w); make it writable for the user the server runs as (uid 65532 in the container image) and check that the disk has free space and is not read-only", ErrFolder, path, err)
+	if err := probeWrite(path); err != nil {
+		return nil, err
 	}
-	_ = probe.Close()
-	_ = os.Remove(probe.Name())
 
 	d := &Dir{path: path, fingerprint: keyFingerprint, freeBytes: func() (uint64, error) { return statfsFree(path) }, cache: map[string]cached{}}
 	d.sweep(time.Now())
 	return d, nil
+}
+
+// probeWrite creates and removes a file in the folder at path, and
+// reports why it cannot, as a folderProblem.
+func probeWrite(path string) error {
+	probe, err := os.CreateTemp(path, ".write-test-*")
+	if err != nil {
+		return writeProblem(path, err)
+	}
+	cerr := probe.Close()
+	rerr := os.Remove(probe.Name())
+	if err := errors.Join(cerr, rerr); err != nil {
+		return writeProblem(path, err)
+	}
+	return nil
 }
 
 // sweep removes stale partial files and uploads. Failures are ignored: a
@@ -194,7 +251,7 @@ func (d *Dir) FreeBytes() (uint64, error) { return d.freeBytes() }
 func statfsFree(path string) (uint64, error) {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {
-		return 0, fmt.Errorf("%w: read free space of %s: %w; make sure the folder exists and is mounted", ErrFolder, path, err)
+		return 0, folderProblem(folderUnreadableMessage, path, fmt.Errorf("read the free space: %w", err))
 	}
 	return uint64(st.Bavail) * uint64(st.Bsize), nil //nolint:unconvert // field types differ between platforms
 }
@@ -202,7 +259,10 @@ func statfsFree(path string) (uint64, error) {
 func (d *Dir) files() ([]os.DirEntry, error) {
 	entries, err := os.ReadDir(d.path)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrFolder, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, folderProblem(folderMissingMessage, d.path, err)
+		}
+		return nil, folderProblem(folderUnreadableMessage, d.path, err)
 	}
 	out := entries[:0]
 	for _, e := range entries {
@@ -330,9 +390,7 @@ func (d *Dir) adopt(src, originalName string, at time.Time) (Info, error) {
 }
 
 // writeError reports a failure to write into the folder.
-func (d *Dir) writeError(err error) error {
-	return fmt.Errorf("%w: %s could not be written (%w); make sure it is writable for the user the server runs as (uid 65532 in the container image) and has free space", ErrFolder, d.path, err)
-}
+func (d *Dir) writeError(err error) error { return writeProblem(d.path, err) }
 
 // syncDir makes the entries of the folder at path durable.
 func syncDir(path string) error {

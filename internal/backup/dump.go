@@ -193,9 +193,10 @@ func (d *Dumper) checkSpace(ctx context.Context, db store.DBTX, schema string, t
 	return sizes, nil
 }
 
-// folderError reports a failure to write into the backup folder.
+// folderError reports a failure of a backup to write into the backup
+// folder.
 func (d *Dir) folderError(err error) error {
-	return fmt.Errorf("take backup: %w: %s could not be written (%w); make sure it is writable for the user the server runs as (uid 65532 in the container image) and has free space", ErrFolder, d.path, err)
+	return fmt.Errorf("take backup: %w", d.writeError(err))
 }
 
 // errWriter remembers the first error of the file it writes to, so a failure

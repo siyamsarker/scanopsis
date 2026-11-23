@@ -14,7 +14,7 @@ import { buttonClass } from '../../ui';
 import { AdminGate } from './AdminGate';
 import { BackupList } from './backups/BackupList';
 import { BackupProgress } from './backups/BackupProgress';
-import { folderProblem, isRunning } from './backups/model';
+import { asSentence, folderProblem, isRunning } from './backups/model';
 import { Notice, ScheduleFailedNotice } from './backups/notices';
 import { ScheduleForm } from './backups/ScheduleForm';
 import { UploadBackup } from './backups/UploadBackup';
@@ -32,7 +32,7 @@ function useJobToasts(job: JobStatus | undefined) {
         description: 'The new backup is at the top of the list.',
       });
     } else if (job.state === 'failed') {
-      toast.error('The backup did not finish', { description: job.message });
+      toast.error('The backup did not finish', { description: asSentence(job.message ?? '') });
     }
   }, [job]);
 }
@@ -87,7 +87,7 @@ function BackupsBody({ onBackUp, canBackUp }: { onBackUp: () => void; canBackUp:
               : 'The last backup did not finish'
           }
         >
-          <p className="break-words">{lastFailed.message}</p>
+          <p className="break-words">{asSentence(lastFailed.message ?? '')}</p>
         </Notice>
       ) : null}
       {running ? <BackupProgress job={job} /> : null}

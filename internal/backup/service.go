@@ -52,6 +52,9 @@ const restartMessage = "The backup was restored, but Scanopsis must restart to f
 // saved, but the server must restart all the same.
 const uncertainRestartMessage = "The restore may have finished, but Scanopsis must restart to finish. Restart it, for example with docker compose restart scanopsis."
 
+// dbMessage says that the database could not be reached.
+const dbMessage = "Scanopsis could not connect to the database. The server log has the details."
+
 // closeTimeout bounds the closing of the lock connection.
 const closeTimeout = 5 * time.Second
 
@@ -173,6 +176,8 @@ type Service struct {
 	lockWait time.Duration
 	dump     func(ctx context.Context, kind Kind, actor string, progress func(Progress)) (Info, error)
 	restore  func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error
+	// lockFn takes the locks of a job (see lock); tests replace it.
+	lockFn func(ctx context.Context, exclusive bool) (func(), error)
 	// expiring, if not nil, is called with the names expiry is about to
 	// delete.
 	expiring func(names []string)
@@ -220,6 +225,7 @@ func NewService(o ServiceOptions) *Service {
 	if o.Dumper != nil {
 		s.dump = o.Dumper.Dump
 	}
+	s.lockFn = s.lock
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	idle := make(chan struct{})
 	close(idle)
@@ -528,7 +534,10 @@ func (s *Service) setProgress(p Progress) { s.progress.Store(&p) }
 // usable reports why no job can run, or nil.
 func (s *Service) usable() error {
 	if s.o.Dir == nil || s.dump == nil {
-		return fmt.Errorf("%w: the backup folder could not be opened when Scanopsis started; see the server log for the reason and restart after fixing it", ErrFolder)
+		return &publicError{
+			msg: "The backup folder could not be used when Scanopsis started. The server log says why; fix it, then restart Scanopsis.",
+			err: ErrFolder,
+		}
 	}
 	return nil
 }
@@ -560,7 +569,7 @@ func (s *Service) backupJob(kind Kind, actor string, then func(context.Context))
 	ctx := s.ctx
 	var info Info
 	err := s.guard(ctx, "a backup job stopped with a panic", func() error {
-		release, err := s.lock(ctx, false)
+		release, err := s.lockFn(ctx, false)
 		if err != nil {
 			return err
 		}
@@ -633,17 +642,42 @@ func (s *Service) failed(ctx context.Context, kind Kind, actor string, err error
 	s.o.Audit.Record(context.WithoutCancel(ctx), actor, audit.ActionBackupFailed, map[string]any{"kind": kind, "error": message(err)})
 }
 
-// message is the text of err for people: the reason without the package's
-// "take backup: ", "restore backup: " and "check backup: " prefixes.
+// unexpectedMessage is the sentence for an error that has none for people;
+// the server log has the error.
+const unexpectedMessage = "Something unexpected stopped the job. The server log has the details."
+
+// message is the reason of err in a sentence for people. Errors that carry
+// one (publicError) give it; the errors of this package whose text is
+// written for people give that text without the package's "take backup: ",
+// "restore backup: " and "check backup: " prefixes. Any other error, such as
+// one of the database or the file system, could name temporary files or
+// internals, so it gives a sentence that points to the server log.
 func message(err error) string {
-	if errors.Is(err, context.Canceled) {
+	var pub *publicError
+	switch {
+	case errors.Is(err, context.Canceled):
 		return "Scanopsis stopped before the job finished; nothing was changed."
+	case errors.As(err, &pub):
+		return pub.msg
+	case errors.Is(err, ErrFolder):
+		return "The backup folder cannot be used. The server log says why."
+	case errors.Is(err, os.ErrNotExist):
+		return "The backup file is no longer in the backup folder."
 	}
-	m := err.Error()
-	for _, p := range []string{"take backup: ", "restore backup: ", "check backup: "} {
-		m = strings.TrimPrefix(m, p)
+	for _, known := range []error{
+		ErrBusy, ErrInUse, ErrMaintenance, ErrNoSpace, ErrKeyMismatch, ErrNewerSchema,
+		ErrCorrupt, ErrNotBackup, ErrFormat, ErrSignature, ErrCommitUncertain,
+		errOtherInstance, errClosed, errInternal, errNeedRestart,
+	} {
+		if errors.Is(err, known) {
+			m := err.Error()
+			for _, p := range []string{"take backup: ", "restore backup: ", "check backup: "} {
+				m = strings.TrimPrefix(m, p)
+			}
+			return sentence(m)
+		}
 	}
-	return m
+	return unexpectedMessage
 }
 
 // CheckRestore tells whether a restore of the backup called name can start
@@ -731,7 +765,7 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 	// happens next.
 	var committed bool
 	err := s.guard(ctx, "a restore job stopped with a panic", func() error {
-		release, err := s.lock(ctx, true)
+		release, err := s.lockFn(ctx, true)
 		if err != nil {
 			return err
 		}
@@ -763,7 +797,7 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 					if errors.Is(err, errStopped) {
 						return err
 					}
-					return fmt.Errorf("the backup of the current data failed, so nothing was restored: %s", message(err))
+					return &publicError{msg: "The backup of the current data failed, so nothing was restored. " + message(err), err: err}
 				}
 				safety = info.Name
 				s.progress.Store(nil)
@@ -845,7 +879,7 @@ func (s *Service) incomplete(ctx context.Context, name string, kind Kind, actor 
 func (s *Service) lock(ctx context.Context, exclusive bool) (func(), error) {
 	conn, err := pgx.ConnectConfig(ctx, s.o.Pool.Config().ConnConfig.Copy())
 	if err != nil {
-		return nil, fmt.Errorf("connect to the database: %w", err)
+		return nil, &publicError{msg: dbMessage, err: fmt.Errorf("connect to the database: %w", err)}
 	}
 	release := func() {
 		// Closing the connection drops its locks, also when the database

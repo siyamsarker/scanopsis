@@ -866,7 +866,7 @@ func TestListBackups(t *testing.T) {
 }
 
 func TestBackupsWithoutFolder(t *testing.T) {
-	folderErr := fmt.Errorf("%w: /var/lib/scanopsis/backups does not exist", ErrFolder)
+	_, folderErr := OpenDir(filepath.Join(t.TempDir(), "backups"), apiFingerprint)
 	svc := NewService(ServiceOptions{Log: discard, KeyFingerprint: apiFingerprint})
 	t.Cleanup(svc.Close)
 	a := NewAPI(APIOptions{Service: svc, FolderPath: "/var/lib/scanopsis/backups", FolderErr: folderErr, Log: discard, Audit: &recAudit{}})

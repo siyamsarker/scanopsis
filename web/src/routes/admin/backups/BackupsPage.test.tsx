@@ -248,7 +248,7 @@ describe('backups page', () => {
     renderApp('/admin/backups');
     expect(
       await screen.findByText(
-        /^The scheduled backup at 23 Nov 2026, \d\d:\d\d .+ failed: disk full$/,
+        /^The scheduled backup at 23 Nov 2026, \d\d:\d\d .+ failed\. Disk full\.$/,
       ),
     ).toBeVisible();
   });

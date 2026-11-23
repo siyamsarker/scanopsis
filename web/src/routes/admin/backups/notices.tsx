@@ -53,7 +53,7 @@ export function Notice({
 }
 
 /**
- * "The scheduled backup at ... failed: ..." while the schedule is on and the
+ * "The scheduled backup at ... failed. ..." while the schedule is on and the
  * last scheduled backup failed, until an administrator dismisses it; else
  * nothing. Dismissing lasts until the next scheduled run.
  */

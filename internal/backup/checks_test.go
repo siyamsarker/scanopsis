@@ -449,8 +449,8 @@ func TestDismissScheduleFailure(t *testing.T) {
 		t.Fatalf("dismiss without a failure = %d %s", r.status, r.body)
 	}
 	at := time.Date(2026, 11, 23, 2, 0, 0, 0, time.UTC)
-	e.svc.recordSchedule(at, errors.New("take backup: the disk is full"))
-	if s := schedule(); s["ok"] != false || s["dismissed"] != false || s["enabled"] != false || s["error"] != "the disk is full" {
+	e.svc.recordSchedule(at, fmt.Errorf("take backup: %w", &spaceError{need: 2 << 30, have: 1 << 30}))
+	if s := schedule(); s["ok"] != false || s["dismissed"] != false || s["enabled"] != false || s["error"] != "Not enough free space for a backup: a backup needs about 2.0 GiB and the backup folder has 1.0 GiB free." {
 		t.Fatalf("schedule = %v", s)
 	}
 	for range 2 {
@@ -462,7 +462,7 @@ func TestDismissScheduleFailure(t *testing.T) {
 		t.Errorf("schedule after dismiss = %v", s)
 	}
 	if ev := e.audit.of(actionScheduleDismissed); len(ev) != 1 || ev[0].actor != adminActor ||
-		ev[0].detail["last_run_at"] != "2026-11-23T02:00:00Z" || ev[0].detail["error"] != "the disk is full" {
+		ev[0].detail["last_run_at"] != "2026-11-23T02:00:00Z" || ev[0].detail["error"] != "Not enough free space for a backup: a backup needs about 2.0 GiB and the backup folder has 1.0 GiB free." {
 		t.Errorf("audit = %+v", ev)
 	}
 	// It is kept in the folder.

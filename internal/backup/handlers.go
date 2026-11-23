@@ -260,9 +260,9 @@ func actor(r *http.Request) (*auth.Principal, string) {
 
 // folderUnavailable answers 503 folder_unavailable with the reason.
 func (a *API) folderUnavailable(w http.ResponseWriter) {
-	msg := "The backup folder cannot be used; see the server log for the reason."
+	msg := "The backup folder cannot be used. The server log says why."
 	if a.o.FolderErr != nil {
-		msg = sentence(a.o.FolderErr.Error())
+		msg = message(a.o.FolderErr)
 	}
 	writeError(w, http.StatusServiceUnavailable, "folder_unavailable", msg)
 }
@@ -347,7 +347,7 @@ func (a *API) list(w http.ResponseWriter, _ *http.Request) {
 	fail := func(err error) {
 		out.Folder.OK = false
 		if out.Folder.Error == "" {
-			out.Folder.Error = sentence(err.Error())
+			out.Folder.Error = message(err)
 		}
 	}
 	dir := a.dir()
