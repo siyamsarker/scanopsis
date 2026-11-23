@@ -1,9 +1,12 @@
 // Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
+import { useBackups } from '../api/backups';
+import { useMe } from '../api/hooks';
 import { usePortfolio } from '../api/portfolio';
 import { PageHeader } from '../components/layout';
 import { ErrorState, Skeleton } from '../components/states';
+import { ScheduleFailedNotice } from './admin/backups/notices';
 import { PortfolioView } from './portfolio/PortfolioView';
 import { SkeletonCard } from './portfolio/ServiceCard';
 
@@ -11,6 +14,10 @@ const TITLE = 'Portfolio';
 
 export function PortfolioPage({ now }: { now?: Date } = {}) {
   const query = usePortfolio();
+  // Administrators learn here when the last scheduled backup failed.
+  const me = useMe();
+  const backups = useBackups(me.data?.role === 'admin', false);
+  const schedule = backups.data?.schedule;
 
   if (query.isPending) {
     return (
@@ -55,5 +62,15 @@ export function PortfolioPage({ now }: { now?: Date } = {}) {
       </>
     );
   }
-  return <PortfolioView data={query.data} now={now} />;
+  return (
+    <PortfolioView
+      data={query.data}
+      now={now}
+      notice={
+        schedule?.last_run_at && !schedule.ok ? (
+          <ScheduleFailedNotice schedule={schedule} link />
+        ) : undefined
+      }
+    />
+  );
 }

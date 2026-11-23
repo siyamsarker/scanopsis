@@ -3,6 +3,7 @@
 
 import {
   Boxes,
+  DatabaseBackup,
   LayoutGrid,
   Plug,
   ScrollText,
@@ -51,6 +52,12 @@ export const NAV: NavGroup[] = [
         keywords: ['gitlab', 'sonarqube', 'uploads', 'tokens'],
       },
       { to: '/admin/audit', label: 'Audit log', Icon: ScrollText, keywords: ['events', 'history'] },
+      {
+        to: '/admin/backups',
+        label: 'Backups',
+        Icon: DatabaseBackup,
+        keywords: ['restore', 'snapshot', 'export'],
+      },
       { to: '/settings', label: 'Settings', Icon: Settings, keywords: ['retention', 'config'] },
     ],
   },

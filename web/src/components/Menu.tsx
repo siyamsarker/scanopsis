@@ -75,6 +75,34 @@ export function MenuItem({
   );
 }
 
+/**
+ * A menu item that is a plain link, for what the browser should handle itself:
+ * a file download (`download`) or a page in a new tab.
+ */
+export function MenuLinkItem({
+  href,
+  icon,
+  children,
+  download,
+  className = '',
+}: {
+  href: string;
+  icon?: ReactNode;
+  children: ReactNode;
+  /** Download the target instead of opening it; true keeps the server's file name. */
+  download?: boolean;
+  className?: string;
+}) {
+  return (
+    <RadixMenu.Item asChild className={`${itemClass} ${className}`}>
+      <a href={href} download={download ? '' : undefined}>
+        {icon}
+        <span className="min-w-0 flex-1 truncate">{children}</span>
+      </a>
+    </RadixMenu.Item>
+  );
+}
+
 export function MenuRadioItem({
   children,
   icon,

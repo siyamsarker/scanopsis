@@ -246,6 +246,43 @@ describe('portfolio model', () => {
 });
 
 describe('PortfolioPage', () => {
+  it('tells admins that the last scheduled backup failed', async () => {
+    renderPage('/', portfolio, (path) => {
+      if (path === '/api/v1/me') return json(200, makeUser({ role: 'admin' }));
+      if (path === '/api/v1/admin/backups') {
+        return json(200, {
+          backups: [],
+          job: {
+            state: 'idle',
+            progress: { table: '', tables_done: 0, tables_total: 0, bytes: 0 },
+            percent: 0,
+            started_at: null,
+            finished_at: null,
+          },
+          schedule: { last_run_at: '2026-11-19T02:00:00Z', ok: false, error: 'disk full' },
+          disk: { free_bytes: 0, used_bytes: 0 },
+          folder: { path: '/var/lib/scanopsis/backups', ok: true },
+        });
+      }
+      return undefined;
+    });
+    const banner = await screen.findByRole('region', { name: 'Scheduled backup failed' });
+    expect(banner).toHaveTextContent(/The scheduled backup at 19 Nov 2026, .+ failed: disk full/);
+    expect(within(banner).getByRole('link', { name: 'Open Backups' })).toHaveAttribute(
+      'href',
+      '/admin/backups',
+    );
+  });
+
+  it('does not ask viewers about backups', async () => {
+    const { calls } = renderPage('/', portfolio, (path) =>
+      path === '/api/v1/me' ? json(200, makeUser({ role: 'viewer' })) : undefined,
+    );
+    await screen.findByRole('list', { name: 'Services' });
+    expect(calls.some((c) => c.path.startsWith('/api/v1/admin/'))).toBe(false);
+    expect(screen.queryByRole('region', { name: 'Scheduled backup failed' })).toBeNull();
+  });
+
   it('sums the portfolio and lists what needs attention, each a filter', async () => {
     renderPage();
     const summary = within(await screen.findByRole('region', { name: 'Summary' }));

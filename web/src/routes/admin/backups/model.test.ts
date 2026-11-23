@@ -1,0 +1,230 @@
+// Copyright 2026 Siyam Sarker
+// SPDX-License-Identifier: Apache-2.0
+
+import type { BackupInfo, JobStatus, RestorePreview } from '../../../api/backups';
+import {
+  canRestore,
+  folderProblem,
+  scheduleFailure,
+  isRunning,
+  jobDetail,
+  keepDaysProblem,
+  kindLabel,
+  madeBy,
+  newTimeProblem,
+  overlayView,
+  restoreBlocker,
+  retentionWarning,
+  scheduleProblems,
+  timeZoneOptions,
+} from './model';
+
+const info: BackupInfo = {
+  name: 'scanopsis-backup-20261123T020000Z-scheduled-abc123.tar.gz',
+  kind: 'scheduled',
+  size: 1024,
+  created_at: '2026-11-23T02:00:00Z',
+  created_by: 'scheduler',
+  app_version: '0.4.0',
+  schema: 12,
+  key_matches: true,
+  readable: true,
+  uploaded_at: null,
+  original_name: '',
+};
+
+const preview: RestorePreview = {
+  info,
+  schema_ok: true,
+  key_matches: true,
+  scans_removed_by_retention: 0,
+  oldest_scan_at: null,
+  retention_days: 90,
+};
+
+const job = (overrides: Partial<JobStatus>): JobStatus => ({
+  state: 'idle',
+  progress: { table: '', tables_done: 0, tables_total: 0, bytes: 0 },
+  percent: 0,
+  started_at: null,
+  finished_at: null,
+  ...overrides,
+});
+
+describe('backup labels', () => {
+  it('names each kind', () => {
+    expect(kindLabel('manual')).toBe('Manual');
+    expect(kindLabel('scheduled')).toBe('Scheduled');
+    expect(kindLabel('uploaded')).toBe('Uploaded');
+    expect(kindLabel('before-restore')).toBe('Before restore');
+  });
+
+  it('says who made a backup in words', () => {
+    expect(madeBy('scheduler')).toBe('Schedule');
+    expect(madeBy('setup')).toBe('Setup screen');
+    expect(madeBy('local:alice')).toBe('alice');
+    expect(madeBy('gitlab:bob')).toBe('bob');
+    expect(madeBy('')).toBe('–');
+  });
+});
+
+describe('jobs', () => {
+  it('knows when a job runs', () => {
+    expect(isRunning(job({ state: 'backing_up' }))).toBe(true);
+    expect(isRunning(job({ state: 'restoring' }))).toBe(true);
+    expect(isRunning(job({ state: 'done' }))).toBe(false);
+    expect(isRunning(undefined)).toBe(false);
+  });
+
+  it('describes progress: current table, tables done of total and size so far', () => {
+    expect(
+      jobDetail(
+        job({
+          state: 'backing_up',
+          progress: { table: 'scans', tables_done: 3, tables_total: 12, bytes: 3 * 1024 * 1024 },
+        }),
+      ),
+    ).toBe('Copying scans, 3 of 12 tables, 3.0 MiB so far');
+    expect(jobDetail(job({ state: 'backing_up' }))).toBe('Starting');
+  });
+});
+
+describe('schedule validation', () => {
+  it('accepts 24-hour times only', () => {
+    expect(newTimeProblem('02:00', [])).toBeUndefined();
+    expect(newTimeProblem('23:59', [])).toBeUndefined();
+    expect(newTimeProblem('24:00', [])).toBe('Use a 24-hour time such as 02:00.');
+    expect(newTimeProblem('2:00', [])).toBe('Use a 24-hour time such as 02:00.');
+    expect(newTimeProblem('', [])).toBe('Use a 24-hour time such as 02:00.');
+  });
+
+  it('refuses a time twice and more than 24 times', () => {
+    expect(newTimeProblem('02:00', ['02:00'])).toBe('02:00 is already in the list.');
+    const full = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:30`);
+    expect(newTimeProblem('02:00', full)).toBe('A day can have at most 24 backup times.');
+  });
+
+  it('keeps scheduled backups from 1 to 365 days', () => {
+    expect(keepDaysProblem('7')).toBeUndefined();
+    expect(keepDaysProblem('365')).toBeUndefined();
+    for (const bad of ['0', '366', '1.5', '', 'seven']) {
+      expect(keepDaysProblem(bad)).toBe('Use a whole number from 1 to 365.');
+    }
+  });
+
+  it('needs at least one time', () => {
+    expect(scheduleProblems({ times: [], keepDays: '7' })).toEqual({
+      times: 'Add at least one time.',
+    });
+    expect(scheduleProblems({ times: ['02:00'], keepDays: '0' })).toEqual({
+      keepDays: 'Use a whole number from 1 to 365.',
+    });
+    expect(scheduleProblems({ times: ['02:00'], keepDays: '7' })).toEqual({});
+  });
+
+  it('lists time zones with UTC first, the current one and the browser zone marked', () => {
+    const options = timeZoneOptions('Etc/Unknown', 'Europe/Berlin');
+    expect(options[0]).toMatchObject({ value: 'UTC' });
+    expect(options.find((o) => o.value === 'Europe/Berlin')).toMatchObject({
+      hint: 'Your time zone',
+    });
+    expect(options.some((o) => o.value === 'Etc/Unknown')).toBe(true);
+    expect(new Set(options.map((o) => o.value)).size).toBe(options.length);
+  });
+});
+
+describe('restore', () => {
+  it('warns about scans the clean-up removes only when there are some', () => {
+    expect(retentionWarning(preview)).toBeNull();
+    expect(retentionWarning({ ...preview, scans_removed_by_retention: 1204 })).toBe(
+      'The next daily clean-up removes up to 1,204 scans older than 90 days from this backup. To keep them, raise the retention period on the Settings page right after the restore.',
+    );
+    expect(retentionWarning({ ...preview, scans_removed_by_retention: 1 })).toContain(
+      'up to 1 scan older',
+    );
+  });
+
+  it('never states removed scans for a backup made with another key', () => {
+    expect(
+      retentionWarning({ ...preview, key_matches: false, scans_removed_by_retention: 5 }),
+    ).toBeNull();
+  });
+
+  it('says why a backup cannot be restored', () => {
+    expect(restoreBlocker(info, preview)).toBeNull();
+    expect(restoreBlocker({ ...info, key_matches: false })).toMatch(/another secret key/);
+    expect(restoreBlocker(info, { ...preview, key_matches: false })).toMatch(
+      /same secret key file/,
+    );
+    expect(restoreBlocker({ ...info, readable: false })).toMatch(/cannot be read/);
+    expect(restoreBlocker(info, { ...preview, schema_ok: false })).toMatch(/newer version/);
+  });
+
+  it('enables the restore only for RESTORE and a 6-digit code', () => {
+    expect(canRestore('RESTORE', '123456')).toBe(true);
+    expect(canRestore('restore', '123456')).toBe(false);
+    expect(canRestore('RESTORE ', '123456')).toBe(false);
+    expect(canRestore('RESTORE', '12345')).toBe(false);
+    expect(canRestore('RESTORE', '12345a')).toBe(false);
+    expect(canRestore('RESTORE', ' 123 456 ')).toBe(true);
+  });
+});
+
+describe('overlayView', () => {
+  it('maps each restore state', () => {
+    expect(
+      overlayView({
+        state: 'restoring',
+        percent: 40,
+        message: 'Restoring a backup.',
+        finished_at: null,
+      }),
+    ).toMatchObject({ kind: 'running', percent: 40 });
+    expect(
+      overlayView({ state: 'backing_up', percent: 5, message: 'Saving.', finished_at: null }).kind,
+    ).toBe('running');
+    expect(overlayView({ state: 'done', percent: 100, message: 'x', finished_at: null }).kind).toBe(
+      'done',
+    );
+    expect(
+      overlayView({
+        state: 'failed',
+        percent: 0,
+        message: 'The restore failed and nothing was changed. The server log has the reason.',
+        finished_at: null,
+      }).kind,
+    ).toBe('failed');
+    expect(
+      overlayView({
+        state: 'failed',
+        percent: 100,
+        message: 'The backup was restored, but Scanopsis must restart to finish.',
+        finished_at: null,
+      }).kind,
+    ).toBe('restart');
+    expect(overlayView({ state: 'idle', percent: 0, message: '', finished_at: null }).kind).toBe(
+      'idle',
+    );
+  });
+});
+
+describe('folder and schedule notices', () => {
+  it('turns the folder error into a sentence under its title', () => {
+    expect(
+      folderProblem(
+        'the backup folder cannot be used: /srv/b does not exist; create it, or mount a volume there',
+      ),
+    ).toBe('/srv/b does not exist; create it, or mount a volume there.');
+    expect(folderProblem('disk is read-only.')).toBe('Disk is read-only.');
+    expect(folderProblem(undefined)).toMatch(/cannot write to it/);
+  });
+
+  it('names the time and the reason of a failed scheduled backup', () => {
+    expect(scheduleFailure('2026-11-23T02:00:00Z', 'disk full')).toMatch(
+      /^The scheduled backup at 23 Nov 2026, .+ failed: disk full$/,
+    );
+    expect(scheduleFailure('2026-11-23T02:00:00Z', '')).toMatch(
+      /failed: the reason is in the server log\.$/,
+    );
+  });
+});

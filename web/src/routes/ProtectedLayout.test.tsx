@@ -79,6 +79,7 @@ describe('protected layout', () => {
       'Users',
       'Integrations',
       'Audit log',
+      'Backups',
       'Settings',
     ]);
     for (const [name, href] of [
@@ -86,6 +87,7 @@ describe('protected layout', () => {
       ['Users', '/admin/users'],
       ['Integrations', '/admin/integrations'],
       ['Audit log', '/admin/audit'],
+      ['Backups', '/admin/backups'],
       ['Settings', '/settings'],
     ]) {
       expect(within(nav).getByRole('link', { name })).toHaveAttribute('href', href);
@@ -105,6 +107,7 @@ describe('protected layout', () => {
     renderApp('/');
     const nav = await mainNav();
     expect(within(nav).queryByRole('link', { name: 'Users' })).not.toBeInTheDocument();
+    expect(within(nav).queryByRole('link', { name: 'Backups' })).not.toBeInTheDocument();
     expect(within(nav).queryByText('Admin')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Account: grace, Viewer' })).toBeInTheDocument();
   });

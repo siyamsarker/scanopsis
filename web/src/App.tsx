@@ -3,6 +3,7 @@
 
 import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router';
+import { useRestoreOverlay } from './api/restoreMode';
 import { MotionRoot } from './components/shell/RouteTransition';
 import { PageLoader } from './components/states';
 import { Toaster } from './components/Toast';
@@ -44,6 +45,22 @@ const IntegrationsPage = lazy(() =>
   import('./routes/IntegrationsPage').then((m) => ({ default: m.IntegrationsPage })),
 );
 const AuditPage = lazy(() => import('./routes/AuditPage').then((m) => ({ default: m.AuditPage })));
+const BackupsPage = lazy(() =>
+  import('./routes/admin/BackupsPage').then((m) => ({ default: m.BackupsPage })),
+);
+// The restore screen loads the first time a restore is seen.
+const RestoreOverlayHost = lazy(() => import('./components/RestoreOverlay'));
+
+/** Covers the whole application while a backup is restored. */
+function RestoreScreen() {
+  const shown = useRestoreOverlay();
+  if (!shown) return null;
+  return (
+    <Suspense fallback={null}>
+      <RestoreOverlayHost />
+    </Suspense>
+  );
+}
 const AccountPage = lazy(() =>
   import('./routes/AccountPage').then((m) => ({ default: m.AccountPage })),
 );
@@ -73,6 +90,7 @@ export function App() {
               <Route path="admin/users" element={<UsersPage />} />
               <Route path="admin/integrations" element={<IntegrationsPage />} />
               <Route path="admin/audit" element={<AuditPage />} />
+              <Route path="admin/backups" element={<BackupsPage />} />
               <Route path="settings" element={<SettingsPage />} />
               <Route path="account" element={<AccountPage />} />
               <Route path="*" element={<NotFoundPage />} />
@@ -80,6 +98,7 @@ export function App() {
           </Route>
         </Routes>
       </Suspense>
+      <RestoreScreen />
       <Toaster />
     </MotionRoot>
   );

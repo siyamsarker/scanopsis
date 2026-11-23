@@ -118,6 +118,26 @@ describe('settings page', () => {
     expect(links[0]).not.toHaveAttribute('aria-current');
   });
 
+  it('leaves the backup schedule to the Backups page', async () => {
+    const withBackup = [
+      ...initial,
+      setting({ key: 'backup.schedule_enabled', type: 'boolean', value: true, env_var: '' }),
+      setting({ key: 'backup.schedule_times', type: 'string_list', value: ['02:00'], env_var: '' }),
+      setting({ key: 'backup.time_zone', value: 'UTC', env_var: '' }),
+      setting({ key: 'backup.keep_days', type: 'integer', value: 7, env_var: '' }),
+    ];
+    mockFetch(settingsApi(undefined, withBackup));
+    renderApp('/settings');
+    await screen.findByLabelText('GitLab URL');
+    expect(document.querySelector('[data-setting^="backup."]')).toBeNull();
+    expect(screen.queryByText(/^backup\./)).not.toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
+      'GitLab',
+      'Sign-in',
+      'Sessions',
+    ]);
+  });
+
   it('orders SonarQube before scan uploads and retention', async () => {
     const extra = [
       ...initial,

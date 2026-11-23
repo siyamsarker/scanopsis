@@ -3,7 +3,7 @@
 
 import { LayoutGrid, Rows3 } from 'lucide-react';
 import { AnimatePresence } from 'motion/react';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { usePortfolioHistory, type Portfolio } from '../../api/portfolio';
 import { FilterChips } from '../../components/FilterChips';
@@ -45,7 +45,16 @@ const FIRST_CARDS = 48;
  * The portfolio once loaded: a summary band, the controls, and the services
  * as cards or as a ranked list. `now` fixes the clock for tests.
  */
-export function PortfolioView({ data, now }: { data: Portfolio; now?: Date }) {
+export function PortfolioView({
+  data,
+  now,
+  notice,
+}: {
+  data: Portfolio;
+  now?: Date;
+  /** Something an administrator must know first, under the header. */
+  notice?: ReactNode;
+}) {
   const [search, setSearch] = useSearchParams();
   const navigate = useNavigate();
   const [mounted] = useState(() => new Date());
@@ -98,6 +107,7 @@ export function PortfolioView({ data, now }: { data: Portfolio; now?: Date }) {
         subtitle="Every service ranked by risk, with its quality gate and how its last pipelines moved."
         freshness={{ at: data.generated_at, now }}
       />
+      {notice ? <div className="mb-6">{notice}</div> : null}
 
       {data.items.length === 0 ? (
         <SetupSteps />
