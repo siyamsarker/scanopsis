@@ -133,6 +133,7 @@ func (a *API) Handlers() map[string]http.Handler {
 		"putSetupRestoreUploadChunk": setup(a.putPart),
 		"cancelSetupRestoreUpload":   setup(a.cancelUpload),
 		"completeSetupRestoreUpload": setup(a.completeUpload),
+		"checkSetupRestoreToken":     http.HandlerFunc(a.checkSetupToken),
 		"restoreSetupBackup":         http.HandlerFunc(a.setupRestore),
 		"getRestoreStatus":           http.HandlerFunc(a.restoreStatus),
 	}
@@ -999,6 +1000,22 @@ func (a *API) refuseUpload(w http.ResponseWriter, r *http.Request, err error) {
 			a.internalError(w, r, "cannot check an upload", err)
 		}
 	}
+}
+
+// checkSetupToken tells whether the setup token is right, so the setup
+// screen can ask for it before a large file is sent. It spends an attempt
+// of the per-address limit on a wrong token, like every setup request.
+func (a *API) checkSetupToken(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if !decode(w, r, &body, false, `Send a JSON object with "token".`) {
+		return
+	}
+	if !a.setupAllowed(w, r, body.Token) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) setupRestore(w http.ResponseWriter, r *http.Request) {

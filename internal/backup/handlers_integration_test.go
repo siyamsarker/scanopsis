@@ -388,6 +388,12 @@ func TestSetupRestoreFlow(t *testing.T) {
 	api := serveAPI(t, e.svc, func(o *APIOptions) { o.CheckSetupToken = setup.CheckToken }, false)
 
 	const base = "/api/v1/setup/restore"
+	if r := api.call("POST", base+"/token", "", map[string]any{"token": "wrong"}); r.status != http.StatusForbidden {
+		t.Fatalf("wrong token = %d %s", r.status, r.body)
+	}
+	if r := api.call("POST", base+"/token", "", map[string]any{"token": token}); r.status != http.StatusNoContent {
+		t.Fatalf("token check = %d %s", r.status, r.body)
+	}
 	r := api.call("POST", base+"/uploads", "", map[string]any{"token": token, "file_name": "from-old-server.tar.gz", "size": len(data)})
 	if r.status != http.StatusCreated {
 		t.Fatalf("start = %d %s", r.status, r.body)

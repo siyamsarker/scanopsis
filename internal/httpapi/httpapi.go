@@ -207,6 +207,7 @@ func (s *server) routes() []route {
 		{"PUT", "/api/v1/setup/restore/uploads/{id}", s.feature("putSetupRestoreUploadChunk")},
 		{"DELETE", "/api/v1/setup/restore/uploads/{id}", s.feature("cancelSetupRestoreUpload")},
 		{"POST", "/api/v1/setup/restore/uploads/{id}/complete", s.feature("completeSetupRestoreUpload")},
+		{"POST", "/api/v1/setup/restore/token", s.feature("checkSetupRestoreToken")},
 		{"POST", "/api/v1/setup/restore", s.feature("restoreSetupBackup")},
 		{"GET", "/api/v1/restore/status", s.feature("getRestoreStatus")},
 		{"DELETE", "/api/v1/users/{id}/mfa", s.requireAdmin(http.HandlerFunc(s.resetMFA))},

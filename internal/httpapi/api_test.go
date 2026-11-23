@@ -103,6 +103,7 @@ var rbacRoutes = []struct {
 	{"PUT", "/api/v1/setup/restore/uploads/3?offset=0", "x", [6]string{"204", "204", "204", "204", "204", "204"}},
 	{"DELETE", "/api/v1/setup/restore/uploads/3", "", [6]string{"204", "204", "204", "204", "204", "204"}},
 	{"POST", "/api/v1/setup/restore/uploads/3/complete", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
+	{"POST", "/api/v1/setup/restore/token", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
 	{"POST", "/api/v1/setup/restore", "{}", [6]string{"204", "204", "204", "204", "204", "204"}},
 	{"GET", "/api/v1/restore/status", "", [6]string{"204", "204", "204", "204", "204", "204"}},
 }
@@ -527,7 +528,7 @@ var featureIDs = []string{
 	"listBackups", "createBackup", "downloadBackup", "deleteBackup", "previewRestore", "restoreBackup",
 	"startBackupUpload", "getBackupUpload", "putBackupUploadChunk", "cancelBackupUpload", "completeBackupUpload",
 	"startSetupRestoreUpload", "getSetupRestoreUpload", "putSetupRestoreUploadChunk", "cancelSetupRestoreUpload",
-	"completeSetupRestoreUpload", "restoreSetupBackup", "getRestoreStatus",
+	"completeSetupRestoreUpload", "checkSetupRestoreToken", "restoreSetupBackup", "getRestoreStatus",
 }
 
 func TestFeatureNotEnabled(t *testing.T) {

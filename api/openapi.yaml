@@ -1157,6 +1157,29 @@ paths:
         "422": { description: "The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "429": { $ref: "#/components/responses/TooManyAttempts" }
         "503": { $ref: "#/components/responses/BusyOrRestoring" }
+  /api/v1/setup/restore/token:
+    post:
+      tags: [setup]
+      summary: Check the setup token before a backup is uploaded.
+      description: |
+        Only while no administrator exists. Answers 204 when the token is
+        right, so the setup screen can say so before a large file is sent. A
+        wrong token counts as an attempt of the per-address limit, as on every
+        setup route.
+      operationId: checkSetupRestoreToken
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetupTokenCheck" }
+      responses:
+        "204": { description: The token is right. }
+        "400": { description: Malformed body (code invalid_request)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "403": { $ref: "#/components/responses/InvalidSetupToken" }
+        "409": { description: Setup is complete (code setup_done)., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "429": { $ref: "#/components/responses/TooManyAttempts" }
+        "503": { $ref: "#/components/responses/BusyOrRestoring" }
   /api/v1/setup/restore:
     post:
       tags: [setup]
@@ -2006,6 +2029,12 @@ components:
         file_name: { type: string, minLength: 1, maxLength: 255 }
         size: { type: integer, format: int64, minimum: 1 }
     SetupTokenBody:
+      type: object
+      required: [token]
+      additionalProperties: false
+      properties:
+        token: { type: string, description: The one-time setup token from the server log. }
+    SetupTokenCheck:
       type: object
       required: [token]
       additionalProperties: false

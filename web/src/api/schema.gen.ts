@@ -1039,6 +1039,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/setup/restore/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check the setup token before a backup is uploaded.
+         * @description Only while no administrator exists. Answers 204 when the token is
+         *     right, so the setup screen can say so before a large file is sent. A
+         *     wrong token counts as an attempt of the per-address limit, as on every
+         *     setup route.
+         */
+        post: operations["checkSetupRestoreToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/setup/restore": {
         parameters: {
             query?: never;
@@ -1892,6 +1915,10 @@ export interface components {
             size: number;
         };
         SetupTokenBody: {
+            /** @description The one-time setup token from the server log. */
+            token: string;
+        };
+        SetupTokenCheck: {
             /** @description The one-time setup token from the server log. */
             token: string;
         };
@@ -4710,6 +4737,49 @@ export interface operations {
             };
             /** @description The file is damaged, not a Scanopsis backup or not signed by this installation's key (code invalid_backup), was made with another secret key (code key_mismatch) or by a newer version (code newer_schema). */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            429: components["responses"]["TooManyAttempts"];
+            503: components["responses"]["BusyOrRestoring"];
+        };
+    };
+    checkSetupRestoreToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupTokenCheck"];
+            };
+        };
+        responses: {
+            /** @description The token is right. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Malformed body (code invalid_request). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            403: components["responses"]["InvalidSetupToken"];
+            /** @description Setup is complete (code setup_done). */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

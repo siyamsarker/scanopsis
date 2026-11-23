@@ -1214,6 +1214,30 @@ Responses:
 | 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
 | 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
 
+### `POST /api/v1/setup/restore/token`
+
+Check the setup token before a backup is uploaded.
+
+Only while no administrator exists. Answers 204 when the token is right, so the setup screen can say so before a large file is sent. A wrong token counts as an attempt of the per-address limit, as on every setup route.
+
+- Operation ID: `checkSetupRestoreToken`
+- Authentication: None
+
+Request body (required):
+
+- `application/json`: [SetupTokenCheck](#setuptokencheck)
+
+Responses:
+
+| Status | Description | Body |
+|---|---|---|
+| 204 | The token is right. | none |
+| 400 | Malformed body (code invalid_request). | `application/json` [Error](#error) |
+| 403 | Wrong setup token (code invalid_setup_token). | `application/json` [Error](#error) |
+| 409 | Setup is complete (code setup_done). | `application/json` [Error](#error) |
+| 429 | Too many wrong setup tokens from this address (code too_many_attempts). Retry-After gives seconds. | `application/json` [Error](#error) |
+| 503 | The server is busy (code busy) or a backup is being restored (code restoring). Nothing was done; retry after the number of seconds in Retry-After. | `application/json` [Error](#error) |
+
 ### `POST /api/v1/setup/restore/uploads`
 
 Start uploading a backup on the setup screen of a new installation.
@@ -2125,6 +2149,14 @@ Type: object
 | `required` | boolean | yes |  |
 
 ### SetupTokenBody
+
+Type: object
+
+| Property | Type | Required | Description |
+|---|---|---|---|
+| `token` | string | yes | The one-time setup token from the server log. |
+
+### SetupTokenCheck
 
 Type: object
 

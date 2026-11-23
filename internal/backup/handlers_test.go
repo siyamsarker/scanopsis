@@ -954,6 +954,35 @@ func TestSetupUploadNeedsToken(t *testing.T) {
 	}
 }
 
+func TestSetupTokenCheck(t *testing.T) {
+	e := newAPIEnv(t, nil)
+	const path = "/api/v1/setup/restore/token"
+	for _, token := range []string{"", "wrong"} {
+		r := e.call("POST", path, "", map[string]any{"token": token})
+		if r.status != http.StatusForbidden || r.errorCode(t) != "invalid_setup_token" {
+			t.Errorf("token %q = %d %s", token, r.status, r.body)
+		}
+	}
+	if r := e.call("POST", path, "", map[string]any{"token": "setup-token"}); r.status != http.StatusNoContent {
+		t.Errorf("right token = %d %s", r.status, r.body)
+	}
+	if r := e.call("POST", path, "", map[string]any{"token": "setup-token", "extra": 1}); r.status != http.StatusBadRequest {
+		t.Errorf("unknown field = %d %s", r.status, r.body)
+	}
+	done := newAPIEnv(t, func(o *APIOptions) {
+		o.CheckSetupToken = func(context.Context, netip.Addr, string) error { return auth.ErrSetupDone }
+	})
+	if r := done.call("POST", path, "", map[string]any{"token": "x"}); r.status != http.StatusConflict || r.errorCode(t) != "setup_done" {
+		t.Errorf("after setup = %d %s", r.status, r.body)
+	}
+	limited := newAPIEnv(t, func(o *APIOptions) {
+		o.CheckSetupToken = func(context.Context, netip.Addr, string) error { return auth.ErrTooManyAttempts }
+	})
+	if r := limited.call("POST", path, "", map[string]any{"token": "x"}); r.status != http.StatusTooManyRequests || r.errorCode(t) != "too_many_attempts" {
+		t.Errorf("limited = %d %s", r.status, r.body)
+	}
+}
+
 func TestSetupEndpointsRefuseOnceSetUp(t *testing.T) {
 	e := newAPIEnv(t, func(o *APIOptions) {
 		o.CheckSetupToken = func(context.Context, netip.Addr, string) error { return auth.ErrSetupDone }

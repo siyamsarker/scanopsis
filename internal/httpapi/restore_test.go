@@ -88,6 +88,7 @@ func TestLimitedAPIRequestExemptsTransfers(t *testing.T) {
 		{"POST", "/api/v1/admin/backup-uploads/abc/complete", true},
 		{"PUT", "/api/v1/admin/backup-uploads/abc/complete", true},
 		{"POST", "/api/v1/setup/restore", true},
+		{"POST", "/api/v1/setup/restore/token", true},
 		{"POST", "/api/v1/setup/restore/uploads", true},
 		{"PUT", "/api/v1/setup/restore/uploads/abc", false},
 		{"GET", "/api/v1/setup/restore/uploads/abc", true},
