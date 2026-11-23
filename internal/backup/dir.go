@@ -254,9 +254,5 @@ func (d *Dir) build(name string, size int64, c cached) Info {
 		at, _ := time.Parse("20060102T150405Z", sub[1])
 		return Info{Name: name, Kind: Kind(sub[2]), Size: size, CreatedAt: at}
 	}
-	return Info{
-		Name: name, Kind: Kind(sub[2]), Size: size, CreatedAt: c.m.CreatedAt, CreatedBy: c.m.CreatedBy,
-		AppVersion: c.m.AppVersion, Schema: c.m.Schema,
-		KeyMatches: c.m.KeyFingerprint != "" && c.m.KeyFingerprint == d.fingerprint,
-	}
+	return infoOf(name, size, c.m, d.fingerprint)
 }

@@ -523,7 +523,7 @@ func TestDumpOutlastsStatementTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	_, tr, err := Verify(f, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -571,14 +571,14 @@ VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, '2026-03-04 05:06:07.123
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	got := map[string]string{}
 	_, err = ReadTables(f, func(tb TableSpec, data io.Reader) (int64, error) {
 		r := csv.NewReader(data)
 		var n int64
 		for {
 			rec, err := r.Read()
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return n, nil
 			}
 			if err != nil {
