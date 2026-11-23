@@ -610,3 +610,83 @@ func TestEarlyAnswersDoNotWaitForTheBody(t *testing.T) {
 		})
 	}
 }
+
+// The parts of backup uploads skip the body buffering and the general
+// slots, but have small limits of their own: no more than uploadPartSlots
+// at once, and no more than uploadPartClientSlots from one address, so
+// requests to made-up upload ids cannot run without bound. The other
+// requests are not held up by them.
+func TestUploadPartsHaveTheirOwnLimit(t *testing.T) {
+	parts := newGate()
+	other := newGate()
+	close(other.release)
+	e := newEnv(t, func(d *Deps) {
+		d.MaxConcurrent = 1
+		d.BusyWait = 50 * time.Millisecond
+		d.ClientIP = ipFromHeader
+		d.Features = map[string]http.Handler{"putSetupRestoreUploadChunk": parts, "getPortfolio": other}
+	})
+	const senders = 12
+	recs := make([]*httptest.ResponseRecorder, senders)
+	var wg sync.WaitGroup
+	for i := range senders {
+		wg.Go(func() {
+			recs[i] = e.do("PUT", "/api/v1/setup/restore/uploads/0123456789abcdef?offset=0", "", "part", ipHeader, ip(i/3+1))
+		})
+	}
+	for range uploadPartSlots {
+		<-parts.entered
+	}
+	time.Sleep(200 * time.Millisecond) // the others give up
+	// The general slot is still free.
+	if rec := e.do("GET", "/api/v1/portfolio", "viewer", ""); rec.Code != 200 {
+		t.Errorf("another request while parts are sent = %d, want 200", rec.Code)
+	}
+	close(parts.release)
+	wg.Wait()
+	ok, busy := 0, 0
+	for _, rec := range recs {
+		switch rec.Code {
+		case 200:
+			ok++
+		case 503:
+			busy++
+			assertError(t, rec, 503, "busy")
+		default:
+			t.Errorf("unexpected status %d", rec.Code)
+		}
+	}
+	if ok != uploadPartSlots || busy != senders-uploadPartSlots || parts.peak != uploadPartSlots {
+		t.Errorf("%d served, %d busy, peak %d; want %d, %d, %d", ok, busy, parts.peak, uploadPartSlots, senders-uploadPartSlots, uploadPartSlots)
+	}
+
+	// One address gets at most its share.
+	one := newGate()
+	e = newEnv(t, func(d *Deps) {
+		d.MaxConcurrent = 1
+		d.BusyWait = 50 * time.Millisecond
+		d.ClientIP = ipFromHeader
+		d.Features = map[string]http.Handler{"putBackupUploadChunk": one, "putSetupRestoreUploadChunk": one}
+	})
+	recs = make([]*httptest.ResponseRecorder, 5)
+	for i := range recs {
+		wg.Go(func() {
+			recs[i] = e.do("PUT", "/api/v1/setup/restore/uploads/0123456789abcdef?offset=0", "", "part", ipHeader, ip(1))
+		})
+	}
+	for range uploadPartClientSlots {
+		<-one.entered
+	}
+	time.Sleep(200 * time.Millisecond)
+	close(one.release)
+	wg.Wait()
+	ok = 0
+	for _, rec := range recs {
+		if rec.Code == 200 {
+			ok++
+		}
+	}
+	if ok != uploadPartClientSlots || one.peak != uploadPartClientSlots {
+		t.Errorf("one address: %d served, peak %d; want %d", ok, one.peak, uploadPartClientSlots)
+	}
+}

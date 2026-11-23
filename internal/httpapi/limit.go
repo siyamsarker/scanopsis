@@ -50,30 +50,44 @@ const (
 	setupUploadsPrefix  = "/api/v1/setup/restore/uploads/"
 	backupsPrefix       = "/api/v1/admin/backups/"
 	downloadSuffix      = "/download"
+
+	// uploadPartSlots is how many parts of backup uploads may be received
+	// at once, and uploadPartClientSlots how many of them one client
+	// address may send. They hold their slot while the body arrives, so
+	// they do not use the general slots; four covers the two uploads the
+	// admin panel and the two the setup screen may have open.
+	uploadPartSlots       = 4
+	uploadPartClientSlots = 2
 )
 
 // limitedAPIRequest reports whether the generic limits of the API apply to a
 // request: the body limit of limitBody and the concurrency limit. They apply
 // to everything below /api/ except the transfers (the Trivy upload, a PUT of
 // a backup upload part and a GET or HEAD of a backup download), whose
-// handlers bound the body and the time themselves. The other requests on
+// handlers bound the body and the time themselves; the upload parts have
+// their own concurrency limit (see uploadPart). The other requests on
 // uploads (status, cancel, complete) read at most a small JSON body and are
 // limited like any other. Both limits use this one test, so no request is
 // left without either.
 func limitedAPIRequest(method, path string) bool {
-	part := func(prefix string) bool {
-		id, ok := strings.CutPrefix(path, prefix)
-		return ok && id != "" && !strings.Contains(id, "/")
-	}
 	switch {
 	case !strings.HasPrefix(path, "/api/"),
 		strings.HasPrefix(path, ingestPrefix),
-		method == http.MethodPut && (part(backupUploadsPrefix) || part(setupUploadsPrefix)),
+		uploadPart(method, path),
 		(method == http.MethodGet || method == http.MethodHead) &&
 			strings.HasPrefix(path, backupsPrefix) && strings.HasSuffix(path, downloadSuffix):
 		return false
 	}
 	return true
+}
+
+// uploadPart reports whether a request sends a part of a backup upload.
+func uploadPart(method, path string) bool {
+	part := func(prefix string) bool {
+		id, ok := strings.CutPrefix(path, prefix)
+		return ok && id != "" && !strings.Contains(id, "/")
+	}
+	return method == http.MethodPut && (part(backupUploadsPrefix) || part(setupUploadsPrefix))
 }
 
 // bodyReadTimeout is how long reading a body may take. A client that has
@@ -269,7 +283,10 @@ func bufferBody(w http.ResponseWriter, r *http.Request) (status int) {
 //
 // Only requests below /api/ are counted: the probes and the web interface are
 // served from outside it, and the Trivy upload is admitted by the ingest
-// package. A MaxConcurrent of zero or less disables the limit.
+// package. The parts of backup uploads, whose bodies arrive slowly, are
+// counted apart: at most uploadPartSlots at once and uploadPartClientSlots
+// per client address, holding their slot until they are answered, without
+// buffering. A MaxConcurrent of zero or less disables the limits.
 func (s *server) limitConcurrency(next http.Handler) http.Handler {
 	if s.MaxConcurrent <= 0 {
 		return next
@@ -279,17 +296,20 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 		size: max(1, s.MaxConcurrent/clientShareDivisor), bodyBytes: bodyBudget / clientBodyShare,
 		m: map[netip.Prefix]*clientShare{},
 	}
+	partSlots := make(chan struct{}, uploadPartSlots)
+	partShares := &clientShares{size: uploadPartClientSlots, m: map[netip.Prefix]*clientShare{}}
 	budget := newByteBudget(bodyBudget)
 	wait := s.BusyWait
 	if wait <= 0 {
 		wait = DefaultBusyWait
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !limitedAPIRequest(r.Method, r.URL.Path) {
+		part := uploadPart(r.Method, r.URL.Path)
+		if !part && !limitedAPIRequest(r.Method, r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if r.ContentLength > maxAPIBody {
+		if !part && r.ContentLength > maxAPIBody {
 			abortUnreadBody(w, r)
 			writeError(w, http.StatusRequestEntityTooLarge, "payload_too_large", "The request body is too large.")
 			return
@@ -344,9 +364,38 @@ func (s *server) limitConcurrency(next http.Handler) http.Handler {
 		var share *clientShare
 		if s.ClientIP != nil {
 			if key, ok := clientKey(s.ClientIP(r)); ok {
-				share = shares.get(key)
-				defer shares.put(key, share)
+				pool := shares
+				if part {
+					pool = partShares
+				}
+				share = pool.get(key)
+				defer pool.put(key, share)
 			}
+		}
+
+		// A part of an upload takes its own slots and keeps them while its
+		// body arrives; its handler bounds the body and the time.
+		if part {
+			if share != nil {
+				switch got, gone := acquire(share.slots); {
+				case gone:
+					return
+				case !got:
+					busy("client share of upload parts")
+					return
+				}
+				defer func() { <-share.slots }()
+			}
+			switch got, gone := acquire(partSlots); {
+			case gone:
+				return
+			case !got:
+				busy("no free slot for an upload part")
+				return
+			}
+			defer func() { <-partSlots }()
+			next.ServeHTTP(w, r)
+			return
 		}
 
 		// A body is read first, before any slot is taken, so that a slow body
