@@ -143,6 +143,12 @@ describe('strip layout', () => {
     expect(stripTicks(y, 3)).toEqual([-20, -10, 0, 10, 20, 30, 40]);
   });
 
+  it('ticks whole numbers only, so small counts never repeat a label', () => {
+    const y = scaleLinear().domain([-1.2, 1.2]).range([100, 0]);
+    expect(stripTicks(y)).toEqual([-1, 0, 1]);
+    expect(stripTicks(scaleLinear().domain([0, 2]).range([100, 0]), 4)).toEqual([0, 1, 2]);
+  });
+
   it('stacks critical at the baseline with gaps and a flagged top segment', () => {
     const y = scaleLinear().domain([0, 100]).range([200, 0]);
     const segs = stackSegments({ critical: 10, high: 20, low: 0, unknown: 0.2 }, y);

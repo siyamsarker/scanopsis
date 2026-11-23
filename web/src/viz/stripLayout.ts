@@ -135,7 +135,11 @@ export function niceCeil(v: number): number {
   return 10 * p;
 }
 
-/** Round ticks on both sides of the baseline: [0, top] up, [0, bottom] down. */
+/**
+ * Round ticks on both sides of the baseline: [0, top] up, [0, bottom] down.
+ * The strip counts findings, so only whole numbers are ticks: a scale of
+ * small counts would otherwise label 0.5 as a second "1".
+ */
 export function stripTicks(y: ScaleLinear<number, number>, count = 2): number[] {
   const [lo, hi] = y.domain();
   const up = scaleLinear().domain([0, hi]).ticks(count);
@@ -145,10 +149,9 @@ export function stripTicks(y: ScaleLinear<number, number>, count = 2): number[] 
           .domain([0, -lo])
           .ticks(Math.max(1, count - 1))
       : [];
-  return [
-    ...down.filter((v) => v > 0 && v <= -lo).map((v) => -v),
-    ...up.filter((v) => v <= hi),
-  ].sort((a, b) => a - b);
+  return [...down.filter((v) => v > 0 && v <= -lo).map((v) => -v), ...up.filter((v) => v <= hi)]
+    .filter((v) => Number.isInteger(v))
+    .sort((a, b) => a - b);
 }
 
 const GATE_ROW = 18;
