@@ -4,7 +4,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { ArchiveRestore, UserPlus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
-import { useNavigate, useSearchParams } from 'react-router';
+import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
 import { setupKey } from '../api/hooks';
 import { AuthShell } from '../components/AuthShell';
@@ -141,14 +141,26 @@ function NewInstallation({ onBack }: { onBack: () => void }) {
 
 type Choice = 'choose' | 'new' | 'restore';
 
-/** The choice is part of the address, so the browser's Back button returns to the two choices. */
-function useChoice(): [Choice, (choice: Choice, replace?: boolean) => void] {
+/**
+ * The choice is part of the address, so the browser's Back button returns to
+ * the two choices. The page's own Back button steps back in the history when
+ * the entry before is the two choices, so no second entry of them is left
+ * behind; a choice opened straight from its address is replaced instead.
+ */
+function useChoice(): [Choice, (choice: Exclude<Choice, 'choose'>) => void, () => void] {
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const start = params.get('start');
   const choice: Choice = start === 'new' || start === 'restore' ? start : 'choose';
+  const fromChoice = (location.state as { fromChoice?: boolean } | null)?.fromChoice === true;
   return [
     choice,
-    (next, replace = false) => setParams(next === 'choose' ? {} : { start: next }, { replace }),
+    (next) => setParams({ start: next }, { state: { fromChoice: true } }),
+    () => {
+      if (fromChoice) void navigate(-1);
+      else setParams({}, { replace: true });
+    },
   ];
 }
 
@@ -157,9 +169,9 @@ const choiceClass =
 
 /** The start of a new server: a fresh installation, or one moved over from a backup. */
 export function SetupPage() {
-  const [choice, setChoice] = useChoice();
-  if (choice === 'new') return <NewInstallation onBack={() => setChoice('choose', true)} />;
-  if (choice === 'restore') return <RestoreFromBackup onBack={() => setChoice('choose', true)} />;
+  const [choice, setChoice, back] = useChoice();
+  if (choice === 'new') return <NewInstallation onBack={back} />;
+  if (choice === 'restore') return <RestoreFromBackup onBack={back} />;
   return (
     <AuthShell
       title="Welcome to Scanopsis"

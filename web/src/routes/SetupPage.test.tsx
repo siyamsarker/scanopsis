@@ -196,4 +196,26 @@ describe('setup page', () => {
       'Too many attempts. Try again in 42 seconds.',
     );
   });
+
+  it('steps back in the history to the choice, leaving no second entry', async () => {
+    mockFetch(setupApi(() => noContent()));
+    renderApp('/setup');
+    await startNew();
+    expect(screen.getByTestId('location')).toHaveTextContent('/setup?start=new');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await screen.findByRole('button', { name: /Restore from a backup/ })).toBeVisible();
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/setup$/);
+    // The entry of the choice was left, not covered by a new one.
+    expect(screen.getByTestId('navigation')).toHaveTextContent('POP');
+  });
+
+  it('replaces a choice opened from its address, which has no choice before it', async () => {
+    mockFetch(setupApi(() => noContent()));
+    renderApp('/setup?start=restore');
+    await screen.findByRole('heading', { name: 'Restore from a backup' });
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await screen.findByRole('button', { name: /Set up a new installation/ })).toBeVisible();
+    expect(screen.getByTestId('location')).toHaveTextContent(/^\/setup$/);
+    expect(screen.getByTestId('navigation')).toHaveTextContent('REPLACE');
+  });
 });

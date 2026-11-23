@@ -3,7 +3,7 @@
 
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router';
+import { MemoryRouter, useLocation, useNavigationType } from 'react-router';
 import { App } from './App';
 import type { Me } from './api/client';
 import { createQueryClient } from './api/queryClient';
@@ -55,7 +55,13 @@ export function mockFetch(handler: Handler) {
 
 function LocationProbe() {
   const location = useLocation();
-  return <output data-testid="location">{location.pathname + location.search}</output>;
+  const navigation = useNavigationType();
+  return (
+    <>
+      <output data-testid="location">{location.pathname + location.search}</output>
+      <output data-testid="navigation">{navigation}</output>
+    </>
+  );
 }
 
 export function renderApp(path: string, client: QueryClient = createQueryClient()) {
