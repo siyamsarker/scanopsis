@@ -342,7 +342,7 @@ Responses:
 
 Replace all data with a backup (admin only).
 
-Needs the phrase RESTORE and a current two-factor code of the administrator. Unless `skip_safety_backup` is true, a backup of the current data (kind before-restore) is taken first. The restore then runs in the background in one database transaction; while it replaces the data, the API answers 503 with the code restoring. Every session ends, this one too. The backup schedule and keep-days of this server are kept. Follow it with GET /api/v1/restore/status. Everything that can refuse the restore (a running job, the backup, the phrase) is checked before the two-factor code, so a refused restore does not use up a code. Restore mode starts once the whole file was checked, when the data is replaced.
+Needs the phrase RESTORE and a current two-factor code of the administrator. The restore runs in the background: it checks the whole file, then, unless `skip_safety_backup` is true, takes a backup of the current data (kind before-restore), then replaces the data in one database transaction; while it replaces the data, the API answers 503 with the code restoring. Every session ends, this one too. The backup schedule and keep-days of this server are kept. Follow it with GET /api/v1/restore/status. Everything that can refuse the restore (a running job, the backup, the phrase) is checked before the two-factor code, so a refused restore does not use up a code. Restore mode starts once the whole file was checked, when the data is replaced.
 
 - Operation ID: `restoreBackup`
 - Authentication: Session, admin

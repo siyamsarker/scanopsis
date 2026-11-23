@@ -95,6 +95,13 @@ type RestoreOptions struct {
 	// not block: store the values and let another goroutine report them.
 	Progress func(Progress)
 
+	// Verified, if not nil, is called once the whole file was checked and
+	// before BeforeReplace. An error it returns stops the restore, which
+	// then changes nothing. The restore job takes the backup of the current
+	// data here, so that the data can change only for a moment between that
+	// backup and the replacement.
+	Verified func(ctx context.Context) error
+
 	// BeforeReplace, if not nil, is called once the whole file was checked,
 	// just before the transaction that replaces the data starts. It is not
 	// called when the file is refused.
@@ -216,7 +223,8 @@ func (c ctxReader) Read(p []byte) (int, error) {
 // elsewhere, or changed after it was made) and one made by a newer version
 // (ErrNewerSchema).
 //
-// Once the file passed, BeforeReplace is called. The restore then runs in
+// Once the file passed, Verified and then BeforeReplace are called. The
+// restore then runs in
 // one transaction: it drops the Scanopsis tables,
 // creates them again at the schema version of the backup, loads every
 // table with COPY, sets each sequence after the highest restored id,
@@ -277,6 +285,11 @@ func Restore(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOpti
 	}
 	if err := o.testHook(stageVerified); err != nil {
 		return fmt.Errorf("restore backup: %w", err)
+	}
+	if o.Verified != nil {
+		if err := o.Verified(ctx); err != nil {
+			return fmt.Errorf("restore backup: %w", err)
+		}
 	}
 	if err := rewind(); err != nil {
 		return fmt.Errorf("restore backup: %w", err)

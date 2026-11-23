@@ -450,7 +450,7 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.State != JobBackingUp || e.svc.Restoring() {
+	if st.State != JobRestoring || e.svc.Restoring() {
 		t.Errorf("started: %+v", st)
 	}
 	st = e.wait(t)
@@ -507,9 +507,9 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 	}
 
 	// A failed safety backup stops the restore before restore mode.
-	e.svc.restore = func(context.Context, *pgxpool.Pool, string, RestoreOptions) error {
-		t.Error("restored without the safety backup")
-		return nil
+	e.svc.restore = func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error {
+		o.BeforeReplace = func() { t.Error("restored without the safety backup") }
+		return realRestore(ctx, pool, path, o)
 	}
 	e.svc.dump = func(context.Context, Kind, string, func(Progress)) (Info, error) {
 		return Info{}, errors.New("take backup: not enough free space for a backup")
@@ -523,6 +523,87 @@ func TestServiceRestoreModeWindow(t *testing.T) {
 	}
 	if f := e.audit.of(audit.ActionBackupFailed); len(f) != 1 || f[0].detail["kind"] != KindBeforeRestore {
 		t.Errorf("backup.failed audit = %+v", f)
+	}
+}
+
+// TestServiceRestoreChecksFirst checks that the whole file is verified
+// before the backup of the current data is taken, so that the data can
+// change only for a moment between that backup and the replacement, and a
+// damaged file costs no backup at all.
+func TestServiceRestoreChecksFirst(t *testing.T) {
+	e := newSvcEnv(t, nil)
+	name := e.backup(t)
+	var mu sync.Mutex
+	var events []string
+	note := func(ev string) {
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+	}
+	var safetyState atomic.Value
+	realDump, realRestore := e.svc.dump, e.svc.restore
+	e.svc.dump = func(ctx context.Context, kind Kind, actor string, progress func(Progress)) (Info, error) {
+		if kind == KindBeforeRestore {
+			note("before-restore backup")
+			safetyState.Store(e.svc.Status())
+		}
+		return realDump(ctx, kind, actor, progress)
+	}
+	e.svc.restore = func(ctx context.Context, pool *pgxpool.Pool, path string, o RestoreOptions) error {
+		o.testHook = func(stage string) error {
+			if stage == stageVerified || stage == stageDropped {
+				note(stage)
+			}
+			return nil
+		}
+		return realRestore(ctx, pool, path, o)
+	}
+	if _, err := e.svc.StartRestore(name, "local:alice", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.wait(t); st.State != JobDone || !strings.Contains(st.Message, "before the restore was saved as") {
+		t.Fatalf("status = %+v", st)
+	}
+	want := []string{stageVerified, "before-restore backup", stageDropped}
+	if !slices.Equal(events, want) {
+		t.Errorf("order = %v, want %v", events, want)
+	}
+	if st, _ := safetyState.Load().(JobStatus); st.State != JobBackingUp || st.Kind != KindBeforeRestore || e.svc.Restoring() {
+		t.Errorf("during the before-restore backup: %+v", st)
+	}
+
+	// A damaged file is refused before any backup of the current data.
+	p, err := e.dir.Path(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(p) //nolint:gosec // a test file
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := e.dir.NewName(KindUploaded, time.Now())
+	if err := os.WriteFile(filepath.Join(e.dir.Root(), damaged), data[:len(data)-200], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	events = nil
+	if _, err := e.svc.StartRestore(damaged, "local:alice", false, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.wait(t); st.State != JobFailed {
+		t.Fatalf("status = %+v", st)
+	}
+	if len(events) != 0 {
+		t.Errorf("a damaged file got to %v", events)
+	}
+	list, _ := e.dir.List()
+	safety := 0
+	for _, b := range list {
+		if b.Kind == KindBeforeRestore {
+			safety++
+		}
+	}
+	if safety != 1 {
+		t.Errorf("%d before-restore backups, want only the one of the first restore", safety)
 	}
 }
 

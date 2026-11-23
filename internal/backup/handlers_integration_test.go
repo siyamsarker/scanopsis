@@ -251,7 +251,7 @@ func TestRestoreNeedsConfirmAndCode(t *testing.T) {
 	}
 
 	r := api.call("POST", path, "admin", map[string]any{"confirm": "RESTORE", "code": "111111"})
-	if m := r.json(t); r.status != http.StatusAccepted || m["type"] != "restore" || m["state"] != "backing_up" {
+	if m := r.json(t); r.status != http.StatusAccepted || m["type"] != "restore" || m["state"] != "restoring" {
 		t.Fatalf("restore = %d %s", r.status, r.body)
 	}
 	st := e.wait(t)

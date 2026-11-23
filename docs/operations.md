@@ -608,9 +608,10 @@ moment. You need an administrator account with two-factor authentication.
 3. Type `RESTORE` (exactly, in capitals) and a current two-factor code, then
    select **Restore backup**.
 
-Scanopsis first saves the current data as a before-restore backup, so you can
-go back. If the disk has no room for it, tick **Skip the backup of the
-current state** in the dialog. The restore then cannot be undone.
+Scanopsis first checks the whole file again. Then it saves the current data as
+a before-restore backup, so you can go back, and replaces the data right
+after it. If the disk has no room for the before-restore backup, tick
+**Skip the backup of the current state** in the dialog. The restore then cannot be undone.
 
 A restore that cannot start, because another job runs or the backup cannot be
 restored here, is refused before your two-factor code is checked, so the code
@@ -626,10 +627,10 @@ retry for several minutes and then lets the job pass.
 
 The restore is all or nothing: it runs in one database transaction, so a
 failure leaves the data as it was and the page says so. The API turns
-requests away only from the moment the data is replaced, after the
-before-restore backup and after the file was checked again in full. When it ends, sign in
-again with an account from the backup. The backup schedule keeps the values
-this server had before the restore.
+requests away only from the moment the data is replaced, after the file was
+checked again in full and the before-restore backup was taken. When it ends,
+sign in again with an account from the backup. The backup schedule keeps the
+values this server had before the restore.
 
 A restore can commit and still not finish, for example when a step after the
 commit fails. When the commit itself fails, Scanopsis cannot tell whether

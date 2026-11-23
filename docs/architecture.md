@@ -300,7 +300,10 @@ the backup is consistent while uploads continue.
 
 **The restore.** Scanopsis reads and verifies the whole file first (signature,
 checksums, key fingerprint, schema version, and limits on how far the file may
-expand). Then it changes the database in one transaction:
+expand). Only then does it back up the current data (unless that was
+skipped), so that a damaged file costs no backup and the data can change only
+for a moment between that backup and the replacement. Then it changes the
+database in one transaction:
 
 1. drops the Scanopsis tables only, and nothing else in the database;
 2. replays the migrations up to the schema version of the backup;
@@ -320,8 +323,8 @@ the restore, so it handles it like a restore that committed and could not
 finish (see below).
 
 **Restore mode.** Restore mode starts when the data replacement starts: after
-the backup of the current data (unless it was skipped) and after the whole
-file was verified. From then until the restore has finished, the API answers
+the whole file was verified and the backup of the current data (unless it was
+skipped) was taken. From then until the restore has finished, the API answers
 `503 restoring`, apart from the version and the restore status, so that
 nothing writes to tables that are being replaced. After the commit,
 Scanopsis refreshes what it holds in memory. If that fails, or the commit

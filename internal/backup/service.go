@@ -664,10 +664,11 @@ func (s *Service) CheckRestore(name string) error {
 }
 
 // StartRestore starts restoring the backup called name in the background
-// and returns at once. Unless skipSafety is set, a backup of the current
-// data (kind before-restore) is taken first. keepHostSettings keeps this
-// server's backup settings (see RestoreOptions). The restore checks the
-// whole file, then replaces the data in one transaction; Restoring is true
+// and returns at once. The restore checks the whole file first; then,
+// unless skipSafety is set, a backup of the current data (kind
+// before-restore) is taken. keepHostSettings keeps this server's backup
+// settings (see RestoreOptions). The restore then replaces the data in one
+// transaction; Restoring is true
 // from the start of that transaction until AfterRestore has finished. When
 // the transaction committed, or its commit failed so that it may have
 // committed (ErrCommitUncertain), and the restore could not finish, the
@@ -689,11 +690,7 @@ func (s *Service) StartRestore(name string, actor string, skipSafety bool, keepH
 	if err != nil {
 		return JobStatus{}, err
 	}
-	first := JobStatus{State: JobRestoring, Type: JobTypeRestore, Kind: kind, Name: name, Message: "Waiting for other maintenance jobs to finish."}
-	if !skipSafety {
-		first = JobStatus{State: JobBackingUp, Type: JobTypeRestore, Kind: KindBeforeRestore, Name: name, Message: "Waiting for other maintenance jobs to finish."}
-	}
-	st, err := s.begin(first)
+	st, err := s.begin(JobStatus{State: JobRestoring, Type: JobTypeRestore, Kind: kind, Name: name, Message: "Waiting for other maintenance jobs to finish."})
 	if err != nil {
 		return JobStatus{}, err
 	}
@@ -733,22 +730,7 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 			return err
 		}
 		defer release()
-		if !skipSafety {
-			s.update(func(st *JobStatus) { st.Message = "Backing up the current data before the restore." })
-			info, err := s.takeBackup(ctx, KindBeforeRestore, actor)
-			if err = s.stopped(err); err != nil {
-				s.failed(ctx, KindBeforeRestore, actor, err)
-				if errors.Is(err, errStopped) {
-					return err
-				}
-				return fmt.Errorf("the backup of the current data failed, so nothing was restored: %s", message(err))
-			}
-			safety = info.Name
-		}
-		s.progress.Store(nil)
-		s.update(func(st *JobStatus) {
-			st.State, st.Kind, st.Progress, st.Message = JobRestoring, kind, Progress{}, "Checking the backup before the restore."
-		})
+		s.update(func(st *JobStatus) { st.Message = "Checking the backup before the restore." })
 		// Restore mode ends here only when the data was not replaced, or
 		// when the server has reloaded everything it keeps in memory.
 		defer func() {
@@ -759,8 +741,33 @@ func (s *Service) restoreJob(name, path string, kind Kind, actor string, skipSaf
 		err = s.restore(ctx, s.o.Pool, path, RestoreOptions{
 			KeepHostSettings: keepHostSettings, Actor: actor, KeyFingerprint: s.o.KeyFingerprint,
 			SigningKey: s.o.Dumper.SigningKey, Progress: s.setProgress,
-			// The file was checked in full: restore mode starts with the
-			// transaction that replaces the data.
+			// The whole file was checked first: the backup of the current
+			// data comes right before the replacement, so that little can
+			// change in between, and a damaged file costs no backup.
+			Verified: func(ctx context.Context) error {
+				if skipSafety {
+					return nil
+				}
+				s.update(func(st *JobStatus) {
+					st.State, st.Kind, st.Message = JobBackingUp, KindBeforeRestore, "Backing up the current data before the restore."
+				})
+				info, err := s.takeBackup(ctx, KindBeforeRestore, actor)
+				if err = s.stopped(err); err != nil {
+					s.failed(ctx, KindBeforeRestore, actor, err)
+					if errors.Is(err, errStopped) {
+						return err
+					}
+					return fmt.Errorf("the backup of the current data failed, so nothing was restored: %s", message(err))
+				}
+				safety = info.Name
+				s.progress.Store(nil)
+				s.update(func(st *JobStatus) {
+					st.State, st.Kind, st.Progress, st.Message = JobRestoring, kind, Progress{}, "Restoring the backup."
+				})
+				return nil
+			},
+			// Restore mode starts with the transaction that replaces the
+			// data.
 			BeforeReplace: func() {
 				s.update(func(st *JobStatus) { st.Message = "Restoring the backup." })
 				s.restoring.Store(true)

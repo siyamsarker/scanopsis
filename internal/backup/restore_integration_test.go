@@ -788,6 +788,10 @@ func TestRestoreReplacesAfterTheCheck(t *testing.T) {
 
 	o := restoreOpts(t)
 	var stages []string
+	o.Verified = func(context.Context) error {
+		stages = append(stages, "checked")
+		return nil
+	}
 	o.BeforeReplace = func() { stages = append(stages, "replace") }
 	o.testHook = func(stage string) error {
 		stages = append(stages, stage)
@@ -802,9 +806,22 @@ func TestRestoreReplacesAfterTheCheck(t *testing.T) {
 	if err := Restore(context.Background(), pool, good, o); err != nil {
 		t.Fatal(err)
 	}
-	if len(stages) < 3 || stages[0] != stageVerified || stages[1] != "replace" || stages[2] != stageDropped {
-		t.Errorf("stages = %v, want verified, replace, dropped, ...", stages)
+	if len(stages) < 4 || stages[0] != stageVerified || stages[1] != "checked" || stages[2] != "replace" || stages[3] != stageDropped {
+		t.Errorf("stages = %v, want verified, checked, replace, dropped, ...", stages)
 	}
+
+	// Verified can still stop the restore, which then changes nothing.
+	changeAll(t, pool)
+	before := snapshot(t, pool)
+	stages = nil
+	o.Verified = func(context.Context) error { return errors.New("no room for the backup of the current data") }
+	if err := Restore(context.Background(), pool, good, o); err == nil || !strings.Contains(err.Error(), "no room") {
+		t.Fatalf("restore stopped after the check = %v", err)
+	}
+	if len(stages) != 1 || stages[0] != stageVerified {
+		t.Errorf("stages = %v, want verified only", stages)
+	}
+	sameSnapshot(t, "after a restore stopped after the check", before, snapshot(t, pool))
 }
 
 func TestRestoreRefusesKeyMismatch(t *testing.T) {
