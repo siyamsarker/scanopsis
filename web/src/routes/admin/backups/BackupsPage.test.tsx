@@ -7,6 +7,7 @@ import { hideRestoreOverlay } from '../../../api/restoreMode';
 import type { Setting } from '../../../api/hooks';
 import {
   apiError,
+  chooseOption,
   json,
   makeUser,
   mockFetch,
@@ -524,6 +525,23 @@ describe('scheduled backups', () => {
     expect(calls.find((c) => c.method === 'PATCH')?.body).toMatchObject({
       'backup.schedule_times': ['02:00', '07:05'],
     });
+  });
+
+  it('narrows the time zones as a filter is typed, and keeps Enter from saving', async () => {
+    const { calls } = mockFetch(api());
+    renderApp('/admin/backups');
+    const form = await screen.findByRole('region', { name: 'Scheduled backups' });
+    const filter = await within(form).findByRole('searchbox', { name: 'Filter time zones' });
+    fireEvent.change(filter, { target: { value: 'tokyo' } });
+    fireEvent.keyDown(filter, { key: 'Enter' });
+    expect(await within(form).findByText('1 time zone matches.')).toBeVisible();
+    expect(calls.some((c) => c.method === 'PATCH')).toBe(false);
+    await chooseOption('Time zone', 'Asia/Tokyo');
+    expect(within(form).getByRole('combobox', { name: 'Time zone' })).toHaveTextContent(
+      'Asia/Tokyo',
+    );
+    fireEvent.change(filter, { target: { value: 'no such place' } });
+    expect(await within(form).findByText('No time zone matches.')).toBeVisible();
   });
 
   it('ties the keep-days problem to its field', async () => {

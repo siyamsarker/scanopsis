@@ -125,14 +125,24 @@ describe('schedule validation', () => {
     expect(scheduleProblems({ times: ['02:00'], keepDays: '7' })).toEqual({});
   });
 
-  it('lists time zones with UTC first, the current one and the browser zone marked', () => {
+  it('lists time zones with the browser zone first and marked, then UTC and the current one', () => {
     const options = timeZoneOptions('Etc/Unknown', 'Europe/Berlin');
-    expect(options[0]).toMatchObject({ value: 'UTC' });
-    expect(options.find((o) => o.value === 'Europe/Berlin')).toMatchObject({
-      hint: 'Your time zone',
-    });
+    expect(options[0]).toMatchObject({ value: 'Europe/Berlin', hint: 'Your time zone' });
+    expect(options[1]).toMatchObject({ value: 'UTC' });
     expect(options.some((o) => o.value === 'Etc/Unknown')).toBe(true);
     expect(new Set(options.map((o) => o.value)).size).toBe(options.length);
+    expect(timeZoneOptions('UTC', 'UTC')[0]).toMatchObject({ value: 'UTC', hint: undefined });
+  });
+
+  it('narrows the time zones to those that match every word typed', () => {
+    const values = (filter: string) =>
+      timeZoneOptions('UTC', 'Europe/Berlin', filter).map((o) => o.value);
+    expect(values('new york')).toEqual(['UTC', 'America/New_York']);
+    expect(values('  BERLIN ')).toEqual(['Europe/Berlin', 'UTC']);
+    expect(values('europe/ber')).toEqual(['Europe/Berlin', 'UTC']);
+    // The saved zone stays listed, so the field still shows it.
+    expect(values('nothing like this')).toEqual(['UTC']);
+    expect(values('')).toEqual(timeZoneOptions('UTC', 'Europe/Berlin').map((o) => o.value));
   });
 });
 

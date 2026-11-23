@@ -110,20 +110,37 @@ function knownZones(): string[] {
   }
 }
 
+/** The words typed into a time zone filter, as lower-case parts to find. */
+function filterWords(filter: string): string[] {
+  return filter.toLowerCase().replace(/_/g, ' ').split(/\s+/).filter(Boolean);
+}
+
+/** Whether `zone` holds every word of the filter ("new york" finds America/New_York). */
+export function zoneMatches(zone: string, filter: string): boolean {
+  const name = zone.toLowerCase().replace(/_/g, ' ');
+  return filterWords(filter).every((word) => name.includes(word));
+}
+
 /**
- * Every time zone the browser knows, UTC first, with the browser's own zone
- * marked. The saved zone is listed even when the browser does not know it.
+ * The time zones the browser knows that match `filter` (all of them when it
+ * is empty): the browser's own zone first and marked, then UTC, then the rest
+ * in order. The saved zone is listed even when the browser does not know it
+ * or the filter does not match it, so the field can still show it.
  */
-export function timeZoneOptions(current: string, browser: string): SelectOption[] {
+export function timeZoneOptions(current: string, browser: string, filter = ''): SelectOption[] {
   const zones = new Set([...knownZones(), current, browser]);
-  zones.delete('UTC');
   zones.delete('');
-  const sorted = [...zones].sort((a, b) => a.localeCompare(b, 'en'));
-  return ['UTC', ...sorted].map((zone) => ({
-    value: zone,
-    label: zone.replace(/_/g, ' '),
-    hint: zone === browser && zone !== 'UTC' ? 'Your time zone' : undefined,
-  }));
+  const rest = [...zones]
+    .filter((zone) => zone !== browser && zone !== 'UTC')
+    .sort((a, b) => a.localeCompare(b, 'en'));
+  const ordered = [...new Set([browser, 'UTC', ...rest])].filter(Boolean);
+  return ordered
+    .filter((zone) => zone === current || zoneMatches(zone, filter))
+    .map((zone) => ({
+      value: zone,
+      label: zone.replace(/_/g, ' '),
+      hint: zone === browser && zone !== 'UTC' ? 'Your time zone' : undefined,
+    }));
 }
 
 // ---- Restore ----

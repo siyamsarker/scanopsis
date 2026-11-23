@@ -7,7 +7,7 @@ import type { BackupList } from '../../../api/backups';
 import { describeError } from '../../../api/errors';
 import { SettingsValidationError, useSettings, useUpdateSettings } from '../../../api/hooks';
 import { Spinner } from '../../../components/ConfirmDialog';
-import { Select } from '../../../components/inputs';
+import { SearchInput, Select } from '../../../components/inputs';
 import { ErrorState, Skeleton } from '../../../components/states';
 import { Switch } from '../../../components/Switch';
 import { toast } from '../../../components/Toast';
@@ -20,6 +20,7 @@ import {
   newTimeProblem,
   scheduleProblems,
   timeZoneOptions,
+  zoneMatches,
 } from './model';
 
 const KEYS = {
@@ -54,7 +55,14 @@ function ScheduleFields({
   const [timeProblem, setTimeProblem] = useState<string>();
   const [problems, setProblems] = useState<Partial<Record<Field, string>>>({});
   const browser = useMemo(() => browserTimeZone(), []);
-  const zones = useMemo(() => timeZoneOptions(draft.zone, browser), [draft.zone, browser]);
+  const [zoneFilter, setZoneFilter] = useState('');
+  const zones = useMemo(
+    () => timeZoneOptions(draft.zone, browser, zoneFilter),
+    [draft.zone, browser, zoneFilter],
+  );
+  const zoneMatchCount = zoneFilter.trim()
+    ? zones.filter((zone) => zoneMatches(zone.value, zoneFilter)).length
+    : null;
 
   const dirty =
     draft.enabled !== saved.enabled ||
@@ -220,8 +228,38 @@ function ScheduleFields({
       </fieldset>
 
       <div className="flex flex-col gap-2">
+        {/* The fields below carry their own names for screen readers. */}
+        <span aria-hidden="true" className={labelClass}>
+          Time zone
+        </span>
+        {/* Enter in the filter narrows the list; it does not save the form. */}
+        <div
+          className="flex flex-col gap-1.5"
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') event.preventDefault();
+          }}
+        >
+          <SearchInput
+            label="Filter time zones"
+            placeholder="Filter time zones, such as Berlin or New York"
+            value={zoneFilter}
+            onChange={setZoneFilter}
+            delayMs={120}
+            shortcutHint={false}
+          />
+          <p aria-live="polite" className="text-small text-text-muted empty:hidden">
+            {zoneMatchCount === null
+              ? ''
+              : zoneMatchCount === 0
+                ? 'No time zone matches.'
+                : zoneMatchCount === 1
+                  ? '1 time zone matches.'
+                  : `${zoneMatchCount} time zones match.`}
+          </p>
+        </div>
         <Select
           label="Time zone"
+          hideLabel
           value={draft.zone}
           onChange={(zone) => change({ zone })}
           options={zones}
