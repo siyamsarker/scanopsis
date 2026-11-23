@@ -1062,15 +1062,17 @@ func TestMFAWithoutRecoveryKeyIssuesNoCodes(t *testing.T) {
 	}
 }
 
+var testIP = netip.MustParseAddr("203.0.113.9")
+
 func TestCheckCodeReplay(t *testing.T) {
 	f := newMFAFixture(t)
 	secret, _ := f.enrolled(t)
 	ctx := context.Background()
 	code := f.codeAt(t, secret, f.clock.Now())
-	if err := f.mfa.CheckCode(ctx, mfaUserID, code); err != nil {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, code); err != nil {
 		t.Fatalf("first use: %v", err)
 	}
-	if err := f.mfa.CheckCode(ctx, mfaUserID, code); !errors.Is(err, ErrInvalidCode) {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, code); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("replay: %v; want ErrInvalidCode", err)
 	}
 	// A step the sign-in check already used is a replay here too.
@@ -1079,13 +1081,13 @@ func TestCheckCodeReplay(t *testing.T) {
 	if w := f.do(t, f.mfa.VerifyHandler(), codeBody(signIn)); w.Code != http.StatusNoContent {
 		t.Fatalf("sign-in: %d %s", w.Code, w.Body)
 	}
-	if err := f.mfa.CheckCode(ctx, mfaUserID, signIn); !errors.Is(err, ErrInvalidCode) {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, signIn); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("code used at sign-in: %v; want ErrInvalidCode", err)
 	}
 	// A code with spaces, as typed, is accepted.
 	f.clock.Advance(time.Minute)
 	c := f.codeAt(t, secret, f.clock.Now())
-	if err := f.mfa.CheckCode(ctx, mfaUserID, c[:3]+" "+c[3:]); err != nil {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, c[:3]+" "+c[3:]); err != nil {
 		t.Fatalf("spaced code: %v", err)
 	}
 }
@@ -1096,14 +1098,14 @@ func TestCheckCodeLockout(t *testing.T) {
 	f.mfa.opts.Limiter = NewRateLimiter(time.Second, 1000, f.clock.Now)
 	ctx := context.Background()
 	for i := 1; i < mfaMaxFailures; i++ {
-		if err := f.mfa.CheckCode(ctx, mfaUserID, "000000"); !errors.Is(err, ErrInvalidCode) {
+		if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, "000000"); !errors.Is(err, ErrInvalidCode) {
 			t.Fatalf("failure %d: %v", i, err)
 		}
 		if f.store.user.MfaFailedAttempts != int32(i) {
 			t.Fatalf("counter %d after %d failures", f.store.user.MfaFailedAttempts, i)
 		}
 	}
-	if err := f.mfa.CheckCode(ctx, mfaUserID, "000000"); !errors.Is(err, ErrLocked) {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, "000000"); !errors.Is(err, ErrLocked) {
 		t.Fatalf("tenth failure: %v; want ErrLocked", err)
 	}
 	if last := f.audit.events[len(f.audit.events)-1]; last.Action != audit.ActionMFALocked || last.Actor != "local:vic" {
@@ -1114,7 +1116,7 @@ func TestCheckCodeLockout(t *testing.T) {
 	}
 	// Locked: even the right code is refused, and nothing is counted.
 	events := len(f.audit.events)
-	if err := f.mfa.CheckCode(ctx, mfaUserID, f.codeAt(t, secret, f.clock.Now())); !errors.Is(err, ErrLocked) {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, f.codeAt(t, secret, f.clock.Now())); !errors.Is(err, ErrLocked) {
 		t.Fatalf("right code while locked: %v", err)
 	}
 	if len(f.audit.events) != events || f.store.user.MfaFailedAttempts != mfaMaxFailures {
@@ -1126,9 +1128,9 @@ func TestCheckCodeSuccessResetsTheCounter(t *testing.T) {
 	f := newMFAFixture(t)
 	secret, _ := f.enrolled(t)
 	ctx := context.Background()
-	_ = f.mfa.CheckCode(ctx, mfaUserID, "000000")
-	_ = f.mfa.CheckCode(ctx, mfaUserID, "000000")
-	if err := f.mfa.CheckCode(ctx, mfaUserID, f.codeAt(t, secret, f.clock.Now())); err != nil {
+	_ = f.mfa.CheckCode(ctx, testIP, mfaUserID, "000000")
+	_ = f.mfa.CheckCode(ctx, testIP, mfaUserID, "000000")
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, f.codeAt(t, secret, f.clock.Now())); err != nil {
 		t.Fatal(err)
 	}
 	if f.store.user.MfaFailedAttempts != 0 {
@@ -1140,7 +1142,7 @@ func TestCheckCodeRejectsRecoveryCode(t *testing.T) {
 	f := newMFAFixture(t)
 	_, codes := f.enrolled(t)
 	ctx := context.Background()
-	if err := f.mfa.CheckCode(ctx, mfaUserID, codes[0]); !errors.Is(err, ErrInvalidCode) {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, codes[0]); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("recovery code: %v; want ErrInvalidCode", err)
 	}
 	if f.store.user.MfaFailedAttempts != 1 {
@@ -1155,18 +1157,35 @@ func TestCheckCodeRejectsRecoveryCode(t *testing.T) {
 func TestCheckCodeLimiterAndNotEnrolled(t *testing.T) {
 	f := newMFAFixture(t)
 	ctx := context.Background()
-	if err := f.mfa.CheckCode(ctx, mfaUserID, "123456"); !errors.Is(err, ErrInvalidCode) {
+	if err := f.mfa.CheckCode(ctx, testIP, mfaUserID, "123456"); !errors.Is(err, ErrInvalidCode) {
 		t.Fatalf("not enrolled: %v", err)
 	}
-	secret, _ := f.enrolled(t)
-	_ = secret
+	f.enrolled(t)
 	var err error
 	for range 10 {
-		if err = f.mfa.CheckCode(ctx, mfaUserID, "000000"); errors.Is(err, ErrTooManyAttempts) {
+		if err = f.mfa.CheckCode(ctx, testIP, mfaUserID, "000000"); errors.Is(err, ErrTooManyAttempts) {
 			break
 		}
 	}
 	if !errors.Is(err, ErrTooManyAttempts) {
 		t.Fatalf("last error %v; want ErrTooManyAttempts", err)
+	}
+}
+
+func TestCheckCodeAuditDetail(t *testing.T) {
+	f := newMFAFixture(t)
+	f.enrolled(t)
+	ctx := context.Background()
+	f.mfa.opts.Limiter = NewRateLimiter(time.Second, 1000, f.clock.Now)
+	for _, tc := range []struct{ code, method string }{
+		{"000000", "totp"},
+		{"abcde-fghij-klmnp-qrstu", "recovery_code"},
+	} {
+		_ = f.mfa.CheckCode(ctx, testIP, mfaUserID, tc.code)
+		e := f.audit.events[len(f.audit.events)-1]
+		if e.Action != audit.ActionMFAFailed || e.Actor != "local:vic" ||
+			e.Detail["method"] != tc.method || e.Detail["ip"] != testIP.String() {
+			t.Fatalf("audit event for %q: %+v", tc.code, e)
+		}
 	}
 }

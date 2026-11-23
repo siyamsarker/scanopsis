@@ -417,10 +417,12 @@ var (
 // session: the code must match within the same skew, a step is accepted once
 // (a code used at sign-in cannot be used here, and the other way round), a
 // wrong code counts toward the lock, and the same limiter applies. Recovery
-// codes are not accepted; one is a wrong code. It returns ErrInvalidCode,
+// codes are not accepted; one is a wrong code. ip is the client address, for
+// the audit log. When ErrLocked is returned the user's sessions are already
+// deleted. It returns ErrInvalidCode,
 // ErrLocked or ErrTooManyAttempts, or another error if the check could not be
 // made.
-func (m *MFA) CheckCode(ctx context.Context, userID int64, code string) error {
+func (m *MFA) CheckCode(ctx context.Context, ip netip.Addr, userID int64, code string) error {
 	user, err := m.store.GetUser(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("load user: %w", err)
@@ -436,7 +438,9 @@ func (m *MFA) CheckCode(ctx context.Context, userID int64, code string) error {
 	}
 	code = normaliseCode(code)
 	accepted := false
+	method := "recovery_code"
 	if isTOTPCode(code) {
+		method = "totp"
 		step, matched, err := m.matchTOTP(user, code)
 		if err != nil {
 			return fmt.Errorf("cannot decrypt TOTP secret; check SCANOPSIS_SECRET_KEY: %w", err)
@@ -450,7 +454,7 @@ func (m *MFA) CheckCode(ctx context.Context, userID int64, code string) error {
 	}
 	if !accepted {
 		locked, err := m.countFailure(ctx, user.Source+":"+user.Username, user.ID,
-			map[string]any{"method": "totp", "purpose": "step_up"})
+			map[string]any{"method": method, "ip": ip.String()})
 		switch {
 		case err != nil:
 			return err

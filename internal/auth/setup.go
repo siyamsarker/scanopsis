@@ -66,8 +66,10 @@ func NewSetup(s SetupStore, sessions SessionStarter, audit AuditRecorder, client
 // PrepareToken returns a new one-time token if no administrator exists, and
 // "" otherwise. The caller logs it at start. Only its SHA-256 is kept, and
 // only in memory; it stops working once setup completes. It fails if a token
-// was already issued by this Setup and no administrator exists. When one
-// does (the database was replaced by a restore), the old token is dropped.
+// was already issued by this Setup and no administrator exists: the held
+// token stays valid and "" is returned, so the caller logs nothing new. When
+// an administrator exists (the database was replaced by a restore), the old
+// token is dropped.
 func (s *Setup) PrepareToken(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -81,7 +83,7 @@ func (s *Setup) PrepareToken(ctx context.Context) (string, error) {
 		return "", nil
 	}
 	if s.hasToken {
-		return "", errors.New("a setup token was already issued")
+		return "", nil
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -100,20 +102,14 @@ var (
 	ErrInvalidToken = errors.New("the setup token is wrong")
 )
 
-// checkRateKey is the rate-limit key of CheckToken. The caller's address is
-// not known there, so all checks share one bucket, which is stricter than
-// the per-address limit of the setup form.
-const checkRateKey = "setup-check"
-
 // CheckToken checks token against the setup token without using it up. It
-// returns ErrSetupDone once an administrator exists, ErrInvalidToken if the
-// token is wrong or none was issued, and ErrTooManyAttempts when the setup
-// rate limit is exceeded. It compares as the setup form does, in constant
-// time, and uses the same limiter.
-func (s *Setup) CheckToken(ctx context.Context, token string) error {
-	if ok, _ := s.limiter.Allow(checkRateKey); !ok {
-		return ErrTooManyAttempts
-	}
+// returns ErrSetupDone once an administrator exists (whatever the attempts
+// so far), ErrTooManyAttempts when the client address has used up its wrong
+// attempts, and ErrInvalidToken if the token is wrong or none was issued. It
+// compares as the setup form does, in constant time, and keys the setup
+// limiter by client address the same way. Only a wrong token spends an
+// attempt, so a correct one is never limited by its own checks.
+func (s *Setup) CheckToken(ctx context.Context, ip netip.Addr, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n, err := s.store.CountAdmins(ctx)
@@ -123,8 +119,13 @@ func (s *Setup) CheckToken(ctx context.Context, token string) error {
 	if n > 0 {
 		return ErrSetupDone
 	}
+	key := addrKey(ip)
+	if blocked, _ := s.limiter.Blocked(key); blocked {
+		return ErrTooManyAttempts
+	}
 	sum := sha256.Sum256([]byte(token))
 	if !s.hasToken || subtle.ConstantTimeCompare(sum[:], s.tokenHash[:]) != 1 {
+		s.limiter.Allow(key)
 		return ErrInvalidToken
 	}
 	return nil

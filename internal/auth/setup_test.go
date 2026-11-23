@@ -129,8 +129,8 @@ func TestSetupPrepareToken(t *testing.T) {
 	if len(f.token) != 43 { // 32 bytes, unpadded base64url
 		t.Fatalf("token %q has length %d; want 43", f.token, len(f.token))
 	}
-	if _, err := f.s.PrepareToken(context.Background()); err == nil {
-		t.Fatal("a second token was issued by the same process")
+	if tok, err := f.s.PrepareToken(context.Background()); tok != "" || err != nil {
+		t.Fatalf("a second token was issued by the same process: %q, %v", tok, err)
 	}
 	if f.s.tokenHash == [32]byte{} {
 		t.Fatal("token hash not kept")
@@ -498,36 +498,62 @@ func TestSetupInternalErrors(t *testing.T) {
 }
 
 func TestSetupCheckToken(t *testing.T) {
-	f := newSetupFixture(t, 4)
+	f := newSetupFixture(t, 3)
 	ctx := context.Background()
-	if err := f.s.CheckToken(ctx, f.token); err != nil {
-		t.Fatalf("valid token: %v", err)
+	a, b := netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("192.0.2.2")
+	// Correct checks never spend attempts.
+	for range 20 {
+		if err := f.s.CheckToken(ctx, a, f.token); err != nil {
+			t.Fatalf("valid token: %v", err)
+		}
 	}
-	// Checking does not spend the token.
-	if err := f.s.CheckToken(ctx, f.token); err != nil {
-		t.Fatalf("valid token again: %v", err)
-	}
-	if err := f.s.CheckToken(ctx, "wrong"); !errors.Is(err, ErrInvalidToken) {
-		t.Fatalf("wrong token: %v", err)
-	}
-	if err := f.s.CheckToken(ctx, ""); !errors.Is(err, ErrInvalidToken) {
+	if err := f.s.CheckToken(ctx, a, ""); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("empty token: %v", err)
 	}
-	// The limiter is the setup limiter: attempts run out.
-	if err := f.s.CheckToken(ctx, f.token); !errors.Is(err, ErrTooManyAttempts) {
-		t.Fatalf("over the limit: %v", err)
+	// A flood of wrong tokens from A runs out...
+	var err error
+	for range 10 {
+		if err = f.s.CheckToken(ctx, a, "wrong"); errors.Is(err, ErrTooManyAttempts) {
+			break
+		}
+		if !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("wrong token: %v", err)
+		}
 	}
-	f.clock.Advance(time.Minute)
+	if !errors.Is(err, ErrTooManyAttempts) {
+		t.Fatalf("flood from A: %v", err)
+	}
+	// ...and does not block B.
+	if err := f.s.CheckToken(ctx, b, f.token); err != nil {
+		t.Fatalf("B while A is blocked: %v", err)
+	}
+	if err := f.s.CheckToken(ctx, b, "wrong"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("B wrong token: %v", err)
+	}
+	// After an administrator exists the answer is ErrSetupDone, flood or not.
 	f.store.admins = 1
-	if err := f.s.CheckToken(ctx, f.token); !errors.Is(err, ErrSetupDone) {
-		t.Fatalf("after an administrator exists: %v", err)
+	for _, ip := range []netip.Addr{a, b} {
+		if err := f.s.CheckToken(ctx, ip, f.token); !errors.Is(err, ErrSetupDone) {
+			t.Fatalf("after an administrator exists: %v", err)
+		}
 	}
 }
 
 func TestSetupCheckTokenWithoutToken(t *testing.T) {
 	s := NewSetup(&fakeSetupStore{}, &fakeStarter{}, &fakeAudit{}, nil, NewRateLimiter(time.Second, 5, nil), nil)
-	if err := s.CheckToken(context.Background(), "anything"); !errors.Is(err, ErrInvalidToken) {
+	if err := s.CheckToken(context.Background(), netip.MustParseAddr("192.0.2.1"), "anything"); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("no token issued: %v", err)
+	}
+}
+
+func TestSetupPrepareTokenKeepsAHeldToken(t *testing.T) {
+	f := newSetupFixture(t, 5)
+	ctx := context.Background()
+	if tok, err := f.s.PrepareToken(ctx); tok != "" || err != nil {
+		t.Fatalf("second PrepareToken: %q, %v; want no new token and no error", tok, err)
+	}
+	if err := f.s.CheckToken(ctx, netip.MustParseAddr("192.0.2.1"), f.token); err != nil {
+		t.Fatalf("held token no longer valid: %v", err)
 	}
 }
 
@@ -541,7 +567,7 @@ func TestSetupPrepareTokenAgainAfterRestore(t *testing.T) {
 		t.Fatalf("PrepareToken with an admin: %q, %v", tok, err)
 	}
 	f.store.admins = 0
-	if err := f.s.CheckToken(ctx, f.token); !errors.Is(err, ErrInvalidToken) {
+	if err := f.s.CheckToken(ctx, netip.MustParseAddr("192.0.2.1"), f.token); !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("old token still accepted: %v", err)
 	}
 	if tok, err := f.s.PrepareToken(ctx); tok == "" || tok == f.token || err != nil {
