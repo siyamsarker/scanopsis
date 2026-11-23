@@ -273,7 +273,9 @@ describe('PortfolioPage', () => {
       return undefined;
     });
     const banner = await screen.findByRole('region', { name: 'Scheduled backup failed' });
-    expect(banner).toHaveTextContent(/The scheduled backup at 19 Nov 2026, .+ failed: disk full/);
+    expect(banner).toHaveTextContent(
+      /The scheduled backup at 19 Nov 2026, .+ failed\. Disk full\./,
+    );
     expect(within(banner).getByRole('link', { name: 'Open Backups' })).toHaveAttribute(
       'href',
       '/admin/backups',
