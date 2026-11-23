@@ -33,7 +33,9 @@ describe('session routing', () => {
     async (path) => {
       mockFetch(server({ setup: true }));
       renderApp(path);
-      expect(await screen.findByRole('heading', { name: 'Set up Scanopsis' })).toBeInTheDocument();
+      expect(
+        await screen.findByRole('heading', { name: 'Welcome to Scanopsis' }),
+      ).toBeInTheDocument();
       expect(where()).toHaveTextContent(/^\/setup$/);
     },
   );

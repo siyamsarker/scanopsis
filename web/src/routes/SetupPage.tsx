@@ -2,35 +2,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useQueryClient } from '@tanstack/react-query';
+import { ArchiveRestore, UserPlus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router';
 import { api, ApiError, unwrap } from '../api/client';
-import { describeError } from '../api/errors';
 import { setupKey } from '../api/hooks';
 import { AuthShell } from '../components/AuthShell';
 import { Spinner } from '../components/ConfirmDialog';
 import { buttonClass, monoInputClass } from '../ui';
 import { Problem } from './admin/kit';
 import { AuthField, PasswordField, PasswordRules, passwordChecks } from './auth/fields';
+import { RestoreFromBackup } from './setup/RestoreFromBackup';
+import { setupMessage } from './setup/messages';
 
 export const passwordRules = 'At least 12 characters, and not your username.';
 
 /** The steps from a new server to the first signed-in administrator. */
 export const setupSteps = ['Administrator', 'Two-factor', 'Recovery codes'];
 
-function setupMessage(err: unknown): string {
-  if (err instanceof ApiError) {
-    if (err.code === 'invalid_setup_token') {
-      return 'The setup token is not correct. Copy it again from the server log.';
-    }
-    if (err.code === 'setup_complete') {
-      return 'Setup is already complete. Sign in with the administrator account.';
-    }
-  }
-  return describeError(err);
-}
-
-export function SetupPage() {
+function NewInstallation({ onBack }: { onBack: () => void }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [token, setToken] = useState('');
@@ -141,7 +131,60 @@ export function SetupPage() {
           {pending ? <Spinner /> : null}
           Create administrator
         </button>
+        <button type="button" className={buttonClass('ghost')} onClick={onBack}>
+          Back
+        </button>
       </form>
+    </AuthShell>
+  );
+}
+
+type Choice = 'choose' | 'new' | 'restore';
+
+const choiceClass =
+  'flex w-full items-start gap-3 rounded-inner border border-line bg-surface p-4 text-left transition-colors hover:border-line-strong hover:bg-sunken';
+
+/** The start of a new server: a fresh installation, or one moved over from a backup. */
+export function SetupPage() {
+  const [choice, setChoice] = useState<Choice>('choose');
+  if (choice === 'new') return <NewInstallation onBack={() => setChoice('choose')} />;
+  if (choice === 'restore') return <RestoreFromBackup onBack={() => setChoice('choose')} />;
+  return (
+    <AuthShell
+      title="Welcome to Scanopsis"
+      lead="This installation is new. How do you want to start?"
+    >
+      <div className="flex flex-col gap-3">
+        <button type="button" className={choiceClass} onClick={() => setChoice('new')}>
+          <UserPlus
+            size={20}
+            strokeWidth={1.75}
+            aria-hidden="true"
+            className="mt-0.5 shrink-0 text-brand"
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-body font-medium text-text">Set up a new installation</span>
+            <span className="text-body-s text-text-muted">
+              Create the first administrator and start empty.
+            </span>
+          </span>
+        </button>
+        <button type="button" className={choiceClass} onClick={() => setChoice('restore')}>
+          <ArchiveRestore
+            size={20}
+            strokeWidth={1.75}
+            aria-hidden="true"
+            className="mt-0.5 shrink-0 text-brand"
+          />
+          <span className="flex flex-col gap-0.5">
+            <span className="text-body font-medium text-text">Restore from a backup</span>
+            <span className="text-body-s text-text-muted">
+              Moving Scanopsis to a new host? Upload a backup from the old one. Use the same secret
+              key file as the old installation.
+            </span>
+          </span>
+        </button>
+      </div>
     </AuthShell>
   );
 }

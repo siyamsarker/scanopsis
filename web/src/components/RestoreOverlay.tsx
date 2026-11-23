@@ -7,7 +7,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { fetchRestoreStatus } from '../api/backups';
 import { ApiError, type Me } from '../api/client';
-import { meKey } from '../api/hooks';
+import { meKey, setupKey } from '../api/hooks';
 import { hideRestoreOverlay } from '../api/restoreMode';
 import { overlayView, type OverlayView } from '../routes/admin/backups/model';
 import { buttonClass } from '../ui';
@@ -219,9 +219,11 @@ export function RestoreOverlayHost() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const isAdmin = queryClient.getQueryData<Me | null>(meKey)?.role === 'admin';
+  // A restore started on the setup screen leads back to it: no account exists yet.
+  const onSetup = queryClient.getQueryData<{ required: boolean }>(setupKey)?.required === true;
   return (
     <RestoreOverlay
-      backLabel={isAdmin ? 'Back to Backups' : 'Back to the portfolio'}
+      backLabel={onSetup ? 'Back to setup' : isAdmin ? 'Back to Backups' : 'Back to the portfolio'}
       onSignIn={() => {
         hideRestoreOverlay();
         queryClient.clear();
@@ -230,7 +232,7 @@ export function RestoreOverlayHost() {
       onBack={() => {
         hideRestoreOverlay();
         void queryClient.invalidateQueries();
-        void navigate(isAdmin ? '/admin/backups' : '/');
+        void navigate(onSetup ? '/setup' : isAdmin ? '/admin/backups' : '/');
       }}
     />
   );

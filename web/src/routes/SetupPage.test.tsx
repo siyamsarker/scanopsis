@@ -30,6 +30,12 @@ function setupApi(post: Handler, signedIn = { value: false }): Handler {
   };
 }
 
+/** Takes the first choice of the setup screen, the new installation. */
+async function startNew() {
+  fireEvent.click(await screen.findByRole('button', { name: /Set up a new installation/ }));
+  return screen.findByRole('heading', { name: 'Set up Scanopsis' });
+}
+
 function fill(token = 'tok-123', password = 'correct horse battery', confirm = password) {
   fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: token } });
   fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'root' } });
@@ -42,7 +48,7 @@ describe('setup page', () => {
   it('explains where to find the token and checks the password rules as you type', async () => {
     mockFetch(setupApi(() => noContent()));
     renderApp('/');
-    const heading = await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    const heading = await startNew();
     // Focus moves to the heading after the page renders.
     await waitFor(() => expect(heading).toHaveFocus());
     const token = screen.getByLabelText('Setup token');
@@ -82,7 +88,7 @@ describe('setup page', () => {
   it('shows where setup is in the steps to the first sign-in', async () => {
     mockFetch(setupApi(() => noContent()));
     renderApp('/setup');
-    await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    await startNew();
     const progress = screen.getByRole('navigation', { name: 'Progress' });
     expect(progress).toHaveTextContent('Step 1 of 3');
     expect(
@@ -105,7 +111,7 @@ describe('setup page', () => {
       }, state),
     );
     renderApp('/setup');
-    await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    await startNew();
     // The token is sent without surrounding spaces.
     fill('  tok-123 ');
     expect(
@@ -129,7 +135,7 @@ describe('setup page', () => {
   it('does not send the form when the passwords differ', async () => {
     const { calls } = mockFetch(setupApi(() => noContent()));
     renderApp('/setup');
-    await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    await startNew();
     fill('t', 'correct horse battery', 'something else entirely');
     expect(await screen.findByText('The passwords do not match.')).toBeVisible();
     expect(screen.getByLabelText('Confirm password')).toHaveAttribute('aria-invalid', 'true');
@@ -157,7 +163,7 @@ describe('setup page', () => {
   ])('shows a message for %s', async (code, status, message, shown) => {
     mockFetch(setupApi(() => apiError(status, code, message)));
     renderApp('/setup');
-    await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    await startNew();
     fill();
     expect(await screen.findByRole('alert')).toHaveTextContent(shown);
     expect(screen.getByRole('button', { name: 'Create administrator' })).toBeEnabled();
@@ -175,7 +181,7 @@ describe('setup page', () => {
       return setupApi(() => undefined)(call);
     });
     renderApp('/setup');
-    await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    await startNew();
     fill();
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
     expect(screen.getByTestId('location')).toHaveTextContent(/^\/login$/);
@@ -184,7 +190,7 @@ describe('setup page', () => {
   it('shows the wait on a 429', async () => {
     mockFetch(setupApi(() => apiError(429, 'rate_limited', 'Slow down.', { 'Retry-After': '42' })));
     renderApp('/setup');
-    await screen.findByRole('heading', { name: 'Set up Scanopsis' });
+    await startNew();
     fill();
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Too many attempts. Try again in 42 seconds.',

@@ -5,7 +5,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import type { RestoreStatus } from '../../../api/backups';
-import { meKey } from '../../../api/hooks';
+import { meKey, setupKey } from '../../../api/hooks';
 import { createQueryClient } from '../../../api/queryClient';
 import { RestoreOverlay, RestoreOverlayHost } from '../../../components/RestoreOverlay';
 import { apiError, json, makeUser, mockFetch } from '../../../test-utils';
@@ -122,13 +122,15 @@ describe('RestoreOverlay', () => {
   it.each([
     ['admin', 'Back to Backups', '/admin/backups'],
     ['viewer', 'Back to the portfolio', '/'],
+    ['setup', 'Back to setup', '/setup'],
   ] as const)('leads a failed restore back by role (%s)', async (role, label, path) => {
     serve({
       state: 'failed',
       message: 'The restore failed and nothing was changed. The server log has the reason.',
     });
     const client = createQueryClient();
-    client.setQueryData(meKey, makeUser({ role }));
+    if (role === 'setup') client.setQueryData(setupKey, { required: true });
+    else client.setQueryData(meKey, makeUser({ role }));
     function Probe() {
       const location = useLocation();
       return <output data-testid="location">{location.pathname}</output>;

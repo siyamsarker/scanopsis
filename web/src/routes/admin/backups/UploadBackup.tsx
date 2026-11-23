@@ -20,7 +20,7 @@ type Phase =
   | { kind: 'interrupted'; file: File; id: string; sent: number }
   | { kind: 'failed'; file: File; message: string; id?: string };
 
-function Progress({ sent, total }: { sent: number; total: number }) {
+export function Progress({ sent, total }: { sent: number; total: number }) {
   const percent = total > 0 ? Math.round((sent / total) * 100) : 0;
   return (
     <div>
