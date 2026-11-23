@@ -185,6 +185,10 @@ type Service struct {
 	needRestart atomic.Bool
 	progress    atomic.Pointer[Progress]
 
+	// saveMu orders the writes of the schedule status file, so the file
+	// always ends with the latest status.
+	saveMu sync.Mutex
+
 	mu      sync.Mutex
 	running bool
 	idle    chan struct{} // closed when the running job ends
@@ -391,7 +395,7 @@ func (s *Service) DismissScheduleFailure() (ScheduleStatus, bool) {
 	s.sched.Dismissed = true
 	st := s.sched
 	s.mu.Unlock()
-	s.saveSchedule(st)
+	s.saveSchedule()
 	return st, true
 }
 
@@ -973,14 +977,19 @@ func (s *Service) recordSchedule(at time.Time, err error) {
 	s.mu.Lock()
 	s.sched = st
 	s.mu.Unlock()
-	s.saveSchedule(st)
+	s.saveSchedule()
 }
 
-// saveSchedule writes the schedule status to the folder.
-func (s *Service) saveSchedule(st ScheduleStatus) {
+// saveSchedule writes the current schedule status to the folder.
+func (s *Service) saveSchedule() {
 	if s.o.Dir == nil {
 		return
 	}
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	s.mu.Lock()
+	st := s.sched
+	s.mu.Unlock()
 	st.Enabled = false // not kept: it comes from the settings
 	if err := writeFileAtomic(filepath.Join(s.o.Dir.Root(), statusFile), st); err != nil {
 		s.o.Log.Warn("could not save the backup schedule status", "error", err)
