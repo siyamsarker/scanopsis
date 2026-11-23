@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
 func TestMessage(t *testing.T) {
@@ -28,6 +30,8 @@ func TestMessage(t *testing.T) {
 		fmt.Errorf("take backup: copy: %w", context.Canceled):                                                                     "Scanopsis stopped before the job finished; nothing was changed.",
 		ErrMaintenance: "Another maintenance job is running; try again in a few minutes.",
 		fmt.Errorf("take backup: %w", &spaceError{need: 2 << 30, have: 1 << 30}): "Not enough free space for a backup: a backup needs about 2.0 GiB and the backup folder has 1.0 GiB free.",
+		fmt.Errorf("restore backup: %w", &store.BlockedError{Msg: "table audit_log belongs to role other, not to scanopsis: the database user in secrets/database_url must own all Scanopsis tables"}):                                                                                            "Table audit_log belongs to role other, not to scanopsis: the database user in secrets/database_url must own all Scanopsis tables.",
+		fmt.Errorf("restore backup: %w", &store.BlockedError{Msg: "another database object depends on a Scanopsis table (view v depends on table services); remove it or restore into a database used only by Scanopsis", Err: errors.New("ERROR: cannot drop table services (SQLSTATE 2BP01)")}): "Another database object depends on a Scanopsis table (view v depends on table services); remove it or restore into a database used only by Scanopsis.",
 	} {
 		got := message(err)
 		if got != want {

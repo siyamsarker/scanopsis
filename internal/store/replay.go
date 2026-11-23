@@ -204,8 +204,8 @@ func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 		ORDER BY c.relname LIMIT 1`, names).Scan(&table, &tableOwner, &user)
 	switch {
 	case err == nil:
-		return fmt.Errorf("table %s belongs to role %s, not to %s: the database user in secrets/database_url must own all Scanopsis tables",
-			table, tableOwner, user)
+		return &BlockedError{Msg: fmt.Sprintf("table %s belongs to role %s, not to %s: the database user in secrets/database_url must own all Scanopsis tables",
+			table, tableOwner, user)}
 	case !errors.Is(err, pgx.ErrNoRows):
 		return fmt.Errorf("check table owners: %w", err)
 	}
@@ -231,8 +231,8 @@ func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 		ORDER BY 1, 2 LIMIT 1`, names).Scan(&table, &object)
 	switch {
 	case err == nil:
-		return fmt.Errorf("another database object depends on Scanopsis table %s (%s); remove it or restore into a database used only by Scanopsis",
-			table, object)
+		return &BlockedError{Msg: fmt.Sprintf("another database object depends on Scanopsis table %s (%s); remove it or restore into a database used only by Scanopsis",
+			table, object)}
 	case !errors.Is(err, pgx.ErrNoRows):
 		return fmt.Errorf("check objects that depend on the tables: %w", err)
 	}
@@ -258,13 +258,37 @@ func DropApplicationTables(ctx context.Context, tx pgx.Tx) error {
 	if _, err := tx.Exec(ctx, "DROP TABLE "+strings.Join(tables, ", ")); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "2BP01" { // dependent_objects_still_exist
-			return fmt.Errorf("another database object depends on a Scanopsis table (%s); remove it or restore into a database used only by Scanopsis: %w",
-				pgErr.Detail, err)
+			return &BlockedError{Msg: fmt.Sprintf("another database object depends on a Scanopsis table (%s); remove it or restore into a database used only by Scanopsis",
+				pgErr.Detail), Err: err}
 		}
 		return fmt.Errorf("drop tables: %w", err)
 	}
 	return nil
 }
+
+// ErrBlocked means the tables cannot be replaced because of something in
+// the database that an operator must change (see BlockedError).
+var ErrBlocked = errors.New("the Scanopsis tables cannot be replaced")
+
+// BlockedError is a refusal of DropApplicationTables that an operator can
+// fix: Msg says what is wrong and what to do, and may be shown to people;
+// Err, if not nil, is the database error behind it, for the log.
+type BlockedError struct {
+	Msg string
+	Err error
+}
+
+func (e *BlockedError) Error() string {
+	if e.Err == nil {
+		return e.Msg
+	}
+	return e.Msg + ": " + e.Err.Error()
+}
+
+func (e *BlockedError) Unwrap() error { return e.Err }
+
+// Is reports whether target is ErrBlocked.
+func (e *BlockedError) Is(target error) bool { return target == ErrBlocked }
 
 // createTable matches the start of a CREATE TABLE statement and captures the
 // table name.

@@ -1147,3 +1147,25 @@ func TestServiceFailureDuringShutdown(t *testing.T) {
 		t.Errorf("audit = %+v", f)
 	}
 }
+
+// A restore refused because something else in the database uses a
+// Scanopsis table says so on the Backups page and in the audit log, with
+// what to do: it is not an unexpected error.
+func TestServiceRestoreRefusalSaysWhatToDo(t *testing.T) {
+	e := newSvcEnv(t, nil)
+	name := e.backup(t)
+	if _, err := e.pool.Exec(context.Background(), `CREATE VIEW other_view AS SELECT name FROM services`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.StartRestore(name, "local:alice", true, true); err != nil {
+		t.Fatal(err)
+	}
+	st := e.wait(t)
+	const want = "Another database object depends on Scanopsis table services"
+	if st.State != JobFailed || !strings.HasPrefix(st.Message, want) || !strings.Contains(st.Message, "restore into a database used only by Scanopsis.") {
+		t.Errorf("status = %+v, want the message to start with %q", st, want)
+	}
+	if f := e.audit.of(audit.ActionBackupRestoreFailed); len(f) != 1 || !strings.HasPrefix(f[0].detail["error"].(string), want) {
+		t.Errorf("audit = %+v", f)
+	}
+}

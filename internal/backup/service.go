@@ -25,6 +25,7 @@ import (
 	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/auth"
 	"github.com/siyamsarker/scanopsis/internal/settings"
+	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
 // AdvisoryLockKey is the PostgreSQL advisory lock held for every backup and
@@ -666,11 +667,15 @@ const unexpectedMessage = "Something unexpected stopped the job. The server log 
 // internals, so it gives a sentence that points to the server log.
 func message(err error) string {
 	var pub *publicError
+	var blocked *store.BlockedError
 	switch {
 	case errors.Is(err, context.Canceled):
 		return "Scanopsis stopped before the job finished; nothing was changed."
 	case errors.As(err, &pub):
 		return pub.msg
+	case errors.As(err, &blocked):
+		// Something in the database the operator must change.
+		return sentence(blocked.Msg)
 	case errors.Is(err, ErrFolder):
 		return "The backup folder cannot be used. The server log says why."
 	case errors.Is(err, os.ErrNotExist):
