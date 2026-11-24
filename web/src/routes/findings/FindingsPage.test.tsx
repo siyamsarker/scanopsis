@@ -533,6 +533,7 @@ describe('findings explorer', () => {
     );
     renderApp('/services/5/findings?tab=secrets');
     expect(await screen.findByText('No secrets found in the current scans')).toBeInTheDocument();
+    expect(screen.getByText(/source tree and the image layers/)).toBeInTheDocument();
   });
 
   it('does not load vulnerabilities for the secrets tab', async () => {

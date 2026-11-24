@@ -62,7 +62,7 @@ export function SecretsTab({
           compact
           art="clean"
           title="No secrets found in the current scans"
-          body="Trivy's secret scan of the source tree reported nothing."
+          body="Trivy's secret scans of the source tree and the image layers reported nothing."
         />
       </div>
     );
