@@ -125,9 +125,9 @@ for image in $IMAGES; do
 
   # One full scan: all severities, unfixed findings included, ignore file
   # applied, secrets in the image layers included. The flags win over any
-  # TRIVY_SEVERITY or TRIVY_IGNORE_UNFIXED set in the job.
+  # TRIVY_SEVERITY, TRIVY_IGNORE_UNFIXED or TRIVY_EXIT_CODE set in the job.
   if ! trivy image --quiet --scanners vuln,secret --format json --show-suppressed \
-      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
+      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false --exit-code 0 \
       --output "$out/$name.json" "$image"; then
     echo "trivy could not scan $image"
     status=1
@@ -145,7 +145,7 @@ for image in $IMAGES; do
 done
 
 # Secrets are a separate scan without a severity filter.
-trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 \
   --skip-dirs "$out" --format json --output "$out/secrets.json" . || status=1
 upload "$out/secrets.json" secret-fs
 trivy convert --format table --exit-code 1 "$out/secrets.json" || status=1
@@ -160,7 +160,8 @@ exit "$status"
    fixed and unfixed findings (`--ignore-unfixed=false`), the secrets that sit
    in the image layers (`--scanners vuln,secret`), and the findings that
    your ignore file (`.trivyignore`) or VEX documents suppressed. Scanopsis
-   shows those as suppressed.
+   shows those as suppressed. `--exit-code 0` keeps a `TRIVY_EXIT_CODE` set in
+   the job from making the scan fail on findings, which would skip the upload.
 2. `upload` compresses the report, sends it, and prints the HTTP status and the
    answer. It retries a temporary failure, see [Retries and
    limits](#retries-and-limits). It always returns 0, so a failed upload never
@@ -367,11 +368,23 @@ the script so that it:
 - decides its exit code from the same report, as before, so that a failed
   upload never changes whether the job passes.
 
-This example does all three. It builds two gates from the one full report: the
-vulnerability gate fails on HIGH and CRITICAL vulnerabilities, unfixed ones
-included, and the secret gate fails on any secret in the image layers. It exits
-with 0 when the job passes and 1 when a gate fails or Trivy cannot scan (2
-means wrong use). The gates give the same result as a plain `trivy image` scan
+This example does all three. It takes one or more images, so a job that builds
+several images scans them all in one call. It builds two gates from each full
+report: the vulnerability gate fails on HIGH and CRITICAL vulnerabilities,
+unfixed ones included, and the secret gate fails on any secret in the image
+layers. Its exit code tells a finding apart from a scan that did not run:
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Every image (or the folder) was scanned, and every gate passed. |
+| `1` | A gate failed: there are findings. |
+| `2` | Trivy could not scan an image or the folder, for example because the image does not exist, the registry refused it or the vulnerability database is missing. Also when the script is called wrongly. |
+
+A `2` wins over a `1`. After a scan error the script still scans, uploads and
+gates the other images, and prints `scan error: Trivy could not scan <image>`
+below Trivy's own message. The upload never changes the exit code.
+
+The gates give the same result as a plain `trivy image` scan
 with the job's variables, as long as gate 1's `--severity` equals the flag of
 your old script (if the old script used `TRIVY_SEVERITY` instead, drop
 `--severity` from gate 1, as gate 2 has none): `trivy convert` does not read `TRIVY_IGNORE_UNFIXED`,
@@ -386,16 +399,21 @@ applies to the gates as it did to the scan.
 #!/bin/sh
 # /opt/platform-trivy/scan.sh: the shared scan script of the platform team.
 #
-#   scan.sh image <image>      scan one image, upload it, apply both gates
-#   scan.sh source [folder]    scan a folder (default: .) for secrets
+#   scan.sh image <image> [<image> ...]   scan each image, upload it, apply both gates
+#   scan.sh source [folder]               scan a folder (default: .) for secrets
 #
 # Needs: trivy, curl, jq, gzip. Variables from the job: SCANOPSIS_URL and
 # SCANOPSIS_ID_TOKEN (from id_tokens).
-# Exit codes: 0 passed, 1 a gate failed or Trivy could not scan, 2 wrong use.
+# Exit codes: 0 passed, 1 a gate failed, 2 Trivy could not scan or wrong use.
 # A problem with the upload never changes the exit code.
 set -u
 out=${SCANOPSIS_OUT:-scanopsis-out}
 mkdir -p "$out"
+
+usage() {
+  echo "usage: scan.sh image <image> [<image> ...] | scan.sh source [folder]" >&2
+  exit 2
+}
 
 # curl 7.71 or later retries every failed connection; an older one only a
 # refused connection.
@@ -420,55 +438,66 @@ upload() {
 
 case "${1:-}" in
 image)
-  if [ -z "${2:-}" ]; then
-    echo "usage: scan.sh image <image> | scan.sh source [folder]" >&2
-    exit 2
-  fi
-  image=$2
-  name=$(printf '%s' "$image" | tr '/:@' '___')
+  shift
+  [ "$#" -gt 0 ] || usage
   status=0
   # Put your own checks here, for example the age of the vulnerability
-  # database, before the scan.
+  # database, before the scans.
 
-  # One full scan for Scanopsis: every severity, unfixed findings, secrets in
-  # the image layers. The flags win over TRIVY_SEVERITY and
-  # TRIVY_IGNORE_UNFIXED set in the job.
-  trivy image --quiet --scanners vuln,secret --format json --show-suppressed \
-    --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
-    --output "$out/$name.json" "$image" || { echo "trivy could not scan $image"; exit 1; }
-  upload "$out/$name.json" image
+  for image in "$@"; do
+    name=$(printf '%s' "$image" | tr '/:@' '___')
+    echo "===== $image"
 
-  # Gate 1, vulnerabilities: fail on HIGH and CRITICAL, unfixed ones included.
-  # Keep --severity equal to the flag of your old script. If the old script set
-  # TRIVY_SEVERITY instead of the flag, drop --severity so the variable applies.
-  # trivy convert does not read TRIVY_IGNORE_UNFIXED, which trivy image does,
-  # so a job that sets it to true gets the same effect from the jq filter.
-  # A .trivyignore in the current folder is applied by trivy convert too.
-  filter='del(.Results[]?.Secrets)'
-  case "${TRIVY_IGNORE_UNFIXED:-}" in
-  1 | t | T | true | TRUE | True)
-    filter="$filter | (.Results[]? | select(.Vulnerabilities) | .Vulnerabilities) |= map(select(.Status == \"fixed\"))"
-    ;;
-  esac
-  jq "$filter" "$out/$name.json" >"$out/$name.vuln.json"
-  trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 "$out/$name.vuln.json" || status=1
-  # Gate 2, secrets in the image layers: fail on any secret. No --severity
-  # here, so a TRIVY_SEVERITY of the job applies, as it would to a plain
-  # secret scan with trivy image.
-  jq 'del(.Results[]?.Vulnerabilities)' "$out/$name.json" >"$out/$name.secret.json"
-  trivy convert --format table --exit-code 1 "$out/$name.secret.json" || status=1
+    # One full scan for Scanopsis: every severity, unfixed findings, secrets
+    # in the image layers. The flags win over TRIVY_SEVERITY,
+    # TRIVY_IGNORE_UNFIXED and TRIVY_EXIT_CODE set in the job, so a non-zero
+    # exit code here means Trivy could not scan: the image does not exist, the
+    # registry refused it, or the vulnerability database is missing.
+    if ! trivy image --quiet --scanners vuln,secret --format json --show-suppressed \
+      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false --exit-code 0 \
+      --output "$out/$name.json" "$image"; then
+      echo "scan error: Trivy could not scan $image (see above); the job ends with exit code 2" >&2
+      status=2
+      continue
+    fi
+    upload "$out/$name.json" image
+
+    gate=0
+    # Gate 1, vulnerabilities: fail on HIGH and CRITICAL, unfixed ones included.
+    # Keep --severity equal to the flag of your old script. If the old script set
+    # TRIVY_SEVERITY instead of the flag, drop --severity so the variable applies.
+    # trivy convert does not read TRIVY_IGNORE_UNFIXED, which trivy image does,
+    # so a job that sets it to true gets the same effect from the jq filter.
+    # A .trivyignore in the current folder is applied by trivy convert too.
+    filter='del(.Results[]?.Secrets)'
+    case "${TRIVY_IGNORE_UNFIXED:-}" in
+    1 | t | T | true | TRUE | True)
+      filter="$filter | (.Results[]? | select(.Vulnerabilities) | .Vulnerabilities) |= map(select(.Status == \"fixed\"))"
+      ;;
+    esac
+    jq "$filter" "$out/$name.json" >"$out/$name.vuln.json"
+    trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 "$out/$name.vuln.json" || gate=1
+    # Gate 2, secrets in the image layers: fail on any secret. No --severity
+    # here, so a TRIVY_SEVERITY of the job applies, as it would to a plain
+    # secret scan with trivy image.
+    jq 'del(.Results[]?.Vulnerabilities)' "$out/$name.json" >"$out/$name.secret.json"
+    trivy convert --format table --exit-code 1 "$out/$name.secret.json" || gate=1
+    [ "$gate" -eq 1 ] && [ "$status" -eq 0 ] && status=1
+  done
   exit "$status"
   ;;
 source)
   dir=${2:-.}
-  trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
-    --skip-dirs "$out" --format json --output "$out/secrets.json" "$dir" || { echo "trivy could not scan $dir"; exit 1; }
+  if ! trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 \
+    --skip-dirs "$out" --format json --output "$out/secrets.json" "$dir"; then
+    echo "scan error: Trivy could not scan $dir (see above); the job ends with exit code 2" >&2
+    exit 2
+  fi
   upload "$out/secrets.json" secret-fs
   trivy convert --format table --exit-code 1 "$out/secrets.json"
   ;;
 *)
-  echo "usage: scan.sh image <image> | scan.sh source [folder]" >&2
-  exit 2
+  usage
   ;;
 esac
 ```
@@ -482,12 +511,14 @@ image-scan:
   stage: test
   variables:
     SCANOPSIS_URL: https://scanopsis.example.com
-    IMAGE: registry.example.com/team/web-frontend:$CI_PIPELINE_IID
+    IMAGES: "registry.example.com/team/web-frontend:$CI_PIPELINE_IID registry.example.com/team/web-worker:$CI_PIPELINE_IID"
   id_tokens:
     SCANOPSIS_ID_TOKEN:
       aud: "$SCANOPSIS_URL"
   script:
-    - /opt/platform-trivy/scan.sh image "$IMAGE"
+    - /opt/platform-trivy/scan.sh image $IMAGES
+  allow_failure:
+    exit_codes: [1]
 
 source-scan:
   stage: test
@@ -498,13 +529,47 @@ source-scan:
       aud: "$SCANOPSIS_URL"
   script:
     - /opt/platform-trivy/scan.sh source "$CI_PROJECT_DIR"
+  allow_failure:
+    exit_codes: [1]
 ```
 
-Both jobs may set `TRIVY_SEVERITY` or `TRIVY_IGNORE_UNFIXED`. The script's flags
-win for the report. Check that the new script ends with the same exit code as
-your old one on a few images of your own: a clean one, one with HIGH findings
-and one with a secret. Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
-artifact, `.`.
+- `$IMAGES` has no quotes in `script`, so each image becomes its own argument.
+- `allow_failure: exit_codes: [1]` lets the pipeline go on when a gate finds
+  something, and still stops it on a scan error (`2`): a scan that did not run
+  is not a pass. Leave `allow_failure` out if findings must stop the pipeline
+  too.
+- Both jobs may set `TRIVY_SEVERITY`, `TRIVY_IGNORE_UNFIXED` or
+  `TRIVY_EXIT_CODE`. The script's flags win for the report, so a finding is
+  never taken for a scan error.
+- Scanning `.` and scanning `$CI_PROJECT_DIR` give the same artifact, `.`.
+
+Check that the new script ends with the same exit code as your old one on a
+few images of your own: a clean one, one with HIGH findings and one with a
+secret. With Trivy 0.72.0 and the job variables `TRIVY_SEVERITY=CRITICAL,HIGH`
+and `TRIVY_IGNORE_UNFIXED=true`, the old gate (`trivy image --scanners vuln
+--severity HIGH,CRITICAL --exit-code 1` and `trivy image --scanners secret
+--exit-code 1` per image, `trivy fs --scanners secret --exit-code 1` for a
+folder) and the script gave:
+
+| Target | Exit code, old / new | Gate tables, old and new |
+| --- | --- | --- |
+| An image based on `alpine:3.17.0` | 1 / 1 | HIGH 26 |
+| An image based on `alpine:3.20` | 1 / 1 | HIGH 2 |
+| An image with one text file (Trivy writes no `Results`) | 0 / 0 | none |
+| A distroless image with a GitHub token | 1 / 1 | one CRITICAL secret |
+| A distroless image with a JWT, a MEDIUM secret | 0 / 0 | none: `TRIVY_SEVERITY` leaves out the MEDIUM secret in both |
+| A folder with an AWS key pair | 1 / 1 | two CRITICAL secrets |
+| A folder without secrets | 0 / 0 | none |
+
+And the cases the old gate could not tell apart:
+
+| Call | Exit code |
+| --- | --- |
+| `scan.sh image` with the `alpine:3.20` image and the clean one | 1 |
+| `scan.sh image` with an image that does not exist between those two | 2; both other images scanned and uploaded |
+| `scan.sh image` without a vulnerability database (`TRIVY_SKIP_DB_UPDATE=true` and an empty cache) | 2 |
+| `scan.sh image` with the clean image | 0 |
+| `scan.sh source` with a folder that does not exist | 2 |
 
 ## Restrict who may upload
 
