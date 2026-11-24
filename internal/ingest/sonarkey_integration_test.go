@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
 // sonarKeyOf returns the SonarQube key of a service, "" when it has none.
@@ -365,7 +367,7 @@ func TestIntegrationSonarKeyRaceWithWebhookPin(t *testing.T) {
 	for {
 		var waiting bool
 		if err := e.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%')`).Scan(&waiting); err != nil {
+			WHERE wait_event_type = 'Lock' AND query LIKE '%FOR NO KEY UPDATE%')`).Scan(&waiting); err != nil {
 			t.Fatal(err)
 		}
 		if waiting {
@@ -389,5 +391,176 @@ func TestIntegrationSonarKeyRaceWithWebhookPin(t *testing.T) {
 	got := e.auditOf("ingest.sonar_key_ignored")
 	if len(got) != 1 || got[0]["current_sonar_project_key"] != "evil:project" {
 		t.Errorf("audit = %v", got)
+	}
+}
+
+// holdRow runs sql on the service row in a transaction that stays open,
+// starts an upload that declares a key, waits until the upload waits for the
+// row, commits, and returns the upload's answer.
+func (e *iEnv) holdRowDuringDeclaration(sql string, args ...any) (int, map[string]any) {
+	e.t.Helper()
+	ctx := context.Background()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, sql, args...); err != nil {
+		e.t.Fatal(err)
+	}
+	type answer struct {
+		code int
+		res  map[string]any
+	}
+	done := make(chan answer, 1)
+	go func() {
+		code, res := e.uploadRaw(upload{body: sonarKeyBody, query: "?sonar_key=platform:payments-api",
+			claims: func(c map[string]any) { c["job_id"] = "3000" }})
+		done <- answer{code, res}
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting bool
+		if err := e.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%FOR NO KEY UPDATE%')`).Scan(&waiting); err != nil {
+			e.t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			e.t.Fatal("the upload never waited for the service row")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		e.t.Fatal(err)
+	}
+	a := <-done
+	return a.code, a.res
+}
+
+// A service archived while the upload runs, after the upload found it but
+// before it locked it for the declared key, is answered as an archived
+// service is (409 service_archived), not with an internal error, and
+// nothing is stored.
+func TestIntegrationSonarKeyServiceArchivedMeanwhile(t *testing.T) {
+	e := newIEnv(t, nil)
+	e.mustUpload(upload{body: sonarKeyBody})
+	scans := e.count("scans")
+	var sid int64
+	if err := e.pool.QueryRow(context.Background(), `SELECT id FROM services WHERE gitlab_project_id = 42`).Scan(&sid); err != nil {
+		t.Fatal(err)
+	}
+	code, res := e.holdRowDuringDeclaration(`UPDATE services SET archived = true WHERE id = $1`, sid)
+	if errObj, _ := res["error"].(map[string]any); code != http.StatusConflict || errObj["code"] != "service_archived" {
+		t.Fatalf("upload = %d %v, want 409 service_archived", code, res)
+	}
+	if n := e.count("scans"); n != scans {
+		t.Errorf("%d scans, want %d", n, scans)
+	}
+	if k, d := e.sonarKeyOf(sid), e.declaredOf(sid); k != "" || d != "" {
+		t.Errorf("key %q declared %q", k, d)
+	}
+}
+
+// A service that is gone when the upload locks it leaves the declared key
+// alone; the rest of the upload goes on as without one.
+func TestIntegrationSonarKeyServiceGone(t *testing.T) {
+	ctx := context.Background()
+	e := newIEnv(t, nil)
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	c := &Claims{ProjectID: 42, ProjectPath: "platform/payments-api", PipelineID: 1001, JobID: 2002}
+	set, notSet, err := declareSonarKey(ctx, tx, store.Service{ID: 999}, c, "platform:payments-api")
+	if set || notSet != nil || err != nil {
+		t.Errorf("declareSonarKey on a missing service = %v %v %v", set, notSet, err)
+	}
+}
+
+// adminChangedKey records an administrator's change of the service's key,
+// as the service API does.
+func (e *iEnv) adminChangedKey(sid int64, key string) {
+	e.t.Helper()
+	ctx := context.Background()
+	if _, err := e.pool.Exec(ctx, `UPDATE services SET sonar_project_key = $2 WHERE id = $1`, sid, key); err != nil {
+		e.t.Fatal(err)
+	}
+	if _, err := e.pool.Exec(ctx, `INSERT INTO audit_log (actor, action, detail)
+		VALUES ('local:root', 'service.updated', jsonb_build_object('id', $1::bigint, 'fields', jsonb_build_array('sonar_project_key')))`, sid); err != nil {
+		e.t.Fatal(err)
+	}
+}
+
+// The de-duplication of ingest.sonar_key_ignored lasts only while the
+// service does not change: after an administrator changed its key, even
+// back to the same one, the same ignored key is a new situation and is
+// audited again.
+func TestIntegrationSonarKeyIgnoredAuditedAgainAfterChange(t *testing.T) {
+	e := newIEnv(t, nil)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO services (name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via)
+		VALUES ('payments-api', 42, 'platform/payments-api', 'platform:renamed', 'manual')`); err != nil {
+		t.Fatal(err)
+	}
+	var sid int64
+	if err := e.pool.QueryRow(context.Background(), `SELECT id FROM services WHERE gitlab_project_id = 42`).Scan(&sid); err != nil {
+		t.Fatal(err)
+	}
+	up := func(job int) {
+		t.Helper()
+		code, res := e.uploadRaw(upload{body: sonarKeyBody, query: "?sonar_key=platform:payments-api",
+			claims: func(c map[string]any) { c["job_id"] = strconv.Itoa(job) }})
+		if code != http.StatusCreated || res["sonar_key_ignored"] != "service_has_other_key" {
+			t.Fatalf("upload %d: %d %v", job, code, res)
+		}
+	}
+	up(3000)
+	up(3001)
+	if n := len(e.auditOf("ingest.sonar_key_ignored")); n != 1 {
+		t.Fatalf("%d events before the change, want 1", n)
+	}
+	e.adminChangedKey(sid, "platform:other")
+	e.adminChangedKey(sid, "platform:renamed")
+	up(3002)
+	up(3003)
+	if n := len(e.auditOf("ingest.sonar_key_ignored")); n != 2 {
+		t.Errorf("%d events after the change, want 2", n)
+	}
+}
+
+// The lock an upload takes on its service for the declared key does not
+// block rows that reference the service, such as the scan of a concurrent
+// upload of another job.
+func TestIntegrationSonarKeyLockAllowsScans(t *testing.T) {
+	ctx := context.Background()
+	e := newIEnv(t, nil)
+	e.mustUpload(upload{body: sonarKeyBody})
+	var sid int64
+	if err := e.pool.QueryRow(ctx, `SELECT id FROM services WHERE gitlab_project_id = 42`).Scan(&sid); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := store.New(tx).LockServiceSonarKey(ctx, sid); err != nil {
+		t.Fatal(err)
+	}
+	other, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Rollback(ctx) }()
+	if _, err := other.Exec(ctx, `SET LOCAL lock_timeout = '1s'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Exec(ctx, `INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id,
+		ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+		VALUES ($1, 'image', 'b', 'b', 1002, 4000, 'main', true, 'c0ffee', 2, now(), '\x1f8b')`, sid); err != nil {
+		t.Errorf("a scan of the service waited for the lock: %v", err)
 	}
 }

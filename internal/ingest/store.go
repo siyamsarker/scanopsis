@@ -391,8 +391,8 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 // nor taken from another service, archived or not; a declaration of a taken
 // key is dropped, so it does not block the service's links for ever. Every
 // change is audited as a change of the service by the upload's project; an
-// ignored key is audited too, once for each new reason or key, so an
-// administrator sees the conflict.
+// ignored key is audited too, so an administrator sees the conflict, but
+// not again while nothing changed (see ignore below).
 //
 // The service row is locked first, so the decision is made on its current
 // key and declaration, and a webhook that links the service waits for this
@@ -402,16 +402,29 @@ func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, c *Claim
 	wrap := func(err error) error { return fmt.Errorf("declare SonarQube key: %w", err) }
 	reason := func(r string) *string { return &r }
 	cur, err := q.LockServiceSonarKey(ctx, svc.ID)
-	if err != nil {
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		// Deleted since it was found: the key is left alone, and the rest
+		// of the upload goes on as without one.
+		return false, nil, nil
+	case err != nil:
 		return false, nil, wrap(err)
+	case cur.Archived:
+		// Archived since it was found: answered as an archived service.
+		return false, nil, errServiceArchived
 	}
-	ignore := func(r string, d map[string]any) (bool, *string, error) {
-		last, err := q.LastSonarKeyIgnored(ctx, strconv.FormatInt(svc.ID, 10))
-		switch {
-		case err == nil && last.Reason == r && last.SonarProjectKey == key:
-			return false, reason(r), nil // audited already; the log line is enough
-		case err != nil && !errors.Is(err, pgx.ErrNoRows):
-			return false, nil, wrap(err)
+	// ignore audits an ignored key, unless the newest event of the service
+	// is the same ignored key: nothing changed since, and the log line is
+	// enough. A cleared declaration is always audited.
+	ignore := func(r string, d map[string]any, always bool) (bool, *string, error) {
+		if !always {
+			last, err := q.LastSonarKeyEvent(ctx, strconv.FormatInt(svc.ID, 10))
+			switch {
+			case err == nil && last.Action == audit.ActionIngestSonarKeyIgnored && last.Reason == r && last.SonarProjectKey == key:
+				return false, reason(r), nil
+			case err != nil && !errors.Is(err, pgx.ErrNoRows):
+				return false, nil, wrap(err)
+			}
 		}
 		d["sonar_project_key"], d["reason"] = key, r
 		return false, reason(r), auditSonarKey(ctx, q, audit.ActionIngestSonarKeyIgnored, svc, c, d)
@@ -426,13 +439,13 @@ func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, c *Claim
 			}
 			d["cleared_sonar_key_declared"] = cur.SonarKeyDeclared.String
 		}
-		return ignore(SonarKeyOtherService, d)
+		return ignore(SonarKeyOtherService, d, cur.SonarKeyDeclared.Valid)
 	}
 	if cur.SonarProjectKey.Valid {
 		if cur.SonarProjectKey.String == key {
 			return false, nil, nil
 		}
-		return ignore(SonarKeyServiceHasOther, map[string]any{"current_sonar_project_key": cur.SonarProjectKey.String})
+		return ignore(SonarKeyServiceHasOther, map[string]any{"current_sonar_project_key": cur.SonarProjectKey.String}, false)
 	}
 	held, err := q.SonarKeyHeld(ctx, pgtype.Text{String: key, Valid: true})
 	if err != nil {

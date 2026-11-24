@@ -278,25 +278,29 @@ func (q *Queries) LastSonarDeliveryAt(ctx context.Context) (pgtype.Timestamptz, 
 	return last_at, err
 }
 
-const lastSonarKeyIgnored = `-- name: LastSonarKeyIgnored :one
-SELECT (detail->>'reason')::text AS reason, (detail->>'sonar_project_key')::text AS sonar_project_key
+const lastSonarKeyEvent = `-- name: LastSonarKeyEvent :one
+SELECT action, COALESCE(detail->>'reason', '')::text AS reason,
+       COALESCE(detail->>'sonar_project_key', '')::text AS sonar_project_key
 FROM audit_log
-WHERE action = 'ingest.sonar_key_ignored' AND detail->>'id' = $1::text
+WHERE action IN ('ingest.sonar_key_ignored', 'service.updated') AND detail->>'id' = $1::text
 ORDER BY at DESC, id DESC
 LIMIT 1
 `
 
-type LastSonarKeyIgnoredRow struct {
+type LastSonarKeyEventRow struct {
+	Action          string
 	Reason          string
 	SonarProjectKey string
 }
 
-// LastSonarKeyIgnored returns the reason and key of the newest
-// ingest.sonar_key_ignored event of a service.
-func (q *Queries) LastSonarKeyIgnored(ctx context.Context, serviceID string) (LastSonarKeyIgnoredRow, error) {
-	row := q.db.QueryRow(ctx, lastSonarKeyIgnored, serviceID)
-	var i LastSonarKeyIgnoredRow
-	err := row.Scan(&i.Reason, &i.SonarProjectKey)
+// LastSonarKeyEvent returns the newest ingest.sonar_key_ignored or
+// service.updated event of a service, with the reason and key of an ignored
+// one. Any change of the service is a service.updated event, so an ignored
+// key is a new situation again after one.
+func (q *Queries) LastSonarKeyEvent(ctx context.Context, serviceID string) (LastSonarKeyEventRow, error) {
+	row := q.db.QueryRow(ctx, lastSonarKeyEvent, serviceID)
+	var i LastSonarKeyEventRow
+	err := row.Scan(&i.Action, &i.Reason, &i.SonarProjectKey)
 	return i, err
 }
 
@@ -484,21 +488,24 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 }
 
 const lockServiceSonarKey = `-- name: LockServiceSonarKey :one
-SELECT sonar_project_key, sonar_key_declared FROM services WHERE id = $1 FOR UPDATE
+SELECT sonar_project_key, sonar_key_declared, archived FROM services WHERE id = $1 FOR NO KEY UPDATE
 `
 
 type LockServiceSonarKeyRow struct {
 	SonarProjectKey  pgtype.Text
 	SonarKeyDeclared pgtype.Text
+	Archived         bool
 }
 
-// LockServiceSonarKey locks a service row and returns its SonarQube key and
-// declared key, so an upload decides on its declaration while no webhook
-// can link the service.
+// LockServiceSonarKey locks a service row and returns its SonarQube key,
+// declared key and archived flag, so an upload decides on its declaration
+// while no webhook can link the service. FOR NO KEY UPDATE, as only other
+// columns change: rows that reference the service (scans) can still be
+// inserted meanwhile.
 func (q *Queries) LockServiceSonarKey(ctx context.Context, id int64) (LockServiceSonarKeyRow, error) {
 	row := q.db.QueryRow(ctx, lockServiceSonarKey, id)
 	var i LockServiceSonarKeyRow
-	err := row.Scan(&i.SonarProjectKey, &i.SonarKeyDeclared)
+	err := row.Scan(&i.SonarProjectKey, &i.SonarKeyDeclared, &i.Archived)
 	return i, err
 }
 

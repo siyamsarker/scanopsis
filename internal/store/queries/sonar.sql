@@ -43,21 +43,26 @@ WHERE id = $1 AND sonar_project_key IS NULL AND NOT archived
   AND (sonar_key_declared IS NULL OR sonar_key_declared = $2)
 RETURNING gitlab_project_path;
 
--- LockServiceSonarKey locks a service row and returns its SonarQube key and
--- declared key, so an upload decides on its declaration while no webhook
--- can link the service.
+-- LockServiceSonarKey locks a service row and returns its SonarQube key,
+-- declared key and archived flag, so an upload decides on its declaration
+-- while no webhook can link the service. FOR NO KEY UPDATE, as only other
+-- columns change: rows that reference the service (scans) can still be
+-- inserted meanwhile.
 -- name: LockServiceSonarKey :one
-SELECT sonar_project_key, sonar_key_declared FROM services WHERE id = $1 FOR UPDATE;
+SELECT sonar_project_key, sonar_key_declared, archived FROM services WHERE id = $1 FOR NO KEY UPDATE;
 
 -- name: ClearSonarKeyDeclared :exec
 UPDATE services SET sonar_key_declared = NULL, sonar_key_declared_at = NULL WHERE id = $1;
 
--- LastSonarKeyIgnored returns the reason and key of the newest
--- ingest.sonar_key_ignored event of a service.
--- name: LastSonarKeyIgnored :one
-SELECT (detail->>'reason')::text AS reason, (detail->>'sonar_project_key')::text AS sonar_project_key
+-- LastSonarKeyEvent returns the newest ingest.sonar_key_ignored or
+-- service.updated event of a service, with the reason and key of an ignored
+-- one. Any change of the service is a service.updated event, so an ignored
+-- key is a new situation again after one.
+-- name: LastSonarKeyEvent :one
+SELECT action, COALESCE(detail->>'reason', '')::text AS reason,
+       COALESCE(detail->>'sonar_project_key', '')::text AS sonar_project_key
 FROM audit_log
-WHERE action = 'ingest.sonar_key_ignored' AND detail->>'id' = @service_id::text
+WHERE action IN ('ingest.sonar_key_ignored', 'service.updated') AND detail->>'id' = @service_id::text
 ORDER BY at DESC, id DESC
 LIMIT 1;
 
