@@ -163,12 +163,17 @@ exit "$status"
    with 1 if there are any. This is your security gate, built from the report
    you uploaded. The gate looks at vulnerabilities only. To fail the job on
    secrets in the image layers too, add the secret gate of the [central
-   script](#a-central-scan-script-with-separate-jobs): `jq
-   'del(.Results[]?.Vulnerabilities)'` on the report, then `trivy convert
-   --format table --exit-code 1`.
+   script](#a-central-scan-script-with-separate-jobs) after the gate line:
+
+   ```sh
+   jq 'del(.Results[]?.Vulnerabilities)' "$out/$name.json" >"$out/$name.secret.json"
+   trivy convert --format table --exit-code 1 "$out/$name.secret.json" || status=1
+   ```
 4. The secret scan of the repository runs on its own, because secrets have no
-   fix status and must not be filtered by severity. It uploads with
-   `kind=secret-fs`. Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
+   fix status. Its report has every severity, whatever the job sets. The gate
+   that follows is `trivy convert` without `--severity`, so a `TRIVY_SEVERITY`
+   in the job decides which secrets fail it, and without that variable every
+   secret does. It uploads with `kind=secret-fs`. Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
    artifact in Scanopsis, see [How Scanopsis tells artifacts
    apart](#how-scanopsis-tells-artifacts-apart).
 5. The last line, `exit "$status"`, makes the gates and the scans decide the job
@@ -355,10 +360,13 @@ This example does all three. It builds two gates from the one full report: the
 vulnerability gate fails on HIGH and CRITICAL vulnerabilities, unfixed ones
 included, and the secret gate fails on any secret in the image layers. It exits
 with 0 when the job passes and 1 when a gate fails or Trivy cannot scan (2
-means wrong use). Keep the `jq` filters equal to the flags your old script
-used: if its scan used `--ignore-unfixed`, add the filter of step 2
-(`select(.Status == "fixed")`) to the vulnerability gate; if it did not scan
-secrets, drop the secret gate. A `.trivyignore` in the folder the job runs in
+means wrong use). The gates give the same result as a plain `trivy image` scan
+with the job's variables: `trivy convert` does not read `TRIVY_IGNORE_UNFIXED`,
+so the script applies the `select(.Status == "fixed")` filter itself when the
+variable is `true`, and `TRIVY_SEVERITY` reaches the secret gate. Keep the `jq`
+filters equal to the flags your old script used: if it passed
+`--ignore-unfixed` as a flag, not as a variable, add that filter without the
+`case`; if it did not scan secrets, drop the secret gate. A `.trivyignore` in the folder the job runs in
 applies to the gates as it did to the scan.
 
 ```sh
@@ -394,7 +402,11 @@ upload() {
 
 case "${1:-}" in
 image)
-  image=${2:?usage: scan.sh image <image>}
+  if [ -z "${2:-}" ]; then
+    echo "usage: scan.sh image <image> | scan.sh source [folder]" >&2
+    exit 2
+  fi
+  image=$2
   name=$(printf '%s' "$image" | tr '/:@' '___')
   status=0
   # Put your own checks here, for example the age of the vulnerability
@@ -409,11 +421,20 @@ image)
   upload "$out/$name.json" image
 
   # Gate 1, vulnerabilities: fail on HIGH and CRITICAL, unfixed ones included.
+  # trivy convert does not read TRIVY_IGNORE_UNFIXED, which trivy image does,
+  # so a job that sets it to true gets the same effect from the jq filter.
   # A .trivyignore in the current folder is applied by trivy convert too.
-  jq 'del(.Results[]?.Secrets)' "$out/$name.json" >"$out/$name.vuln.json"
+  filter='del(.Results[]?.Secrets)'
+  case "${TRIVY_IGNORE_UNFIXED:-}" in
+  1 | t | T | true | TRUE | True)
+    filter="$filter | (.Results[]? | select(.Vulnerabilities) | .Vulnerabilities) |= map(select(.Status == \"fixed\"))"
+    ;;
+  esac
+  jq "$filter" "$out/$name.json" >"$out/$name.vuln.json"
   trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 "$out/$name.vuln.json" || status=1
   # Gate 2, secrets in the image layers: fail on any secret. No --severity
-  # here, so a TRIVY_SEVERITY of the job applies as it would to a secret scan.
+  # here, so a TRIVY_SEVERITY of the job applies, as it would to a plain
+  # secret scan with trivy image.
   jq 'del(.Results[]?.Vulnerabilities)' "$out/$name.json" >"$out/$name.secret.json"
   trivy convert --format table --exit-code 1 "$out/$name.secret.json" || status=1
   exit "$status"
