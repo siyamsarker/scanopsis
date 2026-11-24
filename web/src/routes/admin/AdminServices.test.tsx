@@ -326,7 +326,7 @@ describe('admin services page', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
     expect(within(dialog).getByLabelText('SonarQube project key')).toHaveValue('');
     expect(within(dialog).getByLabelText('SonarQube project key')).toHaveAccessibleDescription(
-      /Waiting for SonarQube project platform:docs, declared by the pipeline\. Setting a key here, or cancelling, stops waiting for platform:docs\./,
+      /Waiting for SonarQube project platform:docs, declared by the pipeline\. Setting a key here, or choosing Cancel waiting key, stops waiting for platform:docs\./,
     );
   });
 

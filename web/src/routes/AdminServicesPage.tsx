@@ -33,7 +33,7 @@ function SonarLink({ service, known }: { service: Service; known?: Known }) {
   const declared = service.sonar_key_declared ?? null;
   if (key === null && declared) {
     const tip =
-      'The pipeline declared this key in an upload. It is set when a SonarQube analysis of the key names this GitLab project. Setting a key here cancels it.';
+      'The pipeline declared this key in an upload. It is set when a SonarQube analysis of the key names this GitLab project. Setting a key in Edit, or choosing Cancel waiting key there, cancels it.';
     return (
       <span className="flex min-w-0 items-center gap-1.5 text-text-muted">
         <Tooltip content={tip}>

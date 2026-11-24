@@ -290,8 +290,8 @@ function EditDialog({
               <>
                 {' '}
                 Waiting for SonarQube project <span className="font-mono">{waiting}</span>, declared
-                by the pipeline. Setting a key here, or cancelling, stops waiting for{' '}
-                <span className="font-mono">{waiting}</span>.
+                by the pipeline. Setting a key here, or choosing Cancel waiting key, stops waiting
+                for <span className="font-mono">{waiting}</span>.
               </>
             ) : null}
           </p>
