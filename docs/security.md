@@ -96,6 +96,7 @@ Each row names where the control lives, so you can check it in the code.
 | Bounded input | A report may be 64 MiB decompressed and hold 200,000 findings. | `internal/ingest/ingest.go`, `internal/ingest/parse.go` |
 | Bounded work | 60 uploads at once per address, then one a second. Uploads are admitted by the memory they need, from a shared budget; at most a quarter of the database pool stores uploads at once. Each project may upload 100 reports at once, then one every 10 seconds, and each job at most 50 artifacts. See [sizing](deployment.md#sizing). | `internal/ingest/ingest.go`, `cmd/scanopsis/main.go` |
 | No internals in answers | Answers never contain the GitLab URL or an upstream error. Both stay in the server log. | `internal/ingest/token.go`, `internal/ingest/ingest.go` |
+| Declared SonarQube key needs SonarQube | An upload's `sonar_key` is set on the service only when a SonarQube analysis of that key, delivered by the signed webhook within 7 days, names the uploading GitLab project. It never replaces a key and never takes one from another service; until it is confirmed, it waits and blocks other keys. | `internal/ingest/store.go`, `internal/sonar/declared.go` |
 | Report time | A report time in the future is replaced by the server time, so nobody can keep a scan "current" forever. | `internal/ingest/ingest.go` |
 | Audited rejections, with a bound | Rejections go to the audit log with the reason. The ones anyone with a token from your GitLab can cause are recorded at most 10 at once per address, then one a minute, so they cannot flood the log. | `internal/ingest/ingest.go` |
 | Warning when uploads are open | While no namespace is allowed, every project of the GitLab instance may upload, and Scanopsis logs a warning. | `internal/ingest/ingest.go` |
@@ -108,7 +109,7 @@ Each row names where the control lives, so you can check it in the code.
 | Small payload | At most 1 MiB. | `internal/sonar/webhook.go` |
 | One delivery, bounded redelivery | A task ID is processed once. A failed one may be redelivered for the same project only, a minute apart, at most five times. | `internal/store/queries/sonar.sql` |
 | Values come from SonarQube | The webhook only says which project and task. The measures are read from SonarQube with the configured token. | `internal/sonar/webhook.go` |
-| Link by key first | A project key set on a service decides. The `gitlabProjectId` scanner property can only link a service that has no key yet, and never moves a link. An analysis that arrived before its service existed is linked only if the pipeline it names is the pipeline of the service's first upload. | `internal/sonar/webhook.go`, `internal/sonar/relink.go` |
+| Link by key first | A project key set on a service decides. The `gitlabProjectId` scanner property can only link a service that has no key yet, and never moves a link. An analysis that arrived before its service existed is linked only if the pipeline it names is the pipeline of the service's first upload. A key the pipeline declared in its upload (`sonar_key`) is the only one the property can link. | `internal/sonar/webhook.go`, `internal/sonar/relink.go` |
 | No redirects elsewhere | Calls to SonarQube refuse a redirect to another scheme or host, so the token stays put. | `internal/sonar/sonar.go` |
 
 ### Browser and transport
@@ -195,7 +196,14 @@ Each is accepted for the reason given, and each has a way to soften it.
    would otherwise stay without a key. Every link is in the audit log
    (`service.updated`, actor `sonarqube`), and an administrator can change
    it. To rule this out entirely, create each service with its SonarQube key
-   before its first upload.
+   before its first upload, or let the pipeline declare the key in every
+   upload, from the first one on (`sonar_key`, see
+   [link the SonarQube project](integrations/gitlab-ci.md#link-the-sonarqube-project)),
+   with `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"` on the scanner.
+   Then only an analysis of the declared key can link the service by itself, and only
+   once SonarQube delivers one that names the project. What is left is
+   SonarQube's own boundary: a user with the Execute Analysis permission on
+   that key can run such an analysis, and nobody without it can.
 
 3. **An `http` SonarQube URL is allowed.** Internal SonarQube servers often
    have no TLS, but then the token and the results cross the network in clear

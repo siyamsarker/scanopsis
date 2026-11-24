@@ -194,12 +194,12 @@ server starts. The tables:
 | `recovery_codes` | The stored form of each recovery code: an HMAC keyed from the secret key, or the SHA-256 of a code issued by version 0.1.0. Also its version and when it was used. |
 | `settings` | The runtime settings. Plain values are JSON, secret values are encrypted. Each row records whether the value came from the environment or the Settings page, who changed it and when. |
 | `audit_log` | Security events: actor, action and a JSON detail. |
-| `services` | One service per GitLab project: name, GitLab project ID and path, the optional SonarQube project key, how it was created (`ingest` or `manual`), and whether it is archived. |
+| `services` | One service per GitLab project: name, GitLab project ID and path, the optional SonarQube project key, the key its pipeline declared in an upload while it waits for SonarQube to confirm it, how it was created (`ingest` or `manual`), and whether it is archived. |
 | `scans` | One Trivy report for one artifact in one CI job: pipeline, job, ref, whether the ref was protected, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity and of fixable, secret and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`). The artifact is stored twice: `artifact_name` as the report named it (`web-frontend:4`) and `artifact_key`, the identity (see [Artifact identity](#artifact-identity)). A job, reported artifact name and kind exist once per service. |
 | `vulnerabilities` | The vulnerabilities of a scan: target, class, package, installed and fixed version, ID, severity, status, title, link, and whether and why Trivy suppressed it. |
 | `secret_findings` | The secret findings of a scan: target, rule, category, severity and line numbers. The matched text is never stored. |
 | `sonar_analyses` | One SonarQube analysis of a linked service: the quality gate and its conditions, every measure as reported, the mode (`mqr` or `standard`), the normalised ratings, coverage and duplication (empty when not reported). |
-| `sonar_deliveries` | Every webhook delivery, linked or not, with its outcome (`pending`, `linked`, `unlinked`, `failed`), a detail text and the number of attempts. It feeds the Integrations page. |
+| `sonar_deliveries` | Every webhook delivery, linked or not, with its outcome (`pending`, `linked`, `unlinked`, `failed`), a detail text, the number of attempts, and the GitLab project, pipeline and analysis time the analysis names. It feeds the Integrations page and the links described in the [SonarQube guide](integrations/sonarqube.md#step-4-link-projects-to-services). |
 
 Deleting a service deletes its scans, findings and analyses (`ON DELETE
 CASCADE`). Deleting a scan deletes its findings.

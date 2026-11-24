@@ -168,7 +168,7 @@ Use `kind=secret-fs` for a secret scan. Each upload answers `201` with the
 counts it stored. That is your first number to compare:
 
 ```text
-{"scan_id":5,"service_id":4,"service_created":true,"replaced":false,"counts":{"critical":2,"high":44,"medium":58,"low":31,"unknown":3},"fixable":66,"secrets":0,"suppressed":0}
+{"scan_id":5,"service_id":4,"service_created":true,"replaced":false,"counts":{"critical":2,"high":44,"medium":58,"low":31,"unknown":3},"fixable":66,"secrets":0,"suppressed":0,"sonar_key_ignored":null}
 ```
 
 If you get an error, see the [GitLab CI guide](integrations/gitlab-ci.md).
@@ -366,7 +366,7 @@ curl -sS -b jar.txt $URL/api/v1/services/2/overview \
 
 ```text
 {"kind":"secret-fs","artifact_name":".","counts":{"critical":0,"high":0,"medium":0,"low":0,"unknown":0},"fixable":0,"secrets":2,"suppressed":0}
-{"kind":"image","artifact_name":"python:3.9-slim-buster","counts":{"critical":2,"high":44,"medium":58,"low":31,"unknown":3},"fixable":66,"secrets":0,"suppressed":0}
+{"kind":"image","artifact_name":"python:3.9-slim-buster","counts":{"critical":2,"high":44,"medium":58,"low":31,"unknown":3},"fixable":66,"secrets":0,"suppressed":0,"sonar_key_ignored":null}
 ```
 
 Each artifact also has an `artifact_key` (the image name without its tag, or

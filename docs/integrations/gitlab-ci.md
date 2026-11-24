@@ -83,7 +83,8 @@ decides from the same report whether the job fails.
 # to Scanopsis, and fail the job only on fixed HIGH and CRITICAL findings.
 #
 # Needs: trivy, curl, jq, gzip.
-# Variables: SCANOPSIS_URL, SCANOPSIS_ID_TOKEN (from id_tokens), IMAGES (space separated).
+# Variables: SCANOPSIS_URL, SCANOPSIS_ID_TOKEN (from id_tokens), IMAGES (space
+# separated), and SONAR_PROJECT_KEY if the project has a SonarQube analysis.
 set -u
 status=0
 out=scanopsis-out
@@ -108,6 +109,7 @@ upload() {
   rm -f "$out/response.json"
   url="$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2"
   [ -n "${3:-}" ] && url="$url&artifact=$3"
+  [ -n "${SONAR_PROJECT_KEY:-}" ] && url="$url&sonar_key=$SONAR_PROJECT_KEY"
   code=$(curl -sS --max-time 120 --retry 8 "$retry" --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
@@ -258,7 +260,7 @@ The job log looks like this (the table is shortened):
 ```console
 $ sh ci/scan.sh
 scanopsis: upload of scanopsis-out/alpine_3.17.0.json returned HTTP 201
-{"scan_id":1,"service_id":1,"service_created":true,"replaced":false,"counts":{"critical":0,"high":26,"medium":40,"low":26,"unknown":0},"fixable":92,"secrets":0,"suppressed":0}
+{"scan_id":1,"service_id":1,"service_created":true,"replaced":false,"counts":{"critical":0,"high":26,"medium":40,"low":26,"unknown":0},"fixable":92,"secrets":0,"suppressed":0,"sonar_key_ignored":null}
 2026-11-22T17:14:37+06:00  WARN  [report] No enabled scanners found. Summary table will not be displayed.
 
 alpine:3.17.0 (alpine 3.17.0)
@@ -266,7 +268,7 @@ alpine:3.17.0 (alpine 3.17.0)
 Total: 26 (HIGH: 26, CRITICAL: 0)
 ...
 scanopsis: upload of scanopsis-out/secrets.json returned HTTP 201
-{"scan_id":2,"service_id":1,"service_created":false,"replaced":false,"counts":{"critical":0,"high":0,"medium":0,"low":0,"unknown":0},"fixable":0,"secrets":2,"suppressed":0}
+{"scan_id":2,"service_id":1,"service_created":false,"replaced":false,"counts":{"critical":0,"high":0,"medium":0,"low":0,"unknown":0},"fixable":0,"secrets":2,"suppressed":0,"sonar_key_ignored":null}
 2026-11-22T17:14:38+06:00  WARN  [report] No enabled scanners found. Summary table will not be displayed.
 
 config.env (secrets)
@@ -288,6 +290,7 @@ How to read the `201` answer:
 | `suppressed` | Findings your ignore file or VEX documents hid. |
 | `service_created` | `true` when this upload created the service. |
 | `replaced` | `true` when an earlier upload of the same job, reported name and kind was replaced. Retrying a job never duplicates data. |
+| `sonar_key_ignored` | `null`, unless the upload declared a SonarQube key that was not set on the service, see [link the SonarQube project](#link-the-sonarqube-project). |
 
 ## How Scanopsis tells artifacts apart
 
@@ -355,6 +358,52 @@ or `release`, choose that branch. A dashboard that follows the most recent scan
 works too, but a fixed branch keeps the numbers from jumping when another
 branch uploads.
 
+## Link the SonarQube project
+
+If the project also has a SonarQube analysis, the upload can tell Scanopsis
+its SonarQube project key, so the service shows the analysis without an
+administrator's step. Many pipelines already keep the key in a variable for
+the analysis job. Put it at the top of `.gitlab-ci.yml`, so that every job has
+it, and pass the GitLab project ID to the scanner (example):
+
+```yaml
+variables:
+  SONAR_PROJECT_KEY: platform:payments-api
+
+sonarqube-check:
+  stage: test
+  script:
+    - >
+      sonar-scanner
+      -Dsonar.projectKey="$SONAR_PROJECT_KEY"
+      -Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"
+      -Dsonar.analysis.pipelineId="$CI_PIPELINE_ID"
+```
+
+The scripts on this page send `SONAR_PROJECT_KEY` with each upload as
+`sonar_key`. Without the variable they send nothing, and nothing changes.
+
+The CI token proves which GitLab project uploads, not that the SonarQube
+project belongs to it. So SonarQube must confirm the key: Scanopsis sets it on
+the service only when an analysis of that key names the same GitLab project in
+`sonar.analysis.gitlabProjectId` and reaches Scanopsis through the webhook.
+The order does not matter. An analysis from the last 7 days confirms the key at
+the upload; otherwise the key waits on the service, and the next such analysis
+sets it. Only a SonarQube user who may run analyses of the project can cause
+one. The [SonarQube guide](sonarqube.md#link-from-the-upload) has the details.
+
+The upload is stored in every case. Its answer says what became of the key:
+
+| `sonar_key_ignored` | Meaning | What to do |
+| --- | --- | --- |
+| `null` | The key is set on the service now, or was already. Or the upload declared no key. | Nothing. |
+| `sonar_key_pending` | No analysis of the key that names this GitLab project arrived in the last 7 days. The key waits on the service. | Nothing, if the analysis passes `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`: its webhook sets the key. Otherwise add the property. |
+| `key_linked_to_other_service` | Another service, maybe an archived one, has this key. | Check `SONAR_PROJECT_KEY`. If the key is right, an administrator frees it on the other service. |
+| `service_has_other_key` | The service is linked to another SonarQube project. Scanopsis keeps that link. | If the project was renamed, an administrator changes the key on the Services page. |
+
+The last two are written to the audit log as `ingest.sonar_key_ignored`, with
+the declared key, and to the server log as a warning.
+
 ## A central scan script with separate jobs
 
 Many teams keep one scan script for all projects, for example in
@@ -403,7 +452,8 @@ applies to the gates as it did to the scan.
 #   scan.sh source [folder]               scan a folder (default: .) for secrets
 #
 # Needs: trivy, curl, jq, gzip. Variables from the job: SCANOPSIS_URL and
-# SCANOPSIS_ID_TOKEN (from id_tokens).
+# SCANOPSIS_ID_TOKEN (from id_tokens); SONAR_PROJECT_KEY if the project has
+# a SonarQube analysis.
 # Exit codes: 0 passed, 1 a gate failed, 2 Trivy could not scan or wrong use.
 # A problem with the upload never changes the exit code.
 set -u
@@ -424,13 +474,15 @@ curl --retry-all-errors --version >/dev/null 2>&1 || retry=--retry-connrefused
 upload() {
   gzip -c "$1" >"$1.gz"
   rm -f "$out/response.json"
+  url="$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2"
+  [ -n "${SONAR_PROJECT_KEY:-}" ] && url="$url&sonar_key=$SONAR_PROJECT_KEY"
   code=$(curl -sS --max-time 120 --retry 8 "$retry" --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
     -H 'Content-Encoding: gzip' \
     --data-binary @"$1.gz" \
     -o "$out/response.json" -w '%{http_code}' \
-    "$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2") || code=000
+    "$url") || code=000
   echo "scanopsis: upload of $1 returned HTTP $code"
   [ -s "$out/response.json" ] && cat "$out/response.json"
   return 0
@@ -721,6 +773,8 @@ job again.
 | `400` `invalid_report`: `The body is not a complete, valid gzip stream.` | `Content-Encoding: gzip` was sent with data that is not gzip, or the file was cut off. | Compress with `gzip -c`, or drop the header. |
 | `400` `invalid_parameter`: `kind must be image or secret-fs.` | The `kind` parameter has another value. | Use `kind=image` for `trivy image` and `kind=secret-fs` for the secret scan. |
 | `400` `invalid_parameter`: `artifact must be 1 to 200 printable characters: no control characters, no non-ASCII spaces, and not only spaces.` | The optional `artifact` parameter is empty, only spaces, longer than 200 characters, or holds a control character or a non-ASCII space such as a no-break space. | Use a plain name, see [keep two variants apart](#keep-two-variants-apart). |
+| `400` `invalid_parameter`: `sonar_key must be a SonarQube project key: 1 to 400 characters, only ASCII letters, digits, '-', '_', '.' and ':', and at least one that is not a digit.` | `SONAR_PROJECT_KEY` holds something that cannot be a SonarQube project key, for example a space or a `/`. | Use the key exactly as `sonar.projectKey` has it. |
+| `201` with `"sonar_key_ignored":"sonar_key_pending"` (or another value) | The scan is stored; the declared SonarQube key was not set by this upload. | See [link the SonarQube project](#link-the-sonarqube-project). |
 | `422` `not_a_trivy_report`: `This is not a Trivy JSON report (SchemaVersion 2): SchemaVersion is missing` (or `SchemaVersion 1 is not supported, only 2 is`) | The file is not a Trivy JSON report, or has an old schema. | Create it with `--format json` from Trivy 0.50 or later. |
 | `413` `report_too_large`: `The report is larger than the limit of 67108864 bytes (decompressed).` | The report is above 64 MiB after decompression. The limit is fixed. | Scan fewer targets per report, for example one report per image. |
 | `413` `report_too_large`: `The report has too many findings: at most 200000 vulnerabilities and secrets (suppressed ones included) are accepted.` | The report holds more than 200,000 findings. | Split the scan, for example one report per image. |
