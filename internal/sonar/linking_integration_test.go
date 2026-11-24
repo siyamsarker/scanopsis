@@ -86,7 +86,7 @@ func TestWebhookPinConflict(t *testing.T) {
 	wantStatus(t, e, hook("task-c", "shared:key", map[string]any{"properties": props}), 202)
 	e.drain(t, 1)
 	d := e.delivery(t, "task-c")
-	want := `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "shared:key" because the service or the key is already linked.`
+	want := `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "shared:key" because the service or the key is already linked, or the service's pipeline declared another key in an upload.`
 	if d.Outcome != "unlinked" || d.Detail != want {
 		t.Errorf("delivery: %+v", d)
 	}

@@ -7,8 +7,13 @@ package sonar
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
 // After the pipeline's upload declared the key of its service, the
@@ -202,5 +207,110 @@ func TestPendingDeclarationBlocksLinkWaiting(t *testing.T) {
 	}
 	if d := e2.delivery(t, "task-planted"); d.Outcome != "unlinked" {
 		t.Errorf("planted: %+v", d)
+	}
+}
+
+// adminSetKey sets or, with "", clears the SonarQube key as an administrator
+// does through the service API.
+func (e *env) adminSetKey(t *testing.T, sid int64, key string) {
+	t.Helper()
+	arg := store.UpdateServiceParams{ID: sid, SetSonarKey: true}
+	if key != "" {
+		arg.SonarProjectKey = pgtype.Text{String: key, Valid: true}
+	}
+	if _, err := e.q.UpdateService(context.Background(), arg); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An administrator's key wins over a pending declaration: after the
+// administrator set a key and cleared it again, the declaration no longer
+// blocks the link by the scanner property, and a later link of the once
+// declared key is audited as a plain property link, not as a confirmed
+// declaration.
+func TestAdminKeyClearsDeclaration(t *testing.T) {
+	for _, key := range []string{"other:project", "demo:orders-api"} {
+		t.Run(key, func(t *testing.T) {
+			e := newEnv(t)
+			e.project(key)
+			sid := e.service(t, "demo/orders-api", 7, "")
+			e.declare(t, sid, "demo:orders-api")
+			e.adminSetKey(t, sid, "demo:orders-y")
+			e.adminSetKey(t, sid, "")
+
+			wantStatus(t, e, hook("task-x", key, claims("7", "1001")), 202)
+			e.drain(t, 1)
+			if d := e.delivery(t, "task-x"); d.Outcome != "linked" || d.ServiceID.Int64 != sid {
+				t.Errorf("delivery: %+v", d)
+			}
+			if k, _ := e.serviceKey(t, sid); k != key {
+				t.Errorf("key %q, want %q", k, key)
+			}
+			got := e.audits(t)
+			if len(got) != 1 || got[0]["detail"].(map[string]any)["reason"] != "linked by the sonar.analysis.gitlabProjectId scanner property" {
+				t.Errorf("audit events: %v", got)
+			}
+		})
+	}
+}
+
+// A declaration committed after a webhook read the service, but before it
+// pinned the key, still wins: the pin of another key is refused under the
+// row lock, and the delivery says so.
+func TestDeclarationWinsRaceWithWebhookPin(t *testing.T) {
+	e := newEnv(t)
+	e.project("evil:project")
+	sid := e.service(t, "demo/orders-api", 7, "")
+	p := webhookPayload{TaskID: "task-x", Status: "SUCCESS"}
+	p.Project.Key = "evil:project"
+	p.Properties = map[string]string{"sonar.analysis.gitlabProjectId": "7"}
+	l, err := e.s.linkService(context.Background(), p)
+	if err != nil || !l.Pin || l.ServiceID != sid {
+		t.Fatalf("link %+v %v", l, err)
+	}
+	e.declare(t, sid, "demo:orders-api") // the upload commits now
+	err = e.s.save(context.Background(), snapshot{ServiceID: sid, TaskID: "task-x", AnalysedAt: analysisTime, Conditions: []Condition{}}, "evil:project")
+	if !errors.Is(err, errPinConflict) {
+		t.Fatalf("save = %v, want the pin conflict", err)
+	}
+	e.noneLinked(t, sid)
+	if a := e.analyses(t, sid); len(a) != 0 {
+		t.Errorf("analysis stored: %+v", a)
+	}
+
+	// The same for the link of a waiting analysis.
+	wantStatus(t, e, hook("task-w", "evil:project", claims("8", "1001")), 202)
+	e.drain(t, 1)
+	other := e.service(t, "demo/billing", 8, "")
+	w := waiting{serviceID: other, project: pgtype.Int8{Int64: 8, Valid: true}, pipeline: pgtype.Int8{Int64: 1001, Valid: true},
+		since: pgtype.Timestamptz{Time: time.Now().Add(-time.Hour), Valid: true}}
+	e.declare(t, other, "demo:billing")
+	if err := e.s.pinWaiting(context.Background(), w, store.WaitingSonarKeysRow{ProjectKey: "evil:project", TaskID: "task-w"}); !errors.Is(err, errServiceTaken) {
+		t.Fatalf("pinWaiting = %v, want refused", err)
+	}
+	e.noneLinked(t, other)
+}
+
+// The declared key is found among any number of waiting keys of the
+// pipeline, not only among the first two.
+func TestLinkWaitingFindsDeclaredAmongMany(t *testing.T) {
+	e := newEnv(t)
+	for _, k := range []string{"a:one", "b:two", "z:declared"} {
+		e.project(k)
+		wantStatus(t, e, hook("task-"+k, k, claims("7", "1001")), 202)
+	}
+	e.drain(t, 3)
+	sid := e.service(t, "demo/orders-api", 7, "")
+	e.declare(t, sid, "z:declared")
+	if err := e.s.LinkWaiting(context.Background(), sid, 7, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if k, _ := e.serviceKey(t, sid); k != "z:declared" {
+		t.Errorf("key %q", k)
+	}
+	for _, k := range []string{"a:one", "b:two"} {
+		if d := e.delivery(t, "task-"+k); d.Outcome != "unlinked" {
+			t.Errorf("%s: %+v", k, d)
+		}
 	}
 }

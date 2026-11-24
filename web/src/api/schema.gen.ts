@@ -1280,6 +1280,13 @@ export interface components {
             created_at: string;
             /** @description The branch (ref) an administrator chose for the dashboards of this service. null when none was chosen; the dashboards then show the ref with the most recent scan. The ref need not have scans yet. */
             default_ref: string | null;
+            /** @description The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it. Given by the service endpoints (list, get, create, update) only. */
+            readonly sonar_key_declared?: string | null;
+            /**
+             * Format: date-time
+             * @description When the waiting sonar_key_declared was declared; null when none waits. Given by the service endpoints only.
+             */
+            readonly sonar_key_declared_at?: string | null;
         };
         ServicePage: {
             items: components["schemas"]["Service"][];
@@ -1295,7 +1302,7 @@ export interface components {
         };
         ServiceUpdate: {
             name?: string;
-            /** @description null unlinks. */
+            /** @description null unlinks. Setting or clearing the key also clears a key the service's pipeline declared that waits for confirmation (sonar_key_declared). */
             sonar_project_key?: string | null;
             archived?: boolean;
             /** @description Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet. */

@@ -19,6 +19,9 @@ WHERE id = @id AND sonar_key_declared IS DISTINCT FROM @key::text;
 -- (the window of the waiting deliveries), an analysis of a key that names a
 -- GitLab project in its gitlabProjectId scanner property. Only a SonarQube
 -- user with the Execute Analysis permission on the project can cause one.
+-- Every outcome counts, failed ones too: the delivery passed the webhook
+-- signature, so SonarQube itself sent the claim, whatever became of the
+-- analysis or of its processing here.
 -- name: SonarKeyConfirmed :one
 SELECT EXISTS (
     SELECT 1 FROM sonar_deliveries
@@ -30,11 +33,33 @@ SELECT EXISTS (
 SELECT id FROM services WHERE sonar_project_key = $1 AND NOT archived;
 
 -- PinSonarKey links an unlinked service to a SonarQube project; zero rows
--- mean (pgx.ErrNoRows) the service was linked in the meantime. It returns the project path.
+-- mean (pgx.ErrNoRows) the service was linked or archived in the meantime,
+-- or its pipeline declared another key in an upload. It returns the project
+-- path. The declaration is checked here, under the row lock, so a
+-- declaration committed after the caller read the service still wins.
 -- name: PinSonarKey :one
 UPDATE services SET sonar_project_key = $2
 WHERE id = $1 AND sonar_project_key IS NULL AND NOT archived
+  AND (sonar_key_declared IS NULL OR sonar_key_declared = $2)
 RETURNING gitlab_project_path;
+
+-- LockServiceSonarKey locks a service row and returns its SonarQube key and
+-- declared key, so an upload decides on its declaration while no webhook
+-- can link the service.
+-- name: LockServiceSonarKey :one
+SELECT sonar_project_key, sonar_key_declared FROM services WHERE id = $1 FOR UPDATE;
+
+-- name: ClearSonarKeyDeclared :exec
+UPDATE services SET sonar_key_declared = NULL, sonar_key_declared_at = NULL WHERE id = $1;
+
+-- LastSonarKeyIgnored returns the reason and key of the newest
+-- ingest.sonar_key_ignored event of a service.
+-- name: LastSonarKeyIgnored :one
+SELECT (detail->>'reason')::text AS reason, (detail->>'sonar_project_key')::text AS sonar_project_key
+FROM audit_log
+WHERE action = 'ingest.sonar_key_ignored' AND detail->>'id' = @service_id::text
+ORDER BY at DESC, id DESC
+LIMIT 1;
 
 -- name: SonarServiceKey :one
 SELECT sonar_project_key FROM services WHERE id = $1;
@@ -123,6 +148,17 @@ WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
 GROUP BY project_key
 ORDER BY project_key
 LIMIT 2;
+
+-- WaitingSonarKeyOf is WaitingSonarKeys for one SonarQube project: its
+-- newest waiting task and the analysedAt it delivered.
+-- name: WaitingSonarKeyOf :one
+SELECT project_key, task_id, analysed_at
+FROM sonar_deliveries
+WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
+  AND claimed_project_id = @claimed_project_id AND claimed_pipeline_id = @claimed_pipeline_id
+  AND project_key = @project_key
+ORDER BY received_at DESC, id DESC
+LIMIT 1;
 
 -- LinkWaitingSonarDeliveries marks those waiting deliveries of one project
 -- key linked to the service.

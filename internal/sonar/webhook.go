@@ -424,7 +424,7 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 	switch err := s.save(ctx, a, pin); {
 	case errors.Is(err, errPinConflict):
 		s.finish(ctx, p.TaskID, outcomeUnlinked, nil, fmt.Sprintf(
-			"The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project %q because the service or the key is already linked.", p.Project.Key))
+			"The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project %q because the service or the key is already linked, or the service's pipeline declared another key in an upload.", p.Project.Key))
 		return
 	case err != nil:
 		fail(&sid, "Storing the analysis failed; see the server log.", err)

@@ -1497,6 +1497,8 @@ components:
         archived: { type: boolean }
         created_at: { type: string, format: date-time }
         default_ref: { type: [string, "null"], description: "The branch (ref) an administrator chose for the dashboards of this service. null when none was chosen; the dashboards then show the ref with the most recent scan. The ref need not have scans yet." }
+        sonar_key_declared: { type: [string, "null"], readOnly: true, description: "The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it. Given by the service endpoints (list, get, create, update) only." }
+        sonar_key_declared_at: { type: [string, "null"], format: date-time, readOnly: true, description: "When the waiting sonar_key_declared was declared; null when none waits. Given by the service endpoints only." }
     ServicePage:
       type: object
       required: [items, next_after]
@@ -1516,7 +1518,7 @@ components:
       additionalProperties: false
       properties:
         name: { type: string, minLength: 1, maxLength: 200 }
-        sonar_project_key: { type: [string, "null"], maxLength: 400, description: null unlinks. }
+        sonar_project_key: { type: [string, "null"], maxLength: 400, description: "null unlinks. Setting or clearing the key also clears a key the service's pipeline declared that waits for confirmation (sonar_key_declared)." }
         archived: { type: boolean }
         default_ref: { type: [string, "null"], minLength: 1, maxLength: 255, description: "Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet." }
     ScanSummary:

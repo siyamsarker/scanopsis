@@ -261,11 +261,14 @@ const updateService = `-- name: UpdateService :one
 UPDATE services SET
     name = COALESCE($1, services.name),
     sonar_project_key = CASE WHEN $2::boolean THEN $3 ELSE services.sonar_project_key END,
+    sonar_key_declared = CASE WHEN $2::boolean THEN NULL ELSE services.sonar_key_declared END,
+    sonar_key_declared_at = CASE WHEN $2::boolean THEN NULL ELSE services.sonar_key_declared_at END,
     archived = COALESCE($4, services.archived),
     default_ref = CASE WHEN $5::boolean THEN $6 ELSE services.default_ref END
-FROM (SELECT p.id, p.default_ref FROM services p WHERE p.id = $7 FOR UPDATE) old
+FROM (SELECT p.id, p.default_ref, p.sonar_key_declared FROM services p WHERE p.id = $7 FOR UPDATE) old
 WHERE services.id = old.id
-RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, services.default_ref, services.sonar_key_declared, services.sonar_key_declared_at, old.default_ref AS previous_default_ref
+RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, services.default_ref, services.sonar_key_declared, services.sonar_key_declared_at, old.default_ref AS previous_default_ref,
+          old.sonar_key_declared AS previous_sonar_key_declared
 `
 
 type UpdateServiceParams struct {
@@ -279,12 +282,16 @@ type UpdateServiceParams struct {
 }
 
 type UpdateServiceRow struct {
-	Service            Service
-	PreviousDefaultRef pgtype.Text
+	Service                  Service
+	PreviousDefaultRef       pgtype.Text
+	PreviousSonarKeyDeclared pgtype.Text
 }
 
 // UpdateService applies the given changes and also returns the previous
-// default ref, read under the same row lock, for the audit event.
+// default ref and declared SonarQube key, read under the same row lock, for
+// the audit event. An administrator who sets or clears the SonarQube key
+// also clears the key the service's pipeline declared: the administrator's
+// choice wins.
 func (q *Queries) UpdateService(ctx context.Context, arg UpdateServiceParams) (UpdateServiceRow, error) {
 	row := q.db.QueryRow(ctx, updateService,
 		arg.Name,
@@ -309,6 +316,7 @@ func (q *Queries) UpdateService(ctx context.Context, arg UpdateServiceParams) (U
 		&i.Service.SonarKeyDeclared,
 		&i.Service.SonarKeyDeclaredAt,
 		&i.PreviousDefaultRef,
+		&i.PreviousSonarKeyDeclared,
 	)
 	return i, err
 }

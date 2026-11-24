@@ -82,6 +82,11 @@ type serviceJSON struct {
 	Archived          bool      `json:"archived"`
 	CreatedAt         time.Time `json:"created_at"`
 	DefaultRef        *string   `json:"default_ref"`
+	// SonarKeyDeclared is the SonarQube key the service's pipeline declared
+	// in an upload, still waiting for SonarQube to confirm it, and since
+	// when. Read only.
+	SonarKeyDeclared   *string    `json:"sonar_key_declared"`
+	SonarKeyDeclaredAt *time.Time `json:"sonar_key_declared_at"`
 }
 
 func toService(s store.Service) serviceJSON {
@@ -97,6 +102,14 @@ func toService(s store.Service) serviceJSON {
 	}
 	if s.DefaultRef.Valid {
 		out.DefaultRef = &s.DefaultRef.String
+	}
+	// A confirmed declaration became the key; only a pending one is shown.
+	if s.SonarKeyDeclared.Valid && !s.SonarProjectKey.Valid {
+		out.SonarKeyDeclared = &s.SonarKeyDeclared.String
+		if s.SonarKeyDeclaredAt.Valid {
+			at := s.SonarKeyDeclaredAt.Time.UTC()
+			out.SonarKeyDeclaredAt = &at
+		}
 	}
 	return out
 }
@@ -336,6 +349,10 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		detail["default_ref"] = map[string]any{
 			"from": textOrNil(row.PreviousDefaultRef), "to": textOrNil(s.DefaultRef),
 		}
+	}
+	if in.Key.set && row.PreviousSonarKeyDeclared.Valid {
+		// The administrator's key replaces the one the pipeline declared.
+		detail["cleared_sonar_key_declared"] = row.PreviousSonarKeyDeclared.String
 	}
 	c.audit.Record(r.Context(), c.actor(r.Context()), audit.ActionServiceUpdated, detail)
 	httpapi.WriteJSON(w, http.StatusOK, toService(s))

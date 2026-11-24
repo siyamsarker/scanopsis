@@ -11,6 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearSonarKeyDeclared = `-- name: ClearSonarKeyDeclared :exec
+UPDATE services SET sonar_key_declared = NULL, sonar_key_declared_at = NULL WHERE id = $1
+`
+
+func (q *Queries) ClearSonarKeyDeclared(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, clearSonarKeyDeclared, id)
+	return err
+}
+
 const declareSonarKey = `-- name: DeclareSonarKey :execrows
 UPDATE services SET sonar_key_declared = $1::text, sonar_key_declared_at = $2::timestamptz
 WHERE id = $3 AND sonar_key_declared IS DISTINCT FROM $1::text
@@ -269,6 +278,28 @@ func (q *Queries) LastSonarDeliveryAt(ctx context.Context) (pgtype.Timestamptz, 
 	return last_at, err
 }
 
+const lastSonarKeyIgnored = `-- name: LastSonarKeyIgnored :one
+SELECT (detail->>'reason')::text AS reason, (detail->>'sonar_project_key')::text AS sonar_project_key
+FROM audit_log
+WHERE action = 'ingest.sonar_key_ignored' AND detail->>'id' = $1::text
+ORDER BY at DESC, id DESC
+LIMIT 1
+`
+
+type LastSonarKeyIgnoredRow struct {
+	Reason          string
+	SonarProjectKey string
+}
+
+// LastSonarKeyIgnored returns the reason and key of the newest
+// ingest.sonar_key_ignored event of a service.
+func (q *Queries) LastSonarKeyIgnored(ctx context.Context, serviceID string) (LastSonarKeyIgnoredRow, error) {
+	row := q.db.QueryRow(ctx, lastSonarKeyIgnored, serviceID)
+	var i LastSonarKeyIgnoredRow
+	err := row.Scan(&i.Reason, &i.SonarProjectKey)
+	return i, err
+}
+
 const linkSonarDeliveriesOfKey = `-- name: LinkSonarDeliveriesOfKey :many
 UPDATE sonar_deliveries
 SET outcome = 'linked', service_id = $1, detail = $2::text
@@ -452,9 +483,29 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 	return items, nil
 }
 
+const lockServiceSonarKey = `-- name: LockServiceSonarKey :one
+SELECT sonar_project_key, sonar_key_declared FROM services WHERE id = $1 FOR UPDATE
+`
+
+type LockServiceSonarKeyRow struct {
+	SonarProjectKey  pgtype.Text
+	SonarKeyDeclared pgtype.Text
+}
+
+// LockServiceSonarKey locks a service row and returns its SonarQube key and
+// declared key, so an upload decides on its declaration while no webhook
+// can link the service.
+func (q *Queries) LockServiceSonarKey(ctx context.Context, id int64) (LockServiceSonarKeyRow, error) {
+	row := q.db.QueryRow(ctx, lockServiceSonarKey, id)
+	var i LockServiceSonarKeyRow
+	err := row.Scan(&i.SonarProjectKey, &i.SonarKeyDeclared)
+	return i, err
+}
+
 const pinSonarKey = `-- name: PinSonarKey :one
 UPDATE services SET sonar_project_key = $2
 WHERE id = $1 AND sonar_project_key IS NULL AND NOT archived
+  AND (sonar_key_declared IS NULL OR sonar_key_declared = $2)
 RETURNING gitlab_project_path
 `
 
@@ -464,7 +515,10 @@ type PinSonarKeyParams struct {
 }
 
 // PinSonarKey links an unlinked service to a SonarQube project; zero rows
-// mean (pgx.ErrNoRows) the service was linked in the meantime. It returns the project path.
+// mean (pgx.ErrNoRows) the service was linked or archived in the meantime,
+// or its pipeline declared another key in an upload. It returns the project
+// path. The declaration is checked here, under the row lock, so a
+// declaration committed after the caller read the service still wins.
 func (q *Queries) PinSonarKey(ctx context.Context, arg PinSonarKeyParams) (string, error) {
 	row := q.db.QueryRow(ctx, pinSonarKey, arg.ID, arg.SonarProjectKey)
 	var gitlab_project_path string
@@ -545,6 +599,9 @@ type SonarKeyConfirmedParams struct {
 // (the window of the waiting deliveries), an analysis of a key that names a
 // GitLab project in its gitlabProjectId scanner property. Only a SonarQube
 // user with the Execute Analysis permission on the project can cause one.
+// Every outcome counts, failed ones too: the delivery passed the webhook
+// signature, so SonarQube itself sent the claim, whatever became of the
+// analysis or of its processing here.
 func (q *Queries) SonarKeyConfirmed(ctx context.Context, arg SonarKeyConfirmedParams) (bool, error) {
 	row := q.db.QueryRow(ctx, sonarKeyConfirmed, arg.ProjectKey, arg.ClaimedProjectID)
 	var confirmed bool
@@ -637,6 +694,43 @@ func (q *Queries) SonarServiceKey(ctx context.Context, id int64) (pgtype.Text, e
 	var sonar_project_key pgtype.Text
 	err := row.Scan(&sonar_project_key)
 	return sonar_project_key, err
+}
+
+const waitingSonarKeyOf = `-- name: WaitingSonarKeyOf :one
+SELECT project_key, task_id, analysed_at
+FROM sonar_deliveries
+WHERE outcome = 'unlinked' AND received_at >= $1::timestamptz
+  AND claimed_project_id = $2 AND claimed_pipeline_id = $3
+  AND project_key = $4
+ORDER BY received_at DESC, id DESC
+LIMIT 1
+`
+
+type WaitingSonarKeyOfParams struct {
+	Since             pgtype.Timestamptz
+	ClaimedProjectID  pgtype.Int8
+	ClaimedPipelineID pgtype.Int8
+	ProjectKey        string
+}
+
+type WaitingSonarKeyOfRow struct {
+	ProjectKey string
+	TaskID     string
+	AnalysedAt pgtype.Timestamptz
+}
+
+// WaitingSonarKeyOf is WaitingSonarKeys for one SonarQube project: its
+// newest waiting task and the analysedAt it delivered.
+func (q *Queries) WaitingSonarKeyOf(ctx context.Context, arg WaitingSonarKeyOfParams) (WaitingSonarKeyOfRow, error) {
+	row := q.db.QueryRow(ctx, waitingSonarKeyOf,
+		arg.Since,
+		arg.ClaimedProjectID,
+		arg.ClaimedPipelineID,
+		arg.ProjectKey,
+	)
+	var i WaitingSonarKeyOfRow
+	err := row.Scan(&i.ProjectKey, &i.TaskID, &i.AnalysedAt)
+	return i, err
 }
 
 const waitingSonarKeys = `-- name: WaitingSonarKeys :many

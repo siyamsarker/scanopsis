@@ -23,16 +23,22 @@ RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
           created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at;
 
 -- UpdateService applies the given changes and also returns the previous
--- default ref, read under the same row lock, for the audit event.
+-- default ref and declared SonarQube key, read under the same row lock, for
+-- the audit event. An administrator who sets or clears the SonarQube key
+-- also clears the key the service's pipeline declared: the administrator's
+-- choice wins.
 -- name: UpdateService :one
 UPDATE services SET
     name = COALESCE(sqlc.narg(name), services.name),
     sonar_project_key = CASE WHEN @set_sonar_key::boolean THEN sqlc.narg(sonar_project_key) ELSE services.sonar_project_key END,
+    sonar_key_declared = CASE WHEN @set_sonar_key::boolean THEN NULL ELSE services.sonar_key_declared END,
+    sonar_key_declared_at = CASE WHEN @set_sonar_key::boolean THEN NULL ELSE services.sonar_key_declared_at END,
     archived = COALESCE(sqlc.narg(archived), services.archived),
     default_ref = CASE WHEN @set_default_ref::boolean THEN sqlc.narg(default_ref) ELSE services.default_ref END
-FROM (SELECT p.id, p.default_ref FROM services p WHERE p.id = @id FOR UPDATE) old
+FROM (SELECT p.id, p.default_ref, p.sonar_key_declared FROM services p WHERE p.id = @id FOR UPDATE) old
 WHERE services.id = old.id
-RETURNING sqlc.embed(services), old.default_ref AS previous_default_ref;
+RETURNING sqlc.embed(services), old.default_ref AS previous_default_ref,
+          old.sonar_key_declared AS previous_sonar_key_declared;
 
 -- name: DeleteService :one
 DELETE FROM services WHERE id = $1 RETURNING gitlab_project_path;

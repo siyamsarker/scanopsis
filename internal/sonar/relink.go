@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"time"
 
@@ -75,14 +74,21 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 	}
 	if d := svc.SonarKeyDeclared; d.Valid && len(keys) > 0 {
 		// The pipeline declared the key in an upload: only that key is
-		// linked, and the waiting analysis confirms it.
-		i := slices.IndexFunc(keys, func(k store.WaitingSonarKeysRow) bool { return k.ProjectKey == d.String })
-		if i < 0 {
+		// linked, and the waiting analysis confirms it. It is looked up by
+		// itself, as keys holds at most two of the waiting keys.
+		k, err := s.q.WaitingSonarKeyOf(ctx, store.WaitingSonarKeyOfParams{
+			Since: w.since, ClaimedProjectID: w.project, ClaimedPipelineID: w.pipeline, ProjectKey: d.String,
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
 			return s.explainWaiting(ctx, w, fmt.Sprintf(
 				"The service of GitLab project %d waits for SonarQube project %q, the key its pipeline declared in an upload, so this analysis was not linked to it. An administrator can set the SonarQube key on the service.",
 				gitlabProjectID, d.String))
 		}
-		keys, w.reason = keys[i:i+1], audit.ReasonSonarKeyConfirmed
+		if err != nil {
+			return err
+		}
+		keys = []store.WaitingSonarKeysRow{{ProjectKey: k.ProjectKey, TaskID: k.TaskID, AnalysedAt: k.AnalysedAt}}
+		w.reason = audit.ReasonSonarKeyConfirmed
 	}
 	switch {
 	case len(keys) == 0:

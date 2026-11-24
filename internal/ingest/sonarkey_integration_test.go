@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -268,5 +269,125 @@ func TestIntegrationSonarKeyIgnored(t *testing.T) {
 				t.Errorf("linker called: waiting %v declared %v", l.got(), l.gotDeclared())
 			}
 		})
+	}
+}
+
+// A pending declaration whose key another service has taken meanwhile is
+// dropped by the project's next upload that declares it, so it stops
+// blocking the links by the scanner properties; the event says so.
+func TestIntegrationSonarKeyTakenClearsDeclaration(t *testing.T) {
+	e := newIEnv(t, nil)
+	code, res := e.uploadRaw(upload{body: sonarKeyBody, query: "?sonar_key=platform:payments-api"})
+	if code != http.StatusCreated || res["sonar_key_ignored"] != "sonar_key_pending" {
+		t.Fatalf("%d %v", code, res)
+	}
+	sid := int64(res["service_id"].(float64))
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO services (name, gitlab_project_path, sonar_project_key, created_via)
+		VALUES ('legacy', 'platform/legacy', 'platform:payments-api', 'manual')`); err != nil {
+		t.Fatal(err)
+	}
+	code, res = e.uploadRaw(upload{body: sonarKeyBody, query: "?sonar_key=platform:payments-api",
+		claims: func(c map[string]any) { c["job_id"] = "3000" }})
+	if code != http.StatusCreated || res["sonar_key_ignored"] != "key_linked_to_other_service" {
+		t.Fatalf("%d %v", code, res)
+	}
+	if d := e.declaredOf(sid); d != "" {
+		t.Errorf("declaration %q kept", d)
+	}
+	got := e.auditOf("ingest.sonar_key_ignored")
+	if len(got) != 1 || got[0]["cleared_sonar_key_declared"] != "platform:payments-api" {
+		t.Errorf("audit = %v", got)
+	}
+}
+
+// An ignored key is audited once for each new reason or key, not on every
+// upload; every upload still logs the warning.
+func TestIntegrationSonarKeyIgnoredAuditedOnce(t *testing.T) {
+	e := newIEnv(t, nil)
+	if _, err := e.pool.Exec(context.Background(), `INSERT INTO services (name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via)
+		VALUES ('payments-api', 42, 'platform/payments-api', 'platform:renamed', 'manual')`); err != nil {
+		t.Fatal(err)
+	}
+	for i, key := range []string{"platform:payments-api", "platform:payments-api", "platform:payments-api", "platform:other", "platform:payments-api"} {
+		code, res := e.uploadRaw(upload{body: sonarKeyBody, query: "?sonar_key=" + key,
+			claims: func(c map[string]any) { c["job_id"] = strconv.Itoa(3000 + i) }})
+		if code != http.StatusCreated || res["sonar_key_ignored"] != "service_has_other_key" {
+			t.Fatalf("upload %d: %d %v", i, code, res)
+		}
+	}
+	var keys []any
+	for _, d := range e.auditOf("ingest.sonar_key_ignored") {
+		keys = append(keys, d["sonar_project_key"])
+	}
+	if want := []any{"platform:payments-api", "platform:other", "platform:payments-api"}; !reflect.DeepEqual(keys, want) {
+		t.Errorf("audited keys %v, want %v", keys, want)
+	}
+	if n := strings.Count(e.logs.String(), "sonar_key_ignored=service_has_other_key"); n != 5 {
+		t.Errorf("%d warnings, want 5", n)
+	}
+}
+
+// A webhook that links the service to another key while the upload runs is
+// either seen by the upload, which then answers service_has_other_key, or
+// refused by the declaration: the upload decides on the service row it has
+// locked.
+func TestIntegrationSonarKeyRaceWithWebhookPin(t *testing.T) {
+	ctx := context.Background()
+	e := newIEnv(t, nil)
+	e.mustUpload(upload{body: sonarKeyBody})
+	var sid int64
+	if err := e.pool.QueryRow(ctx, `SELECT id FROM services WHERE gitlab_project_id = 42`).Scan(&sid); err != nil {
+		t.Fatal(err)
+	}
+	e.sonarDelivery("task-1", "platform:payments-api", 42, time.Minute)
+
+	// The webhook's pin is in flight and holds the row.
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `UPDATE services SET sonar_project_key = 'evil:project' WHERE id = $1`, sid); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		code int
+		res  map[string]any
+	}
+	done := make(chan answer, 1)
+	go func() {
+		code, res := e.uploadRaw(upload{body: sonarKeyBody, query: "?sonar_key=platform:payments-api",
+			claims: func(c map[string]any) { c["job_id"] = "3000" }})
+		done <- answer{code, res}
+	}()
+	// Wait until the upload waits for the row lock, then commit the pin.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting bool
+		if err := e.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE '%FOR UPDATE%')`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the upload never waited for the service row")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	a := <-done
+	if a.code != http.StatusCreated || a.res["sonar_key_ignored"] != "service_has_other_key" {
+		t.Fatalf("upload = %d %v", a.code, a.res)
+	}
+	if k, d := e.sonarKeyOf(sid), e.declaredOf(sid); k != "evil:project" || d != "" {
+		t.Errorf("key %q declared %q", k, d)
+	}
+	got := e.auditOf("ingest.sonar_key_ignored")
+	if len(got) != 1 || got[0]["current_sonar_project_key"] != "evil:project" {
+		t.Errorf("audit = %v", got)
 	}
 }

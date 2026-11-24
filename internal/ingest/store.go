@@ -388,43 +388,77 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 // service, pending, and the webhook sets the key when such a delivery
 // arrives; meanwhile no analysis of another key is linked to the service by
 // the scanner properties. A key is never set on a service that has a key,
-// nor taken from another service, archived or not. Every change is audited
-// as a change of the service by the upload's project; an ignored key is
-// audited too, so an administrator sees the conflict.
+// nor taken from another service, archived or not; a declaration of a taken
+// key is dropped, so it does not block the service's links for ever. Every
+// change is audited as a change of the service by the upload's project; an
+// ignored key is audited too, once for each new reason or key, so an
+// administrator sees the conflict.
+//
+// The service row is locked first, so the decision is made on its current
+// key and declaration, and a webhook that links the service waits for this
+// transaction and then finds the declaration (see PinSonarKey).
 func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, c *Claims, key string) (set bool, notSet *string, err error) {
 	q := store.New(tx)
+	wrap := func(err error) error { return fmt.Errorf("declare SonarQube key: %w", err) }
 	reason := func(r string) *string { return &r }
+	cur, err := q.LockServiceSonarKey(ctx, svc.ID)
+	if err != nil {
+		return false, nil, wrap(err)
+	}
 	ignore := func(r string, d map[string]any) (bool, *string, error) {
+		last, err := q.LastSonarKeyIgnored(ctx, strconv.FormatInt(svc.ID, 10))
+		switch {
+		case err == nil && last.Reason == r && last.SonarProjectKey == key:
+			return false, reason(r), nil // audited already; the log line is enough
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return false, nil, wrap(err)
+		}
 		d["sonar_project_key"], d["reason"] = key, r
 		return false, reason(r), auditSonarKey(ctx, q, audit.ActionIngestSonarKeyIgnored, svc, c, d)
 	}
-	if svc.SonarProjectKey.Valid {
-		if svc.SonarProjectKey.String == key {
+	// taken drops the service's declaration, which can no longer be
+	// confirmed, and ignores the key.
+	taken := func() (bool, *string, error) {
+		d := map[string]any{}
+		if cur.SonarKeyDeclared.Valid {
+			if err := q.ClearSonarKeyDeclared(ctx, svc.ID); err != nil {
+				return false, nil, wrap(err)
+			}
+			d["cleared_sonar_key_declared"] = cur.SonarKeyDeclared.String
+		}
+		return ignore(SonarKeyOtherService, d)
+	}
+	if cur.SonarProjectKey.Valid {
+		if cur.SonarProjectKey.String == key {
 			return false, nil, nil
 		}
-		return ignore(SonarKeyServiceHasOther, map[string]any{"current_sonar_project_key": svc.SonarProjectKey.String})
+		return ignore(SonarKeyServiceHasOther, map[string]any{"current_sonar_project_key": cur.SonarProjectKey.String})
 	}
 	held, err := q.SonarKeyHeld(ctx, pgtype.Text{String: key, Valid: true})
 	if err != nil {
-		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		return false, nil, wrap(err)
 	}
 	if held {
-		return ignore(SonarKeyOtherService, map[string]any{})
+		return taken()
 	}
-	changed, err := q.DeclareSonarKey(ctx, store.DeclareSonarKeyParams{
-		ID: svc.ID, Key: key, At: pgtype.Timestamptz{Time: time.Now(), Valid: true},
-	})
-	if err != nil {
-		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+	changed := !cur.SonarKeyDeclared.Valid || cur.SonarKeyDeclared.String != key
+	if changed {
+		if _, err := q.DeclareSonarKey(ctx, store.DeclareSonarKeyParams{
+			ID: svc.ID, Key: key, At: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		}); err != nil {
+			return false, nil, wrap(err)
+		}
 	}
+	// A delivery with any outcome confirms, a failed one too: SonarQube
+	// signed it, so the claim is SonarQube's whatever became of it.
 	confirmed, err := q.SonarKeyConfirmed(ctx, store.SonarKeyConfirmedParams{
 		ProjectKey: key, ClaimedProjectID: pgtype.Int8{Int64: c.ProjectID, Valid: true},
 	})
 	if err != nil {
-		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		return false, nil, wrap(err)
 	}
 	if !confirmed {
-		if changed == 0 {
+		if !changed {
 			return false, reason(SonarKeyPending), nil // the same pending declaration again
 		}
 		return false, reason(SonarKeyPending), auditSonarKey(ctx, q, audit.ActionServiceUpdated, svc, c, map[string]any{
@@ -435,39 +469,29 @@ func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, c *Claim
 	// upload's transaction usable.
 	sp, err := tx.Begin(ctx)
 	if err != nil {
-		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		return false, nil, wrap(err)
 	}
 	_, err = store.New(sp).PinSonarKey(ctx, store.PinSonarKeyParams{ID: svc.ID, SonarProjectKey: pgtype.Text{String: key, Valid: true}})
 	var pgErr *pgconn.PgError
 	switch {
 	case err == nil:
 		if err := sp.Commit(ctx); err != nil {
-			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+			return false, nil, wrap(err)
 		}
 		return true, nil, auditSonarKey(ctx, q, audit.ActionServiceUpdated, svc, c, map[string]any{
 			"fields": []string{"sonar_project_key"}, "sonar_project_key": key, "reason": audit.ReasonSonarKeyConfirmed,
 		})
 	case errors.As(err, &pgErr) && pgErr.Code == "23505": // unique_violation
 		if err := sp.Rollback(ctx); err != nil {
-			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+			return false, nil, wrap(err)
 		}
-		return ignore(SonarKeyOtherService, map[string]any{})
-	case errors.Is(err, pgx.ErrNoRows):
-		// A webhook linked the service in the meantime, or it was archived.
-		if err := sp.Rollback(ctx); err != nil {
-			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
-		}
-		current, err := q.SonarServiceKey(ctx, svc.ID)
-		if err != nil {
-			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
-		}
-		if !current.Valid || current.String == key {
-			return false, nil, nil
-		}
-		return ignore(SonarKeyServiceHasOther, map[string]any{"current_sonar_project_key": current.String})
+		cur.SonarKeyDeclared = pgtype.Text{String: key, Valid: true} // declared above
+		return taken()
 	default:
+		// The row is locked and keyless and the declaration is key, so
+		// no other refusal is expected.
 		_ = sp.Rollback(ctx)
-		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		return false, nil, wrap(err)
 	}
 }
 
