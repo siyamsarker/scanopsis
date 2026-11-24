@@ -9,6 +9,7 @@ const scan: Scan = {
   id: 7,
   service_id: 3,
   kind: 'image',
+  artifact_key: 'registry.example.com/pay/api',
   artifact_name: 'registry.example.com/pay/api:1.4',
   gitlab_pipeline_id: 1001,
   gitlab_job_id: 5001,
@@ -34,6 +35,7 @@ function earlier(id: number, over: Partial<ScanSummary> = {}): ScanSummary {
     id,
     service_id: 3,
     kind: 'image',
+    artifact_key: scan.artifact_key,
     artifact_name: scan.artifact_name,
     gitlab_pipeline_id: 990 + id,
     gitlab_job_id: 4000 + id,
@@ -55,6 +57,7 @@ function vuln(id: number, over: Partial<Vulnerability> = {}): Vulnerability {
   return {
     id,
     scan_id: 7,
+    artifact_key: scan.artifact_key,
     artifact_name: scan.artifact_name,
     target: 'alpine 3.19',
     class: 'os-pkgs',

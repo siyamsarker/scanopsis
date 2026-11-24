@@ -17,6 +17,7 @@ function v(id: number, over: Partial<Vulnerability> = {}): Vulnerability {
   return {
     id,
     scan_id: 1,
+    artifact_key: 'app',
     artifact_name: 'app',
     target: 'debian 12',
     class: 'os-pkgs',

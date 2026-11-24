@@ -32,6 +32,7 @@ var validSeverities = map[string]bool{"CRITICAL": true, "HIGH": true, "MEDIUM": 
 type vulnerabilityJSON struct {
 	ID               int64     `json:"id"`
 	ScanID           int64     `json:"scan_id"`
+	ArtifactKey      string    `json:"artifact_key"`
 	ArtifactName     string    `json:"artifact_name"`
 	Target           string    `json:"target"`
 	Class            string    `json:"class"`
@@ -52,7 +53,8 @@ type vulnerabilityJSON struct {
 
 func newVulnerability(v store.FindingsVulnerabilityPageRow, firstSeen map[int64]time.Time) vulnerabilityJSON {
 	return vulnerabilityJSON{
-		ID: v.ID, ScanID: v.ScanID, ArtifactName: v.ArtifactName, Target: v.Target, Class: v.Class,
+		ID: v.ID, ScanID: v.ScanID, ArtifactKey: v.ArtifactKey, ArtifactName: v.ArtifactName,
+		Target: v.Target, Class: v.Class,
 		PkgType: v.PkgType, PkgName: v.PkgName, PkgPath: v.PkgPath, InstalledVersion: v.InstalledVersion,
 		FixedVersion: v.FixedVersion, VulnID: v.VulnID, Severity: v.Severity, Status: v.Status,
 		Title: v.Title, PrimaryURL: v.PrimaryUrl, Suppressed: v.Suppressed, Suppression: v.Suppression,
@@ -187,6 +189,7 @@ func severityParam(v string) ([]string, bool) {
 type secretFindingJSON struct {
 	ID           int64  `json:"id"`
 	ScanID       int64  `json:"scan_id"`
+	ArtifactKey  string `json:"artifact_key"`
 	ArtifactName string `json:"artifact_name"`
 	Target       string `json:"target"`
 	RuleID       string `json:"rule_id"`
@@ -229,7 +232,7 @@ func (f *Findings) listSecrets(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, s := range rows {
 			out.Items = append(out.Items, secretFindingJSON{
-				ID: s.ID, ScanID: s.ScanID, ArtifactName: s.ArtifactName, Target: s.Target,
+				ID: s.ID, ScanID: s.ScanID, ArtifactKey: s.ArtifactKey, ArtifactName: s.ArtifactName, Target: s.Target,
 				RuleID: s.RuleID, Category: s.Category, Severity: s.Severity, Title: s.Title,
 				StartLine: int(s.StartLine), EndLine: int(s.EndLine), Suppressed: s.Suppressed,
 			})
@@ -241,6 +244,7 @@ func (f *Findings) listSecrets(w http.ResponseWriter, r *http.Request) {
 type searchItemJSON struct {
 	Service          serviceJSON `json:"service"`
 	Ref              string      `json:"ref"`
+	ArtifactKey      string      `json:"artifact_key"`
 	ArtifactName     string      `json:"artifact_name"`
 	ScanID           int64       `json:"scan_id"`
 	ScannedAt        time.Time   `json:"scanned_at"`
@@ -297,7 +301,7 @@ func (f *Findings) search(w http.ResponseWriter, r *http.Request) {
 		out.Items = append(out.Items, searchItemJSON{
 			Service: newServiceJSON(s.ID, s.Name, s.GitlabProjectID, s.GitlabProjectPath,
 				s.SonarProjectKey, s.CreatedVia, s.Archived, s.CreatedAt, s.DefaultRef),
-			Ref: s.Ref, ArtifactName: s.ArtifactName, ScanID: s.ScanID, ScannedAt: s.ScannedAt.Time,
+			Ref: s.Ref, ArtifactKey: s.ArtifactKey, ArtifactName: s.ArtifactName, ScanID: s.ScanID, ScannedAt: s.ScannedAt.Time,
 			PkgName: s.PkgName, InstalledVersion: s.InstalledVersion, FixedVersion: s.FixedVersion,
 			Severity: s.Severity,
 		})

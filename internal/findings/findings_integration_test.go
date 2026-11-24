@@ -352,7 +352,7 @@ func TestGetScanURLs(t *testing.T) {
 	}
 	sort.Strings(keys)
 	eq(t, "keys", keys, []string{
-		"artifact_name", "commit_sha", "commit_url", "counts", "fixable", "gitlab_job_id", "gitlab_pipeline_id",
+		"artifact_key", "artifact_name", "commit_sha", "commit_url", "counts", "fixable", "gitlab_job_id", "gitlab_pipeline_id",
 		"gitlab_project_path", "id", "job_url", "kind", "pipeline_url", "received_at", "ref", "ref_protected",
 		"scanned_at", "secrets", "service_id", "suppressed", "trivy_version",
 	})
@@ -720,7 +720,7 @@ func TestSecrets(t *testing.T) {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)
-	eq(t, "keys", keys, []string{"artifact_name", "category", "end_line", "id", "rule_id", "scan_id", "severity", "start_line", "suppressed", "target", "title"})
+	eq(t, "keys", keys, []string{"artifact_key", "artifact_name", "category", "end_line", "id", "rule_id", "scan_id", "severity", "start_line", "suppressed", "target", "title"})
 
 	var none struct{ Items []secretFindingJSON }
 	getJSON(t, mux, fmt.Sprintf("/api/v1/services/%d/secrets?ref=feature", f.alpha), &none)

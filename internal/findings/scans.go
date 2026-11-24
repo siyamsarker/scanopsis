@@ -344,6 +344,7 @@ type trendPointJSON struct {
 	ScannedAt        time.Time  `json:"scanned_at"`
 	GitlabPipelineID int64      `json:"gitlab_pipeline_id"`
 	CommitSha        string     `json:"commit_sha"`
+	ArtifactKey      string     `json:"artifact_key"`
 	ArtifactName     string     `json:"artifact_name"`
 	Counts           countsJSON `json:"counts"`
 	Fixable          int        `json:"fixable"`
@@ -410,7 +411,8 @@ func (f *Findings) trends(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		p := trendPointJSON{
 			ScanID: row.ID, Kind: row.Kind, Ref: row.Ref, ScannedAt: row.ScannedAt.Time,
-			GitlabPipelineID: row.GitlabPipelineID, CommitSha: row.CommitSha, ArtifactName: row.ArtifactName,
+			GitlabPipelineID: row.GitlabPipelineID, CommitSha: row.CommitSha,
+			ArtifactKey: row.ArtifactKey, ArtifactName: row.ArtifactName,
 			Counts: countsJSON{
 				Critical: int(row.CountCritical), High: int(row.CountHigh), Medium: int(row.CountMedium),
 				Low: int(row.CountLow), Unknown: int(row.CountUnknown),

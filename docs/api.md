@@ -1773,7 +1773,7 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `artifacts` | array of [ScanSummary](#scansummary) | yes | Latest scan per artifact and kind for the ref. |
+| `artifacts` | array of [ScanSummary](#scansummary) | yes | Latest scan per artifact key and kind for the ref: all tags of an image share one entry, its newest scan. |
 | `by_class` | map of [SeverityCounts](#severitycounts) | yes | Counts per Trivy result class (os-pkgs, lang-pkgs). |
 | `counts` | [SeverityCounts](#severitycounts) | yes |  |
 | `data_at` | string or null (date-time) | yes | Scan time of the newest scan in this overview. |
@@ -1928,7 +1928,8 @@ Type: [ScanSummary](#scansummary) + object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `artifact_name` | string | yes |  |
+| `artifact_key` | string | yes | The artifact: the image name without its tag and digest, the scanned folder relative to the repository (. for the repository itself), or the artifact parameter of the upload. Scans with the same service, artifact key and kind are the same artifact. |
+| `artifact_name` | string | yes | The name as the report gave it, with the tag of an image (web-frontend-stage:4). |
 | `commit_sha` | string | yes |  |
 | `commit_url` | string or null | yes |  |
 | `counts` | [SeverityCounts](#severitycounts) | yes |  |
@@ -1984,7 +1985,8 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `artifact_name` | string | yes |  |
+| `artifact_key` | string | yes | The artifact: the image name without its tag and digest, the scanned folder relative to the repository (. for the repository itself), or the artifact parameter of the upload. Scans with the same service, artifact key and kind are the same artifact. |
+| `artifact_name` | string | yes | The name as the report gave it, with the tag of an image (web-frontend-stage:4). |
 | `commit_sha` | string | yes |  |
 | `counts` | [SeverityCounts](#severitycounts) | yes |  |
 | `fixable` | integer | yes |  |
@@ -2019,7 +2021,8 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `artifact_name` | string | yes |  |
+| `artifact_key` | string | yes | The artifact of the scan (see ScanSummary): . for the repository itself. |
+| `artifact_name` | string | yes | The scanned folder as reported. |
 | `category` | string | yes |  |
 | `end_line` | integer | yes |  |
 | `id` | integer (int64) | yes |  |
@@ -2291,7 +2294,8 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `artifact_name` | string | yes |  |
+| `artifact_key` | string | yes | The artifact of the scan (see ScanSummary). |
+| `artifact_name` | string | yes | The name as reported, with the tag of an image. |
 | `commit_sha` | string | yes |  |
 | `counts` | [SeverityCounts](#severitycounts) | yes |  |
 | `fixable` | integer | yes |  |
@@ -2428,7 +2432,8 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `artifact_name` | string | yes |  |
+| `artifact_key` | string | yes | The artifact of the scan (see ScanSummary). |
+| `artifact_name` | string | yes | The name of the scanned artifact as reported, with the tag of an image. |
 | `class` | string | yes |  |
 | `first_seen_at` | string (date-time) | yes | Scan time of the earliest scan of the same ref and artifact that contains this finding (vuln_id, pkg_name, target). |
 | `fixed_version` | string | yes | Empty when no fix is available. |
@@ -2468,7 +2473,7 @@ Type: object
 | `primary_url` | string | yes | An advisory URL reported for the vulnerability, empty when none was. |
 | `scope` | string (one of `dashboard`, `all`) | yes | The scope that was searched, as asked for. The totals below count within it. |
 | `title` | string | yes | A title reported for the vulnerability, empty when none was. Over every match. |
-| `total_artifacts` | integer (int64) | yes | Number of artifacts (per service) with at least one such finding in the scope. |
+| `total_artifacts` | integer (int64) | yes | Number of artifacts (per service and artifact key) with at least one such finding in the scope. |
 | `total_findings` | integer (int64) | yes | Number of unsuppressed findings of this ID in the current scans of the scope, including any not listed in items. |
 | `total_services` | integer (int64) | yes | Number of non-archived services with at least one such finding in the scope. |
 | `truncated` | boolean | yes | True when total_findings exceeds the 1000 findings listed. The listed ones are the most severe, then by service name. |

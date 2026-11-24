@@ -1303,6 +1303,9 @@ export interface components {
             service_id: number;
             /** @enum {string} */
             kind: "image" | "secret-fs";
+            /** @description The artifact: the image name without its tag and digest, the scanned folder relative to the repository (. for the repository itself), or the artifact parameter of the upload. Scans with the same service, artifact key and kind are the same artifact. */
+            artifact_key: string;
+            /** @description The name as the report gave it, with the tag of an image (web-frontend-stage:4). */
             artifact_name: string;
             /** Format: int64 */
             gitlab_pipeline_id: number;
@@ -1338,6 +1341,9 @@ export interface components {
             id: number;
             /** Format: int64 */
             scan_id: number;
+            /** @description The artifact of the scan (see ScanSummary). */
+            artifact_key: string;
+            /** @description The name of the scanned artifact as reported, with the tag of an image. */
             artifact_name: string;
             /** @description The Trivy target. The OS packages of an image, which Trivy names after the scanned image and tag, are named after the artifact instead (web-frontend-stage (alpine 3.20.3)), so the same finding has the same target in every tag. */
             target: string;
@@ -1375,6 +1381,9 @@ export interface components {
             id: number;
             /** Format: int64 */
             scan_id: number;
+            /** @description The artifact of the scan (see ScanSummary): . for the repository itself. */
+            artifact_key: string;
+            /** @description The scanned folder as reported. */
             artifact_name: string;
             target: string;
             rule_id: string;
@@ -1415,7 +1424,7 @@ export interface components {
             ref_source: components["schemas"]["RefSource"];
             /** @description Refs with scans, most recent first. */
             refs: string[];
-            /** @description Latest scan per artifact and kind for the ref. */
+            /** @description Latest scan per artifact key and kind for the ref: all tags of an image share one entry, its newest scan. */
             artifacts: components["schemas"]["ScanSummary"][];
             counts: components["schemas"]["SeverityCounts"];
             fixable: number;
@@ -1476,6 +1485,9 @@ export interface components {
             /** Format: int64 */
             gitlab_pipeline_id: number;
             commit_sha: string;
+            /** @description The artifact of the scan (see ScanSummary). */
+            artifact_key: string;
+            /** @description The name as reported, with the tag of an image. */
             artifact_name: string;
             counts: components["schemas"]["SeverityCounts"];
             fixable: number;
@@ -1622,7 +1634,7 @@ export interface components {
             total_services: number;
             /**
              * Format: int64
-             * @description Number of artifacts (per service) with at least one such finding in the scope.
+             * @description Number of artifacts (per service and artifact key) with at least one such finding in the scope.
              */
             total_artifacts: number;
             /** @description Every matching finding by the severity reported for it, listed or not. */
@@ -1638,6 +1650,9 @@ export interface components {
             items: {
                 service: components["schemas"]["Service"];
                 ref: string;
+                /** @description The artifact of the scan (see ScanSummary). */
+                artifact_key: string;
+                /** @description The name of the latest scan of the artifact, with the tag of an image. */
                 artifact_name: string;
                 /** Format: int64 */
                 scan_id: number;

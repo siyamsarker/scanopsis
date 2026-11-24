@@ -26,6 +26,7 @@ function point(scan: number, over: Partial<TrendPoint> = {}): TrendPoint {
     scanned_at: `2026-11-1${scan}T10:00:00Z`,
     gitlab_pipeline_id: 800 + scan,
     commit_sha: `sha${scan}`,
+    artifact_key: 'api',
     artifact_name: 'api',
     counts: zero,
     fixable: 0,

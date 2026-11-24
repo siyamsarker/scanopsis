@@ -35,6 +35,7 @@ const OVERVIEW = {
       id: 90,
       service_id: 5,
       kind: 'image',
+      artifact_key: 'app',
       artifact_name: 'app',
       gitlab_pipeline_id: 1234,
       gitlab_job_id: 1,
@@ -65,6 +66,7 @@ function vuln(id: number, over: Partial<Vulnerability>): Vulnerability {
   return {
     id,
     scan_id: 11,
+    artifact_key: 'app',
     artifact_name: 'app',
     target: 'debian 12',
     class: 'os-pkgs',
@@ -165,6 +167,7 @@ function search(id: string) {
   const hit = (serviceId: number, name: string) => ({
     service: { ...SERVICE, id: serviceId, name },
     ref: 'main',
+    artifact_key: 'app',
     artifact_name: 'app',
     scan_id: 100 + serviceId,
     scanned_at: '2026-11-19T10:00:00Z',

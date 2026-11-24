@@ -121,6 +121,7 @@ type scanSummaryJSON struct {
 	ID               int64      `json:"id"`
 	ServiceID        int64      `json:"service_id"`
 	Kind             string     `json:"kind"`
+	ArtifactKey      string     `json:"artifact_key"`
 	ArtifactName     string     `json:"artifact_name"`
 	GitlabPipelineID int64      `json:"gitlab_pipeline_id"`
 	GitlabJobID      int64      `json:"gitlab_job_id"`
@@ -138,7 +139,7 @@ type scanSummaryJSON struct {
 
 func newScanSummary(r scanRow) scanSummaryJSON {
 	return scanSummaryJSON{
-		ID: r.ID, ServiceID: r.ServiceID, Kind: r.Kind, ArtifactName: r.ArtifactName,
+		ID: r.ID, ServiceID: r.ServiceID, Kind: r.Kind, ArtifactKey: r.ArtifactKey, ArtifactName: r.ArtifactName,
 		GitlabPipelineID: r.GitlabPipelineID, GitlabJobID: r.GitlabJobID, Ref: r.Ref,
 		RefProtected: r.RefProtected, CommitSha: r.CommitSha, TrivyVersion: r.TrivyVersion,
 		ScannedAt: r.ScannedAt.Time, ReceivedAt: r.ReceivedAt.Time,
