@@ -401,9 +401,18 @@ A scan's age is its `scanned_at` time, when Trivy ran, not when the report
 arrived.
 
 After the upgrade to 0.4.1, scans of the same image under older tags stop
-counting at once, because only the latest scan per image name is current. They
-are not deleted by the upgrade. The daily clean-up removes them later by the
-rules above, once they are older than the period.
+counting at once, because only the latest scan per image name is current.
+Version 0.4.0 kept them, since each tag counted as the latest. Now they are
+ordinary older scans: the first clean-up, one minute after Scanopsis starts,
+deletes those older than the period, with their findings, and empties the
+stored original report of those older than 30 days. To keep more history, raise
+the period on the Settings page before you upgrade.
+
+Images that differ only by their tag (for example `web-frontend:amd64` and
+`web-frontend:arm64` on one branch) become one artifact at the upgrade, and the
+rows already stored cannot be split. Pass the `artifact` parameter for each
+variant, see [keep two variants
+apart](integrations/gitlab-ci.md#keep-two-variants-apart).
 
 ### What a cleanup run does
 

@@ -271,7 +271,9 @@ network, and the database is still there after `docker compose up -d`.
     OS-package targets of image scans with it. It works in batches, and Scanopsis
     serves requests only after all migrations are done, so it is unavailable
     while they run; it took about 25 seconds on a laptop with
-    540,000 scans and 4.3 million findings.
+    540,000 scans and 4.3 million findings. Rows are rewritten, so the
+    database needs free disk space of about the size of the vulnerabilities
+    table and its indexes while it runs.
   - Migration 00012 adds two columns to the SonarQube deliveries, used to link
     analyses that arrive before the first scan.
 - If the upgrade stops partway, start 0.4.1 again. Do not go back to 0.4.0:
@@ -280,9 +282,22 @@ network, and the database is still there after `docker compose up -d`.
 - Totals are correct at once. A service whose pipelines tagged each image per
   run (`web-frontend:4`, `web-frontend:5`) added the pipelines up before; now
   each image name counts once, with its newest scan, and the risk and the
-  counts drop to the real values. Nothing is deleted by the upgrade. The older
-  per-tag scans stop counting, and the daily clean-up removes them later under
-  the usual [retention rules](operations.md#data-retention).
+  counts drop to the real values. The older per-tag scans stop counting.
+- Images that differ only by their tag, such as `web-frontend:amd64` and
+  `web-frontend:arm64` (platforms or environments) scanned on one branch,
+  become **one** artifact at the upgrade, and only the newer scan counts. In the
+  same pipeline change that takes over the new job script, pass the optional
+  `artifact` parameter for each variant, see
+  [keep two variants apart](integrations/gitlab-ci.md#keep-two-variants-apart).
+  Rows that are already stored cannot be split afterwards.
+- The first data clean-up runs one minute after Scanopsis starts. Version 0.4.0
+  kept every tag's latest scan, because each tag counted as "the latest". After
+  the upgrade those are ordinary older scans, so the first clean-up deletes the
+  ones older than the retention period, with their findings, and empties the
+  stored original report of every scan that is not current and is older than 30
+  days. See the [retention rules](operations.md#data-retention). To keep more
+  history, raise the retention period on the Settings page **before** you
+  upgrade.
 - Take over the new job script from the
   [GitLab CI guide](integrations/gitlab-ci.md): it uploads the full report
   (every severity, unfixed findings, secrets in image layers) whatever
