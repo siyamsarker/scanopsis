@@ -167,7 +167,21 @@ type Options struct {
 	ClientIP func(*http.Request) netip.Addr
 	Logger   *slog.Logger
 	Now      func() time.Time
+	// SonarLinker links the SonarQube analyses that arrived before the
+	// service of their project existed. nil links nothing.
+	SonarLinker SonarLinker
 }
+
+// SonarLinker links a service, once it has a GitLab project ID, to the
+// SonarQube project of analyses that named that project before the service
+// existed.
+type SonarLinker interface {
+	LinkWaiting(ctx context.Context, serviceID, gitlabProjectID int64) error
+}
+
+// sonarLinkTimeout bounds the linking that follows an upload, which reads
+// and writes only the database.
+const sonarLinkTimeout = 10 * time.Second
 
 // SettingsSource gives the current settings.
 type SettingsSource interface{ Current() settings.Snapshot }
@@ -530,6 +544,9 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusInternalServerError, "internal_error", "Something went wrong. Try again later.")
 		return
 	}
+	if res.gotProjectID && i.opts.SonarLinker != nil {
+		i.linkSonar(ctx, res.ServiceID, claims)
+	}
 	i.log.InfoContext(ctx, "scan ingested",
 		"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
 		"job_id", claims.JobID, "artifact", rep.ArtifactName, "artifact_key", key, "kind", kind, "scan_id", res.ScanID,
@@ -539,6 +556,19 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		"secrets", res.Secrets, "suppressed", res.Suppressed,
 		"findings", rep.Counts.total(), "stored_bytes", len(raw), "duration_ms", time.Since(started).Milliseconds())
 	httpapi.WriteJSON(w, http.StatusCreated, res)
+}
+
+// linkSonar links the SonarQube analyses that waited for the service of the
+// project. The scan is stored already, so a failure is only logged; it does
+// not depend on the client staying connected. Reading the analysis from
+// SonarQube happens in the background.
+func (i *Ingest) linkSonar(ctx context.Context, serviceID int64, claims *Claims) {
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sonarLinkTimeout)
+	defer cancel()
+	if err := i.opts.SonarLinker.LinkWaiting(lctx, serviceID, claims.ProjectID); err != nil {
+		i.log.WarnContext(ctx, "cannot link waiting SonarQube analyses to the service",
+			"project", claims.ProjectPath, "project_id", claims.ProjectID, "service_id", serviceID, "error", err)
+	}
 }
 
 // trimThreshold is the estimated memory of an upload from which the heap is

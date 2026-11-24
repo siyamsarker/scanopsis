@@ -62,6 +62,9 @@ type Result struct {
 	Fixable        int32          `json:"fixable"`
 	Secrets        int32          `json:"secrets"`
 	Suppressed     int32          `json:"suppressed"`
+	// gotProjectID is set when the upload created the service or gave it its
+	// GitLab project ID, so analyses that waited for it can be linked.
+	gotProjectID bool
 }
 
 // SeverityCounts is the SeverityCounts schema.
@@ -125,11 +128,11 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 		if err := q.LockIngestProject(ctx, strconv.FormatInt(c.ProjectID, 10)); err != nil {
 			return fmt.Errorf("lock project: %w", err)
 		}
-		svc, created, err := s.resolveService(ctx, q, c)
+		svc, created, gotID, err := s.resolveService(ctx, q, c)
 		if err != nil {
 			return err
 		}
-		res.ServiceID, res.ServiceCreated = svc.ID, created
+		res.ServiceID, res.ServiceCreated, res.gotProjectID = svc.ID, created, created || gotID
 
 		// The scans of this job other than the one this upload replaces. The
 		// project lock held here makes the count exact for concurrent uploads
@@ -262,28 +265,29 @@ func (c *copier) flush() error {
 
 // resolveService finds the service for the token's project: by project ID;
 // else a service an administrator added by the same path (which learns the
-// ID); else a new one. A renamed project updates the path of its service.
-func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claims) (svc store.Service, created bool, err error) {
+// ID: gotID); else a new one (created). A renamed project updates the path
+// of its service.
+func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claims) (svc store.Service, created, gotID bool, err error) {
 	projectID := pgtype.Int8{Int64: c.ProjectID, Valid: true}
 	svc, err = q.GetServiceByProjectID(ctx, projectID)
 	switch {
 	case err == nil:
 		if svc.Archived {
-			return svc, false, errServiceArchived
+			return svc, false, false, errServiceArchived
 		}
 		if svc.GitlabProjectPath != c.ProjectPath {
 			n, err := q.RenameServicePath(ctx, store.RenameServicePathParams{ID: svc.ID, ProjectPath: c.ProjectPath})
 			if err != nil {
-				return svc, false, fmt.Errorf("rename service: %w", err)
+				return svc, false, false, fmt.Errorf("rename service: %w", err)
 			}
 			if n == 0 {
 				s.log.Warn("project path not updated: another service uses it",
 					"service_id", svc.ID, "stored_path", svc.GitlabProjectPath, "token_path", c.ProjectPath)
 			}
 		}
-		return svc, false, nil
+		return svc, false, false, nil
 	case !errors.Is(err, pgx.ErrNoRows):
-		return svc, false, fmt.Errorf("find service: %w", err)
+		return svc, false, false, fmt.Errorf("find service: %w", err)
 	}
 
 	adopted, err := q.AdoptServiceByPath(ctx, store.AdoptServiceByPathParams{ProjectID: projectID, ProjectPath: c.ProjectPath})
@@ -304,11 +308,11 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 			err = q.InsertAudit(ctx, store.InsertAuditParams{Actor: "ci:" + c.ProjectPath, Action: audit.ActionServiceUpdated, Detail: detail})
 		}
 		if err != nil {
-			return svc, false, fmt.Errorf("audit adoption: %w", err)
+			return svc, false, false, fmt.Errorf("audit adoption: %w", err)
 		}
-		return svc, false, nil
+		return svc, false, true, nil
 	case !errors.Is(err, pgx.ErrNoRows):
-		return svc, false, fmt.Errorf("adopt service: %w", err)
+		return svc, false, false, fmt.Errorf("adopt service: %w", err)
 	}
 
 	svc, err = q.InsertIngestService(ctx, store.InsertIngestServiceParams{
@@ -326,19 +330,19 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 			err = q.InsertAudit(ctx, store.InsertAuditParams{Actor: "ci:" + c.ProjectPath, Action: audit.ActionServiceCreated, Detail: detail})
 		}
 		if err != nil {
-			return svc, false, fmt.Errorf("audit creation: %w", err)
+			return svc, false, false, fmt.Errorf("audit creation: %w", err)
 		}
-		return svc, true, nil
+		return svc, true, false, nil
 	case errors.Is(err, pgx.ErrNoRows):
 		// An archived service an administrator added by this path, which was
 		// therefore not adopted, is the one case worth naming.
 		holder, gerr := q.GetServiceByPath(ctx, c.ProjectPath)
 		if gerr == nil && holder.Archived && !holder.GitlabProjectID.Valid {
-			return svc, false, errServiceArchived
+			return svc, false, false, errServiceArchived
 		}
-		return svc, false, errPathTaken
+		return svc, false, false, errPathTaken
 	}
-	return svc, false, fmt.Errorf("create service: %w", err)
+	return svc, false, false, fmt.Errorf("create service: %w", err)
 }
 
 func lastSegment(path string) string {

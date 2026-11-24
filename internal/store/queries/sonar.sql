@@ -23,20 +23,20 @@ FROM services
 WHERE sonar_project_key IS NOT NULL AND NOT archived
 ORDER BY id;
 
--- InsertSonarDelivery records a delivery as pending; zero rows mean the task
--- ID was delivered before.
 -- InsertSonarDelivery records a delivery as pending. A redelivery of a task
 -- whose earlier processing failed is accepted again (an administrator can
 -- redeliver it from SonarQube), but only for the same project, at least a
 -- minute after the previous attempt and at most 5 attempts in all, so a
 -- captured delivery cannot be replayed without bound. Any other duplicate
--- changes nothing and affects no row.
+-- changes nothing and affects no row. claimed_project_id is the
+-- sonar.analysis.gitlabProjectId scanner property, NULL without a usable one.
 -- name: InsertSonarDelivery :execrows
-INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail)
-VALUES ($1, $2, $3, 'pending', '')
+INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail, claimed_project_id)
+VALUES ($1, $2, $3, 'pending', '', $4)
 ON CONFLICT (task_id) DO UPDATE
 SET outcome = 'pending', detail = '', service_id = NULL,
-    received_at = EXCLUDED.received_at, attempts = sonar_deliveries.attempts + 1
+    received_at = EXCLUDED.received_at, attempts = sonar_deliveries.attempts + 1,
+    claimed_project_id = EXCLUDED.claimed_project_id
 WHERE sonar_deliveries.outcome = 'failed'
   AND sonar_deliveries.project_key = EXCLUDED.project_key
   AND sonar_deliveries.attempts < 5
@@ -68,6 +68,23 @@ SET outcome = 'linked', detail = @detail::text,
     service_id = (SELECT sv.id FROM services sv WHERE sv.sonar_project_key = d.project_key)
 WHERE d.outcome = 'pending' AND d.detail = @queued_detail::text
   AND d.project_key = ANY(@project_keys::text[]);
+
+-- WaitingSonarDeliveries lists the unlinked deliveries that name a GitLab
+-- project in their scanner properties, newest first.
+-- name: WaitingSonarDeliveries :many
+SELECT task_id, project_key
+FROM sonar_deliveries
+WHERE outcome = 'unlinked' AND claimed_project_id = $1
+ORDER BY received_at DESC, id DESC
+LIMIT 50;
+
+-- LinkWaitingSonarDeliveries marks the unlinked deliveries of a project that
+-- named a GitLab project as linked to the service of that project.
+-- name: LinkWaitingSonarDeliveries :execrows
+UPDATE sonar_deliveries
+SET outcome = 'linked', service_id = @service_id, detail = @detail::text
+WHERE outcome = 'unlinked' AND claimed_project_id = @claimed_project_id
+  AND project_key = @project_key;
 
 -- name: InsertSonarAnalysis :exec
 INSERT INTO sonar_analyses (

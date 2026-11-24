@@ -211,6 +211,11 @@ func TestMigrate00011Backfill(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	pool := emptyDatabase(t, "migrate_00011")
+	// Up to 11 only: a start interrupted in 00011 has applied nothing newer.
+	migrateTo11 := func() error {
+		_, err := provider(t, pool).UpTo(ctx, 11)
+		return err
+	}
 	if _, err := provider(t, pool).UpTo(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +223,7 @@ func TestMigrate00011Backfill(t *testing.T) {
 		t.Fatal(err)
 	}
 	batchesUsed(t, pool)
-	if err := store.Migrate(ctx, pool); err != nil {
+	if err := migrateTo11(); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	sameKeys(t, artifactKeys(t, pool))
@@ -297,7 +302,7 @@ func TestMigrate00011Backfill(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.Migrate(ctx, pool); err != nil {
+	if err := migrateTo11(); err != nil {
 		t.Fatalf("migrate again: %v", err)
 	}
 	checkArtifactKeyIndexes(t, pool)
@@ -320,7 +325,7 @@ func TestMigrate00011Backfill(t *testing.T) {
 		}
 	}
 	batchesUsed(t, pool)
-	if err := store.Migrate(ctx, pool); err != nil {
+	if err := migrateTo11(); err != nil {
 		t.Fatalf("migrate after an interrupted backfill: %v", err)
 	}
 	keysOfJobs(t, artifactKeys(t, pool), kept)

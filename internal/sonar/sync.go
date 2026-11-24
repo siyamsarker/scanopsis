@@ -28,7 +28,8 @@ const AdvisoryLockKey int64 = 0x53434e5359 // "SCNSY"
 // gives up until the next interval.
 const maxTransportErrors = 3
 
-// Run processes webhook deliveries with a small pool of workers and, every
+// Run processes webhook deliveries, and reads the newest analysis of each
+// project LinkWaiting linked, with a small pool of workers and, every
 // sync interval, reads the newest analysis of every linked project in case a
 // webhook was missed. The sync runs in this goroutine, apart from the
 // workers, so a slow sync never delays deliveries and a burst of deliveries
@@ -46,6 +47,8 @@ func (s *Sonar) Run(ctx context.Context) {
 					return
 				case d := <-s.queue:
 					s.process(ctx, d)
+				case l := <-s.linked:
+					s.syncLinked(ctx, l)
 				}
 			}
 		}()

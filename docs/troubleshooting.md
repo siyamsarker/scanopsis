@@ -201,6 +201,7 @@ means SonarQube cannot reach Scanopsis, or blocks private addresses.
 | `pending`: "The processing queue was full; the next sync will read the analysis." | More than 500 deliveries waited at once. | None; the sync picks it up. |
 | `linked` | Stored. Details such as "The analysis was already stored by a sync." are for information. | None. |
 | `unlinked`: "No service is linked to SonarQube project "...". ..." | No service has that key. | Set the key on the service, or pass `-Dsonar.analysis.gitlabProjectId=$CI_PROJECT_ID` to the scanner. |
+| `unlinked`: "No service is linked to SonarQube project "..." yet. The analysis is linked when the first scan ..." | The analysis ran before the first Trivy scan of the project. | None; the first scan links it. Or set the key on the service. |
 | `unlinked`: "The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, ..." | The service already has another key. | Change the key on the service if the project was renamed. |
 | `failed`: "The analysis task ended with status "..."; nothing was stored." | The analysis failed in SonarQube. | Fix the analysis. |
 | `failed`: "Reading measures failed: SonarQube answered 403 on api/measures/component. The next sync will retry." | Token or permission, as on the card. | Fix the token or the permission. |

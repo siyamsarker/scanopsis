@@ -107,10 +107,16 @@ func (s *Sonar) webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := s.q.InsertSonarDelivery(r.Context(), store.InsertSonarDeliveryParams{
+	arg := store.InsertSonarDeliveryParams{
 		TaskID: p.TaskID, ProjectKey: p.Project.Key,
 		ReceivedAt: pgtype.Timestamptz{Time: s.now(), Valid: true},
-	})
+	}
+	if id, ok := claimedProject(p); ok {
+		// Kept so that the delivery can be linked when the service of the
+		// project is created after it (see LinkWaiting).
+		arg.ClaimedProjectID = pgtype.Int8{Int64: id, Valid: true}
+	}
+	n, err := s.q.InsertSonarDelivery(r.Context(), arg)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "record SonarQube delivery", "error", err)
 		httpapi.WriteError(w, http.StatusInternalServerError, "internal_error", "Something went wrong. Try again later.")
@@ -201,6 +207,10 @@ type link struct {
 	Pin bool
 	// Unlinked explains why no service was found; empty when one was.
 	Unlinked string
+	// Waiting is set when the delivery names a GitLab project that has no
+	// service yet; WaitingFor is that project.
+	Waiting    bool
+	WaitingFor int64
 }
 
 // linkService finds the service of a project. The signature only proves the
@@ -217,16 +227,19 @@ func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (link, error)
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return link{}, err
 	}
-	notFound := fmt.Sprintf(
-		"No service is linked to SonarQube project %q. Pass -Dsonar.analysis.gitlabProjectId=$CI_PROJECT_ID to the scanner, or set the SonarQube key on the service.",
-		p.Project.Key)
-	id, perr := strconv.ParseInt(p.Properties["sonar.analysis.gitlabProjectId"], 10, 64)
-	if perr != nil {
-		return link{Unlinked: notFound}, nil
+	id, ok := claimedProject(p)
+	if !ok {
+		return link{Unlinked: fmt.Sprintf(
+			"No service is linked to SonarQube project %q. Pass -Dsonar.analysis.gitlabProjectId=$CI_PROJECT_ID to the scanner, or set the SonarQube key on the service.",
+			p.Project.Key)}, nil
 	}
 	svc, err := s.q.SonarServiceByGitlabProject(ctx, pgtype.Int8{Int64: id, Valid: true})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return link{Unlinked: notFound}, nil
+		// Typically the analysis ran before the first scan of the project
+		// created its service; LinkWaiting links it then.
+		return link{Waiting: true, WaitingFor: id, Unlinked: fmt.Sprintf(
+			"No service is linked to SonarQube project %q yet. The analysis is linked when the first scan of GitLab project %d reaches Scanopsis; you can also set the SonarQube key on the service.",
+			p.Project.Key, id)}, nil
 	}
 	if err != nil {
 		return link{}, err
@@ -237,6 +250,13 @@ func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (link, error)
 	return link{Unlinked: fmt.Sprintf(
 		"The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, so project %q was not linked to it. Change the SonarQube key on the service if the project was renamed.",
 		p.Project.Key)}, nil
+}
+
+// claimedProject returns the GitLab project ID in the
+// sonar.analysis.gitlabProjectId scanner property, if it is a number.
+func claimedProject(p webhookPayload) (int64, bool) {
+	id, err := strconv.ParseInt(p.Properties["sonar.analysis.gitlabProjectId"], 10, 64)
+	return id, err == nil
 }
 
 // briefError describes a failed Web API call without internals.
@@ -265,6 +285,9 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 	}
 	if l.Unlinked != "" {
 		s.finish(ctx, p.TaskID, outcomeUnlinked, nil, l.Unlinked)
+		if l.Waiting {
+			s.linkLate(ctx, l.WaitingFor)
+		}
 		return
 	}
 	sid := l.ServiceID
@@ -420,19 +443,26 @@ func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
 	if err != nil {
 		return err
 	}
-	detail, err := json.Marshal(map[string]any{
-		"id": a.ServiceID, "gitlab_project_path": path, "fields": []string{"sonar_project_key"},
-		"sonar_project_key": pinKey, "reason": "linked by the sonar.analysis.gitlabProjectId scanner property",
-		"task_id": a.TaskID, "claimed_gitlab_project_id": a.ClaimedProjectID, "pipeline_id": a.Pipeline,
-	})
-	if err != nil {
-		return err
-	}
-	if err := q.InsertAudit(ctx, store.InsertAuditParams{Actor: "sonarqube", Action: audit.ActionServiceUpdated, Detail: detail}); err != nil {
+	if err := auditPin(ctx, q, a.ServiceID, path, pinKey, a.TaskID, a.ClaimedProjectID, a.Pipeline); err != nil {
 		return err
 	}
 	if err := q.InsertSonarAnalysis(ctx, arg); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// auditPin records, in the transaction of q, that a service was linked to a
+// SonarQube project by the gitlabProjectId scanner property of the delivery
+// taskID.
+func auditPin(ctx context.Context, q *store.Queries, serviceID int64, path, key, taskID, claimed string, pipeline *int64) error {
+	detail, err := json.Marshal(map[string]any{
+		"id": serviceID, "gitlab_project_path": path, "fields": []string{"sonar_project_key"},
+		"sonar_project_key": key, "reason": "linked by the sonar.analysis.gitlabProjectId scanner property",
+		"task_id": taskID, "claimed_gitlab_project_id": claimed, "pipeline_id": pipeline,
+	})
+	if err != nil {
+		return err
+	}
+	return q.InsertAudit(ctx, store.InsertAuditParams{Actor: "sonarqube", Action: audit.ActionServiceUpdated, Detail: detail})
 }

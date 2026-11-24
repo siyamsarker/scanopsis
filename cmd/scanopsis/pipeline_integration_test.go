@@ -263,3 +263,105 @@ func TestIntegrationPipelineToDashboard(t *testing.T) {
 		t.Fatalf("sonar health = %d %v", code, sh)
 	}
 }
+
+// TestIntegrationSonarBeforeFirstScan follows a pipeline that runs its
+// SonarQube analysis before its first Trivy scan: the analysis arrives while
+// no service has the project, waits, and is shown as soon as the first upload
+// creates the service, without an administrator's step.
+func TestIntegrationSonarBeforeFirstScan(t *testing.T) {
+	c, publicURL := bootAdmin(t)
+
+	gl := httptest.NewUnstartedServer(nil)
+	gitlabURL := "http://" + gl.Listener.Addr().String()
+	fake, err := fakegitlab.New(gitlabURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gl.Config.Handler = fake.Handler()
+	gl.Start()
+	defer gl.Close()
+
+	sq := fakesonar.New("squ_e2e_token")
+	defer sq.Close()
+	analysed := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	sq.Set("demo:orders-api", fakesonar.Project{
+		Measures:   fakesonar.StandardMeasures(),
+		GateStatus: "OK",
+		Analyses:   []fakesonar.Analysis{{Key: "AX-7", Date: analysed, Revision: "0123456789abcdef0123456789abcdef01234567"}},
+	})
+	if code, body := c.do("PATCH", "/api/v1/settings", map[string]any{
+		"gitlab.url": gitlabURL, "sonar.url": sq.URL, "sonar.token": "squ_e2e_token", "sonar.webhook_secret": "whsec-e2e",
+	}); code != 200 {
+		t.Fatalf("settings = %d %v", code, body)
+	}
+
+	// 1. The analysis arrives first and waits.
+	hook, _ := json.Marshal(map[string]any{
+		"serverUrl": sq.URL, "taskId": "task-early", "status": "SUCCESS",
+		"analysedAt": analysed.Format("2006-01-02T15:04:05-0700"),
+		"project":    map[string]any{"key": "demo:orders-api", "name": "Orders API"},
+		"properties": map[string]string{"sonar.analysis.gitlabProjectId": "7", "sonar.analysis.pipelineId": "1001"},
+	})
+	mac := hmac.New(sha256.New, []byte("whsec-e2e"))
+	mac.Write(hook)
+	if code, body := raw(t, "POST", c.base+"/api/v1/hooks/sonarqube", hook, map[string]string{
+		"X-Sonar-Webhook-HMAC-SHA256": hex.EncodeToString(mac.Sum(nil)), "Content-Type": "application/json",
+	}); code != 202 {
+		t.Fatalf("webhook = %d %v", code, body)
+	}
+	delivery := func() map[string]any {
+		_, sh := c.do("GET", "/api/v1/admin/integrations/sonarqube", nil)
+		list, _ := sh["recent_deliveries"].([]any)
+		if len(list) != 1 {
+			return nil
+		}
+		return list[0].(map[string]any)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for d := delivery(); d == nil || d["outcome"] == "pending"; d = delivery() {
+		if time.Now().After(deadline) {
+			t.Fatalf("delivery not processed: %v", d)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if d := delivery(); d["outcome"] != "unlinked" {
+		t.Fatalf("before the first scan: %v", d)
+	}
+
+	// 2. The first Trivy upload creates the service, which is linked at once.
+	now := time.Now()
+	token, err := fake.SignJWT(map[string]any{
+		"iss": gitlabURL, "aud": publicURL, "sub": "project_path:demo/orders-api:ref_type:branch:ref:main",
+		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nbf": now.Add(-time.Minute).Unix(),
+		"project_id": "7", "project_path": "demo/orders-api", "namespace_path": "demo",
+		"pipeline_id": "1001", "job_id": "5001", "ref": "main", "ref_type": "branch", "ref_protected": "true",
+		"sha": "0123456789abcdef0123456789abcdef01234567",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, res := raw(t, "POST", c.base+"/api/v1/ingest/trivy", []byte(`{"SchemaVersion":2,"ArtifactName":"orders-api:1"}`), map[string]string{
+		"Authorization": "Bearer " + token, "Content-Type": "application/json",
+	})
+	if code != 201 || res["service_created"] != true {
+		t.Fatalf("upload = %d %v", code, res)
+	}
+	serviceID := int64(res["service_id"].(float64))
+	if d := delivery(); d["outcome"] != "linked" || d["service_name"] != "orders-api" {
+		t.Errorf("after the first scan: %v", d)
+	}
+	_, svc := c.do("GET", fmt.Sprintf("/api/v1/services/%d", serviceID), nil)
+	if svc["sonar_project_key"] != "demo:orders-api" {
+		t.Errorf("service = %v", svc)
+	}
+	var latest map[string]any
+	for deadline = time.Now().Add(10 * time.Second); latest == nil && time.Now().Before(deadline); {
+		_, sonar := c.do("GET", fmt.Sprintf("/api/v1/services/%d/sonar", serviceID), nil)
+		if latest, _ = sonar["latest"].(map[string]any); latest == nil {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if latest == nil || latest["quality_gate_status"] != "OK" {
+		t.Fatalf("sonar latest = %v", latest)
+	}
+}

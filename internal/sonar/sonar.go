@@ -25,6 +25,9 @@ const (
 	// is a few kilobytes, so the queue is cheap; when it is still full, the
 	// delivery stays pending and the next sync reads its analysis.
 	queueSize = 500
+	// linkedSize is how many newly linked projects wait to be synced. A
+	// project that does not fit is read by the next sync, as it is linked.
+	linkedSize = 64
 	// workers is how many deliveries are processed at the same time.
 	workers = 4
 )
@@ -70,6 +73,9 @@ type Sonar struct {
 	now  func() time.Time
 
 	queue chan delivery
+	// linked holds projects LinkWaiting has just linked, for the workers to
+	// read their newest analysis at once.
+	linked chan store.SonarLinkedServicesRow
 	// queueWarned is when the full queue was last logged (Unix nanoseconds).
 	queueWarned atomic.Int64
 	// workers is how many goroutines of Run process deliveries.
@@ -98,6 +104,7 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 		pool: pool, q: store.New(pool), cfg: cfg,
 		hc: opts.HTTPClient, log: opts.Logger, now: opts.Now,
 		queue:       make(chan delivery, queueSize),
+		linked:      make(chan store.SonarLinkedServicesRow, linkedSize),
 		workers:     workers,
 		audit:       opts.Audit,
 		clientIP:    opts.ClientIP,

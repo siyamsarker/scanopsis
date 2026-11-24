@@ -117,14 +117,15 @@ type SonarAnalysis struct {
 }
 
 type SonarDelivery struct {
-	ID         int64
-	TaskID     string
-	ProjectKey string
-	ReceivedAt pgtype.Timestamptz
-	Outcome    string
-	ServiceID  pgtype.Int8
-	Detail     string
-	Attempts   int32
+	ID               int64
+	TaskID           string
+	ProjectKey       string
+	ReceivedAt       pgtype.Timestamptz
+	Outcome          string
+	ServiceID        pgtype.Int8
+	Detail           string
+	Attempts         int32
+	ClaimedProjectID pgtype.Int8
 }
 
 type User struct {
