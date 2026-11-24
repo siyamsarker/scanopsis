@@ -2303,7 +2303,7 @@ Type: object
 | `gitlab_pipeline_id` | integer (int64) | yes |  |
 | `kind` | string (one of `image`, `secret-fs`) | yes |  |
 | `new` | [SeverityCounts](#severitycounts) | yes | Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none. |
-| `previous_scan_id` | integer or null (int64) | yes | The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan. |
+| `previous_scan_id` | integer or null (int64) | yes | The previous scan of the same ref, artifact key and kind, which may be older than the window. null for a first scan. |
 | `ref` | string | yes |  |
 | `scan_id` | integer (int64) | yes |  |
 | `scanned_at` | string (date-time) | yes |  |

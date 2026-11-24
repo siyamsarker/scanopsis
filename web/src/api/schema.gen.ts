@@ -1493,7 +1493,7 @@ export interface components {
             fixable: number;
             /**
              * Format: int64
-             * @description The previous scan of the same ref, artifact and kind, which may be older than the window. null for a first scan.
+             * @description The previous scan of the same ref, artifact key and kind, which may be older than the window. null for a first scan.
              */
             previous_scan_id: number | null;
             /** @description Findings of this scan that the previous scan did not have, by severity, as new_total of the scan diff counts them. A first scan has every finding new; a secret scan has none. */
