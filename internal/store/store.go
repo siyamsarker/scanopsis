@@ -175,7 +175,7 @@ func MigrateLogged(ctx context.Context, pool *pgxpool.Pool, log *slog.Logger) er
 		if err != nil {
 			return fmt.Errorf("apply migration %s: %w", name, err)
 		}
-		log.Info("applied migration", "migration", filepath.Base(res.Source.Path), "duration", res.Duration.Round(time.Millisecond))
+		log.Info("applied migration", "migration", filepath.Base(res.Source.Path), "duration", res.Duration.Round(time.Millisecond).String())
 	}
 	return nil
 }
