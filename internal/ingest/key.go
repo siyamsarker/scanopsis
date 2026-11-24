@@ -16,7 +16,7 @@ const maxArtifactParamLen = 200
 
 // errArtifactParam is the answer to an artifact upload parameter that cannot
 // be a key.
-var errArtifactParam = errors.New("artifact must be 1 to 200 printable characters, without control characters")
+var errArtifactParam = errors.New("artifact must be 1 to 200 printable characters: no control characters, no non-ASCII spaces, and not only spaces")
 
 // checkArtifactParam checks the artifact upload parameter: 1 to 200
 // characters of valid UTF-8, each printable (letters, marks, numbers,

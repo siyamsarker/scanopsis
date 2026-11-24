@@ -133,3 +133,22 @@ func TestVulnTarget(t *testing.T) {
 		t.Errorf("long target: %d bytes, %.20q", len(got), got)
 	}
 }
+
+// The answer to a bad artifact parameter names the rules people trip over:
+// non-ASCII spaces (a pasted no-break space) and a value of only spaces.
+func TestArtifactParamMessage(t *testing.T) {
+	for _, v := range []string{"", "   ", "app amd64", "app\tamd64"} {
+		err := checkArtifactParam(v)
+		if err == nil {
+			t.Fatalf("checkArtifactParam(%q) accepted", v)
+		}
+		for _, want := range []string{"1 to 200", "non-ASCII spaces", "only spaces"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("message %q lacks %q", err.Error(), want)
+			}
+		}
+	}
+	if err := checkArtifactParam("web-frontend-stage-amd64"); err != nil {
+		t.Errorf("plain name refused: %v", err)
+	}
+}
