@@ -167,16 +167,17 @@ type Options struct {
 	ClientIP func(*http.Request) netip.Addr
 	Logger   *slog.Logger
 	Now      func() time.Time
-	// SonarLinker links the SonarQube analyses that arrived before the
-	// service of their project existed. nil links nothing.
+	// SonarLinker links the SonarQube analyses of the upload's pipeline that
+	// arrived before the service of their project existed. nil links
+	// nothing.
 	SonarLinker SonarLinker
 }
 
-// SonarLinker links a service, once it has a GitLab project ID, to the
-// SonarQube project of analyses that named that project before the service
-// existed.
+// SonarLinker links a service that has just received its GitLab project ID
+// to the SonarQube project of analyses that named that project and the
+// pipeline of the upload before the service existed.
 type SonarLinker interface {
-	LinkWaiting(ctx context.Context, serviceID, gitlabProjectID int64) error
+	LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pipelineID int64) error
 }
 
 // sonarLinkTimeout bounds the linking that follows an upload, which reads
@@ -558,16 +559,19 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	httpapi.WriteJSON(w, http.StatusCreated, res)
 }
 
-// linkSonar links the SonarQube analyses that waited for the service of the
-// project. The scan is stored already, so a failure is only logged; it does
+// linkSonar links the SonarQube analyses of the upload's pipeline that
+// waited for the service of the project. The pipeline comes from the
+// verified CI token, so an analysis that merely names the project is not
+// enough. The scan is stored already, so a failure is only logged; it does
 // not depend on the client staying connected. Reading the analysis from
 // SonarQube happens in the background.
 func (i *Ingest) linkSonar(ctx context.Context, serviceID int64, claims *Claims) {
 	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sonarLinkTimeout)
 	defer cancel()
-	if err := i.opts.SonarLinker.LinkWaiting(lctx, serviceID, claims.ProjectID); err != nil {
+	if err := i.opts.SonarLinker.LinkWaiting(lctx, serviceID, claims.ProjectID, claims.PipelineID); err != nil {
 		i.log.WarnContext(ctx, "cannot link waiting SonarQube analyses to the service",
-			"project", claims.ProjectPath, "project_id", claims.ProjectID, "service_id", serviceID, "error", err)
+			"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
+			"service_id", serviceID, "error", err)
 	}
 }
 

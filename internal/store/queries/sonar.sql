@@ -28,15 +28,17 @@ ORDER BY id;
 -- redeliver it from SonarQube), but only for the same project, at least a
 -- minute after the previous attempt and at most 5 attempts in all, so a
 -- captured delivery cannot be replayed without bound. Any other duplicate
--- changes nothing and affects no row. claimed_project_id is the
--- sonar.analysis.gitlabProjectId scanner property, NULL without a usable one.
+-- changes nothing and affects no row. claimed_project_id and
+-- claimed_pipeline_id are the sonar.analysis.gitlabProjectId and
+-- sonar.analysis.pipelineId scanner properties, NULL without a usable one.
 -- name: InsertSonarDelivery :execrows
-INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail, claimed_project_id)
-VALUES ($1, $2, $3, 'pending', '', $4)
+INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail, claimed_project_id, claimed_pipeline_id)
+VALUES ($1, $2, $3, 'pending', '', $4, $5)
 ON CONFLICT (task_id) DO UPDATE
 SET outcome = 'pending', detail = '', service_id = NULL,
     received_at = EXCLUDED.received_at, attempts = sonar_deliveries.attempts + 1,
-    claimed_project_id = EXCLUDED.claimed_project_id
+    claimed_project_id = EXCLUDED.claimed_project_id,
+    claimed_pipeline_id = EXCLUDED.claimed_pipeline_id
 WHERE sonar_deliveries.outcome = 'failed'
   AND sonar_deliveries.project_key = EXCLUDED.project_key
   AND sonar_deliveries.attempts < 5
@@ -69,22 +71,49 @@ SET outcome = 'linked', detail = @detail::text,
 WHERE d.outcome = 'pending' AND d.detail = @queued_detail::text
   AND d.project_key = ANY(@project_keys::text[]);
 
--- WaitingSonarDeliveries lists the unlinked deliveries that name a GitLab
--- project in their scanner properties, newest first.
--- name: WaitingSonarDeliveries :many
-SELECT task_id, project_key
-FROM sonar_deliveries
-WHERE outcome = 'unlinked' AND claimed_project_id = $1
-ORDER BY received_at DESC, id DESC
-LIMIT 50;
+-- name: SonarArchivedProject :one
+SELECT EXISTS (
+    SELECT 1 FROM services WHERE gitlab_project_id = $1 AND archived
+) AS archived;
 
--- LinkWaitingSonarDeliveries marks the unlinked deliveries of a project that
--- named a GitLab project as linked to the service of that project.
+-- WaitingSonarKeys lists the SonarQube projects of the unlinked deliveries
+-- that name a GitLab project and pipeline and arrived since a time, with the
+-- newest task of each, by key. Two rows are enough to tell one project from
+-- several. The time bound keeps the scan on sonar_deliveries_received_idx.
+-- name: WaitingSonarKeys :many
+SELECT project_key,
+       (array_agg(task_id ORDER BY received_at DESC, id DESC))[1]::text AS task_id
+FROM sonar_deliveries
+WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
+  AND claimed_project_id = @claimed_project_id AND claimed_pipeline_id = @claimed_pipeline_id
+GROUP BY project_key
+ORDER BY project_key
+LIMIT 2;
+
+-- LinkWaitingSonarDeliveries marks those waiting deliveries of one project
+-- key linked to the service.
 -- name: LinkWaitingSonarDeliveries :execrows
 UPDATE sonar_deliveries
 SET outcome = 'linked', service_id = @service_id, detail = @detail::text
-WHERE outcome = 'unlinked' AND claimed_project_id = @claimed_project_id
+WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
+  AND claimed_project_id = @claimed_project_id AND claimed_pipeline_id = @claimed_pipeline_id
   AND project_key = @project_key;
+
+-- ExplainWaitingSonarDeliveries replaces the detail of the waiting deliveries
+-- of a pipeline that were not linked, and says why.
+-- name: ExplainWaitingSonarDeliveries :execrows
+UPDATE sonar_deliveries
+SET detail = @detail::text
+WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
+  AND claimed_project_id = @claimed_project_id AND claimed_pipeline_id = @claimed_pipeline_id;
+
+-- ExplainUnlinkedSonarClaims replaces the detail of every unlinked delivery
+-- that names a GitLab project, once its service has been linked to another
+-- analysis.
+-- name: ExplainUnlinkedSonarClaims :execrows
+UPDATE sonar_deliveries
+SET detail = @detail::text
+WHERE outcome = 'unlinked' AND claimed_project_id = @claimed_project_id;
 
 -- name: InsertSonarAnalysis :exec
 INSERT INTO sonar_analyses (

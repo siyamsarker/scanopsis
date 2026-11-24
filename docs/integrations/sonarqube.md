@@ -164,9 +164,12 @@ Scanopsis then links this way:
    the analysis links it and Scanopsis saves the key on the service. From then
    on the link is fixed.
    If the analysis runs before the first Trivy scan of the project, there is
-   no service yet. The analysis waits, and the first scan, which creates the
-   service, links it under the same rules and shows its result. Nothing else
-   is needed.
+   no service yet. The analysis waits for up to 7 days. When the first scan
+   of the same pipeline (`sonar.analysis.pipelineId`) creates the service,
+   that analysis links it under the same rules and its result is shown.
+   Analyses that name the project from another pipeline are never linked
+   this way, and if analyses of two SonarQube projects come from the same
+   pipeline, none is linked: set the key on the service.
 3. A pipeline can never move a service to another SonarQube project, or take
    over a service that is linked to a different one.
 
@@ -175,8 +178,8 @@ Each automatic link shows up in the audit log as `service.updated` by the actor
 change or remove the key on the Services page. `sonar.analysis.pipelineId` is
 shown next to the analysis.
 
-Archived services are never linked and never synced. Unarchiving a service
-links the analyses that waited for it.
+Archived services are never linked and never synced. After unarchiving a
+service, set its SonarQube key if it has none.
 
 Community Build analyses one branch per project, the main branch, so each
 service has one SonarQube result.
@@ -299,9 +302,13 @@ calling the endpoint.
 | Linked: `The processing queue was full; the sync read the analysis.` | The delivery waited for the sync, which stored the analysis. | Nothing to do. |
 | Linked: `The analysis was already stored by a sync.` | The sync was faster than the webhook. | Nothing to do. |
 | Linked: `A newer analysis (...) already exists in SonarQube; the measures are from it. The next sync will add it.` | Another analysis finished before this one was read. | Nothing to do. |
-| Unlinked: `No service is linked to SonarQube project "...". ...` | No service has this project key, and the pipeline passed no usable `sonar.analysis.gitlabProjectId`. | Set the key on the service, or add `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`. See [step 4](#step-4-link-projects-to-services). |
-| Unlinked: `No service is linked to SonarQube project "..." yet. The analysis is linked when the first scan of GitLab project ... reaches Scanopsis; ...` | The analysis ran before the first Trivy scan of the project, so there is no service yet (or the service is archived). | Nothing to do: the first scan links it, and the delivery then shows Linked. Or set the key on the service. |
-| Linked: `Linked by the sonar.analysis.gitlabProjectId scanner property once the service of the GitLab project existed; ...` | The analysis waited for the first scan of the project. | Nothing to do. |
+| Unlinked: `No service is linked to SonarQube project "...". Pass -Dsonar.analysis.gitlabProjectId=... and -Dsonar.analysis.pipelineId=... ...` | No service has this project key, and the pipeline passed no usable `sonar.analysis.gitlabProjectId`. | Set the key on the service, or add both properties. See [step 4](#step-4-link-projects-to-services). |
+| Unlinked: `No service is linked to SonarQube project "..." yet. The analysis is linked when the scan of the same pipeline (...) reaches Scanopsis ...` | The analysis ran before the first Trivy scan of the project, so there is no service yet. | Nothing to do: the first scan of that pipeline links it, and the delivery then shows Linked. Or set the key on the service. |
+| Unlinked: `No service is linked to SonarQube project "...", and no service has GitLab project ... yet. Pass -Dsonar.analysis.pipelineId=... ...` | As above, but without `sonar.analysis.pipelineId`, so the analysis cannot be tied to the first scan. | Add `-Dsonar.analysis.pipelineId="$CI_PIPELINE_ID"`, or set the key on the service. |
+| Unlinked: `The service of GitLab project ... is archived, so SonarQube project "..." was not linked. ...` | The service of the project is archived. | An administrator unarchives the service and sets its SonarQube key. |
+| Unlinked: `More than one SonarQube project names GitLab project ... in pipeline ..., so none was linked automatically. ...` | Analyses of two SonarQube projects came from the pipeline of the first scan. | An administrator sets the right key on the service. |
+| Unlinked: `Not linked: the service of GitLab project ... was linked to SonarQube project "..." by the analysis of the pipeline of its first scan. ...` | Another analysis, of the first scan's pipeline, was linked. This one came from another pipeline or named another project. | Nothing to do if the link is right; otherwise change the key on the service. |
+| Linked: `Linked when the first scan of the same pipeline created the service of the GitLab project; ...` | The analysis waited for the first scan of its pipeline. | Nothing to do. |
 | Unlinked: `The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, ...` | The service already has another key, for example because the project was renamed. | Change the SonarQube key on the service. |
 | Unlinked: `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "..." because the service or the key is already linked.` | Another service, maybe an archived one, has this key. | Free the key on the other service, or link by key. |
 | Failed: `The analysis task ended with status "..."; nothing was stored.` | The analysis failed in SonarQube. | Fix the analysis. The next successful one is stored. |

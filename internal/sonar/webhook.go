@@ -111,10 +111,13 @@ func (s *Sonar) webhook(w http.ResponseWriter, r *http.Request) {
 		TaskID: p.TaskID, ProjectKey: p.Project.Key,
 		ReceivedAt: pgtype.Timestamptz{Time: s.now(), Valid: true},
 	}
+	// Kept so that the delivery can be linked when the first upload of the
+	// same pipeline creates the service of the project (see LinkWaiting).
 	if id, ok := claimedProject(p); ok {
-		// Kept so that the delivery can be linked when the service of the
-		// project is created after it (see LinkWaiting).
 		arg.ClaimedProjectID = pgtype.Int8{Int64: id, Valid: true}
+	}
+	if id, ok := claimedPipeline(p); ok {
+		arg.ClaimedPipelineID = pgtype.Int8{Int64: id, Valid: true}
 	}
 	n, err := s.q.InsertSonarDelivery(r.Context(), arg)
 	if err != nil {
@@ -208,9 +211,9 @@ type link struct {
 	// Unlinked explains why no service was found; empty when one was.
 	Unlinked string
 	// Waiting is set when the delivery names a GitLab project that has no
-	// service yet; WaitingFor is that project.
-	Waiting    bool
-	WaitingFor int64
+	// service yet, and the pipeline whose first upload may create it.
+	Waiting                  bool
+	WaitingFor, WaitPipeline int64
 }
 
 // linkService finds the service of a project. The signature only proves the
@@ -230,16 +233,12 @@ func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (link, error)
 	id, ok := claimedProject(p)
 	if !ok {
 		return link{Unlinked: fmt.Sprintf(
-			"No service is linked to SonarQube project %q. Pass -Dsonar.analysis.gitlabProjectId=$CI_PROJECT_ID to the scanner, or set the SonarQube key on the service.",
+			`No service is linked to SonarQube project %q. Pass -Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID" and -Dsonar.analysis.pipelineId="$CI_PIPELINE_ID" to the scanner, or set the SonarQube key on the service.`,
 			p.Project.Key)}, nil
 	}
 	svc, err := s.q.SonarServiceByGitlabProject(ctx, pgtype.Int8{Int64: id, Valid: true})
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Typically the analysis ran before the first scan of the project
-		// created its service; LinkWaiting links it then.
-		return link{Waiting: true, WaitingFor: id, Unlinked: fmt.Sprintf(
-			"No service is linked to SonarQube project %q yet. The analysis is linked when the first scan of GitLab project %d reaches Scanopsis; you can also set the SonarQube key on the service.",
-			p.Project.Key, id)}, nil
+		return s.waitingLink(ctx, p, id)
 	}
 	if err != nil {
 		return link{}, err
@@ -250,6 +249,38 @@ func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (link, error)
 	return link{Unlinked: fmt.Sprintf(
 		"The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, so project %q was not linked to it. Change the SonarQube key on the service if the project was renamed.",
 		p.Project.Key)}, nil
+}
+
+// waitingLink explains a delivery that names GitLab project id when no
+// active service has it. Typically the analysis ran before the first scan of
+// the project; with a pipeline ID, LinkWaiting links it when the upload of
+// that pipeline creates the service. An archived service is never linked.
+func (s *Sonar) waitingLink(ctx context.Context, p webhookPayload, id int64) (link, error) {
+	archived, err := s.q.SonarArchivedProject(ctx, pgtype.Int8{Int64: id, Valid: true})
+	if err != nil {
+		return link{}, err
+	}
+	if archived {
+		return link{Unlinked: fmt.Sprintf(
+			"The service of GitLab project %d is archived, so SonarQube project %q was not linked. An administrator must set the SonarQube key on the service after unarchiving it.",
+			id, p.Project.Key)}, nil
+	}
+	pipeline, ok := claimedPipeline(p)
+	if !ok {
+		return link{Unlinked: fmt.Sprintf(
+			`No service is linked to SonarQube project %q, and no service has GitLab project %d yet. Pass -Dsonar.analysis.pipelineId="$CI_PIPELINE_ID" to the scanner as well, so that the analysis is linked when the scan of the same pipeline arrives, or set the SonarQube key on the service.`,
+			p.Project.Key, id)}, nil
+	}
+	return link{Waiting: true, WaitingFor: id, WaitPipeline: pipeline, Unlinked: fmt.Sprintf(
+		"No service is linked to SonarQube project %q yet. The analysis is linked when the scan of the same pipeline (%d) reaches Scanopsis and creates the service of GitLab project %d; you can also set the SonarQube key on the service.",
+		p.Project.Key, pipeline, id)}, nil
+}
+
+// claimedPipeline returns the GitLab pipeline ID in the
+// sonar.analysis.pipelineId scanner property, if it is a number.
+func claimedPipeline(p webhookPayload) (int64, bool) {
+	id, err := strconv.ParseInt(p.Properties["sonar.analysis.pipelineId"], 10, 64)
+	return id, err == nil
 }
 
 // claimedProject returns the GitLab project ID in the
@@ -286,7 +317,7 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 	if l.Unlinked != "" {
 		s.finish(ctx, p.TaskID, outcomeUnlinked, nil, l.Unlinked)
 		if l.Waiting {
-			s.linkLate(ctx, l.WaitingFor)
+			s.linkLate(ctx, l.WaitingFor, l.WaitPipeline)
 		}
 		return
 	}
@@ -330,10 +361,8 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 			})
 		}
 	}
-	if raw := p.Properties["sonar.analysis.pipelineId"]; raw != "" {
-		if id, err := strconv.ParseInt(raw, 10, 64); err == nil {
-			a.Pipeline = &id
-		}
+	if id, ok := claimedPipeline(p); ok {
+		a.Pipeline = &id
 	}
 	detail := ""
 	switch {

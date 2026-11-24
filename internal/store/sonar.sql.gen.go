@@ -11,6 +11,57 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const explainUnlinkedSonarClaims = `-- name: ExplainUnlinkedSonarClaims :execrows
+UPDATE sonar_deliveries
+SET detail = $1::text
+WHERE outcome = 'unlinked' AND claimed_project_id = $2
+`
+
+type ExplainUnlinkedSonarClaimsParams struct {
+	Detail           string
+	ClaimedProjectID pgtype.Int8
+}
+
+// ExplainUnlinkedSonarClaims replaces the detail of every unlinked delivery
+// that names a GitLab project, once its service has been linked to another
+// analysis.
+func (q *Queries) ExplainUnlinkedSonarClaims(ctx context.Context, arg ExplainUnlinkedSonarClaimsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, explainUnlinkedSonarClaims, arg.Detail, arg.ClaimedProjectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const explainWaitingSonarDeliveries = `-- name: ExplainWaitingSonarDeliveries :execrows
+UPDATE sonar_deliveries
+SET detail = $1::text
+WHERE outcome = 'unlinked' AND received_at >= $2::timestamptz
+  AND claimed_project_id = $3 AND claimed_pipeline_id = $4
+`
+
+type ExplainWaitingSonarDeliveriesParams struct {
+	Detail            string
+	Since             pgtype.Timestamptz
+	ClaimedProjectID  pgtype.Int8
+	ClaimedPipelineID pgtype.Int8
+}
+
+// ExplainWaitingSonarDeliveries replaces the detail of the waiting deliveries
+// of a pipeline that were not linked, and says why.
+func (q *Queries) ExplainWaitingSonarDeliveries(ctx context.Context, arg ExplainWaitingSonarDeliveriesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, explainWaitingSonarDeliveries,
+		arg.Detail,
+		arg.Since,
+		arg.ClaimedProjectID,
+		arg.ClaimedPipelineID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const finishSonarDelivery = `-- name: FinishSonarDelivery :exec
 UPDATE sonar_deliveries
 SET outcome = $2, service_id = $3, detail = $4
@@ -90,12 +141,13 @@ func (q *Queries) InsertSonarAnalysis(ctx context.Context, arg InsertSonarAnalys
 }
 
 const insertSonarDelivery = `-- name: InsertSonarDelivery :execrows
-INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail, claimed_project_id)
-VALUES ($1, $2, $3, 'pending', '', $4)
+INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail, claimed_project_id, claimed_pipeline_id)
+VALUES ($1, $2, $3, 'pending', '', $4, $5)
 ON CONFLICT (task_id) DO UPDATE
 SET outcome = 'pending', detail = '', service_id = NULL,
     received_at = EXCLUDED.received_at, attempts = sonar_deliveries.attempts + 1,
-    claimed_project_id = EXCLUDED.claimed_project_id
+    claimed_project_id = EXCLUDED.claimed_project_id,
+    claimed_pipeline_id = EXCLUDED.claimed_pipeline_id
 WHERE sonar_deliveries.outcome = 'failed'
   AND sonar_deliveries.project_key = EXCLUDED.project_key
   AND sonar_deliveries.attempts < 5
@@ -103,10 +155,11 @@ WHERE sonar_deliveries.outcome = 'failed'
 `
 
 type InsertSonarDeliveryParams struct {
-	TaskID           string
-	ProjectKey       string
-	ReceivedAt       pgtype.Timestamptz
-	ClaimedProjectID pgtype.Int8
+	TaskID            string
+	ProjectKey        string
+	ReceivedAt        pgtype.Timestamptz
+	ClaimedProjectID  pgtype.Int8
+	ClaimedPipelineID pgtype.Int8
 }
 
 // InsertSonarDelivery records a delivery as pending. A redelivery of a task
@@ -114,14 +167,16 @@ type InsertSonarDeliveryParams struct {
 // redeliver it from SonarQube), but only for the same project, at least a
 // minute after the previous attempt and at most 5 attempts in all, so a
 // captured delivery cannot be replayed without bound. Any other duplicate
-// changes nothing and affects no row. claimed_project_id is the
-// sonar.analysis.gitlabProjectId scanner property, NULL without a usable one.
+// changes nothing and affects no row. claimed_project_id and
+// claimed_pipeline_id are the sonar.analysis.gitlabProjectId and
+// sonar.analysis.pipelineId scanner properties, NULL without a usable one.
 func (q *Queries) InsertSonarDelivery(ctx context.Context, arg InsertSonarDeliveryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSonarDelivery,
 		arg.TaskID,
 		arg.ProjectKey,
 		arg.ReceivedAt,
 		arg.ClaimedProjectID,
+		arg.ClaimedPipelineID,
 	)
 	if err != nil {
 		return 0, err
@@ -176,24 +231,29 @@ func (q *Queries) LastSonarDeliveryAt(ctx context.Context) (pgtype.Timestamptz, 
 const linkWaitingSonarDeliveries = `-- name: LinkWaitingSonarDeliveries :execrows
 UPDATE sonar_deliveries
 SET outcome = 'linked', service_id = $1, detail = $2::text
-WHERE outcome = 'unlinked' AND claimed_project_id = $3
-  AND project_key = $4
+WHERE outcome = 'unlinked' AND received_at >= $3::timestamptz
+  AND claimed_project_id = $4 AND claimed_pipeline_id = $5
+  AND project_key = $6
 `
 
 type LinkWaitingSonarDeliveriesParams struct {
-	ServiceID        pgtype.Int8
-	Detail           string
-	ClaimedProjectID pgtype.Int8
-	ProjectKey       string
+	ServiceID         pgtype.Int8
+	Detail            string
+	Since             pgtype.Timestamptz
+	ClaimedProjectID  pgtype.Int8
+	ClaimedPipelineID pgtype.Int8
+	ProjectKey        string
 }
 
-// LinkWaitingSonarDeliveries marks the unlinked deliveries of a project that
-// named a GitLab project as linked to the service of that project.
+// LinkWaitingSonarDeliveries marks those waiting deliveries of one project
+// key linked to the service.
 func (q *Queries) LinkWaitingSonarDeliveries(ctx context.Context, arg LinkWaitingSonarDeliveriesParams) (int64, error) {
 	result, err := q.db.Exec(ctx, linkWaitingSonarDeliveries,
 		arg.ServiceID,
 		arg.Detail,
+		arg.Since,
 		arg.ClaimedProjectID,
+		arg.ClaimedPipelineID,
 		arg.ProjectKey,
 	)
 	if err != nil {
@@ -363,6 +423,19 @@ func (q *Queries) SonarAnalysisKnown(ctx context.Context, arg SonarAnalysisKnown
 	return known, err
 }
 
+const sonarArchivedProject = `-- name: SonarArchivedProject :one
+SELECT EXISTS (
+    SELECT 1 FROM services WHERE gitlab_project_id = $1 AND archived
+) AS archived
+`
+
+func (q *Queries) SonarArchivedProject(ctx context.Context, gitlabProjectID pgtype.Int8) (bool, error) {
+	row := q.db.QueryRow(ctx, sonarArchivedProject, gitlabProjectID)
+	var archived bool
+	err := row.Scan(&archived)
+	return archived, err
+}
+
 const sonarLinkedServices = `-- name: SonarLinkedServices :many
 SELECT id, sonar_project_key::text AS sonar_project_key
 FROM services
@@ -436,31 +509,42 @@ func (q *Queries) SonarServiceKey(ctx context.Context, id int64) (pgtype.Text, e
 	return sonar_project_key, err
 }
 
-const waitingSonarDeliveries = `-- name: WaitingSonarDeliveries :many
-SELECT task_id, project_key
+const waitingSonarKeys = `-- name: WaitingSonarKeys :many
+SELECT project_key,
+       (array_agg(task_id ORDER BY received_at DESC, id DESC))[1]::text AS task_id
 FROM sonar_deliveries
-WHERE outcome = 'unlinked' AND claimed_project_id = $1
-ORDER BY received_at DESC, id DESC
-LIMIT 50
+WHERE outcome = 'unlinked' AND received_at >= $1::timestamptz
+  AND claimed_project_id = $2 AND claimed_pipeline_id = $3
+GROUP BY project_key
+ORDER BY project_key
+LIMIT 2
 `
 
-type WaitingSonarDeliveriesRow struct {
-	TaskID     string
-	ProjectKey string
+type WaitingSonarKeysParams struct {
+	Since             pgtype.Timestamptz
+	ClaimedProjectID  pgtype.Int8
+	ClaimedPipelineID pgtype.Int8
 }
 
-// WaitingSonarDeliveries lists the unlinked deliveries that name a GitLab
-// project in their scanner properties, newest first.
-func (q *Queries) WaitingSonarDeliveries(ctx context.Context, claimedProjectID pgtype.Int8) ([]WaitingSonarDeliveriesRow, error) {
-	rows, err := q.db.Query(ctx, waitingSonarDeliveries, claimedProjectID)
+type WaitingSonarKeysRow struct {
+	ProjectKey string
+	TaskID     string
+}
+
+// WaitingSonarKeys lists the SonarQube projects of the unlinked deliveries
+// that name a GitLab project and pipeline and arrived since a time, with the
+// newest task of each, by key. Two rows are enough to tell one project from
+// several. The time bound keeps the scan on sonar_deliveries_received_idx.
+func (q *Queries) WaitingSonarKeys(ctx context.Context, arg WaitingSonarKeysParams) ([]WaitingSonarKeysRow, error) {
+	rows, err := q.db.Query(ctx, waitingSonarKeys, arg.Since, arg.ClaimedProjectID, arg.ClaimedPipelineID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []WaitingSonarDeliveriesRow{}
+	items := []WaitingSonarKeysRow{}
 	for rows.Next() {
-		var i WaitingSonarDeliveriesRow
-		if err := rows.Scan(&i.TaskID, &i.ProjectKey); err != nil {
+		var i WaitingSonarKeysRow
+		if err := rows.Scan(&i.ProjectKey, &i.TaskID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

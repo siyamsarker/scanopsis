@@ -284,9 +284,6 @@ func serveApp(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 		RetentionDays: func() int { return conf.Current().RetentionDays },
 	})
 	sonarQube := sonar.New(pool, conf, sonar.Options{HTTPClient: httpClient, Logger: log, Audit: rec, ClientIP: resolver.IP})
-	// Analyses that arrive before the service of their project exists are
-	// linked when an upload creates it or an administrator unarchives it.
-	catalogService.SetSonarLinker(sonarQube)
 	features, err := mergeFeatures(
 		ingest.New(pool, conf, rec, ingest.Options{
 			Audience:    cfg.PublicURL.String(),

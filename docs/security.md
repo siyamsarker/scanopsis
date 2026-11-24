@@ -108,7 +108,7 @@ Each row names where the control lives, so you can check it in the code.
 | Small payload | At most 1 MiB. | `internal/sonar/webhook.go` |
 | One delivery, bounded redelivery | A task ID is processed once. A failed one may be redelivered for the same project only, a minute apart, at most five times. | `internal/store/queries/sonar.sql` |
 | Values come from SonarQube | The webhook only says which project and task. The measures are read from SonarQube with the configured token. | `internal/sonar/webhook.go` |
-| Link by key first | A project key set on a service decides. The `gitlabProjectId` scanner property can only link a service that has no key yet, and never moves a link. | `internal/sonar/webhook.go` |
+| Link by key first | A project key set on a service decides. The `gitlabProjectId` scanner property can only link a service that has no key yet, and never moves a link. An analysis that arrived before its service existed is linked only if it names the pipeline of the service's first upload. | `internal/sonar/webhook.go`, `internal/sonar/relink.go` |
 | No redirects elsewhere | Calls to SonarQube refuse a redirect to another scheme or host, so the token stays put. | `internal/sonar/sonar.go` |
 
 ### Browser and transport
@@ -181,10 +181,15 @@ Each is accepted for the reason given, and each has a way to soften it.
 2. **The first SonarQube project to name an unlinked service links it.** A
    service without a SonarQube key is linked to the first analysis that
    carries `sonar.analysis.gitlabProjectId` with its GitLab project ID. Anyone
-   who can run an analysis in your SonarQube can claim such a service. The link
-   is in the audit log (`service.updated`, actor `sonarqube`), and an
-   administrator can change it. Set the key on each service yourself to avoid
-   it.
+   who can run an analysis in your SonarQube can claim such a service. An
+   analysis that arrives before the service exists is linked automatically
+   only if it names the same GitLab pipeline (`sonar.analysis.pipelineId`) as
+   the first upload, whose CI token proves the pipeline, and arrived within 7
+   days. Analyses naming other pipelines are never linked this way, and if
+   analyses of two SonarQube projects name that pipeline, none is linked.
+   Every link is in the audit log (`service.updated`, actor `sonarqube`), and
+   an administrator can change it. To rule this out entirely, create each
+   service with its SonarQube key before its first upload.
 
 3. **An `http` SonarQube URL is allowed.** Internal SonarQube servers often
    have no TLS, but then the token and the results cross the network in clear

@@ -17,32 +17,33 @@ import (
 // fakeLinker records the calls of LinkWaiting.
 type fakeLinker struct {
 	mu    sync.Mutex
-	calls [][2]int64
+	calls [][3]int64
 	err   error
 }
 
-func (f *fakeLinker) LinkWaiting(_ context.Context, serviceID, gitlabProjectID int64) error {
+func (f *fakeLinker) LinkWaiting(_ context.Context, serviceID, gitlabProjectID, pipelineID int64) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, [2]int64{serviceID, gitlabProjectID})
+	f.calls = append(f.calls, [3]int64{serviceID, gitlabProjectID, pipelineID})
 	return f.err
 }
 
-func (f *fakeLinker) got() [][2]int64 {
+func (f *fakeLinker) got() [][3]int64 {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.calls)
 }
 
 // The upload that creates a service, or gives an administrator's service its
-// GitLab project ID, links the SonarQube analyses that waited for it. Later
-// uploads do not.
+// GitLab project ID, links the SonarQube analyses of its own pipeline that
+// waited for it, by the pipeline ID of its verified token. Later uploads do
+// not.
 func TestIntegrationFirstUploadLinksWaitingSonar(t *testing.T) {
 	l := &fakeLinker{}
 	e := newIEnv(t, func(o *Options) { o.SonarLinker = l })
 	body := []byte(`{"SchemaVersion":2,"ArtifactName":"a"}`)
 	res := e.mustUpload(upload{body: body})
-	if want := [][2]int64{{res.ServiceID, 42}}; !slices.Equal(l.got(), want) {
+	if want := [][3]int64{{res.ServiceID, 42, 1001}}; !slices.Equal(l.got(), want) {
 		t.Fatalf("calls after the first upload = %v, want %v", l.got(), want)
 	}
 	e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["job_id"] = "3000" }})
@@ -56,8 +57,10 @@ func TestIntegrationFirstUploadLinksWaitingSonar(t *testing.T) {
 		VALUES ('Orders', 'demo/orders-api', 'manual') RETURNING id`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	e.mustUpload(upload{body: body, claims: func(c map[string]any) { c["project_id"] = "7"; c["project_path"] = "demo/orders-api" }})
-	if got := l.got(); len(got) != 2 || got[1] != [2]int64{id, 7} {
+	e.mustUpload(upload{body: body, claims: func(c map[string]any) {
+		c["project_id"], c["project_path"], c["pipeline_id"] = "7", "demo/orders-api", "2002"
+	}})
+	if got := l.got(); len(got) != 2 || got[1] != [3]int64{id, 7, 2002} {
 		t.Errorf("calls after the adoption = %v", got)
 	}
 }

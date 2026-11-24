@@ -138,7 +138,7 @@ func TestWebhookUnlinked(t *testing.T) {
 	wantStatus(t, e, hook("task-3", "other:project", nil), 202)
 	e.drain(t, 1)
 	d := e.delivery(t, "task-3")
-	want := `No service is linked to SonarQube project "other:project". Pass -Dsonar.analysis.gitlabProjectId=$CI_PROJECT_ID to the scanner, or set the SonarQube key on the service.`
+	want := noClaimHint("other:project")
 	if d.Outcome != "unlinked" || d.ServiceID.Valid || d.Detail != want {
 		t.Errorf("delivery: %+v", d)
 	}

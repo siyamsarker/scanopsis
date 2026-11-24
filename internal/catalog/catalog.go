@@ -44,20 +44,7 @@ type Catalog struct {
 	log   *slog.Logger
 	// history caches the portfolio history (see historyCache).
 	history *historyCache
-	// sonar links waiting SonarQube analyses; nil links nothing.
-	sonar SonarLinker
 }
-
-// SonarLinker links a service, once it has a GitLab project ID, to the
-// SonarQube project of analyses that named that project while no service
-// could take them.
-type SonarLinker interface {
-	LinkWaiting(ctx context.Context, serviceID, gitlabProjectID int64) error
-}
-
-// SetSonarLinker sets what links waiting SonarQube analyses when a service is
-// unarchived. Call it before serving requests.
-func (c *Catalog) SetSonarLinker(l SonarLinker) { c.sonar = l }
 
 // New returns a Catalog.
 func New(pool *pgxpool.Pool, cfg SettingsSource, audit auth.AuditRecorder, log *slog.Logger) *Catalog {
@@ -351,25 +338,7 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	c.audit.Record(r.Context(), c.actor(r.Context()), audit.ActionServiceUpdated, detail)
-	if in.Archived != nil && !*in.Archived {
-		c.linkSonar(r.Context(), s)
-	}
 	httpapi.WriteJSON(w, http.StatusOK, toService(s))
-}
-
-// linkSonar links the SonarQube analyses that waited for an unarchived
-// service: archived services are never linked, so the analyses of its
-// project stayed unlinked. Only a service with a GitLab project ID and no
-// SonarQube key can be linked. A failure is logged; the update stands.
-func (c *Catalog) linkSonar(ctx context.Context, s store.Service) {
-	if c.sonar == nil || !s.GitlabProjectID.Valid || s.SonarProjectKey.Valid || s.Archived {
-		return
-	}
-	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
-	defer cancel()
-	if err := c.sonar.LinkWaiting(lctx, s.ID, s.GitlabProjectID.Int64); err != nil {
-		c.log.WarnContext(ctx, "cannot link waiting SonarQube analyses to the service", "service_id", s.ID, "error", err)
-	}
 }
 
 func (c *Catalog) deleteService(w http.ResponseWriter, r *http.Request) {
