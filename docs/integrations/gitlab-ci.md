@@ -292,6 +292,10 @@ it. The artifact is named by its **key**:
 | An image | The image name without its tag and digest. The registry, the port and the letter case stay as Trivy reports them. | `registry.example.com/team/web-frontend:4` and `registry.example.com/team/web-frontend:5` are one artifact, `registry.example.com/team/web-frontend`. `registry.example.com:5000/team/app:1` becomes `registry.example.com:5000/team/app`. |
 | A folder (`kind=secret-fs`) | `.` for the project folder, otherwise the path inside it. A path in the runner's build folder is read relative to your repository, using the project path of the token. | `.`, `/builds/demo/web-frontend` and `$CI_PROJECT_DIR` are all `.`. `/builds/demo/web-frontend/services/api` is `services/api`. Any other name stays as it is. |
 
+A relative folder is a key as written: `./services/api`, `services/api/` and
+`services/api` are three different keys. Use the same spelling in every run, or
+scan `.`.
+
 So per-run tags such as `$CI_PIPELINE_IID` or `$CI_COMMIT_SHORT_SHA` do not
 create a new image on the dashboard each time. The dashboard shows the key and,
 as a detail, the latest name with its tag, for example `Latest:
@@ -361,7 +365,9 @@ vulnerability gate fails on HIGH and CRITICAL vulnerabilities, unfixed ones
 included, and the secret gate fails on any secret in the image layers. It exits
 with 0 when the job passes and 1 when a gate fails or Trivy cannot scan (2
 means wrong use). The gates give the same result as a plain `trivy image` scan
-with the job's variables: `trivy convert` does not read `TRIVY_IGNORE_UNFIXED`,
+with the job's variables, as long as gate 1's `--severity` equals the flag of
+your old script (if the old script used `TRIVY_SEVERITY` instead, drop
+`--severity` from gate 1, as gate 2 has none): `trivy convert` does not read `TRIVY_IGNORE_UNFIXED`,
 so the script applies the `select(.Status == "fixed")` filter itself when the
 variable is `true`, and `TRIVY_SEVERITY` reaches the secret gate. Keep the `jq`
 filters equal to the flags your old script used: if it passed
@@ -421,6 +427,8 @@ image)
   upload "$out/$name.json" image
 
   # Gate 1, vulnerabilities: fail on HIGH and CRITICAL, unfixed ones included.
+  # Keep --severity equal to the flag of your old script. If the old script set
+  # TRIVY_SEVERITY instead of the flag, drop --severity so the variable applies.
   # trivy convert does not read TRIVY_IGNORE_UNFIXED, which trivy image does,
   # so a job that sets it to true gets the same effect from the jq filter.
   # A .trivyignore in the current folder is applied by trivy convert too.

@@ -186,8 +186,9 @@ Keep in mind how Scanopsis counts, because the comparison depends on it:
 - **Severity counts** are the **unsuppressed** vulnerabilities. Suppressed
   ones (in `ExperimentalModifiedFindings`) are counted apart.
 - **Fixable** counts unsuppressed vulnerabilities that have a fixed version.
-- **Secrets** are the unsuppressed findings of `secret-fs` scans, never part
-  of the severity counts.
+- **Secrets** are the unsuppressed secret findings: those of `secret-fs`
+  scans and those Trivy found in image layers (an image report made with
+  `--scanners vuln,secret`). They are never part of the severity counts.
 - The artifacts of one service add up.
 - The artifact is the image name without its tag, or the scanned folder
   relative to the repository (`.` for the repository itself). The
@@ -249,6 +250,10 @@ If retention already emptied the report, the command says so and exits with
 ### B. An independent count with jq
 
 This counts straight from the JSON, without Trivy's table:
+
+The `secrets=` count takes the secrets of every result, so it covers the
+secrets in image layers of an image report (made with `--scanners vuln,secret`)
+as well as a `secret-fs` report.
 
 ```sh
 jq -r '[.Results[]?.Vulnerabilities[]?.Severity] as $s
