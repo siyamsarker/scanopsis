@@ -77,9 +77,7 @@ export function useNewerScanId(scan: Scan | undefined) {
           params: { path: { id: s.service_id }, query: { ref: s.ref, limit: 200 } },
         }),
       );
-      const latest = page.items.find(
-        (i) => i.artifact_name === s.artifact_name && i.kind === s.kind,
-      );
+      const latest = page.items.find((i) => i.artifact_key === s.artifact_key && i.kind === s.kind);
       return latest && latest.id !== s.id ? latest.id : null;
     },
   });

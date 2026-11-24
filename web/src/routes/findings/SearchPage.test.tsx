@@ -19,6 +19,7 @@ const svc = (id: number, name: string) => ({
 const hit = (over: object) => ({
   service: svc(1, 'payments-api'),
   ref: 'main',
+  artifact_key: 'app',
   artifact_name: 'app',
   scan_id: 11,
   scanned_at: '2026-11-19T10:00:00Z',
@@ -46,8 +47,8 @@ function searchApi(items: object[], extra?: Handler): Handler {
           .size,
         total_artifacts: new Set(
           items.map((i) => {
-            const h = i as { service: { id: number }; artifact_name: string };
-            return `${h.service.id}/${h.artifact_name}`;
+            const h = i as { service: { id: number }; artifact_key: string };
+            return `${h.service.id}/${h.artifact_key}`;
           }),
         ).size,
         ...summaryOf(items as { severity: string; fixed_version: string }[]),
@@ -74,7 +75,7 @@ const searchCalls = (calls: { path: string }[]) =>
 
 const ITEMS = [
   hit({}),
-  hit({ artifact_name: 'worker', scan_id: 12, fixed_version: '' }),
+  hit({ artifact_key: 'worker', artifact_name: 'worker', scan_id: 12, fixed_version: '' }),
   hit({ service: svc(2, 'auth'), scan_id: 21, ref: 'release', severity: 'HIGH' }),
 ];
 
@@ -122,6 +123,32 @@ describe('vulnerability search', () => {
     const auth = within(table).getByRole('rowgroup', { name: 'auth' });
     expect(within(auth).getByText('release')).toBeInTheDocument();
     expect(within(auth).getByText('High')).toBeInTheDocument();
+  });
+
+  it('counts the tags of an image as one image and names it by key', async () => {
+    mockFetch(
+      searchApi([
+        hit({ artifact_key: 'web-frontend-stage', artifact_name: 'web-frontend-stage:4' }),
+        hit({
+          artifact_key: 'web-frontend-stage',
+          artifact_name: 'web-frontend-stage:3',
+          ref: 'release',
+          scan_id: 13,
+        }),
+      ]),
+    );
+    renderApp('/search?id=CVE-2024-3094');
+    expect(
+      await screen.findByText('CVE-2024-3094 affects 1 service in 1 image.'),
+    ).toBeInTheDocument();
+    const group = screen.getByRole('rowgroup', { name: 'payments-api' });
+    expect(within(group).getByText('1 image')).toBeInTheDocument();
+    expect(within(group).getAllByTitle('web-frontend-stage')).toHaveLength(2);
+    expect(
+      within(group)
+        .getAllByText(/^Latest:/)
+        .map((e) => e.textContent?.replace(/\s+/g, ' ')),
+    ).toEqual(['Latest: web-frontend-stage:4', 'Latest: web-frontend-stage:3']);
   });
 
   it('says so when the matches were cut and gives the true totals', async () => {

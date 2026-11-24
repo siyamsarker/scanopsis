@@ -147,6 +147,35 @@ export function artifactLabel(name: string | null | undefined, kind: string | nu
   return raw;
 }
 
+/** What names a scanned artifact: its key, the name the scan reported and the kind of scan. */
+export interface ArtifactRef {
+  artifact_key: string;
+  artifact_name: string;
+  kind: string;
+}
+
+/**
+ * The name an image scan reported when it says more than the artifact key:
+ * the tag or digest ("web-frontend-stage:4" of "web-frontend-stage"). Null
+ * when it adds nothing, and for a secret scan, whose reported name is a
+ * folder on the CI runner.
+ */
+export function scannedName({ artifact_key, artifact_name, kind }: ArtifactRef): string | null {
+  if (kind !== 'image' || !artifact_name || artifact_name === artifact_key) return null;
+  return artifact_name;
+}
+
+/**
+ * What a scanned name adds to its key, for a short label: the tag or digest
+ * (":4", "@sha256:…"), or the whole name when it does not start with the key.
+ * Null when it adds nothing.
+ */
+export function scannedTag(artifact: ArtifactRef): string | null {
+  const name = scannedName(artifact);
+  if (name === null) return null;
+  return name.startsWith(artifact.artifact_key) ? name.slice(artifact.artifact_key.length) : name;
+}
+
 const STATUS_LABEL: Record<string, string> = {
   affected: 'Affected',
   fixed: 'Fixed in a newer version',

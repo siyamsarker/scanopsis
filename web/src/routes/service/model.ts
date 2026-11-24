@@ -131,7 +131,7 @@ export function pipelinePoints(
       groups.set(key, g);
     }
     if (p.scanned_at > g.at) g.at = p.scanned_at;
-    if (!g.artifacts.includes(p.artifact_name)) g.artifacts.push(p.artifact_name);
+    if (!g.artifacts.includes(p.artifact_key)) g.artifacts.push(p.artifact_key);
     // The first scan of an artifact has every finding "new"; drawn as new it
     // would dwarf every real change, so it counts as the starting point.
     const first = p.previous_scan_id === null;

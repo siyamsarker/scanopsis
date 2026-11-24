@@ -83,7 +83,7 @@ export function LensSummary({
   const allRisk = riskPoints(countSeverities(all));
   const fixable = selected.filter(isFixable).length;
   const packages = new Set(selected.map((v) => v.pkg_name)).size;
-  const images = new Set(selected.map((v) => v.artifact_name)).size;
+  const images = new Set(selected.map((v) => v.artifact_key)).size;
   const share = selected.length ? fixable / selected.length : 0;
   const atLeast = incomplete ? 'at least ' : '';
 

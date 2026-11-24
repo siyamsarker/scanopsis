@@ -4,9 +4,11 @@
 import type { Vulnerability } from '../../api/findings';
 import { targetLabel } from './FindingsList';
 import {
+  applyFilters,
   compareVersions,
   groupRows,
   highestFixed,
+  parseFilters,
   parseGroupBy,
   suggestedFix,
   upgradeCommand,
@@ -118,8 +120,14 @@ describe('grouping', () => {
   const rows = [
     v(1, { pkg_name: 'openssl', severity: 'CRITICAL', fixed_version: '3.0.9' }),
     v(2, { pkg_name: 'openssl', fixed_version: '3.0.10, 3.1.2' }),
-    v(3, { pkg_name: 'zlib', severity: 'LOW', artifact_name: 'worker' }),
-    v(4, { pkg_name: 'zlib', severity: 'LOW', vuln_id: 'CVE-1', artifact_name: 'worker' }),
+    v(3, { pkg_name: 'zlib', severity: 'LOW', artifact_key: 'worker', artifact_name: 'worker' }),
+    v(4, {
+      pkg_name: 'zlib',
+      severity: 'LOW',
+      vuln_id: 'CVE-1',
+      artifact_key: 'worker',
+      artifact_name: 'worker',
+    }),
   ];
 
   it('groups by package and ranks groups by risk points', () => {
@@ -166,5 +174,50 @@ describe('targetLabel', () => {
     expect(targetLabel('python:3.9 (debian 10.13)', 'python:3.9')).toBe('debian 10.13');
     expect(targetLabel('app/package-lock.json', 'app:1')).toBe('app/package-lock.json');
     expect(targetLabel('python:3.9', 'python:3.9')).toBe('python:3.9');
+  });
+
+  it('drops the artifact key an OS target is stored under, as a whole word only', () => {
+    expect(targetLabel('web-frontend-stage (alpine 3.20.3)', 'web-frontend-stage')).toBe(
+      'alpine 3.20.3',
+    );
+    expect(targetLabel('app/package-lock.json', 'app')).toBe('app/package-lock.json');
+    expect(targetLabel('app-worker (alpine 3.20.3)', 'app')).toBe('app-worker (alpine 3.20.3)');
+  });
+});
+
+describe('artifact key', () => {
+  const stage = { artifact_key: 'web-frontend-stage', artifact_name: 'web-frontend-stage:4' };
+  const rows = [
+    v(1, { ...stage, pkg_name: 'openssl', severity: 'CRITICAL', fixed_version: '3.3.2' }),
+    v(2, { ...stage, pkg_name: 'musl' }),
+    v(3, {
+      artifact_key: 'worker',
+      artifact_name: 'worker:9',
+      pkg_name: 'openssl',
+      fixed_version: '3.3.2',
+    }),
+  ];
+  const ids = (list: Vulnerability[]) => list.map((r) => r.id);
+  const filter = (query: string) =>
+    ids(applyFilters(rows, parseFilters(new URLSearchParams(query))));
+
+  it('filters by the key, and by a full name from an older link', () => {
+    expect(filter('artifact=web-frontend-stage')).toEqual([1, 2]);
+    expect(filter('artifact=web-frontend-stage:4')).toEqual([1, 2]);
+    expect(filter('artifact=worker,web-frontend-stage')).toEqual([1, 2, 3]);
+    expect(filter('artifact=web-frontend-stage:3')).toEqual([]);
+  });
+
+  it('groups by image under the key, with the latest name as detail', () => {
+    expect(groupRows(rows, 'image').map((g) => [g.label, g.latest, g.rows.length])).toEqual([
+      ['web-frontend-stage', 'web-frontend-stage:4', 2],
+      ['worker', 'worker:9', 1],
+    ]);
+  });
+
+  it('names the images an upgrade clears by key', () => {
+    expect(upgradeGroups(rows).map((g) => [g.pkg, g.artifacts])).toEqual([
+      ['openssl', ['web-frontend-stage', 'worker']],
+    ]);
   });
 });

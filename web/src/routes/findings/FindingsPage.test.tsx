@@ -102,7 +102,8 @@ const VULNS: Vulnerability[] = [
     fixed_version: '4.17.21',
     severity: 'LOW',
     class: 'lang-pkgs',
-    artifact_name: 'worker',
+    artifact_key: 'worker',
+    artifact_name: 'worker:2',
     primary_url: 'javascript:alert(1)',
   }),
   vuln(5, {
@@ -111,7 +112,8 @@ const VULNS: Vulnerability[] = [
     fixed_version: '1.0.1',
     severity: 'MEDIUM',
     class: 'other',
-    artifact_name: 'worker',
+    artifact_key: 'worker',
+    artifact_name: 'worker:2',
   }),
   vuln(6, {
     pkg_name: 'bar',
@@ -326,6 +328,8 @@ describe('findings explorer', () => {
     ['?q=title 5', '1 vulnerability, 1 fixable'],
     ['?class=lang-pkgs', '3 vulnerabilities, 3 fixable'],
     ['?artifact=worker', '2 vulnerabilities, 2 fixable'],
+    // A link from before images were named by key still filters.
+    ['?artifact=worker:2', '2 vulnerabilities, 2 fixable'],
   ])('applies URL filters %s client-side', async (query, expected) => {
     const { calls } = mockFetch(api());
     renderApp(`/services/5/findings${query}`);
@@ -336,6 +340,41 @@ describe('findings explorer', () => {
       expect(p.get('fixable')).toBeNull();
       expect(p.get('q')).toBeNull();
     }
+  });
+
+  it('shows images by key, filters them by key and groups them under it', async () => {
+    mockFetch(api());
+    renderApp('/services/5/findings');
+    await summary('7 vulnerabilities, 6 fixable');
+    expect(within(row('CVE-2024-0004')).getByText('worker')).toHaveAttribute('title', 'worker:2');
+    expect(within(row('CVE-2024-0004')).queryByText('worker:2')).toBeNull();
+    const images = screen.getByRole('group', { name: 'Filter by image' });
+    expect(within(images).queryByRole('button', { name: /worker:2/ })).toBeNull();
+    fireEvent.click(within(images).getByRole('button', { name: /worker/ }));
+    expect(await summary('2 vulnerabilities, 2 fixable')).toBeInTheDocument();
+    expect(screen.getByTestId('location')).toHaveTextContent('artifact=worker');
+    expect(screen.getByTestId('location')).not.toHaveTextContent('worker%3A2');
+  });
+
+  it('marks the image chip of an older link that names the tag', async () => {
+    mockFetch(api());
+    renderApp('/services/5/findings?artifact=worker:2');
+    await summary('2 vulnerabilities, 2 fixable');
+    const images = screen.getByRole('group', { name: 'Filter by image' });
+    expect(within(images).getByRole('button', { name: /worker/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('names an image group by key with its latest tag', async () => {
+    mockFetch(api());
+    renderApp('/services/5/findings?group=image');
+    await summary('7 vulnerabilities, 6 fixable');
+    const latest = screen.getByText(/^Latest:/);
+    expect(latest).toHaveTextContent('Latest: worker:2');
+    const header = latest.closest('[role="row"]') as HTMLElement;
+    expect(within(header).getByTitle('worker')).toHaveTextContent(/^worker$/);
   });
 
   it('writes facet changes to the URL and shows facet counts', async () => {

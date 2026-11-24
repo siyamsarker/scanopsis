@@ -40,6 +40,7 @@ function scan(id: number, overrides: Record<string, unknown> = {}) {
     id,
     service_id: 7,
     kind: 'image',
+    artifact_key: 'registry.example.com/payments/api',
     artifact_name: 'registry.example.com/payments/api:1.4',
     gitlab_pipeline_id: 900 + id,
     gitlab_job_id: 5000 + id,
@@ -67,7 +68,8 @@ const overview = {
     scan(11),
     scan(12, {
       kind: 'secret-fs',
-      artifact_name: '.',
+      artifact_key: '.',
+      artifact_name: '/builds/x/0/platform/payments-api',
       counts: counts(0, 0, 0, 0, 0),
       secrets: 2,
       scanned_at: '2026-11-18T09:00:00Z',
@@ -150,6 +152,7 @@ const trendPoint = (id: number, over: Record<string, unknown> = {}) => ({
   scanned_at: `2026-11-1${id - 8}T10:00:00Z`,
   gitlab_pipeline_id: 900 + id,
   commit_sha: `sha${id}`,
+  artifact_key: 'registry.example.com/payments/api',
   artifact_name: 'registry.example.com/payments/api:1.4',
   counts: counts(2, 44, 5, 3, 1),
   fixable: 30,
@@ -363,9 +366,13 @@ describe('service dashboard', () => {
     expect(source).toHaveTextContent('2 secrets');
     expect(source).not.toHaveTextContent('vulnerabilities');
     expect(source).toHaveAttribute('href', '/scans/12');
-    expect(panel.getByRole('link', { name: /payments\/api:1.4/ })).toHaveTextContent(
-      '55 vulnerabilities',
+    // The image by its key, the latest tag as a detail.
+    const image = panel.getByRole('link', { name: /^registry\.example\.com\/payments\/api(?!:)/ });
+    expect(image).toHaveTextContent('55 vulnerabilities');
+    expect(within(image).getByText(/^Latest:/)).toHaveTextContent(
+      'Latest: registry.example.com/payments/api:1.4',
     );
+    expect(within(source).queryByText(/^Latest:/)).toBeNull();
   });
 
   it('shows the quality gate with new code and overall labelled, and measure changes', async () => {
@@ -479,6 +486,14 @@ describe('service dashboard', () => {
     });
     const table = await screen.findByRole('table', { name: 'Recent scans' });
     await within(table).findByText('#911');
+    // Each scan names its image by key and the tag it scanned below it.
+    const link = within(table).getByRole('link', {
+      name: /Open the scan of .*:1\.4 from pipeline 911/,
+    });
+    expect(link).toHaveTextContent(
+      /^registry\.example\.com\/payments\/apiregistry\.example\.com\/payments\/api:1\.4$/,
+    );
+    expect(within(link).getByText(':1.4')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Load more scans' }));
     expect(await within(table).findByText('#905')).toBeInTheDocument();
     expect(requested(calls, '/api/v1/services/7/scans')).toContain(

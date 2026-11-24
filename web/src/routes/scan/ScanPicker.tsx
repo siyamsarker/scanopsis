@@ -6,7 +6,13 @@ import { useRef, useState, type KeyboardEvent } from 'react';
 import { useEarlierScans, type Scan, type ScanSummary } from '../../api/scan';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/Popover';
 import { Skeleton } from '../../components/states';
-import { formatExactTime, formatInt, formatShortDate, relativeTime } from '../../format';
+import {
+  formatExactTime,
+  formatInt,
+  formatShortDate,
+  relativeTime,
+  scannedTag,
+} from '../../format';
 import { buttonClass } from '../../ui';
 import { DistributionMini, riskPoints } from '../../viz';
 
@@ -28,6 +34,7 @@ function Option({
   sameRef: boolean;
   onPick: () => void;
 }) {
+  const tag = scannedTag(scan);
   return (
     <li>
       <button
@@ -43,7 +50,17 @@ function Option({
         </span>
         <span className="min-w-0">
           <span className="flex min-w-0 items-center gap-2 text-body-s text-text">
-            <span className="font-medium tabular-nums">Pipeline #{scan.gitlab_pipeline_id}</span>
+            <span className="shrink-0 font-medium tabular-nums">
+              Pipeline #{scan.gitlab_pipeline_id}
+            </span>
+            {tag ? (
+              <span
+                className="min-w-0 truncate font-mono text-small text-text-muted"
+                title={scan.artifact_name}
+              >
+                {tag}
+              </span>
+            ) : null}
             {previous ? <span className="tag shrink-0">Previous</span> : null}
           </span>
           <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-small text-text-muted">

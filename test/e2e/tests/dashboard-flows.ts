@@ -326,7 +326,9 @@ export function registerDashboardFlows(session: Session): void {
     // Artifacts: the image and the source tree of the secret scan.
     await expect(open).toContainText('Source tree');
     await expect(open).toContainText('Secret scan');
-    await expect(open).toContainText(current.artifact);
+    // The image by its key, with the tag of its latest scan as a detail.
+    await expect(open).toContainText(current.key);
+    await expect(open).toContainText(`Latest: ${current.artifact}`);
     await expect(open).toContainText(plural(sum(current.counts), 'vulnerability', 'vulnerabilities'));
     await expect(open).toContainText('2 secrets');
 
@@ -460,7 +462,8 @@ export function registerDashboardFlows(session: Session): void {
     await page.goto(`/scans/${scanIds[current.name]}`);
     const m = main(page);
 
-    await expect(m.getByRole('heading', { name: current.artifact })).toBeVisible();
+    await expect(m.getByRole('heading', { name: current.key, exact: true })).toBeVisible();
+    await expect(m).toContainText(`Image ${current.artifact} scanned`);
     const project = `${gitlabUrl}/${currentJob.projectPath}`;
     await expect(m.getByRole('link', { name: new RegExp(`^#${currentJob.pipelineId}`) })).toHaveAttribute('href', `${project}/-/pipelines/${currentJob.pipelineId}`);
     await expect(m.getByRole('link', { name: new RegExp(`^#${currentJob.jobId}`) })).toHaveAttribute('href', `${project}/-/jobs/${currentJob.jobId}`);

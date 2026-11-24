@@ -7,9 +7,10 @@ import { Link } from 'react-router';
 import type { Scan } from '../../api/scan';
 import { ArtifactName } from '../../components/ArtifactName';
 import { CopyIconButton } from '../../components/CopyIconButton';
+import { Mono } from '../../components/Mono';
 import { PageHeader } from '../../components/layout';
 import { Skeleton } from '../../components/states';
-import { NO_VALUE, formatExactTime, relativeTime, shortSha } from '../../format';
+import { NO_VALUE, formatExactTime, relativeTime, scannedName, shortSha } from '../../format';
 import { buttonClass } from '../../ui';
 import { SafeExternal } from '../findings/VulnDrawer';
 import { findingsHref } from './Posture';
@@ -36,6 +37,8 @@ function When({ at }: { at: string }) {
 }
 
 export function ScanHeader({ scan, serviceName }: { scan: Scan; serviceName: string }) {
+  // The image is named by key; the tag this scan was of follows the kind.
+  const tagged = scannedName(scan);
   return (
     <>
       <PageHeader
@@ -44,10 +47,17 @@ export function ScanHeader({ scan, serviceName }: { scan: Scan; serviceName: str
           { label: serviceName, to: `/services/${scan.service_id}` },
           { label: `Pipeline #${scan.gitlab_pipeline_id}` },
         ]}
-        title={<ArtifactName name={scan.artifact_name} kind={scan.kind} className="text-[0.9em]" />}
+        title={<ArtifactName artifact={scan} className="text-[0.9em]" />}
         subtitle={
           <>
-            {kindLabel(scan.kind)} scanned <When at={scan.scanned_at} /> on{' '}
+            {kindLabel(scan.kind)}
+            {tagged ? (
+              <>
+                {' '}
+                <Mono value={tagged} className="text-text" />
+              </>
+            ) : null}{' '}
+            scanned <When at={scan.scanned_at} /> on{' '}
             <span className="font-mono text-text">{scan.ref}</span>
             {scan.ref_protected ? ', a protected ref' : ''}
           </>

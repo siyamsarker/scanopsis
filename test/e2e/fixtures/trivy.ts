@@ -52,11 +52,21 @@ export interface Report {
   /** CreatedAt of the report, in milliseconds since the epoch. */
   createdAt: number;
   artifact: string;
+  /** The artifact the dashboards show: an image name without its tag and digest. */
+  key: string;
   /** Unsuppressed vulnerabilities, the ones every dashboard number counts. */
   findings: Finding[];
   counts: Counts;
   fixable: number;
   secretRules: string[];
+}
+
+/** An image name without its digest and tag; a registry port is not a tag. */
+function imageKey(name: string): string {
+  const bare = name.split('@')[0];
+  const slash = bare.lastIndexOf('/');
+  const colon = bare.indexOf(':', slash + 1);
+  return colon === -1 ? bare : bare.slice(0, colon);
 }
 
 function load(name: string): Report {
@@ -83,6 +93,7 @@ function load(name: string): Report {
     body,
     createdAt: Date.parse(raw.CreatedAt),
     artifact: raw.ArtifactName,
+    key: imageKey(raw.ArtifactName),
     findings,
     counts: countBySeverity(findings),
     fixable: findings.filter((f) => f.fixed !== '').length,

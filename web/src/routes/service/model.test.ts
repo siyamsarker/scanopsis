@@ -59,6 +59,22 @@ function analysis(id: number, over: Partial<SonarAnalysis> = {}): SonarAnalysis 
 }
 
 describe('pipelinePoints', () => {
+  it('counts the tags of one image in a pipeline as one artifact, named by its key', () => {
+    const strip = pipelinePoints(
+      [
+        point(1, { artifact_key: 'web-frontend-stage', artifact_name: 'web-frontend-stage:4' }),
+        point(2, {
+          gitlab_pipeline_id: 801,
+          artifact_key: 'web-frontend-stage',
+          artifact_name: 'web-frontend-stage:latest',
+        }),
+      ],
+      [],
+      { metric: 'coverage', label: 'Coverage' },
+    );
+    expect(strip.points.map((p) => p.artifact)).toEqual(['web-frontend-stage']);
+  });
+
   it('sums the image scans of a pipeline and leaves secret scans out', () => {
     const strip = pipelinePoints(
       [
@@ -66,6 +82,7 @@ describe('pipelinePoints', () => {
         point(2, { new: { ...zero, critical: 1 }, fixed: 2 }),
         point(3, {
           gitlab_pipeline_id: 802,
+          artifact_key: 'worker',
           artifact_name: 'worker',
           new: { ...zero, high: 2 },
           fixed: 1,

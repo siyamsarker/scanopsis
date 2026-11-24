@@ -140,8 +140,12 @@ export function SecretsTab({
                     <span className="ml-2 text-small text-text-faint">{s.category}</span>
                   ) : null}
                 </span>
-                <span role="cell" className="hidden truncate text-small text-text-muted md:block">
-                  {artifactLabel(s.artifact_name, 'secret-fs')}
+                <span
+                  role="cell"
+                  className="hidden truncate text-small text-text-muted md:block"
+                  title={s.artifact_name}
+                >
+                  {artifactLabel(s.artifact_key, 'secret-fs')}
                 </span>
               </div>
             );

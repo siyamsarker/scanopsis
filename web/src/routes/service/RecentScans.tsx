@@ -4,7 +4,7 @@
 import { useMemo } from 'react';
 import { Link } from 'react-router';
 import { useServiceScans, type ScanSummary } from '../../api/service';
-import { ArtifactName } from '../../components/ArtifactName';
+import { ArtifactDetail, ArtifactName } from '../../components/ArtifactName';
 import { DataTable } from '../../components/DataTable';
 import { Mono } from '../../components/Mono';
 import { EmptyState } from '../../components/states';
@@ -33,7 +33,8 @@ const columns: Column<ScanSummary>[] = [
         className="block max-w-72 font-medium text-text hover:underline"
         aria-label={`Open the scan of ${s.artifact_name} from pipeline ${s.gitlab_pipeline_id}`}
       >
-        <ArtifactName name={s.artifact_name} kind={s.kind} truncate />
+        <ArtifactName artifact={s} truncate />
+        <ArtifactDetail artifact={s} className="font-normal" />
       </Link>
     ),
   },

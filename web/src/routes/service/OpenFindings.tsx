@@ -5,7 +5,7 @@ import { KeyRound, Wrench, EyeOff } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Link } from 'react-router';
 import type { Overview } from '../../api/service';
-import { ArtifactName } from '../../components/ArtifactName';
+import { ArtifactDetail, ArtifactName } from '../../components/ArtifactName';
 import type { SeverityCountValues } from '../../components/severityModel';
 import { countOf, formatExactTime, formatInt, relativeTime } from '../../format';
 import { SeverityBar, type Severity } from '../../viz';
@@ -169,11 +169,11 @@ export function OpenFindings({ overview, serviceId }: { overview: Overview; serv
               >
                 <span className="min-w-0">
                   <ArtifactName
-                    name={scan.artifact_name}
-                    kind={scan.kind}
+                    artifact={scan}
                     truncate
                     className="text-body-s font-medium text-text"
                   />
+                  <ArtifactDetail label="Latest" artifact={scan} className="mt-0.5" />
                   <span className="mt-0.5 block text-caption text-text-muted">
                     {SCAN_KIND_LABEL[scan.kind] ?? scan.kind}, pipeline #{scan.gitlab_pipeline_id},{' '}
                     <time

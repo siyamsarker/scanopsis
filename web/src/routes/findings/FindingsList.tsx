@@ -14,6 +14,7 @@ import {
   type ReactNode,
 } from 'react';
 import type { Vulnerability } from '../../api/findings';
+import { ArtifactDetail } from '../../components/ArtifactName';
 import { useCssom } from '../../components/cssom';
 import { SeverityMark } from '../../components/SeverityMark';
 import { SEVERITY_LABEL, severityKey } from '../../components/severityModel';
@@ -42,15 +43,25 @@ export const ROW_GRID =
 
 /**
  * The scanned target without the image name Trivy repeats in it:
- * "python:3.9 (debian 10.13)" in image "python:3.9" reads "debian 10.13".
+ * "python:3.9 (debian 10.13)" in image "python:3.9" reads "debian 10.13", and
+ * "web-frontend-stage (alpine 3.20.3)" in web-frontend-stage "alpine 3.20.3".
+ * The name must be the whole first word, so "app/package-lock.json" in image
+ * "app" stays as it is.
  */
 export function targetLabel(target: string, artifact: string) {
   if (!artifact || !target.startsWith(artifact)) return target;
+  if (target.length > artifact.length && !/\s/.test(target[artifact.length])) return target;
   const rest = target
     .slice(artifact.length)
     .trim()
     .replace(/^\((.*)\)$/, '$1');
   return rest || target;
+}
+
+/** The target of a finding without the image it is in, named by key or, in older scans, by tag. */
+export function findingTarget(v: Pick<Vulnerability, 'target' | 'artifact_key' | 'artifact_name'>) {
+  const byKey = targetLabel(v.target, v.artifact_key);
+  return byKey !== v.target ? byKey : targetLabel(v.target, v.artifact_name);
 }
 
 /** "pkg@1.0 → 1.1" in one truncating line; the fixed version in the ok colour. */
@@ -442,10 +453,10 @@ export function FindingsList({
               </span>
               <span role="gridcell" className="hidden min-w-0 md:block">
                 <span className="block truncate text-body-s text-text" title={v.artifact_name}>
-                  {v.artifact_name}
+                  {v.artifact_key}
                 </span>
                 <span className="mt-1 block truncate text-caption text-text-faint" title={v.target}>
-                  {targetLabel(v.target, v.artifact_name)}
+                  {findingTarget(v)}
                 </span>
               </span>
               <span role="gridcell" className="hidden text-right md:block">
@@ -503,6 +514,13 @@ function GroupHeader({
           >
             {group.label}
           </span>
+          {group.latest ? (
+            <ArtifactDetail
+              label="Latest"
+              artifact={{ artifact_key: group.key, artifact_name: group.latest, kind: 'image' }}
+              className="shrink max-sm:hidden"
+            />
+          ) : null}
           {group.version ? (
             <span className="shrink-0 font-mono text-small text-text-muted max-sm:hidden">
               {group.version}

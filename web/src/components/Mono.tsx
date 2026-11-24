@@ -19,6 +19,8 @@ export interface MonoProps {
   to?: To;
   /** Cuts long values with an ellipsis instead of wrapping; the full value is in the tooltip. */
   truncate?: boolean;
+  /** A tooltip in place of the full value. */
+  title?: string;
   className?: string;
 }
 
@@ -49,10 +51,11 @@ export function Mono({
   copyLabel = 'Copy',
   to,
   truncate = false,
+  title,
   className = '',
 }: MonoProps) {
   const shown = kind === 'sha' ? shortSha(value) : value;
-  const tip = shown !== value || truncate ? value : undefined;
+  const tip = title ?? (shown !== value || truncate ? value : undefined);
   const text = (
     <span
       title={tip}

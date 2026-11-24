@@ -102,7 +102,7 @@ export function VulnerabilitiesTab({
     const sev = countBy(applyFilters(rows, filters, 'severity'), (v) => severityKey(v.severity));
     const fix = applyFilters(rows, filters, 'fixable');
     const cls = countBy(applyFilters(rows, filters, 'classes'), vulnClass);
-    const art = countBy(applyFilters(rows, filters, 'artifacts'), (v) => v.artifact_name);
+    const art = countBy(applyFilters(rows, filters, 'artifacts'), (v) => v.artifact_key);
     const fixable = fix.filter(isFixable).length;
     const severity: ChipOption[] = SEVERITY_ORDER.map((key) => ({
       value: key,
@@ -117,13 +117,13 @@ export function VulnerabilitiesTab({
     const classes = CLASS_OPTIONS.map((o) => ({ ...o, count: cls.get(o.value) ?? 0 })).filter(
       (o) => o.count > 0 || filters.classes.includes(o.value as never),
     );
-    const artifactNames = [...new Set(rows.map((v) => v.artifact_name))].sort();
-    const artifacts = artifactNames.map((name) => ({
-      value: name,
-      label: name,
-      count: art.get(name) ?? 0,
-    }));
-    return { severity, fixOptions, classes, artifacts };
+    // One chip per artifact key, so every tag of an image is one image.
+    const keys = [...new Set(rows.map((v) => v.artifact_key))].sort();
+    const artifacts = keys.map((key) => ({ value: key, label: key, count: art.get(key) ?? 0 }));
+    // A link from before keys may name an image with its tag: mark its key.
+    const keyOf = new Map(rows.map((v) => [v.artifact_name, v.artifact_key]));
+    const selectedArtifacts = [...new Set(filters.artifacts.map((a) => keyOf.get(a) ?? a))];
+    return { severity, fixOptions, classes, artifacts, selectedArtifacts };
   }, [rows, filters]);
 
   if (error && rows.length === 0) {
@@ -252,7 +252,7 @@ export function VulnerabilitiesTab({
                 <FilterChips
                   label="Filter by image"
                   options={chips.artifacts}
-                  selected={filters.artifacts}
+                  selected={chips.selectedArtifacts}
                   onChange={(s) => setParam('artifact', s.join(',') || null)}
                 />
               </Facet>

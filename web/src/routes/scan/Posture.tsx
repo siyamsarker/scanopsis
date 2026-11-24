@@ -4,7 +4,7 @@
 import { ArrowUpRight, Info } from 'lucide-react';
 import { Link } from 'react-router';
 import { useNewerScanId, type Scan } from '../../api/scan';
-import { countOf, formatInt } from '../../format';
+import { artifactLabel, countOf, formatInt } from '../../format';
 import { linkClass } from '../../ui';
 import { RiskIris, SeverityBar, explainRisk, riskPoints, type Severity } from '../../viz';
 
@@ -85,7 +85,12 @@ export function Posture({ scan }: { scan: Scan }) {
         </div>
       ) : (
         <div className="panel grid items-center gap-6 px-5 py-5 sm:grid-cols-[auto_minmax(0,1fr)] sm:px-6">
-          <RiskIris counts={scan.counts} size={96} name={scan.artifact_name} animate />
+          <RiskIris
+            counts={scan.counts}
+            size={96}
+            name={artifactLabel(scan.artifact_key, scan.kind)}
+            animate
+          />
           <div className="min-w-0 space-y-3">
             <p className="text-body-s text-text-muted">
               <span className="font-semibold text-text">{countOf(total, 'open finding')}</span>{' '}

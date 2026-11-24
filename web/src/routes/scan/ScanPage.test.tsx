@@ -148,8 +148,13 @@ describe('scan detail', () => {
   it('shows header facts with exact links and the protected tag', async () => {
     const { calls } = api();
     renderApp('/scans/7');
-    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(scan.artifact_name);
-    expect(screen.getByText(/Image scanned/)).toBeInTheDocument();
+    // The image by its key; the tag that was scanned in the line below.
+    const heading = await screen.findByRole('heading', { level: 1 });
+    expect(heading).toHaveTextContent('registry.example.com/pay/api');
+    expect(heading).not.toHaveTextContent(':1.4');
+    expect(screen.getByText(/^Image/)).toHaveTextContent(
+      /^Image registry\.example\.com\/pay\/api:1\.4 scanned/,
+    );
     const crumbs = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(within(crumbs).getByRole('link', { name: 'Portfolio' })).toHaveAttribute('href', '/');
     expect(await within(crumbs).findByRole('link', { name: 'Payments API' })).toHaveAttribute(
@@ -174,7 +179,8 @@ describe('scan detail', () => {
         commit_url: null,
         ref_protected: false,
         kind: 'secret-fs',
-        artifact_name: '.',
+        artifact_key: '.',
+        artifact_name: '/builds/x/0/pay/api',
         secrets: 2,
       },
     });
@@ -227,7 +233,12 @@ describe('scan detail', () => {
     const calls = api({
       scans: () =>
         json(200, {
-          items: [{ ...scan, id: 20, artifact_name: 'other:1' }, { ...scan, id: 9 }, { ...scan }],
+          items: [
+            { ...scan, id: 20, artifact_key: 'other', artifact_name: 'other:1' },
+            // A newer tag of the same image is a newer scan of this artifact.
+            { ...scan, id: 9, artifact_name: 'registry.example.com/pay/api:1.5' },
+            { ...scan },
+          ],
           next_before: null,
         }),
     }).calls;
@@ -343,6 +354,29 @@ describe('scan detail', () => {
     // Back to the previous scan: the parameter leaves the URL.
     fireEvent.click(within(screen.getByRole('listbox')).getAllByRole('option')[0]);
     await waitFor(() => expect(screen.getByTestId('location')).toHaveTextContent(/^\/scans\/7$/));
+  });
+
+  it('names the tag of each earlier scan of an image in the picker', async () => {
+    api({
+      earlier: () =>
+        json(200, {
+          items: [
+            earlier(6, { artifact_name: 'registry.example.com/pay/api:1.3' }),
+            earlier(5, { artifact_name: 'registry.example.com/pay/api' }),
+          ],
+          next_before: null,
+        }),
+    });
+    renderApp('/scans/7');
+    fireEvent.click(await screen.findByRole('button', { name: /Compare with pipeline #996/ }));
+    const items = within(
+      await screen.findByRole('listbox', { name: 'Earlier scans' }),
+    ).getAllByRole('option');
+    expect(within(items[0]).getByText(':1.3')).toHaveAttribute(
+      'title',
+      'registry.example.com/pay/api:1.3',
+    );
+    expect(items[1]).not.toHaveTextContent(':');
   });
 
   it('explains a base that cannot be compared and goes back to the previous scan', async () => {

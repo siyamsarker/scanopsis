@@ -29,6 +29,7 @@ export interface Filters {
   /** 'true' keeps fixable, 'false' keeps findings without a fix, null keeps both. */
   fixable: 'true' | 'false' | null;
   classes: VulnClass[];
+  /** Artifact keys; a full name, from a link made before keys, is matched too. */
   artifacts: string[];
   q: string;
 }
@@ -68,7 +69,12 @@ export function applyFilters(rows: Vulnerability[], f: Filters, skip?: Facet): V
     if (skip !== 'fixable' && f.fixable !== null && isFixable(v) !== (f.fixable === 'true'))
       return false;
     if (skip !== 'classes' && f.classes.length && !f.classes.includes(vulnClass(v))) return false;
-    if (skip !== 'artifacts' && f.artifacts.length && !f.artifacts.includes(v.artifact_name))
+    if (
+      skip !== 'artifacts' &&
+      f.artifacts.length &&
+      !f.artifacts.includes(v.artifact_key) &&
+      !f.artifacts.includes(v.artifact_name)
+    )
       return false;
     if (
       q &&
@@ -221,7 +227,7 @@ export function upgradeGroups(rows: Vulnerability[]): UpgradeGroup[] {
         counts,
         risk: riskPoints(counts),
         vulnIds: [...new Set(bySeverity.map((v) => v.vuln_id))],
-        artifacts: [...new Set(items.map((v) => v.artifact_name))].sort(),
+        artifacts: [...new Set(items.map((v) => v.artifact_key))].sort(),
       };
     })
     .sort(
@@ -329,12 +335,14 @@ export interface FindingGroup {
   upgradeTo?: string;
   /** Vulnerability groups: the title. */
   title?: string;
+  /** Image groups: the name of the latest scan, with its tag, when it differs from the key. */
+  latest?: string;
 }
 
 function groupKey(v: Vulnerability, by: Exclude<GroupBy, 'none'>): [string, string] {
   if (by === 'package') return [JSON.stringify([v.pkg_name, v.installed_version]), v.pkg_name];
   if (by === 'vulnerability') return [v.vuln_id, v.vuln_id];
-  return [v.artifact_name, v.artifact_name];
+  return [v.artifact_key, v.artifact_key];
 }
 
 /**
@@ -349,6 +357,7 @@ export function groupRows(rows: Vulnerability[], by: Exclude<GroupBy, 'none'>): 
     if (!group) {
       group = { key, label, rows: [], counts: emptyCounts(), risk: 0, fixable: 0 };
       if (by === 'package') group.version = v.installed_version;
+      if (by === 'image' && v.artifact_name !== v.artifact_key) group.latest = v.artifact_name;
       groups.set(key, group);
     }
     group.rows.push(v);

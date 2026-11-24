@@ -262,7 +262,14 @@ export function VulnDrawer({
 
       <Block title="Details">
         <dl>
-          <Fact label="Image">{vuln.artifact_name}</Fact>
+          <Fact label="Image">
+            <Mono value={vuln.artifact_key} />
+          </Fact>
+          {vuln.artifact_name !== vuln.artifact_key ? (
+            <Fact label="Scanned as">
+              <Mono value={vuln.artifact_name} />
+            </Fact>
+          ) : null}
           <Fact label="Target">
             <Mono value={vuln.target} />
           </Fact>

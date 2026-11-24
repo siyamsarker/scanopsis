@@ -9,6 +9,7 @@ import {
   type SearchScope,
   type VulnerabilitySearch,
 } from '../api/findings';
+import { ArtifactDetail } from '../components/ArtifactName';
 import { CopyIconButton } from '../components/CopyIconButton';
 import { SearchInput } from '../components/inputs';
 import { PageHeader } from '../components/layout';
@@ -181,7 +182,7 @@ function Results({ result }: { result: VulnerabilitySearch }) {
         </div>
       </div>
       {[...byService.entries()].map(([serviceId, group]) => {
-        const images = new Set(group.hits.map((h) => h.artifact_name)).size;
+        const images = new Set(group.hits.map((h) => h.artifact_key)).size;
         const worst =
           SEVERITY_ORDER.find((s) => group.hits.some((h) => severityKey(h.severity) === s)) ??
           'unknown';
@@ -230,9 +231,10 @@ function Results({ result }: { result: VulnerabilitySearch }) {
                     </span>
                   </span>
                   <span role="cell" className="min-w-0 max-md:col-start-2 max-md:row-start-1">
-                    <span className="block truncate text-body-s text-text" title={h.artifact_name}>
-                      {h.artifact_name}
+                    <span className="block truncate text-body-s text-text" title={h.artifact_key}>
+                      {h.artifact_key}
                     </span>
+                    <ArtifactDetail label="Latest" artifact={{ ...h, kind: 'image' }} />
                   </span>
                   <span role="cell" className="min-w-0 max-md:col-start-2">
                     <span
