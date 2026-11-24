@@ -71,6 +71,14 @@ SET outcome = 'linked', detail = @detail::text,
 WHERE d.outcome = 'pending' AND d.detail = @queued_detail::text
   AND d.project_key = ANY(@project_keys::text[]);
 
+-- FirstScanPipeline returns the pipeline of the first upload stored for a
+-- service, in the order the server received them.
+-- name: FirstScanPipeline :one
+SELECT gitlab_pipeline_id FROM scans
+WHERE service_id = $1
+ORDER BY received_at, id
+LIMIT 1;
+
 -- name: SonarArchivedProject :one
 SELECT EXISTS (
     SELECT 1 FROM services WHERE gitlab_project_id = $1 AND archived

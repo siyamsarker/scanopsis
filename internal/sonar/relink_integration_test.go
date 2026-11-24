@@ -299,6 +299,7 @@ func TestLinkLateAfterRace(t *testing.T) {
 	wantStatus(t, e, hook("task-r", "demo:orders-api", claims("7", "1001")), 202)
 	e.drain(t, 1)
 	sid := e.service(t, "demo/orders-api", 7, "")
+	e.scan(t, sid, 1001)
 	// No service when the delivery was resolved, and the upload's call saw
 	// the delivery still pending: only the check after it links it.
 	e.s.linkLate(context.Background(), 7, 1001)
@@ -310,4 +311,39 @@ func TestLinkLateAfterRace(t *testing.T) {
 	}
 	// Without a service it does nothing.
 	e.s.linkLate(context.Background(), 8, 1001)
+}
+
+// The check after a race follows the rule of LinkWaiting: it links only an
+// analysis of the pipeline whose upload created the service.
+func TestLinkLateOtherPipeline(t *testing.T) {
+	e := newEnv(t)
+	e.project("evil:project")
+	wantStatus(t, e, hook("task-x", "evil:project", claims("7", "999")), 202)
+	e.drain(t, 1)
+	sid := e.service(t, "demo/orders-api", 7, "")
+	e.scan(t, sid, 1001)
+	e.scan(t, sid, 999) // a later upload of the planted pipeline
+	e.s.linkLate(context.Background(), 7, 999)
+	e.noneLinked(t, sid)
+	if d := e.delivery(t, "task-x"); d.Outcome != "unlinked" {
+		t.Errorf("delivery: %+v", d)
+	}
+	// A service without scans (added by an administrator) is not linked
+	// either.
+	wantStatus(t, e, hook("task-b", "evil:project", claims("8", "999")), 202)
+	e.drain(t, 1)
+	bare := e.service(t, "demo/billing", 8, "")
+	e.s.linkLate(context.Background(), 8, 999)
+	e.noneLinked(t, bare)
+}
+
+// scan stores a scan of the service from a pipeline, as an upload does.
+func (e *env) scan(t *testing.T, serviceID, pipeline int64) {
+	t.Helper()
+	_, err := e.pool.Exec(context.Background(), `INSERT INTO scans (service_id, kind, artifact_name, artifact_key,
+		gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+		VALUES ($1, 'image', 'app:1', 'app', $2, $2, 'main', true, 'c0ffee', 2, now(), '\x1f8b')`, serviceID, pipeline)
+	if err != nil {
+		t.Fatal(err)
+	}
 }

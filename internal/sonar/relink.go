@@ -158,12 +158,17 @@ func (s *Sonar) pinWaiting(ctx context.Context, w waiting, k store.WaitingSonarK
 // service of gitlabProjectID, if that service exists by now. The first upload
 // of the pipeline may create the service while the delivery is processed: it
 // then looks for waiting deliveries before this one is marked as waiting, and
-// this check finds the service instead. It links no more than the webhook
-// would have, had it found the service. A failure is logged.
+// this check finds the service instead. It follows the rule of LinkWaiting:
+// the delivery's pipelineID must be the pipeline of the service's first
+// scan, the upload that created the service or gave it its GitLab project
+// ID. A failure is logged.
 func (s *Sonar) linkLate(ctx context.Context, gitlabProjectID, pipelineID int64) {
 	svc, err := s.q.SonarServiceByGitlabProject(ctx, pgtype.Int8{Int64: gitlabProjectID, Valid: true})
 	if err == nil && !svc.SonarProjectKey.Valid {
-		err = s.LinkWaiting(ctx, svc.ID, gitlabProjectID, pipelineID)
+		var first int64
+		if first, err = s.q.FirstScanPipeline(ctx, svc.ID); err == nil && first == pipelineID {
+			err = s.LinkWaiting(ctx, svc.ID, gitlabProjectID, pipelineID)
+		}
 	}
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) && ctx.Err() == nil {
 		s.log.WarnContext(ctx, "cannot link a waiting SonarQube delivery", "gitlab_project_id", gitlabProjectID, "error", err)

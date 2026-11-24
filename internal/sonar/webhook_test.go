@@ -103,3 +103,24 @@ func TestWebhookNotConfigured(t *testing.T) {
 		}
 	}
 }
+
+// GitLab project and pipeline IDs are positive integers written plainly; any
+// other value of the scanner property names nothing.
+func TestClaimedIDs(t *testing.T) {
+	cases := map[string]bool{
+		"7": true, "1001": true, "9223372036854775807": true,
+		"": false, "0": false, "-5": false, "+5": false, " 5": false, "5 ": false,
+		"0x10": false, "1e3": false, "9223372036854775808": false, "abc": false,
+	}
+	for raw, ok := range cases {
+		p := webhookPayload{Properties: map[string]string{
+			"sonar.analysis.gitlabProjectId": raw, "sonar.analysis.pipelineId": raw,
+		}}
+		if _, got := claimedProject(p); got != ok {
+			t.Errorf("project %q: %v, want %v", raw, got, ok)
+		}
+		if _, got := claimedPipeline(p); got != ok {
+			t.Errorf("pipeline %q: %v, want %v", raw, got, ok)
+		}
+	}
+}

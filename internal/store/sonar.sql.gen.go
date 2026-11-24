@@ -85,6 +85,22 @@ func (q *Queries) FinishSonarDelivery(ctx context.Context, arg FinishSonarDelive
 	return err
 }
 
+const firstScanPipeline = `-- name: FirstScanPipeline :one
+SELECT gitlab_pipeline_id FROM scans
+WHERE service_id = $1
+ORDER BY received_at, id
+LIMIT 1
+`
+
+// FirstScanPipeline returns the pipeline of the first upload stored for a
+// service, in the order the server received them.
+func (q *Queries) FirstScanPipeline(ctx context.Context, serviceID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, firstScanPipeline, serviceID)
+	var gitlab_pipeline_id int64
+	err := row.Scan(&gitlab_pipeline_id)
+	return gitlab_pipeline_id, err
+}
+
 const insertSonarAnalysis = `-- name: InsertSonarAnalysis :exec
 INSERT INTO sonar_analyses (
     service_id, task_id, analysis_key, analysed_at, revision, quality_gate_status,

@@ -277,17 +277,24 @@ func (s *Sonar) waitingLink(ctx context.Context, p webhookPayload, id int64) (li
 }
 
 // claimedPipeline returns the GitLab pipeline ID in the
-// sonar.analysis.pipelineId scanner property, if it is a number.
+// sonar.analysis.pipelineId scanner property, if it is one.
 func claimedPipeline(p webhookPayload) (int64, bool) {
-	id, err := strconv.ParseInt(p.Properties["sonar.analysis.pipelineId"], 10, 64)
-	return id, err == nil
+	return gitlabID(p.Properties["sonar.analysis.pipelineId"])
 }
 
 // claimedProject returns the GitLab project ID in the
-// sonar.analysis.gitlabProjectId scanner property, if it is a number.
+// sonar.analysis.gitlabProjectId scanner property, if it is one.
 func claimedProject(p webhookPayload) (int64, bool) {
-	id, err := strconv.ParseInt(p.Properties["sonar.analysis.gitlabProjectId"], 10, 64)
-	return id, err == nil
+	return gitlabID(p.Properties["sonar.analysis.gitlabProjectId"])
+}
+
+// gitlabID reads a GitLab ID: a positive decimal integer, digits only.
+func gitlabID(raw string) (int64, bool) {
+	if raw == "" || raw[0] < '0' || raw[0] > '9' {
+		return 0, false // also a sign, which ParseInt accepts
+	}
+	id, err := strconv.ParseInt(raw, 10, 64)
+	return id, err == nil && id > 0
 }
 
 // briefError describes a failed Web API call without internals.
