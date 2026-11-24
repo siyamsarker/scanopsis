@@ -30,6 +30,23 @@ interface Known {
 /** The SonarQube key and whether analyses arrive for it. */
 function SonarLink({ service, known }: { service: Service; known?: Known }) {
   const key = service.sonar_project_key;
+  const declared = service.sonar_key_declared ?? null;
+  if (key === null && declared) {
+    const tip =
+      'The pipeline declared this key in an upload. It is set when a SonarQube analysis of the key names this GitLab project. Setting a key here cancels it.';
+    return (
+      <span className="flex min-w-0 items-center gap-1.5 text-text-muted">
+        <Tooltip content={tip}>
+          <button type="button" className="inline-flex shrink-0 rounded-full" aria-label={tip}>
+            <StatusMark status="none" size={13} />
+          </button>
+        </Tooltip>
+        <span className="min-w-0 truncate" title={`Waiting for SonarQube project ${declared}`}>
+          Waiting for SonarQube project <span className="font-mono text-small">{declared}</span>
+        </span>
+      </span>
+    );
+  }
   if (key === null) {
     return (
       <span className="inline-flex items-center gap-1.5 whitespace-nowrap text-text-muted">

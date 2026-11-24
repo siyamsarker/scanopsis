@@ -298,6 +298,38 @@ describe('admin services page', () => {
     );
   });
 
+  it('shows a SonarQube key the pipeline declared that waits for SonarQube', async () => {
+    const waiting: Service = {
+      ...docs,
+      sonar_key_declared: 'platform:docs',
+      sonar_key_declared_at: '2026-11-20T10:00:00Z',
+    };
+    mockFetch(
+      api((call) =>
+        call.method === 'GET' && call.path.startsWith('/api/v1/services?')
+          ? json(200, { items: [pay, waiting], next_after: null })
+          : undefined,
+      ),
+    );
+    renderApp('/admin/services');
+    const docsRow = await rowOf(/Docs/);
+    expect(docsRow).toHaveTextContent('Waiting for SonarQube project platform:docs');
+    expect(within(docsRow).queryByText('Not linked')).not.toBeInTheDocument();
+    expect(
+      within(docsRow).getByRole('button', { name: /declared this key in an upload/ }),
+    ).toBeInTheDocument();
+    // A linked service shows its key, not a declaration.
+    const payRow = await rowOf(/Payments/);
+    expect(payRow).not.toHaveTextContent('Waiting for SonarQube project');
+
+    await chooseAction('Docs', 'Edit');
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
+    expect(within(dialog).getByLabelText('SonarQube project key')).toHaveValue('');
+    expect(within(dialog).getByLabelText('SonarQube project key')).toHaveAccessibleDescription(
+      /Waiting for SonarQube project platform:docs, declared by the pipeline\. Saving a key here, or an empty one, cancels it\./,
+    );
+  });
+
   it('edits the name and unlinks SonarQube with null', async () => {
     const { calls } = mockFetch(
       api((call) =>

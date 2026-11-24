@@ -270,6 +270,14 @@ function EditDialog({
           />
           <p id={`${ids}-sonar-hint`} className="text-caption text-text-muted">
             The key of the project in SonarQube. Leave it empty to unlink.
+            {service.sonar_key_declared ? (
+              <>
+                {' '}
+                Waiting for SonarQube project{' '}
+                <span className="font-mono">{service.sonar_key_declared}</span>, declared by the
+                pipeline. Saving a key here, or an empty one, cancels it.
+              </>
+            ) : null}
           </p>
         </div>
         {problem ? <Problem>{problem}</Problem> : null}
