@@ -67,6 +67,8 @@ type DeleteScanForJobParams struct {
 	Kind         string
 }
 
+// A repeated job replaces its own scan of the same reported name, whatever
+// the artifact key.
 func (q *Queries) DeleteScanForJob(ctx context.Context, arg DeleteScanForJobParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteScanForJob,
 		arg.ServiceID,
@@ -155,15 +157,15 @@ func (q *Queries) InsertIngestService(ctx context.Context, arg InsertIngestServi
 
 const insertScan = `-- name: InsertScan :one
 INSERT INTO scans (
-    service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+    service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
     commit_sha, trivy_version, schema_version, scanned_at,
     count_critical, count_high, count_medium, count_low, count_unknown,
     count_fixable, count_secrets, count_suppressed, raw_report
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11,
-    $12, $13, $14, $15, $16,
-    $17, $18, $19, $20
+    $1, $2, $3, $4, $5, $6, $7, $8,
+    $9, $10, $11, $12,
+    $13, $14, $15, $16, $17,
+    $18, $19, $20, $21
 )
 RETURNING id
 `
@@ -172,6 +174,7 @@ type InsertScanParams struct {
 	ServiceID        int64
 	Kind             string
 	ArtifactName     string
+	ArtifactKey      string
 	GitlabPipelineID int64
 	GitlabJobID      int64
 	Ref              string
@@ -196,6 +199,7 @@ func (q *Queries) InsertScan(ctx context.Context, arg InsertScanParams) (int64, 
 		arg.ServiceID,
 		arg.Kind,
 		arg.ArtifactName,
+		arg.ArtifactKey,
 		arg.GitlabPipelineID,
 		arg.GitlabJobID,
 		arg.Ref,

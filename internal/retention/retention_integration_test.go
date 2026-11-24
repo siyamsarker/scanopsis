@@ -96,9 +96,9 @@ func (f *fixture) scanP(svc int64, ref, artifact, kind string, scannedAgo time.D
 	f.job++
 	label := fmt.Sprintf("%d/%s/%s/%s/%dh", svc, ref, artifact, kind, int(scannedAgo.Hours()))
 	id := f.insertID("scans", label, `
-		INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+		INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 		                   commit_sha, schema_version, scanned_at, raw_report)
-		VALUES ($1, $2, $3, 1, $4, $5, $7, 'abc', 2, $6, '\x1f8b') RETURNING id`,
+		VALUES ($1, $2, $3, $3, 1, $4, $5, $7, 'abc', 2, $6, '\x1f8b') RETURNING id`,
 		svc, kind, artifact, f.job, ref, f.now.Add(-scannedAgo), protected)
 	f.exec(`INSERT INTO vulnerabilities (scan_id, target, class, pkg_name, vuln_id, severity)
 	        VALUES ($1, 't', 'os-pkgs', 'p', 'CVE-1', 'HIGH')`, id)
@@ -111,9 +111,9 @@ func (f *fixture) scanAt(svc int64, ref, artifact, kind string, at time.Time, la
 	f.t.Helper()
 	f.job++
 	return f.insertID("scans", label, `
-		INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+		INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 		                   commit_sha, schema_version, scanned_at, raw_report)
-		VALUES ($1, $2, $3, 1, $4, $5, false, 'abc', 2, $6, '\x00') RETURNING id`,
+		VALUES ($1, $2, $3, $3, 1, $4, $5, false, 'abc', 2, $6, '\x00') RETURNING id`,
 		svc, kind, artifact, f.job, ref, at)
 }
 
@@ -305,20 +305,20 @@ func TestRunWithMoreThanOneBatch(t *testing.T) {
 	svc := f.service("svc")
 	other := f.service("other")
 	const n = 2500
-	f.exec(`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+	f.exec(`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 	                           commit_sha, schema_version, scanned_at, raw_report)
-	        SELECT $1, 'image', 'web', 1, g, 'main', false, 'abc', 2, $2::timestamptz - interval '100 days' + g * interval '1 second', '\x00'
+	        SELECT $1, 'image', 'web', 'web', 1, g, 'main', false, 'abc', 2, $2::timestamptz - interval '100 days' + g * interval '1 second', '\x00'
 	        FROM generate_series(1, $3) g`, svc, f.now, n)
 	// Old scans that are kept (protected refs) sit between the deletable ones in time and must be skipped, not retried forever.
 	for i := range 30 {
-		f.exec(`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+		f.exec(`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 		                           commit_sha, schema_version, scanned_at, raw_report)
-		        VALUES ($1, 'image', 'web', 1, 100000 + $2, $3, true, 'abc', 2, $4::timestamptz - interval '100 days' + $2 * interval '80 seconds', '\x00')`,
+		        VALUES ($1, 'image', 'web', 'web', 1, 100000 + $2, $3, true, 'abc', 2, $4::timestamptz - interval '100 days' + $2 * interval '80 seconds', '\x00')`,
 			other, i, fmt.Sprintf("branch-%d", i), f.now)
 	}
-	f.exec(`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+	f.exec(`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 	                           commit_sha, schema_version, scanned_at, raw_report)
-	        VALUES ($1, 'image', 'web', 1, 999999, 'main', false, 'abc', 2, $2, '\x00')`, svc, f.now.Add(-day))
+	        VALUES ($1, 'image', 'web', 'web', 1, 999999, 'main', false, 'abc', 2, $2, '\x00')`, svc, f.now.Add(-day))
 
 	res := f.job1(newSettings(30)).RunOnce(context.Background())
 	if res.Scans != n || res.FailedSteps != 0 {
@@ -460,9 +460,9 @@ func TestConcurrentRunsDeleteEachRowOnce(t *testing.T) {
 	f := newFixture(t)
 	svc := f.service("svc")
 	const n = 3000
-	f.exec(`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+	f.exec(`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 	                           commit_sha, schema_version, scanned_at, raw_report)
-	        SELECT $1, 'image', 'web', 1, g, 'main', false, 'abc', 2, $2::timestamptz - interval '100 days' + g * interval '1 second', '\x00'
+	        SELECT $1, 'image', 'web', 'web', 1, g, 'main', false, 'abc', 2, $2::timestamptz - interval '100 days' + g * interval '1 second', '\x00'
 	        FROM generate_series(1, $3) g`, svc, f.now, n)
 
 	var wg sync.WaitGroup

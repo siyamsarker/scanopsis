@@ -166,12 +166,12 @@ func TestMigrateQueryIndexes(t *testing.T) {
 	}
 
 	after := indexes(t, pool)
-	for _, name := range []string{"vulnerabilities_scan_key_idx", "scans_current_cover_idx", "scans_latest_ref_idx", "vulnerabilities_vuln_id_scan_idx", "scans_protected_idx"} {
+	for _, name := range []string{"vulnerabilities_scan_key_idx", "scans_current_key_idx", "scans_latest_ref_idx", "vulnerabilities_vuln_id_scan_idx", "scans_protected_key_idx"} {
 		if valid, ok := after[name]; !ok || !valid {
 			t.Errorf("index %s: present %v, valid %v", name, ok, valid)
 		}
 	}
-	for _, name := range []string{"vulnerabilities_scan_idx", "scans_current_idx", "vulnerabilities_vuln_id_idx"} {
+	for _, name := range []string{"vulnerabilities_scan_idx", "scans_current_idx", "vulnerabilities_vuln_id_idx", "scans_current_cover_idx", "scans_protected_idx"} {
 		if _, ok := after[name]; ok {
 			t.Errorf("index %s still exists", name)
 		}
@@ -179,8 +179,9 @@ func TestMigrateQueryIndexes(t *testing.T) {
 
 	// Simulate a build that was interrupted: the index exists but is invalid
 	// and the migration is not recorded. A start that stops in 00007 never
-	// reaches the later migrations, so roll those back first. The next start
-	// must rebuild the index and apply the rest.
+	// reaches the later migrations, so roll those back first. Applying 00007
+	// again must rebuild the index (00011 replaces it later, so this is
+	// checked before the rest is applied).
 	if _, err := provider(t, pool).DownTo(ctx, 7); err != nil {
 		t.Fatal(err)
 	}
@@ -192,10 +193,16 @@ func TestMigrateQueryIndexes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := store.MigrateLogged(ctx, strict, log); err != nil {
+	if _, err := provider(t, pool).UpTo(ctx, 7); err != nil {
 		t.Fatalf("migrate after an interrupted build: %v", err)
 	}
 	if valid, ok := indexes(t, pool)["scans_current_cover_idx"]; !ok || !valid {
 		t.Errorf("interrupted index was not rebuilt: present %v, valid %v", ok, valid)
+	}
+	if err := store.MigrateLogged(ctx, strict, log); err != nil {
+		t.Fatalf("migrate the rest: %v", err)
+	}
+	if valid, ok := indexes(t, pool)["scans_current_key_idx"]; !ok || !valid {
+		t.Errorf("index scans_current_key_idx after the rest: present %v, valid %v", ok, valid)
 	}
 }

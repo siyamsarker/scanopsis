@@ -41,10 +41,10 @@ var historyJob atomic.Int64
 func pipelineScan(t *testing.T, pool *pgxpool.Pool, svc int64, kind, artifact, ref string, pipeline int64,
 	at time.Time, c counts) {
 	t.Helper()
-	mustExec(t, pool, `INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref,
+	mustExec(t, pool, `INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref,
 		ref_protected, commit_sha, schema_version, scanned_at, count_critical, count_high, count_medium, count_low,
 		count_unknown, raw_report)
-		VALUES ($1,$2,$3,$4,$5,$6,false,'abc',2,$7,$8,$9,$10,$11,$12,'\x1f8b')`,
+		VALUES ($1,$2,$3,$3,$4,$5,$6,false,'abc',2,$7,$8,$9,$10,$11,$12,'\x1f8b')`,
 		svc, kind, artifact, pipeline, 700000+historyJob.Add(1), ref, at,
 		c.Critical, c.High, c.Medium, c.Low, c.Unknown)
 }

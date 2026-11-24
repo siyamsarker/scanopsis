@@ -12,14 +12,14 @@ import (
 )
 
 const currentScans = `-- name: CurrentScans :many
-SELECT DISTINCT ON (artifact_name, kind)
-       id, service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref,
+SELECT DISTINCT ON (artifact_key, kind)
+       id, service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref,
        ref_protected, commit_sha, trivy_version, schema_version, scanned_at, received_at,
        count_critical, count_high, count_medium, count_low, count_unknown,
        count_fixable, count_secrets, count_suppressed
 FROM scans
 WHERE service_id = $1 AND ref = $2
-ORDER BY artifact_name, kind, scanned_at DESC, id DESC
+ORDER BY artifact_key, kind, scanned_at DESC, id DESC
 `
 
 type CurrentScansParams struct {
@@ -32,6 +32,7 @@ type CurrentScansRow struct {
 	ServiceID        int64
 	Kind             string
 	ArtifactName     string
+	ArtifactKey      string
 	GitlabPipelineID int64
 	GitlabJobID      int64
 	Ref              string
@@ -66,6 +67,7 @@ func (q *Queries) CurrentScans(ctx context.Context, arg CurrentScansParams) ([]C
 			&i.ServiceID,
 			&i.Kind,
 			&i.ArtifactName,
+			&i.ArtifactKey,
 			&i.GitlabPipelineID,
 			&i.GitlabJobID,
 			&i.Ref,
@@ -112,7 +114,8 @@ type ListRefsRow struct {
 // Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 // The "current state" of a service for a ref is the latest scan per
-// (artifact_name, kind). Lists never select raw_report.
+// (artifact_key, kind): every tag of an image counts as one artifact.
+// Lists never select raw_report.
 // ListRefs returns the refs of a service with scans, most recent first.
 func (q *Queries) ListRefs(ctx context.Context, serviceID int64) ([]ListRefsRow, error) {
 	rows, err := q.db.Query(ctx, listRefs, serviceID)

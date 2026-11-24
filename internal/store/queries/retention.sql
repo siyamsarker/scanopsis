@@ -4,7 +4,7 @@
 -- Data retention. Every statement deletes or changes at most @batch_size
 -- rows, so no statement holds locks for long. "Latest" matches the
 -- current-state queries: the newest (scanned_at, id) of a (service, ref,
--- artifact, kind).
+-- artifact_key, kind), so the scans of earlier tags of an image expire.
 --
 -- A scan is "kept" (never expires, and keeps its raw report) when it is the
 -- latest of its (service, ref, artifact, kind) and one of these holds:
@@ -32,7 +32,7 @@ WITH doomed AS (
           EXISTS (
               SELECT 1 FROM scans n
               WHERE n.service_id = s.service_id AND n.ref = s.ref
-                AND n.artifact_name = s.artifact_name AND n.kind = s.kind
+                AND n.artifact_key = s.artifact_key AND n.kind = s.kind
                 AND (n.scanned_at, n.id) > (s.scanned_at, s.id)
           )
           OR NOT (
@@ -68,7 +68,7 @@ WITH todo AS (
           EXISTS (
               SELECT 1 FROM scans n
               WHERE n.service_id = s.service_id AND n.ref = s.ref
-                AND n.artifact_name = s.artifact_name AND n.kind = s.kind
+                AND n.artifact_key = s.artifact_key AND n.kind = s.kind
                 AND (n.scanned_at, n.id) > (s.scanned_at, s.id)
           )
           OR NOT (

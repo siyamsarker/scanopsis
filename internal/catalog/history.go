@@ -27,11 +27,11 @@ const (
 )
 
 // historySQL returns, for every non-archived service, the latest
-// historyWindow scans of each (artifact_name, kind) of its dashboard ref,
+// historyWindow scans of each (artifact_key, kind) of its dashboard ref,
 // with the counts the portfolio sums. The dashboard ref and the skip scan
 // over the groups are those of portfolioSQL. Rows come in no particular
 // order; the handler groups them. The per-group read is an ordered index
-// scan of scans_current_cover_idx; the planner, which expects a couple of
+// scan of scans_current_key_idx; the planner, which expects a couple of
 // dozen rows per group, otherwise prefers a bitmap scan that reads every
 // scan of the group, so the handler turns bitmap scans off for this
 // transaction.
@@ -43,25 +43,25 @@ WITH svc AS MATERIALIZED (
     FROM services s
     WHERE NOT s.archived
 ), grp AS MATERIALIZED (
-    SELECT svc.id AS service_id, svc.ref, g.artifact_name, g.kind
+    SELECT svc.id AS service_id, svc.ref, g.artifact_key, g.kind
     FROM svc
     CROSS JOIN LATERAL (
         WITH RECURSIVE c AS (
-            (SELECT artifact_name, kind FROM scans
+            (SELECT artifact_key, kind FROM scans
              WHERE service_id = svc.id AND ref = svc.ref
-             ORDER BY artifact_name, kind LIMIT 1)
+             ORDER BY artifact_key, kind LIMIT 1)
             UNION ALL
             SELECT n.* FROM c, LATERAL (
-                SELECT artifact_name, kind FROM scans
-                WHERE service_id = svc.id AND ref = svc.ref AND (artifact_name, kind) > (c.artifact_name, c.kind)
-                ORDER BY artifact_name, kind LIMIT 1
+                SELECT artifact_key, kind FROM scans
+                WHERE service_id = svc.id AND ref = svc.ref AND (artifact_key, kind) > (c.artifact_key, c.kind)
+                ORDER BY artifact_key, kind LIMIT 1
             ) n
         )
-        SELECT artifact_name, kind FROM c
+        SELECT artifact_key, kind FROM c
     ) g
     WHERE svc.ref IS NOT NULL
 )
-SELECT g.service_id, g.ref, g.artifact_name, g.kind,
+SELECT g.service_id, g.ref, g.artifact_key, g.kind,
        x.id, x.gitlab_pipeline_id, x.scanned_at,
        x.count_critical, x.count_high, x.count_medium, x.count_low, x.count_unknown
 FROM grp g
@@ -69,8 +69,8 @@ CROSS JOIN LATERAL (
     SELECT id, gitlab_pipeline_id, scanned_at,
            count_critical, count_high, count_medium, count_low, count_unknown
     FROM scans
-    WHERE service_id = g.service_id AND ref = g.ref AND artifact_name = g.artifact_name AND kind = g.kind
-    ORDER BY service_id, ref, artifact_name, kind, scanned_at DESC, id DESC
+    WHERE service_id = g.service_id AND ref = g.ref AND artifact_key = g.artifact_key AND kind = g.kind
+    ORDER BY service_id, ref, artifact_key, kind, scanned_at DESC, id DESC
     LIMIT ` + strconv.Itoa(historyWindow) + `
 ) x`
 
@@ -80,13 +80,13 @@ CROSS JOIN LATERAL (
 const probeSQL = `
 SELECT q.i, x.count_critical, x.count_high, x.count_medium, x.count_low, x.count_unknown
 FROM unnest($1::bigint[], $2::text[], $3::text[], $4::text[], $5::timestamptz[])
-     WITH ORDINALITY AS q(service_id, ref, artifact_name, kind, at, i)
+     WITH ORDINALITY AS q(service_id, ref, artifact_key, kind, at, i)
 CROSS JOIN LATERAL (
     SELECT count_critical, count_high, count_medium, count_low, count_unknown
     FROM scans
-    WHERE service_id = q.service_id AND ref = q.ref AND artifact_name = q.artifact_name AND kind = q.kind
+    WHERE service_id = q.service_id AND ref = q.ref AND artifact_key = q.artifact_key AND kind = q.kind
       AND scanned_at <= q.at
-    ORDER BY service_id, ref, artifact_name, kind, scanned_at DESC, id DESC
+    ORDER BY service_id, ref, artifact_key, kind, scanned_at DESC, id DESC
     LIMIT 1
 ) x`
 
@@ -137,7 +137,7 @@ func compareScans(a, b historyScan) int {
 	return cmp.Or(a.at.Compare(b.at), cmp.Compare(a.id, b.id))
 }
 
-// historyGroup is one (artifact_name, kind) of a service's dashboard ref
+// historyGroup is one (artifact_key, kind) of a service's dashboard ref
 // with its latest scans, newest first. full means more scans may exist
 // before the oldest one read.
 type historyGroup struct {
@@ -300,7 +300,7 @@ func (c *Catalog) loadHistory(ctx context.Context, now time.Time) (*portfolioHis
 }
 
 // readHistory runs historySQL and groups its rows by service, ordered by
-// service id, and by (artifact_name, kind), scans newest first.
+// service id, and by (artifact_key, kind), scans newest first.
 func readHistory(ctx context.Context, tx pgx.Tx) ([]*historyService, error) {
 	rows, err := tx.Query(ctx, historySQL)
 	if err != nil {

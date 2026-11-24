@@ -74,11 +74,11 @@ func Seed(ctx context.Context, pool *pgxpool.Pool, v Volume) error {
 		// production, so the rows of one service are spread over the table.
 		// The pipeline id doubles as the scan's sequence number within its
 		// artifact; the newest scan of every artifact is at most an hour old.
-		fmt.Sprintf(`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref,
+		fmt.Sprintf(`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref,
 		                     ref_protected, commit_sha, schema_version, scanned_at,
 		                     count_critical, count_high, count_medium, count_low, count_unknown,
 		                     count_fixable, count_secrets, raw_report)
-		  SELECT s.id, CASE WHEN a = 3 THEN 'secret-fs' ELSE 'image' END, 'artifact' || a, j,
+		  SELECT s.id, CASE WHEN a = 3 THEN 'secret-fs' ELSE 'image' END, 'artifact' || a, 'artifact' || a, j,
 		         s.id * 100000 + a * 10000 + j,
 		         CASE WHEN j %% 7 = 0 THEN 'feature-' || ((j / 7) %% %d + 1) ELSE 'main' END,
 		         false, 'c' || j, 2,

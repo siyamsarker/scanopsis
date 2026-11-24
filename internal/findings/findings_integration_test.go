@@ -936,9 +936,9 @@ func TestTrendsCapDefault(t *testing.T) {
 	f := seed(t)
 	svc := newService(t, f.pool, "busy", "grp/busy", false)
 	_, err := f.pool.Exec(context.Background(), `
-		INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref,
+		INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref,
 		                   ref_protected, commit_sha, schema_version, scanned_at, raw_report)
-		SELECT $1, 'image', 'img', 5000 + g, 900000 + g, 'main', true, 'c', 2,
+		SELECT $1, 'image', 'img', 'img', 5000 + g, 900000 + g, 'main', true, 'c', 2,
 		       now() - (306 - g) * interval '1 hour', '\x00'
 		FROM generate_series(1, 305) g`, svc)
 	if err != nil {

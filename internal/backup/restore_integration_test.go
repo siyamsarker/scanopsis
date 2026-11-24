@@ -130,8 +130,8 @@ VALUES ('local', 'alice', 'Alice', 'alice@example.com', 'admin', '$argon2id$v=19
 	mustExec(t, db, `INSERT INTO services (name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via) VALUES
 ('payments-api', 101, 'example/payments-api', 'example_payments-api', 'ingest'),
 ('billing-api', NULL, 'example/billing-api', NULL, 'manual')`)
-	mustExec(t, db, `INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, trivy_version, schema_version, scanned_at, count_high, raw_report)
-SELECT s.id, CASE WHEN g % 3 = 0 THEN 'secret-fs' ELSE 'image' END, 'app', g, s.id * 1000 + g, 'main', g % 2 = 0, 'c' || g, '0.60.0', 2,
+	mustExec(t, db, `INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, trivy_version, schema_version, scanned_at, count_high, raw_report)
+SELECT s.id, CASE WHEN g % 3 = 0 THEN 'secret-fs' ELSE 'image' END, 'app', 'app', g, s.id * 1000 + g, 'main', g % 2 = 0, 'c' || g, '0.60.0', 2,
        now() - g * interval '1 day', 2, decode('1f8b0800' || md5(g::text), 'hex')
 FROM services s, generate_series(1, 6) g`)
 	mustExec(t, db, `INSERT INTO vulnerabilities (scan_id, target, class, pkg_type, pkg_name, installed_version, fixed_version, vuln_id, severity, title, primary_url, suppressed)
@@ -162,8 +162,8 @@ func changeAll(t *testing.T, db store.DBTX) {
 		`UPDATE settings SET value = '30' WHERE key = 'retention.days'`,
 		`DELETE FROM settings WHERE key = 'sonar.token'`,
 		`INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('orders-api', 'example/orders-api', 'manual')`,
-		`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
-SELECT id, 'image', 'app', 77, 77, 'main', true, 'c77', 2, now(), '\x00' FROM services WHERE name = 'orders-api'`,
+		`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+SELECT id, 'image', 'app', 'app', 77, 77, 'main', true, 'c77', 2, now(), '\x00' FROM services WHERE name = 'orders-api'`,
 		`UPDATE vulnerabilities SET suppressed = NOT suppressed`,
 		`DELETE FROM secret_findings`,
 		`UPDATE sonar_analyses SET quality_gate_status = 'ERROR'`,
@@ -882,14 +882,16 @@ INSERT INTO users (source, username, role, password_hash) VALUES ('local', 'alic
 INSERT INTO settings (key, value, source, updated_by) VALUES ('gitlab.url', '"https://gitlab.example.com"', 'ui', 'alice');
 INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual');
 INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
-  SELECT 1, 'image', 'app', g, g, 'main', true, 'c' || g, 2, now() - g * interval '1 hour', '\x1f8b' FROM generate_series(1, 5) g;
+  SELECT 1, 'image', 'registry.example.com:5000/app:' || g, g, g, 'main', true, 'c' || g, 2, now() - g * interval '1 hour', '\x1f8b' FROM generate_series(1, 5) g;
 INSERT INTO vulnerabilities (scan_id, target, class, pkg_name, vuln_id, severity) SELECT id, 't', 'os-pkgs', 'pkg', 'CVE-2024-1', 'HIGH' FROM scans;
+INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+  VALUES (1, 'secret-fs', '/builds/runner/0/example/payments-api/services/api', 6, 6, 'main', true, 'c6', 2, now(), '\x1f8b');
 INSERT INTO audit_log (actor, action) VALUES ('alice', 'login.succeeded');
 `
 
 func TestRestoreOlderSchema(t *testing.T) {
 	t.Parallel()
-	for _, version := range []int64{9, 7} {
+	for _, version := range []int64{10, 9, 7} {
 		t.Run(fmt.Sprint(version), func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
@@ -932,8 +934,21 @@ func TestRestoreOlderSchema(t *testing.T) {
 			if err := pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM services), (SELECT count(*) FROM scans), (SELECT count(*) FROM vulnerabilities)`).Scan(&services, &scans, &findings); err != nil {
 				t.Fatal(err)
 			}
-			if services != 1 || scans != 5 || findings != 5 {
-				t.Errorf("restored %d services, %d scans, %d findings; want 1, 5, 5", services, scans, findings)
+			if services != 1 || scans != 6 || findings != 5 {
+				t.Errorf("restored %d services, %d scans, %d findings; want 1, 6, 5", services, scans, findings)
+			}
+			// Every scan has the key of its artifact: the image name without
+			// its tag, and the folder relative to the project.
+			rows, err := pool.Query(ctx, `SELECT DISTINCT kind || ' ' || artifact_key FROM scans ORDER BY 1`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keys, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"image registry.example.com:5000/app", "secret-fs services/api"}; !slices.Equal(keys, want) {
+				t.Errorf("artifact keys after the restore %q, want %q", keys, want)
 			}
 			// The newer migrations ran over the restored rows.
 			var issuer string
@@ -1051,8 +1066,8 @@ func TestPreviewRetention(t *testing.T) {
 	pool := storetest.New(t)
 	now := time.Now()
 	mustExec(t, pool, `INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual')`)
-	mustExec(t, pool, `INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
-VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, $1, '\x00'), (1, 'image', 'app', 2, 2, 'main', false, 'c', 2, $2, '\x00')`,
+	mustExec(t, pool, `INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+VALUES (1, 'image', 'app', 'app', 1, 1, 'main', false, 'c', 2, $1, '\x00'), (1, 'image', 'app', 'app', 2, 2, 'main', false, 'c', 2, $2, '\x00')`,
 		now.Add(-10*24*time.Hour), now.Add(-100*24*time.Hour))
 	plain := dumpPool(t, pool, testFingerprint(t))
 	mustExec(t, pool, `INSERT INTO settings (key, value, source, updated_by) VALUES ('retention.days', '120', 'ui', 'alice')`)

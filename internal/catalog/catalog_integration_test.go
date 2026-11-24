@@ -110,10 +110,10 @@ type scanSeed struct {
 
 func addScan(t *testing.T, pool *pgxpool.Pool, s scanSeed) {
 	t.Helper()
-	mustExec(t, pool, `INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref,
+	mustExec(t, pool, `INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref,
 		ref_protected, commit_sha, schema_version, scanned_at, count_critical, count_high, count_medium, count_low,
 		count_unknown, count_fixable, count_secrets, raw_report)
-		VALUES ($1,$2,$3,1,$4,$5,false,'abc',2,$6,$7,$8,$9,$10,$11,$12,$13,'\x1f8b')`,
+		VALUES ($1,$2,$3,$3,1,$4,$5,false,'abc',2,$6,$7,$8,$9,$10,$11,$12,$13,'\x1f8b')`,
 		s.svc, s.kind, s.artifact, s.job, s.ref, s.at, s.crit, s.high, s.med, s.low, s.unk, s.fixable, s.secrets)
 }
 

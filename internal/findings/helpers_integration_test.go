@@ -101,9 +101,9 @@ func newScan(t testing.TB, pool *pgxpool.Pool, service int64, kind, artifact, re
 	var id int64
 	job := jobSeq.Add(1)
 	err := pool.QueryRow(context.Background(),
-		`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref,
+		`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref,
 		                    ref_protected, commit_sha, trivy_version, schema_version, scanned_at, raw_report)
-		 VALUES ($1, $2, $3, $4, $5, $6, true, $7, '0.58.0', 2, $8, '\x00')
+		 VALUES ($1, $2, $3, $3, $4, $5, $6, true, $7, '0.58.0', 2, $8, '\x00')
 		 RETURNING id`,
 		service, kind, artifact, 1000+job, job, ref, fmt.Sprintf("%040x", job), at).Scan(&id)
 	if err != nil {

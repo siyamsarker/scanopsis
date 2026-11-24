@@ -156,6 +156,7 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 			ServiceID:        svc.ID,
 			Kind:             in.kind,
 			ArtifactName:     rep.ArtifactName,
+			ArtifactKey:      rep.ArtifactName,
 			GitlabPipelineID: c.PipelineID,
 			GitlabJobID:      c.JobID,
 			Ref:              c.Ref,

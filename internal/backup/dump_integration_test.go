@@ -230,8 +230,8 @@ func TestDumpConsistentUnderWrites(t *testing.T) {
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
 		var id int64
-		err = tx.QueryRow(ctx, `INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, count_high, raw_report)
-VALUES ($1, 'image', 'app', $2, $2, 'main', false, 'c', 2, now(), $3, '\x1f8b') RETURNING id`, svc, i, perScan).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, count_high, raw_report)
+VALUES ($1, 'image', 'app', 'app', $2, $2, 'main', false, 'c', 2, now(), $3, '\x1f8b') RETURNING id`, svc, i, perScan).Scan(&id)
 		if err != nil {
 			return err
 		}
@@ -359,8 +359,8 @@ func TestDumpPartialRemovedOnError(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
-SELECT 1, 'image', 'app', g, g, 'main', false, 'c', 2, now(), '\x1f8b' FROM generate_series(1, 20000) g`); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+SELECT 1, 'image', 'app', 'app', g, g, 'main', false, 'c', 2, now(), '\x1f8b' FROM generate_series(1, 20000) g`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO vulnerabilities (scan_id, target, class, pkg_name, vuln_id, severity, title)
@@ -486,8 +486,8 @@ func seedLarge(t *testing.T, pool, short *pgxpool.Pool) {
 	ctx := context.Background()
 	for _, q := range []string{
 		`INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual')`,
-		`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
-SELECT 1, 'image', 'app', g, g, 'main', false, 'c', 2, now(), '\x1f8b' FROM generate_series(1, 2000) g`,
+		`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+SELECT 1, 'image', 'app', 'app', g, g, 'main', false, 'c', 2, now(), '\x1f8b' FROM generate_series(1, 2000) g`,
 		`INSERT INTO vulnerabilities (scan_id, target, class, pkg_name, vuln_id, severity, title)
 SELECT s.id, 't', 'os-pkgs', 'pkg', 'CVE-' || s.id || '-' || g, 'HIGH', repeat(md5(g::text), 4) FROM scans s, generate_series(1, 200) g`,
 	} {
@@ -543,8 +543,8 @@ func TestDumpIndependentOfSessionSettings(t *testing.T) {
 	ctx := context.Background()
 	for _, q := range []string{
 		`INSERT INTO services (name, gitlab_project_path, created_via) VALUES ('payments-api', 'example/payments-api', 'manual')`,
-		`INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
-VALUES (1, 'image', 'app', 1, 1, 'main', false, 'c', 2, '2026-03-04 05:06:07.123456+00', '\x1f8b00')`,
+		`INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, schema_version, scanned_at, raw_report)
+VALUES (1, 'image', 'app', 'app', 1, 1, 'main', false, 'c', 2, '2026-03-04 05:06:07.123456+00', '\x1f8b00')`,
 		`INSERT INTO sonar_analyses (service_id, task_id, analysed_at, coverage) VALUES (1, 'task-1', '2026-03-04 05:06:07+00', 0.1::float8 + 0.2::float8)`,
 	} {
 		if _, err := pool.Exec(ctx, q); err != nil {

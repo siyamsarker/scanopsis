@@ -42,19 +42,21 @@ ON CONFLICT DO NOTHING
 RETURNING *;
 
 -- name: DeleteScanForJob :execrows
+-- A repeated job replaces its own scan of the same reported name, whatever
+-- the artifact key.
 DELETE FROM scans
 WHERE service_id = $1 AND gitlab_job_id = $2 AND artifact_name = $3 AND kind = $4;
 
 -- name: InsertScan :one
 INSERT INTO scans (
-    service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+    service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
     commit_sha, trivy_version, schema_version, scanned_at,
     count_critical, count_high, count_medium, count_low, count_unknown,
     count_fixable, count_secrets, count_suppressed, raw_report
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7,
-    $8, $9, $10, $11,
-    $12, $13, $14, $15, $16,
-    $17, $18, $19, $20
+    $1, $2, $3, $4, $5, $6, $7, $8,
+    $9, $10, $11, $12,
+    $13, $14, $15, $16, $17,
+    $18, $19, $20, $21
 )
 RETURNING id;

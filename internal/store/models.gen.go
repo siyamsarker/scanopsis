@@ -46,6 +46,7 @@ type Scan struct {
 	CountSecrets     int32
 	CountSuppressed  int32
 	RawReport        []byte
+	ArtifactKey      string
 }
 
 type SecretFinding struct {

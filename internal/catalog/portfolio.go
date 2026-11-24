@@ -15,9 +15,9 @@ import (
 // dashboard ref is the branch an administrator chose (default_ref), even when
 // it has no scans yet, else the ref of the most recent scan (ties broken by
 // ref as in ListRefs); findings.pickRef applies the same rule. The current
-// state of a ref is the latest scan per (artifact_name, kind), as in
-// CurrentScans. It finds the latest scan of each (artifact_name, kind) by
-// jumping from one group to the next in scans_current_cover_idx (a recursive
+// state of a ref is the latest scan per (artifact_key, kind), as in
+// CurrentScans. It finds the latest scan of each (artifact_key, kind) by
+// jumping from one group to the next in scans_current_key_idx (a recursive
 // "skip scan") instead of reading every scan of the ref, so its cost follows
 // the number of artifacts, not the number of scans in the retention window;
 // the counts come from the index without reading the table. It is written by
@@ -44,20 +44,20 @@ LEFT JOIN LATERAL (
 ) dr ON true
 LEFT JOIN LATERAL (
     WITH RECURSIVE c AS (
-        (SELECT artifact_name, kind, count_critical, count_high, count_medium, count_low,
+        (SELECT artifact_key, kind, count_critical, count_high, count_medium, count_low,
                 count_unknown, count_fixable, count_secrets, scanned_at
          FROM scans
          WHERE service_id = s.id AND ref = dr.ref
-         ORDER BY artifact_name, kind, scanned_at DESC, id DESC
+         ORDER BY artifact_key, kind, scanned_at DESC, id DESC
          LIMIT 1)
         UNION ALL
         SELECT n.*
         FROM c, LATERAL (
-            SELECT artifact_name, kind, count_critical, count_high, count_medium, count_low,
+            SELECT artifact_key, kind, count_critical, count_high, count_medium, count_low,
                    count_unknown, count_fixable, count_secrets, scanned_at
             FROM scans
-            WHERE service_id = s.id AND ref = dr.ref AND (artifact_name, kind) > (c.artifact_name, c.kind)
-            ORDER BY artifact_name, kind, scanned_at DESC, id DESC
+            WHERE service_id = s.id AND ref = dr.ref AND (artifact_key, kind) > (c.artifact_key, c.kind)
+            ORDER BY artifact_key, kind, scanned_at DESC, id DESC
             LIMIT 1
         ) n
     )

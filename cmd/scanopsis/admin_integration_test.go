@@ -320,9 +320,9 @@ func (e *adminEnv) scan(t *testing.T, raw []byte) int64 {
 		t.Fatal(err)
 	}
 	if err := e.pool.QueryRow(ctx, `
-		INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+		INSERT INTO scans (service_id, kind, artifact_name, artifact_key, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
 		                   commit_sha, schema_version, scanned_at, raw_report)
-		VALUES ($1, 'image', 'app', 1, (SELECT count(*) + 1 FROM scans), 'main', false, 'abc', 2, now(), $2) RETURNING id`,
+		VALUES ($1, 'image', 'app', 'app', 1, (SELECT count(*) + 1 FROM scans), 'main', false, 'abc', 2, now(), $2) RETURNING id`,
 		svc, raw).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
