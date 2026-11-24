@@ -6,9 +6,9 @@
 # Run all commands in this directory. The guide is docs/getting-started.md.
 #
 # Image: Scanopsis publishes no container image. Build one from the newest
-# version branch, release/0.4.1, with `make image IMAGE=scanopsis:v0.4.1` in
+# version branch, release/0.4.2, with `make image IMAGE=scanopsis:v0.4.2` in
 # the repository root (docs/versions.md). The file named .env next to this
-# one sets SCANOPSIS_IMAGE=scanopsis:v0.4.1, as .env.example does.
+# one sets SCANOPSIS_IMAGE=scanopsis:v0.4.2, as .env.example does.
 # SCANOPSIS_IMAGE is required, so Compose never falls back to an unpinned
 # image.
 #
