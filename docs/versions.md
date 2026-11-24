@@ -299,7 +299,8 @@ network, and the database is still there after `docker compose up -d`.
 #### From 0.4.1
 
 - Two migrations run when 0.4.2 starts. **Back up first**, with **Back up
-  now** on the Backups page. Going back to 0.4.1 needs that backup.
+  now** on the Backups page. Going back to the version you ran before needs
+  that backup.
   - Migration 00013 adds the analysis time to the SonarQube deliveries, so an
     analysis that is linked when the first scan of its pipeline arrives keeps
     its pipeline number.
@@ -315,9 +316,13 @@ network, and the database is still there after `docker compose up -d`.
   `SONAR_PROJECT_KEY` as `sonar_key`, so a service links itself to its
   SonarQube project once an analysis confirms the key, see
   [link the SonarQube project](integrations/gitlab-ci.md#link-the-sonarqube-project).
-  The central scan script takes a list of images and ends with `2`, not `1`,
-  when Trivy cannot scan: check the `allow_failure` exit codes of the jobs
-  that call it.
+  Both scripts end with `2`, not `1`, when Trivy cannot scan, and the
+  central scan script takes a list of images. A job with
+  `allow_failure: exit_codes: [1]` then stops the pipeline on a scan error,
+  which it let pass before.
+- A key that a pipeline declared and that waits for SonarQube shows on the
+  Services page. Setting or clearing a service's SonarQube key there cancels
+  it.
 - If you run the [accuracy check](verification.md), take its new commands:
   step A counts the secrets in image layers apart, and `collect.sh` keeps the
   backslashes of the API answer.

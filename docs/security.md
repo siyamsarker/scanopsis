@@ -96,7 +96,7 @@ Each row names where the control lives, so you can check it in the code.
 | Bounded input | A report may be 64 MiB decompressed and hold 200,000 findings. | `internal/ingest/ingest.go`, `internal/ingest/parse.go` |
 | Bounded work | 60 uploads at once per address, then one a second. Uploads are admitted by the memory they need, from a shared budget; at most a quarter of the database pool stores uploads at once. Each project may upload 100 reports at once, then one every 10 seconds, and each job at most 50 artifacts. See [sizing](deployment.md#sizing). | `internal/ingest/ingest.go`, `cmd/scanopsis/main.go` |
 | No internals in answers | Answers never contain the GitLab URL or an upstream error. Both stay in the server log. | `internal/ingest/token.go`, `internal/ingest/ingest.go` |
-| Declared SonarQube key needs SonarQube | An upload's `sonar_key` is set on the service only when a SonarQube analysis of that key, delivered by the signed webhook within 7 days, names the uploading GitLab project. It never replaces a key and never takes one from another service; until it is confirmed, it waits and blocks other keys. | `internal/ingest/store.go`, `internal/sonar/declared.go` |
+| Declared SonarQube key needs SonarQube | An upload's `sonar_key` is set on the service only when a SonarQube analysis of that key, delivered by the signed webhook within 7 days, names the uploading GitLab project. It never replaces a key and never takes one from another service; until it is confirmed, it waits, shows on the Services page and blocks other keys. The decision is made on the locked service row, so a webhook link at the same moment cannot slip past it. An administrator's key always wins and cancels a waiting one. | `internal/ingest/store.go`, `internal/sonar/declared.go` |
 | Report time | A report time in the future is replaced by the server time, so nobody can keep a scan "current" forever. | `internal/ingest/ingest.go` |
 | Audited rejections, with a bound | Rejections go to the audit log with the reason. The ones anyone with a token from your GitLab can cause are recorded at most 10 at once per address, then one a minute, so they cannot flood the log. | `internal/ingest/ingest.go` |
 | Warning when uploads are open | While no namespace is allowed, every project of the GitLab instance may upload, and Scanopsis logs a warning. | `internal/ingest/ingest.go` |
@@ -203,7 +203,9 @@ Each is accepted for the reason given, and each has a way to soften it.
    Then only an analysis of the declared key can link the service by itself, and only
    once SonarQube delivers one that names the project. What is left is
    SonarQube's own boundary: a user with the Execute Analysis permission on
-   that key can run such an analysis, and nobody without it can.
+   that key can run such an analysis, and nobody without it can. An
+   administrator who sets or clears the key cancels a waiting declaration;
+   the project's next upload declares the key again.
 
 3. **An `http` SonarQube URL is allowed.** Internal SonarQube servers often
    have no TLS, but then the token and the results cross the network in clear

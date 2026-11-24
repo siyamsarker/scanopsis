@@ -86,18 +86,24 @@ decides from the same report whether the job fails.
 # Variables: SCANOPSIS_URL, SCANOPSIS_ID_TOKEN (from id_tokens), IMAGES (space
 # separated), and SONAR_PROJECT_KEY if the project has a SonarQube analysis.
 set -u
-status=0
+failed=0 # 1 when a gate found something
+broken=0 # 1 when Trivy could not scan an image or the repository
 out=scanopsis-out
 mkdir -p "$out"
 
-# curl 7.71 or later retries every failed connection; an older one only a
-# refused connection.
+# --retry repeats timeouts and the answers 408, 429, 500, 502, 503 and 504.
+# --retry-all-errors (curl 7.71 or later) also repeats every upload that got
+# no answer at all. An older curl knows only --retry-connrefused, which adds
+# a refused connection.
 retry=--retry-all-errors
 curl --retry-all-errors --version >/dev/null 2>&1 || retry=--retry-connrefused
 
+# urlencode <value>: percent-encodes a value for the query string.
+urlencode() { jq -rn --arg v "$1" '$v | @uri'; }
+
 # upload <report.json> <image|secret-fs> [artifact]
 # The optional third argument names the artifact, see "Keep two variants
-# apart". Use letters, digits, - _ . only, or percent-encode the value.
+# apart".
 # Prints what happened and always returns 0: a problem with the upload never
 # changes the result of the job. curl retries for about four minutes (8
 # retries, waiting 1 s, 2 s, 4 s and so on, or the Retry-After of the answer)
@@ -108,8 +114,8 @@ upload() {
   gzip -c "$1" >"$1.gz"
   rm -f "$out/response.json"
   url="$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2"
-  [ -n "${3:-}" ] && url="$url&artifact=$3"
-  [ -n "${SONAR_PROJECT_KEY:-}" ] && url="$url&sonar_key=$SONAR_PROJECT_KEY"
+  [ -n "${3:-}" ] && url="$url&artifact=$(urlencode "$3")"
+  [ -n "${SONAR_PROJECT_KEY:-}" ] && url="$url&sonar_key=$(urlencode "$SONAR_PROJECT_KEY")"
   code=$(curl -sS --max-time 120 --retry 8 "$retry" --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
@@ -127,12 +133,13 @@ for image in $IMAGES; do
 
   # One full scan: all severities, unfixed findings included, ignore file
   # applied, secrets in the image layers included. The flags win over any
-  # TRIVY_SEVERITY, TRIVY_IGNORE_UNFIXED or TRIVY_EXIT_CODE set in the job.
+  # TRIVY_SEVERITY, TRIVY_IGNORE_UNFIXED, TRIVY_EXIT_CODE or TRIVY_EXIT_ON_EOL
+  # set in the job, so a non-zero exit code means Trivy could not scan.
   if ! trivy image --quiet --scanners vuln,secret --format json --show-suppressed \
-      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false --exit-code 0 \
-      --output "$out/$name.json" "$image"; then
-    echo "trivy could not scan $image"
-    status=1
+      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
+      --exit-code 0 --exit-on-eol 0 --output "$out/$name.json" "$image"; then
+    echo "scan error: Trivy could not scan $image (see above)" >&2
+    broken=1
     continue
   fi
 
@@ -143,16 +150,22 @@ for image in $IMAGES; do
   # what --ignore-unfixed does), then fail on HIGH and CRITICAL.
   jq 'if .Results then .Results |= map(del(.Secrets) | if .Vulnerabilities then .Vulnerabilities |= map(select(.Status == "fixed")) else . end) else . end' \
     "$out/$name.json" >"$out/$name.gate.json"
-  trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 "$out/$name.gate.json" || status=1
+  trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 "$out/$name.gate.json" || failed=1
 done
 
 # Secrets are a separate scan without a severity filter.
-trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 \
-  --skip-dirs "$out" --format json --output "$out/secrets.json" . || status=1
-upload "$out/secrets.json" secret-fs
-trivy convert --format table --exit-code 1 "$out/secrets.json" || status=1
+if trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 \
+  --skip-dirs "$out" --format json --output "$out/secrets.json" .; then
+  upload "$out/secrets.json" secret-fs
+  trivy convert --format table --exit-code 1 "$out/secrets.json" || failed=1
+else
+  echo "scan error: Trivy could not scan the repository (see above)" >&2
+  broken=1
+fi
 
-exit "$status"
+# 2: Trivy could not scan something, 1: a gate failed, 0: passed.
+[ "$broken" -eq 1 ] && exit 2
+exit "$failed"
 ```
 
 ### What the script does
@@ -162,10 +175,14 @@ exit "$status"
    fixed and unfixed findings (`--ignore-unfixed=false`), the secrets that sit
    in the image layers (`--scanners vuln,secret`), and the findings that
    your ignore file (`.trivyignore`) or VEX documents suppressed. Scanopsis
-   shows those as suppressed. `--exit-code 0` keeps a `TRIVY_EXIT_CODE` set in
-   the job from making the scan fail on findings, which would skip the upload.
+   shows those as suppressed. `--exit-code 0` and `--exit-on-eol 0` keep a
+   `TRIVY_EXIT_CODE` or `TRIVY_EXIT_ON_EOL` set in the job from making the
+   scan fail on findings or on an end-of-life OS, which would skip the upload.
+   So the scan fails only when Trivy could not scan: the image does not exist,
+   the registry refused it, or the vulnerability database is missing.
 2. `upload` compresses the report, sends it, and prints the HTTP status and the
-   answer. It retries a temporary failure, see [Retries and
+   answer. It percent-encodes the artifact name and the SonarQube key with
+   `jq`'s `@uri`. It retries a temporary failure, see [Retries and
    limits](#retries-and-limits). It always returns 0, so a failed upload never
    fails the job.
 3. `jq` removes the secrets and every vulnerability whose `Status` is not
@@ -177,7 +194,7 @@ exit "$status"
 
    ```sh
    jq 'del(.Results[]?.Vulnerabilities)' "$out/$name.json" >"$out/$name.secret.json"
-   trivy convert --format table --exit-code 1 "$out/$name.secret.json" || status=1
+   trivy convert --format table --exit-code 1 "$out/$name.secret.json" || failed=1
    ```
 4. The secret scan of the repository runs on its own, because secrets have no
    fix status. Its report has every severity, whatever the job sets. The gate
@@ -186,8 +203,11 @@ exit "$status"
    secret does. It uploads with `kind=secret-fs`. Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
    artifact in Scanopsis, see [How Scanopsis tells artifacts
    apart](#how-scanopsis-tells-artifacts-apart).
-5. The last line, `exit "$status"`, makes the gates and the scans decide the job
-   result, never the upload.
+5. The last two lines make the scans and the gates decide the job result,
+   never the upload: `2` when Trivy could not scan an image or the
+   repository, `1` when a gate failed, `0` when all passed. The other images
+   are still scanned after a scan error. These are the exit codes of the
+   [central script](#a-central-scan-script-with-separate-jobs) too.
 
 `trivy convert` prints `No enabled scanners found. Summary table will not be
 displayed.` before the table. That is expected.
@@ -335,9 +355,9 @@ Scan them in separate jobs.
 
 This uses the optional third argument of `upload` from step 2. The value
 becomes the key. Rules: 1 to 200 printable characters, no control characters,
-no spaces other than the plain space, and not only spaces. Use letters, digits,
-`-`, `_` and `.` in a URL as it is, and percent-encode anything else. A value
-that breaks a rule is answered with `400` `invalid_parameter`.
+no spaces other than the plain space, and not only spaces. `upload`
+percent-encodes the value, so any of these characters is safe. A value that
+breaks a rule is answered with `400` `invalid_parameter`.
 
 A retried upload replaces the earlier upload of the same job, reported name and
 kind, whatever the `artifact` value.
@@ -397,12 +417,14 @@ The upload is stored in every case. Its answer says what became of the key:
 | `sonar_key_ignored` | Meaning | What to do |
 | --- | --- | --- |
 | `null` | The key is set on the service now, or was already. Or the upload declared no key. | Nothing. |
-| `sonar_key_pending` | No analysis of the key that names this GitLab project arrived in the last 7 days. The key waits on the service. | Nothing, if the analysis passes `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`: its webhook sets the key. Otherwise add the property. |
-| `key_linked_to_other_service` | Another service, maybe an archived one, has this key. | Check `SONAR_PROJECT_KEY`. If the key is right, an administrator frees it on the other service. |
+| `sonar_key_pending` | No analysis of the key that names this GitLab project arrived in the last 7 days. The key waits on the service; the Services page shows "Waiting for SonarQube project ...". | Nothing, if the analysis passes `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`: its webhook sets the key. Otherwise add the property. |
+| `key_linked_to_other_service` | Another service, maybe an archived one, has this key. A key of this project that waited is dropped. | Check `SONAR_PROJECT_KEY`. If the key is right, an administrator frees it on the other service. |
 | `service_has_other_key` | The service is linked to another SonarQube project. Scanopsis keeps that link. | If the project was renamed, an administrator changes the key on the Services page. |
 
-The last two are written to the audit log as `ingest.sonar_key_ignored`, with
-the declared key, and to the server log as a warning.
+The last two are written to the server log as a warning on every upload, and
+to the audit log as `ingest.sonar_key_ignored`, with the declared key, once
+for each new reason or key. An administrator who sets or clears the key on the
+Services page always wins, and cancels a key that waits.
 
 ## A central scan script with separate jobs
 
@@ -465,17 +487,22 @@ usage() {
   exit 2
 }
 
-# curl 7.71 or later retries every failed connection; an older one only a
-# refused connection.
+# --retry repeats timeouts and the answers 408, 429, 500, 502, 503 and 504.
+# --retry-all-errors (curl 7.71 or later) also repeats every upload that got
+# no answer at all. An older curl knows only --retry-connrefused, which adds
+# a refused connection.
 retry=--retry-all-errors
 curl --retry-all-errors --version >/dev/null 2>&1 || retry=--retry-connrefused
+
+# urlencode <value>: percent-encodes a value for the query string.
+urlencode() { jq -rn --arg v "$1" '$v | @uri'; }
 
 # upload <report.json> <image|secret-fs>: prints what happened, always returns 0.
 upload() {
   gzip -c "$1" >"$1.gz"
   rm -f "$out/response.json"
   url="$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2"
-  [ -n "${SONAR_PROJECT_KEY:-}" ] && url="$url&sonar_key=$SONAR_PROJECT_KEY"
+  [ -n "${SONAR_PROJECT_KEY:-}" ] && url="$url&sonar_key=$(urlencode "$SONAR_PROJECT_KEY")"
   code=$(curl -sS --max-time 120 --retry 8 "$retry" --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
@@ -502,12 +529,13 @@ image)
 
     # One full scan for Scanopsis: every severity, unfixed findings, secrets
     # in the image layers. The flags win over TRIVY_SEVERITY,
-    # TRIVY_IGNORE_UNFIXED and TRIVY_EXIT_CODE set in the job, so a non-zero
-    # exit code here means Trivy could not scan: the image does not exist, the
-    # registry refused it, or the vulnerability database is missing.
+    # TRIVY_IGNORE_UNFIXED, TRIVY_EXIT_CODE and TRIVY_EXIT_ON_EOL set in the
+    # job, so a non-zero exit code here means Trivy could not scan: the image
+    # does not exist, the registry refused it, or the vulnerability database
+    # is missing.
     if ! trivy image --quiet --scanners vuln,secret --format json --show-suppressed \
-      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false --exit-code 0 \
-      --output "$out/$name.json" "$image"; then
+      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
+      --exit-code 0 --exit-on-eol 0 --output "$out/$name.json" "$image"; then
       echo "scan error: Trivy could not scan $image (see above); the job ends with exit code 2" >&2
       status=2
       continue
@@ -540,6 +568,8 @@ image)
   ;;
 source)
   dir=${2:-.}
+  # A folder has no OS, so TRIVY_EXIT_ON_EOL does not apply (and trivy fs
+  # does not know --exit-on-eol).
   if ! trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 \
     --skip-dirs "$out" --format json --output "$out/secrets.json" "$dir"; then
     echo "scan error: Trivy could not scan $dir (see above); the job ends with exit code 2" >&2
@@ -569,8 +599,6 @@ image-scan:
       aud: "$SCANOPSIS_URL"
   script:
     - /opt/platform-trivy/scan.sh image $IMAGES
-  allow_failure:
-    exit_codes: [1]
 
 source-scan:
   stage: test
@@ -581,18 +609,22 @@ source-scan:
       aud: "$SCANOPSIS_URL"
   script:
     - /opt/platform-trivy/scan.sh source "$CI_PROJECT_DIR"
-  allow_failure:
-    exit_codes: [1]
 ```
 
 - `$IMAGES` has no quotes in `script`, so each image becomes its own argument.
-- `allow_failure: exit_codes: [1]` lets the pipeline go on when a gate finds
-  something, and still stops it on a scan error (`2`): a scan that did not run
-  is not a pass. Leave `allow_failure` out if findings must stop the pipeline
-  too.
-- Both jobs may set `TRIVY_SEVERITY`, `TRIVY_IGNORE_UNFIXED` or
-  `TRIVY_EXIT_CODE`. The script's flags win for the report, so a finding is
-  never taken for a scan error.
+- If your jobs already have `allow_failure: exit_codes: [1]`, keep it: the
+  pipeline goes on when a gate finds something, as before, and now stops on a
+  scan error (`2`), because a scan that did not run is not a pass. Without
+  `allow_failure`, both stop the pipeline, as before.
+- Both jobs may set `TRIVY_SEVERITY`, `TRIVY_IGNORE_UNFIXED`, `TRIVY_EXIT_CODE`
+  or `TRIVY_EXIT_ON_EOL`. The script's flags win for the report, so a finding
+  or an end-of-life OS is never taken for a scan error. The gates read
+  `TRIVY_EXIT_ON_EOL` as `trivy image` did, so an end-of-life OS still fails
+  them when the job sets it.
+- When Scanopsis cannot be reached, each upload retries for about four and a
+  quarter minutes, see [Retries and limits](#retries-and-limits). A list of N
+  images then takes N times as long, plus the source scan's upload. Keep the
+  job timeout above that, or split long lists over several jobs.
 - Scanning `.` and scanning `$CI_PROJECT_DIR` give the same artifact, `.`.
 
 Check that the new script ends with the same exit code as your old one on a
@@ -612,6 +644,7 @@ folder) and the script gave:
 | A distroless image with a JWT, a MEDIUM secret | 0 / 0 | none: `TRIVY_SEVERITY` leaves out the MEDIUM secret in both |
 | A folder with an AWS key pair | 1 / 1 | two CRITICAL secrets |
 | A folder without secrets | 0 / 0 | none |
+| `alpine:3.17.0` itself, an end-of-life OS, with `TRIVY_EXIT_ON_EOL=1` as well | 1 / 1 | HIGH 26; the report is uploaded |
 
 And the cases the old gate could not tell apart:
 
@@ -674,7 +707,7 @@ short outage does not lose a scan. curl decides what to retry:
 | `429` | Too many uploads from one address (`too_many_requests`) or from one project (`project_rate_limited`), or the job is over its artifact limit (`job_artifact_limit`). | Yes, after `Retry-After`. For `job_artifact_limit`, `Retry-After` is an hour, so curl gives up. |
 | `500`, `502`, `504` | An error in Scanopsis, or a proxy that could not reach it. | Yes |
 | `503` | Scanopsis is busy (`busy`), restoring a backup (`restoring`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`). All but the GitLab one carry `Retry-After`. A short restore ends within the retry time; during a long one the scan is not kept. | Yes |
-| No answer: connection refused, network unreachable, timeout | Scanopsis is down or restarting. | Yes (`--retry-all-errors`; with curl older than 7.71, only a refused connection) |
+| No answer: connection refused, network unreachable, timeout | Scanopsis is down or restarting. | Yes (`--retry-all-errors`; with curl older than 7.71, only a refused connection or a timeout) |
 | `400`, `401`, `403`, `409`, `413`, `415`, `422` | The request itself is wrong. The same request gets the same answer. | No |
 
 A retry is safe: the same job, artifact and kind replaces the earlier upload.
@@ -685,7 +718,7 @@ minutes.
 The script uses `--retry-all-errors` (curl 7.71 or later) because a stopped
 Scanopsis does not always look like a refused connection. When its name has an
 IPv6 address that the runner cannot reach and an IPv4 address that refuses,
-curl reports the last error, "Network is unreachable", and
+curl can end with "Network is unreachable" (curl 7.88 did), and
 `--retry-connrefused` gives up at once: the scan is lost. `--retry-all-errors`
 repeats every upload that got no answer. It does not repeat an answer such as
 `401` or `409`, because the script does not pass `--fail`. With an older curl
@@ -693,8 +726,11 @@ the script falls back to `--retry-connrefused`; `curl --version | head -1`
 shows yours.
 
 Every upload that gets no answer waits the full four minutes before it
-prints `HTTP 000`: also one with a wrong URL, an unknown host name or a
-certificate the runner does not trust. Check the URL with one job before you
+prints `HTTP 000` (255 seconds in a test): also one with a wrong URL, an
+unknown host name or a certificate the runner does not trust. A job that
+uploads several reports waits that long for each, so ten images cost about 43
+minutes while Scanopsis is unreachable. Keep the job timeout above that, or
+split long lists over several jobs, and check the URL with one job before you
 roll the script out.
 
 These limits protect Scanopsis and its database. You cannot change them:
@@ -754,6 +790,7 @@ job again.
 
 | Answer | Cause | Fix |
 | --- | --- | --- |
+| `000`, after about four minutes, below `curl: (3) URL using bad/illegal format or missing URL` (or `URL rejected`, depending on the curl version) | curl refused the address itself, so nothing was sent: `SCANOPSIS_URL` has a space, a quote or another character that cannot be in a URL, or a hand-written upload put a value into the URL without encoding it. curl repeats the error until the retries end. | Correct `SCANOPSIS_URL`. Encode every value you add to the URL, as `urlencode` in the scripts does. |
 | `503` `ingest_not_configured`: `Uploads are not enabled: the GitLab URL is not configured in Scanopsis.` | `gitlab.url` is not set. | Set it, see [step 1](#step-1-tell-scanopsis-where-your-gitlab-is). |
 | `401` `invalid_token`: `The Authorization header is missing. Send Authorization: Bearer <ID token>.` | The request had no `Authorization` header. | Send `Authorization: Bearer $SCANOPSIS_ID_TOKEN`. |
 | `401` `invalid_token`: `The Authorization header must be: Bearer <ID token>.` | The token variable is empty: the job has no `id_tokens` entry with that name. | Add `id_tokens: SCANOPSIS_ID_TOKEN:` to the job, see [step 3](#step-3-call-the-script-from-gitlab-ciyml). |
@@ -773,7 +810,7 @@ job again.
 | `400` `invalid_report`: `The body is not a complete, valid gzip stream.` | `Content-Encoding: gzip` was sent with data that is not gzip, or the file was cut off. | Compress with `gzip -c`, or drop the header. |
 | `400` `invalid_parameter`: `kind must be image or secret-fs.` | The `kind` parameter has another value. | Use `kind=image` for `trivy image` and `kind=secret-fs` for the secret scan. |
 | `400` `invalid_parameter`: `artifact must be 1 to 200 printable characters: no control characters, no non-ASCII spaces, and not only spaces.` | The optional `artifact` parameter is empty, only spaces, longer than 200 characters, or holds a control character or a non-ASCII space such as a no-break space. | Use a plain name, see [keep two variants apart](#keep-two-variants-apart). |
-| `400` `invalid_parameter`: `sonar_key must be a SonarQube project key: 1 to 400 characters, only ASCII letters, digits, '-', '_', '.' and ':', and at least one that is not a digit.` | `SONAR_PROJECT_KEY` holds something that cannot be a SonarQube project key, for example a space or a `/`. | Use the key exactly as `sonar.projectKey` has it. |
+| `400` `invalid_parameter`: `sonar_key must be a SonarQube project key: 1 to 400 characters, only ASCII letters, digits, '-', '_', '.' and ':', and at least one that is not a digit.` | `SONAR_PROJECT_KEY` holds something that cannot be a SonarQube project key, for example a space or a `/`. The scripts encode it, so Scanopsis gets it as written. | Use the key exactly as `sonar.projectKey` has it. |
 | `201` with `"sonar_key_ignored":"sonar_key_pending"` (or another value) | The scan is stored; the declared SonarQube key was not set by this upload. | See [link the SonarQube project](#link-the-sonarqube-project). |
 | `422` `not_a_trivy_report`: `This is not a Trivy JSON report (SchemaVersion 2): SchemaVersion is missing` (or `SchemaVersion 1 is not supported, only 2 is`) | The file is not a Trivy JSON report, or has an old schema. | Create it with `--format json` from Trivy 0.50 or later. |
 | `413` `report_too_large`: `The report is larger than the limit of 67108864 bytes (decompressed).` | The report is above 64 MiB after decompression. The limit is fixed. | Scan fewer targets per report, for example one report per image. |

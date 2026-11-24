@@ -179,9 +179,19 @@ permission) can cause such a delivery.
 
 While a declared key waits, only that key can link the service: an analysis of
 any other project that names `P` is not linked, and its delivery says why. A
-newer upload that declares another key replaces the waiting one. A waiting key
-shows only in the audit log and in the upload answer, not on the Services page.
-An administrator can set a key on the service at any time.
+newer upload that declares another key replaces the waiting one.
+
+- **See it.** The Services page shows a waiting key next to the SonarQube
+  field as "Waiting for SonarQube project `K`", and the API gives it as
+  `sonar_key_declared` and `sonar_key_declared_at` of the service. When an
+  analysis is not linked to a service, check this first.
+- **Override it.** An administrator who sets or clears the SonarQube key of
+  the service on the Services page cancels the waiting key. The audit event
+  then has `cleared_sonar_key_declared`.
+- **A taken key.** If another service gets `K` while it waits, the next upload
+  of the project that declares `K` drops the waiting key and answers
+  `key_linked_to_other_service`. Until that upload, the waiting key still
+  keeps other projects' analyses from linking the service.
 
 The upload never changes a key that is set, and never takes a key from another
 service. It answers `service_has_other_key` when the service has another key,
@@ -194,7 +204,8 @@ Every step is in the audit log:
 | --- | --- | --- |
 | `service.updated` with the reason "declared by the pipeline's upload and confirmed by a SonarQube analysis of the same project" | `ci:<project path>` with the pipeline and job, or `sonarqube` when the webhook confirms a waiting key | The key is set. |
 | `service.updated` with `sonar_key_declared` and the reason "declared by the pipeline's upload; set when a SonarQube analysis of the same project confirms it" | `ci:<project path>` | The key starts to wait. A repeated upload of the same waiting key is not recorded again. |
-| `ingest.sonar_key_ignored` (**SonarQube key ignored**) with the reason, the declared key and, for `service_has_other_key`, the current one | `ci:<project path>` | The upload's key was not used. Recorded for every such upload. |
+| `ingest.sonar_key_ignored` (**SonarQube key ignored**) with the reason, the declared key, for `service_has_other_key` the current one, and `cleared_sonar_key_declared` when it dropped a waiting key | `ci:<project path>` | The upload's key was not used. Recorded once for each new reason or key; the server log has a warning for every such upload. |
+| `service.updated` with `cleared_sonar_key_declared` | The administrator | An administrator set or cleared the key while a declared key waited. |
 
 ### Link from the analysis
 
@@ -370,7 +381,7 @@ calling the endpoint.
 | Unlinked: `The service of GitLab project ... waits for SonarQube project "...", the key its pipeline declared in an upload, so ...` | An upload declared another key, which waits for its own analysis. | Nothing to do if the declared key is right. Otherwise correct `SONAR_PROJECT_KEY`, or set the key on the service. |
 | Unlinked: `Not linked: the service of GitLab project ... is linked to SonarQube project "...", the key its pipeline declared in its upload. ...` | The declared key was set, and this analysis is of another project. | Nothing to do if the link is right; otherwise change the key on the service. |
 | Unlinked: `The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, ...` | The service already has another key, for example because the project was renamed. | Change the SonarQube key on the service. |
-| Unlinked: `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "..." because the service or the key is already linked.` | Another service, maybe an archived one, has this key. | Free the key on the other service, or link by key. |
+| Unlinked: `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "..." because the service or the key is already linked, or the service's pipeline declared another key in an upload.` | Another service, maybe an archived one, has this key, or the service waits for the key its pipeline declared. | Look at the service on the Services page: a waiting key shows there. Free the key on the other service, correct `SONAR_PROJECT_KEY`, or set the key on the service. |
 | Failed: `The analysis task ended with status "..."; nothing was stored.` | The analysis failed in SonarQube. | Fix the analysis. The next successful one is stored. |
 | Failed: `Reading measures failed: SonarQube answered 401 on api/measures/component. ...` | The token is wrong or revoked. | Create a new token and save it in Settings. |
 | Failed: `... SonarQube answered 403 on ...` or `... answered 404 on ...` | The user lacks Browse on the project, or the project key does not exist. Newer versions answer 404 for a missing permission. | Give the user Browse on the project. |
@@ -386,7 +397,7 @@ calling the endpoint.
 | Problem | Cause | Fix |
 | --- | --- | --- |
 | SonarQube shows the delivery as failed, with a timeout or a connection error. | SonarQube cannot reach Scanopsis, or blocks private addresses. | See [If SonarQube refuses a private address](#if-sonarqube-refuses-a-private-address). |
-| A service shows no SonarQube data. | It has no SonarQube key, and no analysis arrived with its GitLab project ID. | Link it, see [step 4](#step-4-link-projects-to-services). |
+| A service shows no SonarQube data. | It has no SonarQube key, and no analysis arrived with its GitLab project ID. Or its pipeline declared a key that waits: the Services page shows "Waiting for SonarQube project ...". | Link it, see [step 4](#step-4-link-projects-to-services). For a waiting key, run an analysis of that key with `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`, or set the key on the service. |
 | The Integrations page shows "The last sync failed". | The last sync could not read a project. The text names the project and the SonarQube status. | Fix the cause. The next good sync clears it. |
 | A rating or the coverage says "Not available". | SonarQube did not report that metric for the analysis. | Check the project in SonarQube. |
 
