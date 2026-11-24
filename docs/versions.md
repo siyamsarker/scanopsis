@@ -264,12 +264,13 @@ network, and the database is still there after `docker compose up -d`.
 #### From 0.4.0
 
 - Two migrations run when 0.4.1 starts. **Back up first**, with **Back up
-  now** on the Backups page, because the old version cannot read the upgraded
-  database.
+  now** on the Backups page, because 0.4.0 can start on the upgraded
+  database but cannot work with it: its uploads fail.
   - Migration 00011 gives every scan its artifact key (the image name without
     its tag, or the folder relative to the repository) and rewrites the
-    OS-package targets of image scans with it. It works in batches and keeps
-    the database usable meanwhile; it took about 25 seconds on a laptop with
+    OS-package targets of image scans with it. It works in batches, and Scanopsis
+    serves requests only after all migrations are done, so it is unavailable
+    while they run; it took about 25 seconds on a laptop with
     540,000 scans and 4.3 million findings.
   - Migration 00012 adds two columns to the SonarQube deliveries, used to link
     analyses that arrive before the first scan.

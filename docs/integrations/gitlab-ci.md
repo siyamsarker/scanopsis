@@ -98,6 +98,7 @@ mkdir -p "$out"
 # not retry other answers: a 4xx such as 401, 409 or 413 stays the same.
 upload() {
   gzip -c "$1" >"$1.gz"
+  rm -f "$out/response.json"
   url="$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2"
   [ -n "${3:-}" ] && url="$url&artifact=$3"
   code=$(curl -sS --max-time 120 --retry 8 --retry-connrefused --retry-max-time 300 -X POST \
@@ -160,7 +161,11 @@ exit "$status"
 3. `jq` removes the secrets and every vulnerability whose `Status` is not
    `fixed`. `trivy convert` then prints the HIGH and CRITICAL findings that are left, and exits
    with 1 if there are any. This is your security gate, built from the report
-   you uploaded.
+   you uploaded. The gate looks at vulnerabilities only. To fail the job on
+   secrets in the image layers too, add the secret gate of the [central
+   script](#a-central-scan-script-with-separate-jobs): `jq
+   'del(.Results[]?.Vulnerabilities)'` on the report, then `trivy convert
+   --format table --exit-code 1`.
 4. The secret scan of the repository runs on its own, because secrets have no
    fix status and must not be filtered by severity. It uploads with
    `kind=secret-fs`. Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
@@ -290,14 +295,23 @@ still works.
 
 ### Keep two variants apart
 
-Two images with the same name but different contents, for example one build per
-platform pushed with the same name, would replace each other. Give each upload
-its own name with the optional `artifact` parameter:
+Two images whose names differ only by the tag are one artifact, so the newer
+scan replaces the older one as the current state. That is what you want for
+`web-frontend:4` and `web-frontend:5`. It is not what you want for two builds
+of one release, such as `registry.example.com/team/web-frontend:4-amd64` and
+`registry.example.com/team/web-frontend:4-arm64`, which you scan in the same
+job. Give each upload its own name with the optional `artifact` parameter. In
+the loop of step 2, the file name is the image name with `/`, `:` and `@`
+replaced by `_`:
 
 ```sh
-upload "$out/web-frontend-amd64.json" image web-frontend-amd64
-upload "$out/web-frontend-arm64.json" image web-frontend-arm64
+upload "$out/registry.example.com_team_web-frontend_4-amd64.json" image web-frontend-amd64
+upload "$out/registry.example.com_team_web-frontend_4-arm64.json" image web-frontend-arm64
 ```
+
+Variants with exactly the same image name cannot be kept apart inside one job,
+because a job's second upload of the same reported name replaces its first.
+Scan them in separate jobs.
 
 This uses the optional third argument of `upload` from step 2. The value
 becomes the key. Rules: 1 to 200 printable characters, no control characters,
@@ -305,10 +319,8 @@ no spaces other than the plain space, and not only spaces. Use letters, digits,
 `-`, `_` and `.` in a URL as it is, and percent-encode anything else. A value
 that breaks a rule is answered with `400` `invalid_parameter`.
 
-One job that uploads the same reported name twice, once with each `artifact`
-value, keeps only the second: a retried upload replaces the earlier upload of
-the same job, reported name and kind. Give a job's variants different image
-names, or upload them from different jobs.
+A retried upload replaces the earlier upload of the same job, reported name and
+kind, whatever the `artifact` value.
 
 ## Step 5. Choose the dashboard branch
 
@@ -339,11 +351,85 @@ the script so that it:
 - decides its exit code from the same report, as before, so that a failed
   upload never changes whether the job passes.
 
-This example does all three. It exits with 0 when the job passes and 1 when the
-gate fails or Trivy cannot scan (2 means wrong use):
+This example does all three. It builds two gates from the one full report: the
+vulnerability gate fails on HIGH and CRITICAL vulnerabilities, unfixed ones
+included, and the secret gate fails on any secret in the image layers. It exits
+with 0 when the job passes and 1 when a gate fails or Trivy cannot scan (2
+means wrong use). Keep the `jq` filters equal to the flags your old script
+used: if its scan used `--ignore-unfixed`, add the filter of step 2
+(`select(.Status == "fixed")`) to the vulnerability gate; if it did not scan
+secrets, drop the secret gate. A `.trivyignore` in the folder the job runs in
+applies to the gates as it did to the scan.
 
 ```sh
-'''+script+'''
+#!/bin/sh
+# /opt/platform-trivy/scan.sh: the shared scan script of the platform team.
+#
+#   scan.sh image <image>      scan one image, upload it, apply both gates
+#   scan.sh source [folder]    scan a folder (default: .) for secrets
+#
+# Needs: trivy, curl, jq, gzip. Variables from the job: SCANOPSIS_URL and
+# SCANOPSIS_ID_TOKEN (from id_tokens).
+# Exit codes: 0 passed, 1 a gate failed or Trivy could not scan, 2 wrong use.
+# A problem with the upload never changes the exit code.
+set -u
+out=${SCANOPSIS_OUT:-scanopsis-out}
+mkdir -p "$out"
+
+# upload <report.json> <image|secret-fs>: prints what happened, always returns 0.
+upload() {
+  gzip -c "$1" >"$1.gz"
+  rm -f "$out/response.json"
+  code=$(curl -sS --max-time 120 --retry 8 --retry-connrefused --retry-max-time 300 -X POST \
+    -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
+    -H 'Content-Type: application/json' \
+    -H 'Content-Encoding: gzip' \
+    --data-binary @"$1.gz" \
+    -o "$out/response.json" -w '%{http_code}' \
+    "$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2") || code=000
+  echo "scanopsis: upload of $1 returned HTTP $code"
+  [ -s "$out/response.json" ] && cat "$out/response.json"
+  return 0
+}
+
+case "${1:-}" in
+image)
+  image=${2:?usage: scan.sh image <image>}
+  name=$(printf '%s' "$image" | tr '/:@' '___')
+  status=0
+  # Put your own checks here, for example the age of the vulnerability
+  # database, before the scan.
+
+  # One full scan for Scanopsis: every severity, unfixed findings, secrets in
+  # the image layers. The flags win over TRIVY_SEVERITY and
+  # TRIVY_IGNORE_UNFIXED set in the job.
+  trivy image --quiet --scanners vuln,secret --format json --show-suppressed \
+    --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
+    --output "$out/$name.json" "$image" || { echo "trivy could not scan $image"; exit 1; }
+  upload "$out/$name.json" image
+
+  # Gate 1, vulnerabilities: fail on HIGH and CRITICAL, unfixed ones included.
+  # A .trivyignore in the current folder is applied by trivy convert too.
+  jq 'del(.Results[]?.Secrets)' "$out/$name.json" >"$out/$name.vuln.json"
+  trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 "$out/$name.vuln.json" || status=1
+  # Gate 2, secrets in the image layers: fail on any secret. No --severity
+  # here, so a TRIVY_SEVERITY of the job applies as it would to a secret scan.
+  jq 'del(.Results[]?.Vulnerabilities)' "$out/$name.json" >"$out/$name.secret.json"
+  trivy convert --format table --exit-code 1 "$out/$name.secret.json" || status=1
+  exit "$status"
+  ;;
+source)
+  dir=${2:-.}
+  trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+    --skip-dirs "$out" --format json --output "$out/secrets.json" "$dir" || { echo "trivy could not scan $dir"; exit 1; }
+  upload "$out/secrets.json" secret-fs
+  trivy convert --format table --exit-code 1 "$out/secrets.json"
+  ;;
+*)
+  echo "usage: scan.sh image <image> | scan.sh source [folder]" >&2
+  exit 2
+  ;;
+esac
 ```
 
 Make it executable on the runner (`chmod 755 /opt/platform-trivy/scan.sh`).
@@ -374,9 +460,9 @@ source-scan:
 ```
 
 Both jobs may set `TRIVY_SEVERITY` or `TRIVY_IGNORE_UNFIXED`. The script's flags
-win for the report. Check that the gate still fails and passes where it did
-before, on one image of your own (see [Check the gate before you replace
-yours](#check-the-gate-before-you-replace-yours)). Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
+win for the report. Check that the new script ends with the same exit code as
+your old one on a few images of your own: a clean one, one with HIGH findings
+and one with a secret. Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
 artifact, `.`.
 
 ## Restrict who may upload

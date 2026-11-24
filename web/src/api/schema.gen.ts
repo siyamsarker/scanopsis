@@ -3082,8 +3082,10 @@ export interface operations {
                 kind?: "image" | "secret-fs";
                 /**
                  * @description Names the artifact for this upload instead of the report, to keep apart variants that
-                 *     Scanopsis would otherwise treat as one, such as the builds of an image for two platforms
-                 *     (web-frontend-stage-amd64, web-frontend-stage-arm64). Without it the artifact is the
+                 *     Scanopsis would otherwise treat as one, such as the builds of one release for two
+                 *     platforms that are tagged apart (web-frontend:4-amd64 and web-frontend:4-arm64, uploaded
+                 *     as web-frontend-amd64 and web-frontend-arm64). Uploads of the same reported name from one
+                 *     job replace each other, whatever this value is: scan variants of one name in separate jobs. Without it the artifact is the
                  *     image name without its tag and digest (every tag of an image is the same artifact), and
                  *     for secret-fs the scanned folder, with the runner's build folder of the project read as
                  *     `.` and a folder inside it as its path in the repository (services/api). 1 to 200
