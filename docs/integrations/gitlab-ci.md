@@ -30,7 +30,9 @@ You need:
 - GitLab 15.7 or later. Older versions do not have the `id_tokens` keyword.
 - Trivy 0.50 or later on the runner. Older versions do not have
   `--show-suppressed`.
-- `curl`, `jq` and `gzip` on the runner.
+- `curl`, `jq` and `gzip` on the runner. With curl 7.71 or later the upload
+  also survives a Scanopsis that is down, see [Retries and
+  limits](#retries-and-limits).
 - A network path from the runner to Scanopsis, and from Scanopsis to GitLab.
   Scanopsis downloads the signing keys from GitLab.
 
@@ -87,21 +89,26 @@ status=0
 out=scanopsis-out
 mkdir -p "$out"
 
+# curl 7.71 or later retries every failed connection; an older one only a
+# refused connection.
+retry=--retry-all-errors
+curl --retry-all-errors --version >/dev/null 2>&1 || retry=--retry-connrefused
+
 # upload <report.json> <image|secret-fs> [artifact]
 # The optional third argument names the artifact, see "Keep two variants
 # apart". Use letters, digits, - _ . only, or percent-encode the value.
 # Prints what happened and always returns 0: a problem with the upload never
 # changes the result of the job. curl retries for about four minutes (8
 # retries, waiting 1 s, 2 s, 4 s and so on, or the Retry-After of the answer)
-# when Scanopsis answers 408, 429, 500, 502, 503 or 504, when a transfer times
-# out, and when the connection is refused (Scanopsis is restarting). It does
-# not retry other answers: a 4xx such as 401, 409 or 413 stays the same.
+# when Scanopsis answers 408, 429, 500, 502, 503 or 504, and when it gets no
+# answer at all (Scanopsis is down or restarting). It does not retry other
+# answers: a 4xx such as 401, 409 or 413 stays the same.
 upload() {
   gzip -c "$1" >"$1.gz"
   rm -f "$out/response.json"
   url="$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2"
   [ -n "${3:-}" ] && url="$url&artifact=$3"
-  code=$(curl -sS --max-time 120 --retry 8 --retry-connrefused --retry-max-time 300 -X POST \
+  code=$(curl -sS --max-time 120 --retry 8 "$retry" --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
     -H 'Content-Encoding: gzip' \
@@ -390,11 +397,16 @@ set -u
 out=${SCANOPSIS_OUT:-scanopsis-out}
 mkdir -p "$out"
 
+# curl 7.71 or later retries every failed connection; an older one only a
+# refused connection.
+retry=--retry-all-errors
+curl --retry-all-errors --version >/dev/null 2>&1 || retry=--retry-connrefused
+
 # upload <report.json> <image|secret-fs>: prints what happened, always returns 0.
 upload() {
   gzip -c "$1" >"$1.gz"
   rm -f "$out/response.json"
-  code=$(curl -sS --max-time 120 --retry 8 --retry-connrefused --retry-max-time 300 -X POST \
+  code=$(curl -sS --max-time 120 --retry 8 "$retry" --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
     -H 'Content-Encoding: gzip' \
@@ -545,14 +557,28 @@ short outage does not lose a scan. curl decides what to retry:
 | `429` | Too many uploads from one address (`too_many_requests`) or from one project (`project_rate_limited`), or the job is over its artifact limit (`job_artifact_limit`). | Yes, after `Retry-After`. For `job_artifact_limit`, `Retry-After` is an hour, so curl gives up. |
 | `500`, `502`, `504` | An error in Scanopsis, or a proxy that could not reach it. | Yes |
 | `503` | Scanopsis is busy (`busy`), restoring a backup (`restoring`), cannot reach its database (`unavailable`) or cannot reach GitLab (`gitlab_unavailable`). All but the GitLab one carry `Retry-After`. A short restore ends within the retry time; during a long one the scan is not kept. | Yes |
-| Connection refused, timeout | Scanopsis is down or restarting. | Yes (`--retry-connrefused`) |
+| No answer: connection refused, network unreachable, timeout | Scanopsis is down or restarting. | Yes (`--retry-all-errors`; with curl older than 7.71, only a refused connection) |
 | `400`, `401`, `403`, `409`, `413`, `415`, `422` | The request itself is wrong. The same request gets the same answer. | No |
 
-The script uses `--retry`, not `--retry-all-errors`, which would also repeat the
-last row and only slow the job down. A retry is safe: the same job, artifact and
-kind replaces the earlier upload. curl 7.66 or later honours `Retry-After`.
-Eight retries with curl's doubling wait (1 s, 2 s, 4 s, up to 128 s) and
-`--retry-max-time 300` give the four minutes.
+A retry is safe: the same job, artifact and kind replaces the earlier upload.
+curl 7.66 or later honours `Retry-After`. Eight retries with curl's doubling
+wait (1 s, 2 s, 4 s, up to 128 s) and `--retry-max-time 300` give the four
+minutes.
+
+The script uses `--retry-all-errors` (curl 7.71 or later) because a stopped
+Scanopsis does not always look like a refused connection. When its name has an
+IPv6 address that the runner cannot reach and an IPv4 address that refuses,
+curl reports the last error, "Network is unreachable", and
+`--retry-connrefused` gives up at once: the scan is lost. `--retry-all-errors`
+repeats every upload that got no answer. It does not repeat an answer such as
+`401` or `409`, because the script does not pass `--fail`. With an older curl
+the script falls back to `--retry-connrefused`; `curl --version | head -1`
+shows yours.
+
+Every upload that gets no answer waits the full four minutes before it
+prints `HTTP 000`: also one with a wrong URL, an unknown host name or a
+certificate the runner does not trust. Check the URL with one job before you
+roll the script out.
 
 These limits protect Scanopsis and its database. You cannot change them:
 
@@ -601,8 +627,9 @@ as the scan is current. [Operations](../operations.md) has the command.
 ## Troubleshooting
 
 Each upload prints `scanopsis: upload of ... returned HTTP <code>`, followed by
-the answer of Scanopsis. HTTP `000` means curl got no answer at all. The line
-above it says why: a wrong URL, DNS, TLS or a firewall.
+the answer of Scanopsis. HTTP `000` means curl got no answer at all, even after
+about four minutes of retries. The line above it says why: Scanopsis is down, a
+wrong URL, DNS, TLS or a firewall.
 
 If the answer is `500` `internal_error`, the upload was not stored and the cause
 is in the Scanopsis log. The script retries it. If the retries fail too, run the
