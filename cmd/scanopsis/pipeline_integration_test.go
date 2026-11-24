@@ -361,7 +361,8 @@ func TestIntegrationSonarBeforeFirstScan(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	if latest == nil || latest["quality_gate_status"] != "OK" {
+	// The card says in which pipeline the analysis ran.
+	if latest == nil || latest["quality_gate_status"] != "OK" || latest["gitlab_pipeline_id"] != float64(1001) {
 		t.Fatalf("sonar latest = %v", latest)
 	}
 }
