@@ -894,7 +894,7 @@ docker run -d --name scanopsis --network scanopsis-net \
   -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
   -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
   -v "$PWD/backups:/var/lib/scanopsis/backups" \
-  scanopsis:v0.4.0
+  scanopsis:v0.4.1
 ```
 
 The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`. Wait
@@ -1009,7 +1009,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: scanopsis
-          image: registry.example.com/platform/scanopsis:v0.4.0
+          image: registry.example.com/platform/scanopsis:v0.4.1
           ports:
             - name: http
               containerPort: 8080
@@ -1294,11 +1294,11 @@ You deploy a new version by building its image from its version branch, see
 build steps, and [roll back to the previous version](versions.md#roll-back-to-the-previous-version)
 for the way back. Schema changes run when the new version starts; there is no
 separate migration step. The recorded run below
-upgraded from 0.1.0 straight to 0.3.0. 0.4.0 adds no migration, so an upgrade
-to 0.4.0 ends at the same schema version, 10; the version line in the output
-is the one of that run, and yours shows `v0.4.0` and another commit. From
-0.2.0 it looks the same, except that the schema version is already 10 and
-stays 10. Before an upgrade from a version before 0.4.0, also
+upgraded from 0.1.0 straight to 0.3.0. 0.4.0 added no migration, and 0.4.1
+adds two (00011 and 00012), so an upgrade to 0.4.1 ends at schema version 12;
+the version line and the schema numbers in the output are the ones of that
+run, and yours show `v0.4.1`, another commit and 12. From 0.4.0 the version
+before the upgrade is 10. Before an upgrade from a version before 0.4.0, also
 [move the database into a folder](versions.md#move-the-database-into-a-folder).
 
 ### Upgrade
@@ -1353,7 +1353,9 @@ A failed migration stops the server with `apply migration <file>:` and the
 database error. Most migrations run in a transaction, and the large index
 builds can safely run again, so the next start continues where the last one
 stopped. A migration that cannot lock a table within 10 seconds stops the
-start the same way; start again when the database is quieter.
+start the same way; start again when the database is quieter. After a stop
+during the 0.4.1 upgrade, start 0.4.1 again; do not start 0.4.0 on that
+database.
 
 ### Roll back
 

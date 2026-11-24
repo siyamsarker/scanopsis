@@ -8,26 +8,27 @@ Which version to install, and how to upgrade or roll back.
 
 ## The short version
 
-Install **0.4.0**, the newest version. It is on the branch `release/0.4.0`
-with the tag `v0.4.0`. Scanopsis publishes no container image, so you build
+Install **0.4.1**, the newest version. It is on the branch `release/0.4.1`
+with the tag `v0.4.1`. Scanopsis publishes no container image, so you build
 it yourself from that branch, as [install the newest version](#install-the-newest-version)
 shows.
 
 | Do | Do not |
 | --- | --- |
-| Deploy the newest version branch, `release/0.4.0`. | Deploy from `main`. It is development code and can be broken at any time. |
+| Deploy the newest version branch, `release/0.4.1`. | Deploy from `main`. It is development code and can be broken at any time. |
 | Upgrade as soon as a newer version is published. Only the newest version receives fixes. | Install an older version, or stay on one. |
 | Back up the database and the secret key before every upgrade. | Upgrade without a backup. Some versions change the database, and that cannot be undone. |
-| Tag your image with the version: `scanopsis:v0.4.0`. | Reuse one image name for different versions; you lose the way back. |
+| Tag your image with the version: `scanopsis:v0.4.1`. | Reuse one image name for different versions; you lose the way back. |
 
 A version branch never changes once it is published. Fixes go into the next
 version.
 
-> **Older versions:** the branches `release/0.1.0`, `release/0.2.0` and
-> `release/0.3.0` stay on GitHub only as a record. They receive no fixes,
+> **Older versions:** the branches `release/0.1.0`, `release/0.2.0`,
+> `release/0.3.0` and `release/0.4.0` stay on GitHub only as a record. They
+> receive no fixes,
 > including security fixes, and are not meant for new installations. If you
 > run one,
-> [upgrade to 0.4.0](#upgrade-to-the-newest-version); you can go straight
+> [upgrade to 0.4.1](#upgrade-to-the-newest-version); you can go straight
 > there from any older version.
 
 Versions before 1.0.0 are early versions: compare the numbers with your own
@@ -54,22 +55,22 @@ Do this for a new installation.
 1. Get the version and check it:
 
    ```sh
-   git clone --branch release/0.4.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/0.4.1 --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    git describe --tags --always --dirty
    ```
 
-   The last command prints `v0.4.0`. If it prints a commit hash, run
-   `git fetch --depth 1 origin tag v0.4.0` and try again.
+   The last command prints `v0.4.1`. If it prints a commit hash, run
+   `git fetch --depth 1 origin tag v0.4.1` and try again.
 
 2. Build the image:
 
    ```sh
-   make image IMAGE=scanopsis:v0.4.0
+   make image IMAGE=scanopsis:v0.4.1
    ```
 
 3. Continue with [step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets).
-   `deploy/compose/.env.example` already names the image `scanopsis:v0.4.0`.
+   `deploy/compose/.env.example` already names the image `scanopsis:v0.4.1`.
 
 ## Check the running version
 
@@ -81,10 +82,10 @@ It prints the version the image was built from. The line looks like this
 (an example: the commit and the Go version on your build differ):
 
 ```text
-{"version":"v0.4.0","commit":"<commit>","go":"<go version>"}
+{"version":"v0.4.1","commit":"<commit>","go":"<go version>"}
 ```
 
-`version` must be `v0.4.0`.
+`version` must be `v0.4.1`.
 
 If `version` is not the one you expect, the container runs another image.
 Build the image again from the version branch.
@@ -94,48 +95,49 @@ Build the image again from the version branch.
 **When:** a newer version is published. **Takes:** about 10 minutes, plus
 the backup.
 
-You can upgrade from any older version straight to 0.4.0; you do not need to
+You can upgrade from any older version straight to 0.4.1; you do not need to
 install the versions in between. The newest version applies every database
 change it finds missing.
 
 | You run | Database change | Read first |
 | --- | --- | --- |
-| 0.3.0 | None. 0.4.0 adds no migration. | [From 0.3.0](#from-030) |
-| 0.2.0 | None up to 0.4.0 | [From 0.2.0](#from-020) |
-| 0.1.0 | Yes, applied when 0.4.0 starts | [From 0.1.0](#from-010) |
+| 0.4.0 | Yes: two migrations, applied when 0.4.1 starts | [From 0.4.0](#from-040) |
+| 0.3.0 | Yes: the same two | [From 0.3.0](#from-030) |
+| 0.2.0 | Yes: the same two | [From 0.2.0](#from-020) |
+| 0.1.0 | Yes: all the changes since 0.1.0, applied when 0.4.1 starts | [From 0.1.0](#from-010) |
 
 1. Read [before you upgrade](#before-you-upgrade) for the version you run.
 
 2. Back up the database and the secret key, as the
    [operations guide](operations.md) describes under "Back up with pg_dump
-   instead" (the Backups page exists only from 0.4.0). If you run 0.4.0 and
-   upgrade later, use the Backups page.
+   instead" (the Backups page exists only from 0.4.0). If you run 0.4.0, use the
+   Backups page. The upgrade changes the database, so do not skip this.
 
-3. Get 0.4.0 in your existing clone and build it:
+3. Get 0.4.1 in your existing clone and build it:
 
    ```sh
-   git fetch --depth 1 origin release/0.4.0:release/0.4.0 tag v0.4.0
-   git switch release/0.4.0
-   make image IMAGE=scanopsis:v0.4.0
+   git fetch --depth 1 origin release/0.4.1:release/0.4.1 tag v0.4.1
+   git switch release/0.4.1
+   make image IMAGE=scanopsis:v0.4.1
    ```
 
    A fresh clone, as in [install the newest version](#install-the-newest-version),
    works too.
 
 4. Compare `deploy/compose/compose.yaml` and `deploy/compose/.env.example` of
-   0.4.0 with your copies and take over new settings. Copy the new
+   0.4.1 with your copies and take over new settings. Copy the new
    `compose.yaml` if you did not change yours: it keeps the database and the
    backups in folders. Leave `SCANOPSIS_IMAGE` in `.env` on your old image for
    now.
 
 5. If your database is still in a Docker volume (every version before 0.4.0
    does this), [move it into a folder](#move-the-database-into-a-folder)
-   now, while the old image is still set. A new 0.4.0 `compose.yaml` started
+   now, while the old image is still set. A new 0.4.1 `compose.yaml` started
    without the move would create an empty database in `data/postgres` and
    leave your data behind in the volume. If `deploy/compose/data/postgres`
    exists already, skip this step.
 
-6. Set `SCANOPSIS_IMAGE=scanopsis:v0.4.0` in `deploy/compose/.env` and start
+6. Set `SCANOPSIS_IMAGE=scanopsis:v0.4.1` in `deploy/compose/.env` and start
    it:
 
    ```sh
@@ -143,13 +145,16 @@ change it finds missing.
    docker compose up -d
    ```
 
-   If the database changes, it happens now. On a large database this can take
-   a few minutes; the log shows each step.
+   The database changes now. On a large database this takes a while: the
+   change that gives every scan its artifact key took about 25 seconds on a
+   laptop with 540,000 scans and 4.3 million findings. The log shows each step.
+   If it stops partway (for example when the host restarts), start 0.4.1 again
+   and it continues. Do not start 0.4.0 on a database that is half upgraded.
 
 7. [Check the running version](#check-the-running-version). It must show
-   `v0.4.0`.
+   `v0.4.1`.
 
-8. Once 0.4.0 runs well and the backup you made before the upgrade (step 2)
+8. Once 0.4.1 runs well and the backup you made before the upgrade (step 2)
    still exists, remove the old volume, if you moved one. Until then it is
    your way back:
 
@@ -158,7 +163,7 @@ change it finds missing.
    ```
 
 The [deployment guide](deployment.md#upgrade-and-roll-back) shows the output
-of each step in a recorded upgrade (made with 0.3.0).
+of each step in a recorded upgrade (made with 0.3.0; the schema version of 0.4.1 is 12).
 
 ### Move the database into a folder
 
@@ -256,16 +261,45 @@ network, and the database is still there after `docker compose up -d`.
 
 ### Before you upgrade
 
+#### From 0.4.0
+
+- Two migrations run when 0.4.1 starts. **Back up first**, with **Back up
+  now** on the Backups page, because the old version cannot read the upgraded
+  database.
+  - Migration 00011 gives every scan its artifact key (the image name without
+    its tag, or the folder relative to the repository) and rewrites the
+    OS-package targets of image scans with it. It works in batches and keeps
+    the database usable meanwhile; it took about 25 seconds on a laptop with
+    540,000 scans and 4.3 million findings.
+  - Migration 00012 adds two columns to the SonarQube deliveries, used to link
+    analyses that arrive before the first scan.
+- If the upgrade stops partway, start 0.4.1 again. Do not go back to 0.4.0:
+  0.4.0 cannot handle a database where 00011 ran only in part. Going back to
+  0.4.0 after a finished upgrade needs the backup you made first.
+- Totals are correct at once. A service whose pipelines tagged each image per
+  run (`web-frontend:4`, `web-frontend:5`) added the pipelines up before; now
+  each image name counts once, with its newest scan, and the risk and the
+  counts drop to the real values. Nothing is deleted by the upgrade. The older
+  per-tag scans stop counting, and the daily clean-up removes them later under
+  the usual [retention rules](operations.md#data-retention).
+- Take over the new job script from the
+  [GitLab CI guide](integrations/gitlab-ci.md): it uploads the full report
+  (every severity, unfixed findings, secrets in image layers) whatever
+  `TRIVY_SEVERITY` or `TRIVY_IGNORE_UNFIXED` the job sets.
+- The first setup screen of a new installation is **Welcome to Scanopsis**; an
+  existing installation is not affected.
+
 #### From 0.3.0
 
-- The database schema does not change: 0.4.0 adds no migration, and the last
-  one is still the one 0.3.0 has. Going back to 0.3.0 later needs no restore
-  for the schema. Which storage a version uses is decided by the
-  `compose.yaml` you run it with: with the `compose.yaml` of 0.3.0, the
-  database is the old Docker volume.
+Everything in [from 0.4.0](#from-040), and also:
+
+- 0.4.0 added no migration, so the migrations that run are the two of 0.4.1.
+  Which storage a version uses is decided by the `compose.yaml` you run it
+  with: with the `compose.yaml` of 0.3.0, the database is the old Docker
+  volume. Going back to 0.3.0 needs the backup you made before the upgrade.
 - The database lives in a folder now, not in the Docker volume. Follow
   [move the database into a folder](#move-the-database-into-a-folder) before
-  you start 0.4.0.
+  you start 0.4.1.
 - Take over the new `compose.yaml`: longer stop times (2 minutes for the
   database, 30 seconds for Scanopsis), 256 MB of shared memory for the
   database, and the `backups` folder mounted into Scanopsis.
@@ -277,8 +311,8 @@ network, and the database is still there after `docker compose up -d`.
 
 Everything in [from 0.3.0](#from-030), and also:
 
-- The database does not change from 0.2.0 to 0.4.0. If you need to go back,
-  0.2.0 runs on the same database, without restoring the backup.
+- The database changes on the way to 0.4.1. If you need to go back, restore
+  the backup you made before the upgrade.
 - The web interface is new. Ask users to reload pages that are open during the
   upgrade.
 - Scripts that read `GET /api/v1/services/{id}/trends` receive at most the
@@ -287,8 +321,8 @@ Everything in [from 0.3.0](#from-030), and also:
 
 #### From 0.1.0
 
-Everything in [from 0.2.0](#from-020), except that the database does change
-along the way, and also:
+Everything in [from 0.2.0](#from-020), and the database changes more on the
+way (every migration since 0.1.0 runs), and also:
 
 - If a reverse proxy runs in front of Scanopsis, set
   `SCANOPSIS_TRUSTED_PROXIES` to its address. Without it, all users count as

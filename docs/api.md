@@ -11,7 +11,7 @@ it is authenticated.
 
 This page is generated from the OpenAPI document `api/openapi.yaml`, the
 contract of the API. To change it, change that file and run `make generate`.
-Version of the OpenAPI document: 0.4.0.
+Version of the OpenAPI document: 0.4.1.
 
 JSON API of Scanopsis. Most endpoints require a signed-in session (a session cookie); each endpoint states how it is authenticated: a session, an administrator session, a GitLab CI/CD ID token (the Trivy upload), a signed webhook (SonarQube) or none (setup, version, health). State-changing requests from browsers must be same-origin (checked with the Sec-Fetch-Site and Origin headers).
 
@@ -600,7 +600,7 @@ Parameters:
 
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
-| `artifact` | query | no | string (minLength 1, maxLength 200) | Names the artifact for this upload instead of the report, to keep apart variants that Scanopsis would otherwise treat as one, such as the builds of an image for two platforms (web-frontend-stage-amd64, web-frontend-stage-arm64). Without it the artifact is the image name without its tag and digest (every tag of an image is the same artifact), and for secret-fs the scanned folder, with the runner's build folder of the project read as `.` and a folder inside it as its path in the repository (services/api). 1 to 200 printable characters, without control characters. |
+| `artifact` | query | no | string (minLength 1, maxLength 200) | Names the artifact for this upload instead of the report, to keep apart variants that Scanopsis would otherwise treat as one, such as the builds of an image for two platforms (web-frontend-stage-amd64, web-frontend-stage-arm64). Without it the artifact is the image name without its tag and digest (every tag of an image is the same artifact), and for secret-fs the scanned folder, with the runner's build folder of the project read as `.` and a folder inside it as its path in the repository (services/api). 1 to 200 printable characters: no control characters, no non-ASCII spaces (only the plain space is allowed), and not only spaces. |
 | `kind` | query | no | string (one of `image`, `secret-fs`, default image) | image (default) for `trivy image`, secret-fs for `trivy fs --scanners secret`. |
 
 Request body (required):

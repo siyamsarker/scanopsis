@@ -40,7 +40,7 @@ services different:
 | A service with hundreds of findings | Volume. |
 | A service with fixed and unfixed findings | The fixable count. |
 | A service with a `.trivyignore` or VEX document | Suppressed findings. |
-| A service with more than one image | The sum over artifacts. |
+| A service with more than one image, and one image scanned under two tags | The sum over artifacts; each image name counts once, with its newest scan. |
 | A service with a secret scan | The secret count. |
 | A clean image (Trivy writes no `Results`) | The zero case. |
 | SonarQube projects with a passing gate, a failing gate, and no coverage | SonarQube values and empty values. |
@@ -175,7 +175,12 @@ If you get an error, see the [GitLab CI guide](integrations/gitlab-ci.md).
 Keep in mind how Scanopsis counts, because the comparison depends on it:
 
 - Dashboards show the **current state of one branch**: the latest scan of
-  each artifact and kind, by the report's `CreatedAt`. The branch is the one
+  each artifact and kind, by the report's `CreatedAt`. An image is counted
+  once per image name: `registry.example.com/team/web-frontend:4` and
+  `registry.example.com/team/web-frontend:5` are one artifact, so only the
+  newer scan counts. Count the images of a service the same way when you
+  compare: the latest scan of each image name, not of each tag. Scans made
+  before 0.4.1 with older tags stay stored but stop counting. The branch is the one
   you pick, else the dashboard branch an administrator chose, else the branch
   of the most recent scan. The page names it.
 - **Severity counts** are the **unsuppressed** vulnerabilities. Suppressed
@@ -184,6 +189,10 @@ Keep in mind how Scanopsis counts, because the comparison depends on it:
 - **Secrets** are the unsuppressed findings of `secret-fs` scans, never part
   of the severity counts.
 - The artifacts of one service add up.
+- The artifact is the image name without its tag, or the scanned folder
+  relative to the repository (`.` for the repository itself). The
+  [GitLab CI guide](integrations/gitlab-ci.md#how-scanopsis-tells-artifacts-apart)
+  has the rules.
 
 Upload every report of a service from the same branch. If two reports of one
 artifact have different `CreatedAt` times, the newer one is current.
@@ -329,6 +338,9 @@ curl -sS -b jar.txt $URL/api/v1/services/2/overview \
 {"kind":"secret-fs","artifact_name":".","counts":{"critical":0,"high":0,"medium":0,"low":0,"unknown":0},"fixable":0,"secrets":2,"suppressed":0}
 {"kind":"image","artifact_name":"python:3.9-slim-buster","counts":{"critical":2,"high":44,"medium":58,"low":31,"unknown":3},"fixable":66,"secrets":0,"suppressed":0}
 ```
+
+Each artifact also has an `artifact_key` (the image name without its tag, or
+the folder); `artifact_name` is the name as Trivy reported it.
 
 For service 3, made from `image-suppressed.json`, the same command shows
 `"suppressed":3`.

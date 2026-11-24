@@ -86,6 +86,7 @@ docker compose logs scanopsis | grep 'scanopsis starting' | tail -1
 | "The setup token is not correct. Copy it again from the server log." (`invalid_setup_token`) | The token is from an earlier start, or incomplete. Every start makes a new one. | `docker compose logs scanopsis \| grep setup_token` and use the last one. |
 | "Setup is already complete. Sign in instead." (`setup_complete`) | An administrator exists. | Sign in. If you cannot, see [recovering access](operations.md#recovering-access-when-locked-out). |
 | The log has no `setup_token` line | An administrator already exists. | Sign in. |
+| The first page is **Welcome to Scanopsis** with two choices, not a form | This is the first screen of a new installation. | Select **Set up a new installation**, or **Restore from a backup** to move from another host. |
 | "The password must be at least 12 characters long." (or another `weak_password` rule) | The password breaks a rule: at least 12 characters, at most 1024 bytes, not the user name, not one repeated character. | Choose another password. |
 
 ### Local sign-in
@@ -157,6 +158,8 @@ Scanopsis that give no Scanopsis message, or a surprising one.
 | `HTTP 503`, `ingest_not_configured`: "Uploads are not enabled: the GitLab URL is not configured in Scanopsis." | No GitLab URL is set. | Set it on the Settings page. |
 | `HTTP 429`, `too_many_requests`, for many jobs at once | Runners behind one NAT address share a limit: 60 at once, then one a second. | Spread the uploads. The script retries. |
 | The upload hangs, then `408` (`request_timeout`) | The report did not arrive within 5 minutes. | Upload from a faster network, or send it compressed (the CI script does). |
+| `HTTP 201`, but the dashboard shows fewer findings than Trivy printed (for example no MEDIUM or LOW) | The scan ran with `TRIVY_SEVERITY` or `TRIVY_IGNORE_UNFIXED=true` set in the job, and the report was cut before the upload. | Use the scan flags of the [GitLab CI guide](integrations/gitlab-ci.md#step-2-add-the-scan-script-to-your-repository): `--severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false`. A flag wins over the variable. |
+| `HTTP 400`, `invalid_parameter`: "artifact must be 1 to 200 printable characters: ..." | The optional `artifact` parameter is empty, only spaces, too long, or holds a control character or a non-ASCII space. | Use a plain name, see [keep two variants apart](integrations/gitlab-ci.md#keep-two-variants-apart). |
 | `HTTP 201`, but nothing new on the dashboard | The dashboard shows another branch, or the portfolio is filtered. | See [web interface](#web-interface). |
 | Rejected uploads you cannot see in the job log | The job ignores the answer on purpose. | The **Integrations** page lists recently refused uploads with the service and the reason; the audit log has `ingest.rejected`. Rejections before the allowed-namespaces check are recorded at most 10 at once per address, then one a minute. The server log has `upload rejected` for every one. |
 
@@ -230,7 +233,8 @@ for the same project, at least a minute after the last try, up to five times.
 | "Stale" next to "Last scan" | The latest scan is older than 7 days. | Run the pipeline, or archive a retired service. |
 | The numbers do not change after a pipeline | The dashboard shows one branch: the chosen dashboard branch, or else the branch of the most recent scan. A report with an older `CreatedAt` never replaces a newer one. | Check the branch named under the service title, and compare the scan time with the report's `CreatedAt`. |
 | A count differs from Trivy's output | Scanopsis counts unsuppressed findings only, sums the latest scan of every artifact, and shows secrets separately. | Follow the [accuracy check](verification.md). |
-| An artifact is missing | It was not uploaded for this branch, or has another `ArtifactName`. | Check `ArtifactName` in the report. |
+| An artifact is missing | It was not uploaded for this branch, or its image name (without the tag) or folder is not the one you expect. | Check `ArtifactName` in the report. The artifact is the image name without its tag, so two tags of one image are one artifact. To keep two variants apart, see [keep two variants apart](integrations/gitlab-ci.md#keep-two-variants-apart). |
+| An image shows its newest tag only, and older tags of it are gone from the totals | One image name is one artifact: the newest scan replaces the older ones, whatever the tag. This is how Scanopsis has worked since 0.4.1. After the upgrade from 0.4.0 or older, the totals dropped to the real values and the older per-tag scans stopped counting. | Nothing to fix. They stay stored until the daily [clean-up](operations.md#data-retention) removes them. |
 | "No SonarQube analysis yet" | The project is linked, but no analysis arrived. | Run an analysis and check **Integrations**. |
 | "Not available" for coverage, duplication or a rating | SonarQube did not report that value. Scanopsis never shows 0 for an unknown value. | Check the project in SonarQube, for example that tests produced a coverage report. |
 | Old scans are gone | [Data retention](operations.md#data-retention) deleted them. | Raise `retention.days` if you need more history. |

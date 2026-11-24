@@ -113,8 +113,8 @@ sequenceDiagram
 ```
 
 The project, pipeline, job, branch and commit come from the checked token, never
-from the report. Uploading the same job, artifact and kind again replaces the
-earlier scan, so a retried job never duplicates data. Uploads of one GitLab
+from the report. Uploading the same job, reported artifact name and kind again
+replaces the earlier scan, so a retried job never duplicates data. Uploads of one GitLab
 project take a database advisory lock, one at a time, so two first uploads
 create one service, not two.
 
@@ -195,7 +195,7 @@ server starts. The tables:
 | `settings` | The runtime settings. Plain values are JSON, secret values are encrypted. Each row records whether the value came from the environment or the Settings page, who changed it and when. |
 | `audit_log` | Security events: actor, action and a JSON detail. |
 | `services` | One service per GitLab project: name, GitLab project ID and path, the optional SonarQube project key, how it was created (`ingest` or `manual`), and whether it is archived. |
-| `scans` | One Trivy report for one artifact in one CI job: pipeline, job, ref, whether the ref was protected, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity and of fixable, secret and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`). A job, artifact and kind exist once per service. |
+| `scans` | One Trivy report for one artifact in one CI job: pipeline, job, ref, whether the ref was protected, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity and of fixable, secret and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`). The artifact is stored twice: `artifact_name` as the report named it (`web-frontend:4`) and `artifact_key`, the identity (see [Artifact identity](#artifact-identity)). A job, reported artifact name and kind exist once per service. |
 | `vulnerabilities` | The vulnerabilities of a scan: target, class, package, installed and fixed version, ID, severity, status, title, link, and whether and why Trivy suppressed it. |
 | `secret_findings` | The secret findings of a scan: target, rule, category, severity and line numbers. The matched text is never stored. |
 | `sonar_analyses` | One SonarQube analysis of a linked service: the quality gate and its conditions, every measure as reported, the mode (`mqr` or `standard`), the normalised ratings, coverage and duplication (empty when not reported). |
@@ -216,6 +216,32 @@ All jobs run inside the Scanopsis process. There is no separate worker.
 | Retention | One minute after start, then every 24 hours | Deletes scans, SonarQube analyses and deliveries older than the retention period (default 90 days), but keeps the current scans and the latest analysis of every service. Empties the stored original report of a scan that is not current after 30 days. Deletes audit events after 365 days, or after the retention period if that is longer. A run that deletes anything writes an audit event. See [operations](operations.md). |
 | Backup schedule | At the times set on the Backups page, in the time zone set there; the clock is checked at least once a minute | Takes a scheduled backup, then deletes scheduled backups older than the keep period, except the newest. The result of the last run is kept in the backup folder, so a failure survives a restart. |
 
+## Artifact identity
+
+Scanopsis must know which scans are of the same thing, so that a new scan
+replaces the older one and "new" and "fixed" mean something. That is the
+**artifact key**, stored on every scan next to the artifact name as reported:
+
+- An image: its name without the tag and digest. The registry and its port are
+  part of the name, and letter case is kept (`registry.example.com:5000/team/app:1`
+  is `registry.example.com:5000/team/app`).
+- A scanned folder: `.` for the project's own folder, otherwise the path inside
+  it, found with the project path of the token (`/builds/demo/web-frontend` is
+  `.`, `/builds/demo/web-frontend/services/api` is `services/api`).
+- Or the value of the optional `artifact` upload parameter, when the pipeline
+  gives one.
+
+Before 0.4.1 the name with its tag was the identity, so a pipeline that tags
+each run (`web-frontend:4`, `web-frontend:5`) looked like many images and the
+totals of a service added up over pipelines. Everything that means "the same
+artifact" now uses the key: the current state, new and fixed findings, earlier
+scans, trends, search, filters and data retention. The name as reported stays
+for display and for replacing the scan of a retried job. The OS-package
+targets of an image scan are stored with the key instead of the tagged name
+(`web-frontend-stage (alpine 3.20.3)`), so the same finding matches from one
+tag to the next. The [GitLab CI guide](integrations/gitlab-ci.md#how-scanopsis-tells-artifacts-apart)
+shows the rules from a pipeline's side.
+
 ## What "current" means
 
 The dashboards show the current state of a service. The definition is exact:
@@ -229,7 +255,7 @@ The dashboards show the current state of a service. The definition is exact:
   The API reports which case applied as `ref_source`: `requested`, `default` or
   `latest`.
 - **Which scans.** For that ref, the current state is the **latest scan per
-  artifact and kind**. "Latest" means the newest `scanned_at`, the time in the
+  artifact key and kind**. "Latest" means the newest `scanned_at`, the time in the
   Trivy report (`CreatedAt`), then the highest scan ID. It is not the time the
   report arrived. If the report time is in the future, Scanopsis uses its own
   clock instead, so a wrong clock cannot keep a scan current forever.
@@ -243,7 +269,7 @@ The queries behind these numbers read indexes, not whole tables. They stay fast
 with 500 services and 90 days of history, which is about 540,000 scans and
 millions of findings:
 
-- The portfolio finds the latest scan per artifact by jumping from one artifact
+- The portfolio finds the latest scan per artifact key by jumping from one key
   to the next in a covering index on `scans` that also holds the counts, so it
   never reads the table. A second index finds the ref with the most recent scan
   of a service.

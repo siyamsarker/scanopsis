@@ -359,8 +359,8 @@ new branch.
 ## Find a vulnerability across services
 
 **Search** in the header finds where a vulnerability ID (a CVE or GHSA number)
-appears in the current scans, meaning the latest scan of each artifact on a
-branch. A switch picks which branches are searched:
+appears in the current scans, meaning the latest scan of each artifact (an
+image name whatever its tag, or a folder) on a branch. A switch picks which branches are searched:
 
 - **Dashboard branches and protected refs** (default): the dashboard branch of
   every service and every protected branch or tag. This is what your services
@@ -383,7 +383,7 @@ end.
 
 - **Scan history** for `retention.days` days (default 90).
 - **Current scans, however old.** A scan is current when it is the latest of
-  its service, branch, artifact and kind, and its branch is the dashboard
+  its service, branch, artifact key and kind, and its branch is the dashboard
   branch, or was protected when the scan ran, or (with no dashboard branch
   chosen) is the branch the dashboards show. So what a dashboard shows is
   never deleted, and the last scan of every protected branch stays.
@@ -399,6 +399,11 @@ the dashboard branch or protect it in GitLab.
 
 A scan's age is its `scanned_at` time, when Trivy ran, not when the report
 arrived.
+
+After the upgrade to 0.4.1, scans of the same image under older tags stop
+counting at once, because only the latest scan per image name is current. They
+are not deleted by the upgrade. The daily clean-up removes them later by the
+rules above, once they are older than the period.
 
 ### What a cleanup run does
 

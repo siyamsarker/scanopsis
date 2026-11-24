@@ -7,7 +7,7 @@
 **Code quality and container security for every service, in one view.**<br>
 SonarQube and Trivy results from your GitLab CI/CD pipelines, side by side.
 
-[![Version](https://img.shields.io/badge/version-0.4.0-4f46e5?style=flat-square)](docs/versions.md)
+[![Version](https://img.shields.io/badge/version-0.4.1-4f46e5?style=flat-square)](docs/versions.md)
 [![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](web/package.json)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?style=flat-square&logo=postgresql&logoColor=white)](docs/deployment.md)
@@ -29,8 +29,8 @@ instead of clicking through job logs and SonarQube projects.
 
 ![The service dashboard of payments-api in the dark theme: a risk ring around the risk score with the failed quality gate, a one-line verdict of what changed since the previous pipeline, and the pipeline strip with new and fixed findings per pipeline, gate results and coverage on new code](docs/images/service-dark.png)
 
-> **Status:** install **0.4.0**, the newest version (branch `release/0.4.0`,
-> tag `v0.4.0`). It is an early version: every feature below works and is
+> **Status:** install **0.4.1**, the newest version (branch `release/0.4.1`,
+> tag `v0.4.1`). It is an early version: every feature below works and is
 > tested end to end, but the accuracy check against real pipeline data is
 > still open. Deploy the version branch, never `main`, which is development
 > code.
@@ -176,12 +176,12 @@ Node.js 26 as well.
 ## Quick start
 
 Scanopsis publishes no container image. You build it from the newest
-**version branch**, `release/0.4.0`, never from `main`:
+**version branch**, `release/0.4.1`, never from `main`:
 
 ```sh
-git clone --branch release/0.4.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
+git clone --branch release/0.4.1 --depth 1 https://github.com/siyamsarker/scanopsis.git
 cd scanopsis
-make image IMAGE=scanopsis:v0.4.0
+make image IMAGE=scanopsis:v0.4.1
 cd deploy/compose
 ```
 
@@ -193,7 +193,7 @@ Then:
    for the database and `sudo install -d -m 700 -o 65532 -g 65532 backups`
    for the backups.
 3. Copy `.env.example` to `.env` and set `SCANOPSIS_PUBLIC_URL`. It already
-   runs the image you built, `scanopsis:v0.4.0`.
+   runs the image you built, `scanopsis:v0.4.1`.
 4. Run `docker compose up -d`.
 5. Read the one-time setup token from the log and create the first
    administrator in the browser.
@@ -228,17 +228,18 @@ takes about 15 minutes. Then connect your pipelines with the
 
 ## Versions and upgrading
 
-The newest version is **0.4.0**. Each version is a branch, such as
-`release/0.4.0`, with a tag, such as `v0.4.0`, and never changes once
+The newest version is **0.4.1**. Each version is a branch, such as
+`release/0.4.1`, with a tag, such as `v0.4.1`, and never changes once
 published. `main` is development code.
 
-Already running Scanopsis? Upgrade to 0.4.0 from any older version in one
+Already running Scanopsis? Upgrade to 0.4.1 from any older version in one
 step: back up, move the database into a folder (the versions guide shows
-how), build the 0.4.0 image and point `SCANOPSIS_IMAGE` at it. It updates
-the database when it starts, if it has to. The [versions guide](docs/versions.md)
+how), build the 0.4.1 image and point `SCANOPSIS_IMAGE` at it. It updates
+the database when it starts, if it has to (0.4.1 changes the database, so
+back up first). The [versions guide](docs/versions.md)
 lists what to check for the version you run, and how to roll back.
 
-The branches of older versions (0.1.0, 0.2.0 and 0.3.0) stay on GitHub only as a
+The branches of older versions (0.1.0, 0.2.0, 0.3.0 and 0.4.0) stay on GitHub only as a
 record. They receive no fixes, so do not install them.
 
 ## Security

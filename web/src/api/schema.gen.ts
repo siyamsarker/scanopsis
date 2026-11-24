@@ -3087,7 +3087,8 @@ export interface operations {
                  *     image name without its tag and digest (every tag of an image is the same artifact), and
                  *     for secret-fs the scanned folder, with the runner's build folder of the project read as
                  *     `.` and a folder inside it as its path in the repository (services/api). 1 to 200
-                 *     printable characters, without control characters.
+                 *     printable characters: no control characters, no non-ASCII spaces (only the plain space
+                 *     is allowed), and not only spaces.
                  */
                 artifact?: string;
             };

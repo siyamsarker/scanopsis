@@ -25,41 +25,41 @@ if you use it, your SonarQube.
 ## Step 1. Build the image
 
 Scanopsis publishes no container image, so you build one from a version
-branch. This guide uses **0.4.0**, the newest version. Always deploy a
+branch. This guide uses **0.4.1**, the newest version. Always deploy a
 version branch, never `main`: `main` is development code.
 
 1. Clone the version branch:
 
    ```sh
-   git clone --branch release/0.4.0 --depth 1 https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/0.4.1 --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    ```
 
 2. Build the image with a tag that names the version:
 
    ```sh
-   make image IMAGE=scanopsis:v0.4.0
+   make image IMAGE=scanopsis:v0.4.1
    ```
 
    The first build downloads dependencies and takes a few minutes. The last
    lines look like this:
 
    ```text
-   #24 unpacking to docker.io/library/scanopsis:v0.4.0 0.0s done
+   #24 unpacking to docker.io/library/scanopsis:v0.4.1 0.0s done
    #24 DONE 0.3s
    ```
 
 3. Check that the image exists:
 
    ```sh
-   docker image ls scanopsis:v0.4.0
+   docker image ls scanopsis:v0.4.1
    ```
 
-   You see one line with the repository `scanopsis` and the tag `v0.4.0`.
+   You see one line with the repository `scanopsis` and the tag `v0.4.1`.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, the version
 string has unusual characters. Pass a plain one, for example
-`make image IMAGE=scanopsis:v0.4.0 VERSION=v0.4.0`. If it fails while
+`make image IMAGE=scanopsis:v0.4.1 VERSION=v0.4.1`. If it fails while
 downloading, check the network access and proxy settings of Docker on the
 host.
 
@@ -125,6 +125,14 @@ sudo install -d -m 700 -o 65532 -g 65532 backups
 | `data/postgres` | The database. Mode 700, because it holds the database files. 70 is the user the PostgreSQL image runs as; only it may open the database files, so the folder must belong to it. Leave the owner alone afterwards. |
 | `backups` | The backup files Scanopsis writes. The container runs as user 65532, so that user must own the folder; `sudo install` sets owner and mode 700 in one step, which keeps other users on the host out. |
 
+On macOS with Docker Desktop, you do not need `sudo` or the owner options:
+create the folders with plain `mkdir`, because Docker Desktop handles the file
+ownership of the folders it shares with its containers:
+
+```sh
+mkdir -p data/postgres backups
+```
+
 Why folders: a Docker volume is deleted by `docker compose down -v`,
 `docker volume prune` and `docker system prune --volumes`. No Docker cleanup
 command (`docker compose down -v`, `docker volume prune`, `docker system prune`)
@@ -151,10 +159,26 @@ host, as the [operations guide](operations.md) describes.
    this host name. Another name makes sign-in fail.
 
 3. Check that `SCANOPSIS_IMAGE` names the image from step 1:
-   `SCANOPSIS_IMAGE=scanopsis:v0.4.0`, which `.env.example` already sets.
+   `SCANOPSIS_IMAGE=scanopsis:v0.4.1`, which `.env.example` already sets.
    Compose runs exactly this image, and an
    [upgrade](versions.md#upgrade-to-the-newest-version) later changes only this
    line.
+
+Local additions, such as `extra_hosts` entries that tell the container where
+a host name lives, go in `deploy/compose/compose.override.yaml`. Compose reads
+that file next to `compose.yaml` on its own and merges it, so you never edit
+`compose.yaml` and an upgrade can replace it. For example, to make
+`gitlab.example.com` resolve to `10.0.0.5` inside the Scanopsis container
+(example):
+
+```yaml
+services:
+  scanopsis:
+    extra_hosts:
+      - "gitlab.example.com:10.0.0.5"
+```
+
+The [deployment guide](deployment.md) has more examples.
 
 Check that Compose accepts the files:
 
@@ -252,7 +276,11 @@ If the command prints nothing, an administrator already exists. Go to
 
 ## Step 8. Complete the setup in the browser
 
-1. Open the `setup_url` from the log. You see **Set up Scanopsis**.
+1. Open the `setup_url` from the log. You see **Welcome to Scanopsis** with two
+   choices. Select **Set up a new installation**. (The other choice, **Restore
+   from a backup**, is for moving Scanopsis to a new host, see the
+   [operations guide](operations.md#backup-and-restore).) You see **Set up
+   Scanopsis**.
 2. Fill in the form:
    - **Setup token**: the token from step 7.
    - **Username**: for example `root`. This becomes a local account with the

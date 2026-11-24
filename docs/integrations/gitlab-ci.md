@@ -65,6 +65,16 @@ Save this file as `ci/scan.sh` in your repository. It scans each image once,
 with every severity and with unfixed findings. It uploads that full report, then
 decides from the same report whether the job fails.
 
+> **The upload scan must always ask for everything.** The script passes
+> `--severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL` and does not ignore unfixed
+> findings, on purpose. Many GitLab projects set the job variables
+> `TRIVY_SEVERITY` (for example `HIGH,CRITICAL`) or `TRIVY_IGNORE_UNFIXED=true`
+> for their gate. Trivy reads them as defaults, so without the flags the report
+> would silently lose its MEDIUM and LOW findings, and Scanopsis would show
+> fewer findings than exist. A flag on the command line wins over the
+> environment variable (checked with Trivy 0.72.0), so the script is safe
+> whatever the job sets. The gate keeps its own filter, further down.
+
 ```sh
 #!/bin/sh
 # ci/scan.sh: scan images and the repository, upload the full Trivy reports
@@ -77,7 +87,9 @@ status=0
 out=scanopsis-out
 mkdir -p "$out"
 
-# upload <report.json> <image|secret-fs>
+# upload <report.json> <image|secret-fs> [artifact]
+# The optional third argument names the artifact, see "Keep two variants
+# apart". Use letters, digits, - _ . only, or percent-encode the value.
 # Prints what happened and always returns 0: a problem with the upload never
 # changes the result of the job. curl retries for about four minutes (8
 # retries, waiting 1 s, 2 s, 4 s and so on, or the Retry-After of the answer)
@@ -86,13 +98,15 @@ mkdir -p "$out"
 # not retry other answers: a 4xx such as 401, 409 or 413 stays the same.
 upload() {
   gzip -c "$1" >"$1.gz"
+  url="$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2"
+  [ -n "${3:-}" ] && url="$url&artifact=$3"
   code=$(curl -sS --max-time 120 --retry 8 --retry-connrefused --retry-max-time 300 -X POST \
     -H "Authorization: Bearer ${SCANOPSIS_ID_TOKEN:-}" \
     -H 'Content-Type: application/json' \
     -H 'Content-Encoding: gzip' \
     --data-binary @"$1.gz" \
     -o "$out/response.json" -w '%{http_code}' \
-    "$SCANOPSIS_URL/api/v1/ingest/trivy?kind=$2") || code=000
+    "$url") || code=000
   echo "scanopsis: upload of $1 returned HTTP $code"
   [ -s "$out/response.json" ] && cat "$out/response.json"
   return 0
@@ -101,8 +115,11 @@ upload() {
 for image in $IMAGES; do
   name=$(printf '%s' "$image" | tr '/:@' '___')
 
-  # One full scan: all severities, unfixed findings included, ignore file applied.
-  if ! trivy image --quiet --scanners vuln --format json --show-suppressed \
+  # One full scan: all severities, unfixed findings included, ignore file
+  # applied, secrets in the image layers included. The flags win over any
+  # TRIVY_SEVERITY or TRIVY_IGNORE_UNFIXED set in the job.
+  if ! trivy image --quiet --scanners vuln,secret --format json --show-suppressed \
+      --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --ignore-unfixed=false \
       --output "$out/$name.json" "$image"; then
     echo "trivy could not scan $image"
     status=1
@@ -111,15 +128,17 @@ for image in $IMAGES; do
 
   upload "$out/$name.json" image
 
-  # The gate, built from the same JSON: drop findings without a fix (this is
+  # The gate, built from the same JSON: drop the secrets (the gate has always
+  # looked at vulnerabilities only) and the findings without a fix (this is
   # what --ignore-unfixed does), then fail on HIGH and CRITICAL.
-  jq 'if .Results then .Results |= map(if .Vulnerabilities then .Vulnerabilities |= map(select(.Status == "fixed")) else . end) else . end' \
+  jq 'if .Results then .Results |= map(del(.Secrets) | if .Vulnerabilities then .Vulnerabilities |= map(select(.Status == "fixed")) else . end) else . end' \
     "$out/$name.json" >"$out/$name.gate.json"
   trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 "$out/$name.gate.json" || status=1
 done
 
 # Secrets are a separate scan without a severity filter.
-trivy fs --quiet --scanners secret --skip-dirs "$out" --format json --output "$out/secrets.json" . || status=1
+trivy fs --quiet --scanners secret --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL \
+  --skip-dirs "$out" --format json --output "$out/secrets.json" . || status=1
 upload "$out/secrets.json" secret-fs
 trivy convert --format table --exit-code 1 "$out/secrets.json" || status=1
 
@@ -129,19 +148,24 @@ exit "$status"
 ### What the script does
 
 1. `trivy image ... --format json --show-suppressed` writes one complete report
-   per image: all severities, fixed and unfixed findings, and the findings that
+   per image: all severities (`--severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL`),
+   fixed and unfixed findings (`--ignore-unfixed=false`), the secrets that sit
+   in the image layers (`--scanners vuln,secret`), and the findings that
    your ignore file (`.trivyignore`) or VEX documents suppressed. Scanopsis
    shows those as suppressed.
 2. `upload` compresses the report, sends it, and prints the HTTP status and the
    answer. It retries a temporary failure, see [Retries and
    limits](#retries-and-limits). It always returns 0, so a failed upload never
    fails the job.
-3. `jq` removes every vulnerability whose `Status` is not `fixed`. `trivy
-   convert` then prints the HIGH and CRITICAL findings that are left, and exits
+3. `jq` removes the secrets and every vulnerability whose `Status` is not
+   `fixed`. `trivy convert` then prints the HIGH and CRITICAL findings that are left, and exits
    with 1 if there are any. This is your security gate, built from the report
    you uploaded.
-4. The secret scan runs on its own, because secrets have no fix status and must
-   not be filtered by severity. It uploads with `kind=secret-fs`.
+4. The secret scan of the repository runs on its own, because secrets have no
+   fix status and must not be filtered by severity. It uploads with
+   `kind=secret-fs`. Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
+   artifact in Scanopsis, see [How Scanopsis tells artifacts
+   apart](#how-scanopsis-tells-artifacts-apart).
 5. The last line, `exit "$status"`, makes the gates and the scans decide the job
    result, never the upload.
 
@@ -197,7 +221,12 @@ trivy-scan:
   `aud` must be the public URL of Scanopsis, written exactly as in
   `SCANOPSIS_PUBLIC_URL`: same scheme, no trailing slash.
 - `IMAGES` is a space-separated list. Each image gets its own report and becomes
-  one artifact on the dashboard.
+  one artifact on the dashboard. A tag that changes with every run, such as
+  `$CI_PIPELINE_IID` or `$CI_COMMIT_SHORT_SHA`, is fine: the artifact is the
+  image name without its tag, so the newest scan replaces the older ones.
+- A runner that uses the shell executor ignores `image:`. The job then runs
+  with the tools installed on the runner itself, so check `trivy`, `jq`, `curl`
+  and `gzip` there.
 - Run the job after the image is built and pushed, with access to pull it.
 
 ## Step 4. Run a pipeline and read the log
@@ -240,7 +269,46 @@ How to read the `201` answer:
 | `secrets` | Secret findings. |
 | `suppressed` | Findings your ignore file or VEX documents hid. |
 | `service_created` | `true` when this upload created the service. |
-| `replaced` | `true` when an earlier upload of the same job, artifact and kind was replaced. Retrying a job never duplicates data. |
+| `replaced` | `true` when an earlier upload of the same job, reported name and kind was replaced. Retrying a job never duplicates data. |
+
+## How Scanopsis tells artifacts apart
+
+Scanopsis keeps one current scan per artifact. A new upload replaces the older
+scan of the same artifact, and the new and fixed findings are counted against
+it. The artifact is named by its **key**:
+
+| What you scan | The key | Examples |
+| --- | --- | --- |
+| An image | The image name without its tag and digest. The registry, the port and the letter case stay as Trivy reports them. | `registry.example.com/team/web-frontend:4` and `registry.example.com/team/web-frontend:5` are one artifact, `registry.example.com/team/web-frontend`. `registry.example.com:5000/team/app:1` becomes `registry.example.com:5000/team/app`. |
+| A folder (`kind=secret-fs`) | `.` for the project folder, otherwise the path inside it. A path in the runner's build folder is read relative to your repository, using the project path of the token. | `.`, `/builds/demo/web-frontend` and `$CI_PROJECT_DIR` are all `.`. `/builds/demo/web-frontend/services/api` is `services/api`. Any other name stays as it is. |
+
+So per-run tags such as `$CI_PIPELINE_IID` or `$CI_COMMIT_SHORT_SHA` do not
+create a new image on the dashboard each time. The dashboard shows the key and,
+as a detail, the latest name with its tag, for example `Latest:
+web-frontend:4`. A link to the findings page that names an image with its tag
+still works.
+
+### Keep two variants apart
+
+Two images with the same name but different contents, for example one build per
+platform pushed with the same name, would replace each other. Give each upload
+its own name with the optional `artifact` parameter:
+
+```sh
+upload "$out/web-frontend-amd64.json" image web-frontend-amd64
+upload "$out/web-frontend-arm64.json" image web-frontend-arm64
+```
+
+This uses the optional third argument of `upload` from step 2. The value
+becomes the key. Rules: 1 to 200 printable characters, no control characters,
+no spaces other than the plain space, and not only spaces. Use letters, digits,
+`-`, `_` and `.` in a URL as it is, and percent-encode anything else. A value
+that breaks a rule is answered with `400` `invalid_parameter`.
+
+One job that uploads the same reported name twice, once with each `artifact`
+value, keeps only the second: a retried upload replaces the earlier upload of
+the same job, reported name and kind. Give a job's variants different image
+names, or upload them from different jobs.
 
 ## Step 5. Choose the dashboard branch
 
@@ -252,6 +320,64 @@ Right after the first upload, an administrator opens **Services**, finds the new
 service and selects its branch tag to choose the dashboard branch, usually your
 default branch.
 [Operations](../operations.md) describes the Services page.
+
+If your pipelines scan only on a deployment branch, for example `production`
+or `release`, choose that branch. A dashboard that follows the most recent scan
+works too, but a fixed branch keeps the numbers from jumping when another
+branch uploads.
+
+## A central scan script with separate jobs
+
+Many teams keep one scan script for all projects, for example in
+`/opt/platform-trivy/scan.sh` on the runner, with one job that scans the image
+and another that scans the source for secrets. You can keep that shape. Change
+the script so that it:
+
+- writes one JSON report per image and per folder, with the full set of flags
+  from step 2, so job variables cannot cut the report;
+- uploads each report, with `kind=image` or `kind=secret-fs`;
+- decides its exit code from the same report, as before, so that a failed
+  upload never changes whether the job passes.
+
+This example does all three. It exits with 0 when the job passes and 1 when the
+gate fails or Trivy cannot scan (2 means wrong use):
+
+```sh
+'''+script+'''
+```
+
+Make it executable on the runner (`chmod 755 /opt/platform-trivy/scan.sh`).
+Then call it from two jobs. They run on a runner with the shell executor, so
+they use the tools installed on the runner and ignore `image:`:
+
+```yaml
+image-scan:
+  stage: test
+  variables:
+    SCANOPSIS_URL: https://scanopsis.example.com
+    IMAGE: registry.example.com/team/web-frontend:$CI_PIPELINE_IID
+  id_tokens:
+    SCANOPSIS_ID_TOKEN:
+      aud: "$SCANOPSIS_URL"
+  script:
+    - /opt/platform-trivy/scan.sh image "$IMAGE"
+
+source-scan:
+  stage: test
+  variables:
+    SCANOPSIS_URL: https://scanopsis.example.com
+  id_tokens:
+    SCANOPSIS_ID_TOKEN:
+      aud: "$SCANOPSIS_URL"
+  script:
+    - /opt/platform-trivy/scan.sh source "$CI_PROJECT_DIR"
+```
+
+Both jobs may set `TRIVY_SEVERITY` or `TRIVY_IGNORE_UNFIXED`. The script's flags
+win for the report. Check that the gate still fails and passes where it did
+before, on one image of your own (see [Check the gate before you replace
+yours](#check-the-gate-before-you-replace-yours)). Scanning `.` and scanning `$CI_PROJECT_DIR` give the same
+artifact, `.`.
 
 ## Restrict who may upload
 
@@ -387,6 +513,7 @@ job again.
 | `400` `invalid_report`: `The body is not valid JSON: ...` | The file is cut off or is not JSON, for example because Trivy failed and wrote nothing. | Check the Trivy step. The script skips an image that Trivy could not scan. |
 | `400` `invalid_report`: `The body is not a complete, valid gzip stream.` | `Content-Encoding: gzip` was sent with data that is not gzip, or the file was cut off. | Compress with `gzip -c`, or drop the header. |
 | `400` `invalid_parameter`: `kind must be image or secret-fs.` | The `kind` parameter has another value. | Use `kind=image` for `trivy image` and `kind=secret-fs` for the secret scan. |
+| `400` `invalid_parameter`: `artifact must be 1 to 200 printable characters: no control characters, no non-ASCII spaces, and not only spaces.` | The optional `artifact` parameter is empty, only spaces, longer than 200 characters, or holds a control character or a non-ASCII space such as a no-break space. | Use a plain name, see [keep two variants apart](#keep-two-variants-apart). |
 | `422` `not_a_trivy_report`: `This is not a Trivy JSON report (SchemaVersion 2): SchemaVersion is missing` (or `SchemaVersion 1 is not supported, only 2 is`) | The file is not a Trivy JSON report, or has an old schema. | Create it with `--format json` from Trivy 0.50 or later. |
 | `413` `report_too_large`: `The report is larger than the limit of 67108864 bytes (decompressed).` | The report is above 64 MiB after decompression. The limit is fixed. | Scan fewer targets per report, for example one report per image. |
 | `413` `report_too_large`: `The report has too many findings: at most 200000 vulnerabilities and secrets (suppressed ones included) are accepted.` | The report holds more than 200,000 findings. | Split the scan, for example one report per image. |
