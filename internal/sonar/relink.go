@@ -89,7 +89,7 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 	}
 	l := linkedProject{
 		SonarLinkedServicesRow: store.SonarLinkedServicesRow{ID: serviceID, SonarProjectKey: k.ProjectKey},
-		from:                   &delivered{pipeline: pipelineID, at: k.ReceivedAt.Time},
+		from:                   &delivered{pipeline: pipelineID, analysedAt: k.AnalysedAt.Time},
 	}
 	select {
 	case s.linked <- l:
@@ -112,15 +112,17 @@ type linkedProject struct {
 // the scanner's properties, so the pipeline comes from the delivery.
 type delivered struct {
 	pipeline int64
-	// at is when the delivery arrived. An analysis that started later is a
-	// newer one, not the analysis of the pipeline.
-	at time.Time
+	// analysedAt is the analysedAt of the delivery; zero when unknown.
+	analysedAt time.Time
 }
 
-// pipelineOf returns the pipeline of the delivery for an analysis that
-// started at date, or nil when the analysis is not the delivered one.
+// pipelineOf returns the pipeline of the delivery for an analysis dated
+// date, or nil unless the analysis is provably the delivered one: its date
+// must be exactly the delivered analysedAt, as a webhook's analysis is
+// matched in process. Any other analysis, a newer one included, is stored
+// without a pipeline rather than with a wrong one.
 func (d *delivered) pipelineOf(date time.Time) *int64 {
-	if d == nil || d.pipeline == 0 || d.at.IsZero() || date.After(d.at) {
+	if d == nil || d.pipeline == 0 || d.analysedAt.IsZero() || !date.Equal(d.analysedAt) {
 		return nil
 	}
 	p := d.pipeline

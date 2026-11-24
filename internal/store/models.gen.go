@@ -127,6 +127,7 @@ type SonarDelivery struct {
 	Attempts          int32
 	ClaimedProjectID  pgtype.Int8
 	ClaimedPipelineID pgtype.Int8
+	AnalysedAt        pgtype.Timestamptz
 }
 
 type User struct {

@@ -119,6 +119,11 @@ func (s *Sonar) webhook(w http.ResponseWriter, r *http.Request) {
 	if id, ok := claimedPipeline(p); ok {
 		arg.ClaimedPipelineID = pgtype.Int8{Int64: id, Valid: true}
 	}
+	// Tells the analysis of this delivery from a newer one when it is read
+	// back from SonarQube after a later link (see delivered.pipelineOf).
+	if t, err := parseTime(p.AnalysedAt); err == nil {
+		arg.AnalysedAt = pgtype.Timestamptz{Time: t, Valid: true}
+	}
 	n, err := s.q.InsertSonarDelivery(r.Context(), arg)
 	if err != nil {
 		s.log.ErrorContext(r.Context(), "record SonarQube delivery", "error", err)

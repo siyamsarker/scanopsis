@@ -157,13 +157,14 @@ func (q *Queries) InsertSonarAnalysis(ctx context.Context, arg InsertSonarAnalys
 }
 
 const insertSonarDelivery = `-- name: InsertSonarDelivery :execrows
-INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail, claimed_project_id, claimed_pipeline_id)
-VALUES ($1, $2, $3, 'pending', '', $4, $5)
+INSERT INTO sonar_deliveries (task_id, project_key, received_at, outcome, detail, claimed_project_id, claimed_pipeline_id, analysed_at)
+VALUES ($1, $2, $3, 'pending', '', $4, $5, $6)
 ON CONFLICT (task_id) DO UPDATE
 SET outcome = 'pending', detail = '', service_id = NULL,
     received_at = EXCLUDED.received_at, attempts = sonar_deliveries.attempts + 1,
     claimed_project_id = EXCLUDED.claimed_project_id,
-    claimed_pipeline_id = EXCLUDED.claimed_pipeline_id
+    claimed_pipeline_id = EXCLUDED.claimed_pipeline_id,
+    analysed_at = EXCLUDED.analysed_at
 WHERE sonar_deliveries.outcome = 'failed'
   AND sonar_deliveries.project_key = EXCLUDED.project_key
   AND sonar_deliveries.attempts < 5
@@ -176,6 +177,7 @@ type InsertSonarDeliveryParams struct {
 	ReceivedAt        pgtype.Timestamptz
 	ClaimedProjectID  pgtype.Int8
 	ClaimedPipelineID pgtype.Int8
+	AnalysedAt        pgtype.Timestamptz
 }
 
 // InsertSonarDelivery records a delivery as pending. A redelivery of a task
@@ -185,7 +187,8 @@ type InsertSonarDeliveryParams struct {
 // captured delivery cannot be replayed without bound. Any other duplicate
 // changes nothing and affects no row. claimed_project_id and
 // claimed_pipeline_id are the sonar.analysis.gitlabProjectId and
-// sonar.analysis.pipelineId scanner properties, NULL without a usable one.
+// sonar.analysis.pipelineId scanner properties, NULL without a usable one;
+// analysed_at is the analysedAt of the payload, NULL when unreadable.
 func (q *Queries) InsertSonarDelivery(ctx context.Context, arg InsertSonarDeliveryParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertSonarDelivery,
 		arg.TaskID,
@@ -193,6 +196,7 @@ func (q *Queries) InsertSonarDelivery(ctx context.Context, arg InsertSonarDelive
 		arg.ReceivedAt,
 		arg.ClaimedProjectID,
 		arg.ClaimedPipelineID,
+		arg.AnalysedAt,
 	)
 	if err != nil {
 		return 0, err
@@ -528,7 +532,7 @@ func (q *Queries) SonarServiceKey(ctx context.Context, id int64) (pgtype.Text, e
 const waitingSonarKeys = `-- name: WaitingSonarKeys :many
 SELECT project_key,
        (array_agg(task_id ORDER BY received_at DESC, id DESC))[1]::text AS task_id,
-       max(received_at)::timestamptz AS received_at
+       (array_agg(analysed_at ORDER BY received_at DESC, id DESC))[1]::timestamptz AS analysed_at
 FROM sonar_deliveries
 WHERE outcome = 'unlinked' AND received_at >= $1::timestamptz
   AND claimed_project_id = $2 AND claimed_pipeline_id = $3
@@ -546,13 +550,13 @@ type WaitingSonarKeysParams struct {
 type WaitingSonarKeysRow struct {
 	ProjectKey string
 	TaskID     string
-	ReceivedAt pgtype.Timestamptz
+	AnalysedAt pgtype.Timestamptz
 }
 
 // WaitingSonarKeys lists the SonarQube projects of the unlinked deliveries
 // that name a GitLab project and pipeline and arrived since a time, with the
-// newest task of each and when it arrived, by key. Two rows are enough to
-// tell one project from several. The time bound keeps the scan on
+// newest task of each and the analysedAt it delivered, by key. Two rows are
+// enough to tell one project from several. The time bound keeps the scan on
 // sonar_deliveries_received_idx.
 func (q *Queries) WaitingSonarKeys(ctx context.Context, arg WaitingSonarKeysParams) ([]WaitingSonarKeysRow, error) {
 	rows, err := q.db.Query(ctx, waitingSonarKeys, arg.Since, arg.ClaimedProjectID, arg.ClaimedPipelineID)
@@ -563,7 +567,7 @@ func (q *Queries) WaitingSonarKeys(ctx context.Context, arg WaitingSonarKeysPara
 	items := []WaitingSonarKeysRow{}
 	for rows.Next() {
 		var i WaitingSonarKeysRow
-		if err := rows.Scan(&i.ProjectKey, &i.TaskID, &i.ReceivedAt); err != nil {
+		if err := rows.Scan(&i.ProjectKey, &i.TaskID, &i.AnalysedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
