@@ -86,11 +86,13 @@ SELECT EXISTS (
 
 -- WaitingSonarKeys lists the SonarQube projects of the unlinked deliveries
 -- that name a GitLab project and pipeline and arrived since a time, with the
--- newest task of each, by key. Two rows are enough to tell one project from
--- several. The time bound keeps the scan on sonar_deliveries_received_idx.
+-- newest task of each and when it arrived, by key. Two rows are enough to
+-- tell one project from several. The time bound keeps the scan on
+-- sonar_deliveries_received_idx.
 -- name: WaitingSonarKeys :many
 SELECT project_key,
-       (array_agg(task_id ORDER BY received_at DESC, id DESC))[1]::text AS task_id
+       (array_agg(task_id ORDER BY received_at DESC, id DESC))[1]::text AS task_id,
+       max(received_at)::timestamptz AS received_at
 FROM sonar_deliveries
 WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
   AND claimed_project_id = @claimed_project_id AND claimed_pipeline_id = @claimed_pipeline_id

@@ -145,7 +145,7 @@ func (s *Sonar) sync(ctx context.Context, snap settings.Snapshot) {
 		if ctx.Err() != nil {
 			return
 		}
-		err := s.syncProject(ctx, cl, svc)
+		err := s.syncProject(ctx, cl, svc, nil)
 		if err == nil {
 			synced = append(synced, svc.SonarProjectKey)
 			transport = 0
@@ -206,7 +206,9 @@ func (s *Sonar) finishSync(lastErr string) {
 }
 
 // syncProject stores the newest analysis of a project unless it is known.
-func (s *Sonar) syncProject(ctx context.Context, cl *client, svc store.SonarLinkedServicesRow) error {
+// from is the delivery that has just linked the project, if any: the
+// analysis is stored with its pipeline when it is the delivered one.
+func (s *Sonar) syncProject(ctx context.Context, cl *client, svc store.SonarLinkedServicesRow, from *delivered) error {
 	latest, err := cl.latestAnalysis(ctx, svc.SonarProjectKey)
 	if err != nil {
 		return err
@@ -229,7 +231,7 @@ func (s *Sonar) syncProject(ctx context.Context, cl *client, svc store.SonarLink
 	return s.save(ctx, snapshot{
 		ServiceID: svc.ID, TaskID: "sync:" + latest.Key, AnalysisKey: latest.Key,
 		AnalysedAt: latest.Date, Revision: latest.Revision, Gate: gate,
-		Conditions: conds, Measures: measures,
+		Conditions: conds, Measures: measures, Pipeline: from.pipelineOf(latest.Date),
 	}, "")
 }
 

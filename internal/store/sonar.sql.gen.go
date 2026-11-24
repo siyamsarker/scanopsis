@@ -527,7 +527,8 @@ func (q *Queries) SonarServiceKey(ctx context.Context, id int64) (pgtype.Text, e
 
 const waitingSonarKeys = `-- name: WaitingSonarKeys :many
 SELECT project_key,
-       (array_agg(task_id ORDER BY received_at DESC, id DESC))[1]::text AS task_id
+       (array_agg(task_id ORDER BY received_at DESC, id DESC))[1]::text AS task_id,
+       max(received_at)::timestamptz AS received_at
 FROM sonar_deliveries
 WHERE outcome = 'unlinked' AND received_at >= $1::timestamptz
   AND claimed_project_id = $2 AND claimed_pipeline_id = $3
@@ -545,12 +546,14 @@ type WaitingSonarKeysParams struct {
 type WaitingSonarKeysRow struct {
 	ProjectKey string
 	TaskID     string
+	ReceivedAt pgtype.Timestamptz
 }
 
 // WaitingSonarKeys lists the SonarQube projects of the unlinked deliveries
 // that name a GitLab project and pipeline and arrived since a time, with the
-// newest task of each, by key. Two rows are enough to tell one project from
-// several. The time bound keeps the scan on sonar_deliveries_received_idx.
+// newest task of each and when it arrived, by key. Two rows are enough to
+// tell one project from several. The time bound keeps the scan on
+// sonar_deliveries_received_idx.
 func (q *Queries) WaitingSonarKeys(ctx context.Context, arg WaitingSonarKeysParams) ([]WaitingSonarKeysRow, error) {
 	rows, err := q.db.Query(ctx, waitingSonarKeys, arg.Since, arg.ClaimedProjectID, arg.ClaimedPipelineID)
 	if err != nil {
@@ -560,7 +563,7 @@ func (q *Queries) WaitingSonarKeys(ctx context.Context, arg WaitingSonarKeysPara
 	items := []WaitingSonarKeysRow{}
 	for rows.Next() {
 		var i WaitingSonarKeysRow
-		if err := rows.Scan(&i.ProjectKey, &i.TaskID); err != nil {
+		if err := rows.Scan(&i.ProjectKey, &i.TaskID, &i.ReceivedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

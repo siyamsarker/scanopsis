@@ -75,7 +75,7 @@ type Sonar struct {
 	queue chan delivery
 	// linked holds projects LinkWaiting has just linked, for the workers to
 	// read their newest analysis at once.
-	linked chan store.SonarLinkedServicesRow
+	linked chan linkedProject
 	// queueWarned is when the full queue was last logged (Unix nanoseconds).
 	queueWarned atomic.Int64
 	// workers is how many goroutines of Run process deliveries.
@@ -104,7 +104,7 @@ func New(pool *pgxpool.Pool, cfg SettingsSource, opts Options) *Sonar {
 		pool: pool, q: store.New(pool), cfg: cfg,
 		hc: opts.HTTPClient, log: opts.Logger, now: opts.Now,
 		queue:       make(chan delivery, queueSize),
-		linked:      make(chan store.SonarLinkedServicesRow, linkedSize),
+		linked:      make(chan linkedProject, linkedSize),
 		workers:     workers,
 		audit:       opts.Audit,
 		clientIP:    opts.ClientIP,

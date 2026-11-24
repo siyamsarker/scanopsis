@@ -87,13 +87,44 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 	case err != nil:
 		return err
 	}
-	l := store.SonarLinkedServicesRow{ID: serviceID, SonarProjectKey: k.ProjectKey}
+	l := linkedProject{
+		SonarLinkedServicesRow: store.SonarLinkedServicesRow{ID: serviceID, SonarProjectKey: k.ProjectKey},
+		from:                   &delivered{pipeline: pipelineID, at: k.ReceivedAt.Time},
+	}
 	select {
 	case s.linked <- l:
 	default:
 		s.log.InfoContext(ctx, "SonarQube project linked; the next sync reads its analysis", "project", k.ProjectKey, "service_id", serviceID)
 	}
 	return nil
+}
+
+// linkedProject is a project that has just been linked to a service, for a
+// worker to read its newest analysis at once.
+type linkedProject struct {
+	store.SonarLinkedServicesRow
+	// from is the delivery that linked it, nil when there is none.
+	from *delivered
+}
+
+// delivered is a webhook delivery that named the pipeline of an analysis.
+// The analysis is read back from SonarQube, whose Web API does not return
+// the scanner's properties, so the pipeline comes from the delivery.
+type delivered struct {
+	pipeline int64
+	// at is when the delivery arrived. An analysis that started later is a
+	// newer one, not the analysis of the pipeline.
+	at time.Time
+}
+
+// pipelineOf returns the pipeline of the delivery for an analysis that
+// started at date, or nil when the analysis is not the delivered one.
+func (d *delivered) pipelineOf(date time.Time) *int64 {
+	if d == nil || d.pipeline == 0 || d.at.IsZero() || date.After(d.at) {
+		return nil
+	}
+	p := d.pipeline
+	return &p
 }
 
 // waiting names the deliveries LinkWaiting may link.
@@ -176,13 +207,14 @@ func (s *Sonar) linkLate(ctx context.Context, gitlabProjectID, pipelineID int64)
 }
 
 // syncLinked reads the newest analysis of a project LinkWaiting has just
-// linked. A failure is logged; the next sync reads the project again.
-func (s *Sonar) syncLinked(ctx context.Context, l store.SonarLinkedServicesRow) {
+// linked, with the pipeline of the delivery that linked it. A failure is
+// logged; the next sync reads the project again.
+func (s *Sonar) syncLinked(ctx context.Context, l linkedProject) {
 	snap := s.cfg.Current()
 	if !snap.SonarEnabled() {
 		return
 	}
-	if err := s.syncProject(ctx, s.client(snap), l); err != nil && ctx.Err() == nil {
+	if err := s.syncProject(ctx, s.client(snap), l.SonarLinkedServicesRow, l.from); err != nil && ctx.Err() == nil {
 		s.warn(ctx, "reading the analysis of a newly linked SonarQube project failed; the next sync retries", l.SonarProjectKey, err)
 	}
 }
