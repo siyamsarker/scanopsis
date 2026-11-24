@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -284,6 +285,29 @@ func TestIngestCreated(t *testing.T) {
 	}
 }
 
+func TestIngestArtifactKey(t *testing.T) {
+	for _, tc := range []struct{ query, body, want string }{
+		{"", `{"SchemaVersion":2,"ArtifactName":"registry.example.com/team/app:1.2@sha256:0d2b1e8f"}`, "registry.example.com/team/app"},
+		{"?artifact=app-arm64", `{"SchemaVersion":2,"ArtifactName":"registry.example.com/team/app:1.2"}`, "app-arm64"},
+		{"?artifact=" + url.QueryEscape(strings.Repeat("ü", 200)), `{"SchemaVersion":2,"ArtifactName":"app:1"}`, strings.Repeat("ü", 200)},
+		{"?kind=secret-fs", `{"SchemaVersion":2,"ArtifactName":"/builds/x/0/Platform/Payments-API/services/api/"}`, "services/api"},
+		{"?kind=secret-fs", `{"SchemaVersion":2,"ArtifactName":"/builds/x/0/platform/payments-api"}`, "."},
+		{"?kind=secret-fs&artifact=repository", `{"SchemaVersion":2,"ArtifactName":"."}`, "repository"},
+	} {
+		e := newHEnv(t, nil)
+		w := e.do(req{body: []byte(tc.body), query: tc.query})
+		if w.Code != http.StatusCreated || len(e.save.calls) != 1 {
+			t.Fatalf("%s: %d %s", tc.query, w.Code, w.Body)
+		}
+		if got := e.save.calls[0].key; got != tc.want {
+			t.Errorf("%s %s: key %q, want %q", tc.query, tc.body, got, tc.want)
+		}
+		if !strings.Contains(e.logs.String(), "artifact_key=") {
+			t.Errorf("the success log does not name the key: %s", e.logs.String())
+		}
+	}
+}
+
 func jsonEqual(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
@@ -358,6 +382,11 @@ func TestIngestRejections(t *testing.T) {
 		{name: "no content type", req: req{body: valid, contentType: str("")}, status: 415, code: "unsupported_media_type", project: true},
 		{name: "encoding", req: req{body: valid, header: map[string]string{"Content-Encoding": "br"}}, status: 415, code: "unsupported_media_type", project: true},
 		{name: "kind", req: req{body: valid, query: "?kind=sbom"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "artifact empty", req: req{body: valid, query: "?artifact="}, status: 400, code: "invalid_parameter", project: true},
+		{name: "artifact blank", req: req{body: valid, query: "?artifact=%20%20"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "artifact too long", req: req{body: valid, query: "?artifact=" + strings.Repeat("a", 201)}, status: 400, code: "invalid_parameter", project: true},
+		{name: "artifact control", req: req{body: valid, query: "?artifact=app%09amd64"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "artifact not utf-8", req: req{body: valid, query: "?artifact=%FF"}, status: 400, code: "invalid_parameter", project: true},
 		{name: "invalid json", req: req{body: []byte(`{"SchemaVersion":`)}, status: 400, code: "invalid_report", project: true},
 		{name: "empty body", req: req{body: nil}, status: 400, code: "invalid_report", project: true},
 		{name: "trailing data", req: req{body: append(append([]byte{}, valid...), []byte(`{}`)...)}, status: 400, code: "invalid_report", project: true},

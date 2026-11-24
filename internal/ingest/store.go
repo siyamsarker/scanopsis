@@ -43,6 +43,8 @@ var errJobArtifacts = errors.New("the job has uploaded too many different artifa
 type saveInput struct {
 	claims *Claims
 	kind   string
+	// key is the artifact key of the scan (see ArtifactKey).
+	key    string
 	report *Report // everything but the findings
 	raw    []byte  // gzip-compressed report
 	// findings reads the findings of the report again, in order, into a sink.
@@ -156,7 +158,7 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 			ServiceID:        svc.ID,
 			Kind:             in.kind,
 			ArtifactName:     rep.ArtifactName,
-			ArtifactKey:      rep.ArtifactName,
+			ArtifactKey:      in.key,
 			GitlabPipelineID: c.PipelineID,
 			GitlabJobID:      c.JobID,
 			Ref:              c.Ref,

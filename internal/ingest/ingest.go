@@ -403,6 +403,17 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		reject(http.StatusBadRequest, codeInvalidParam, "kind must be image or secret-fs.")
 		return
 	}
+	// artifact names the artifact instead of the report, for variants of one
+	// image that must stay apart (see ArtifactKey). Checked before the body
+	// is read, like kind.
+	var override string
+	if q := r.URL.Query(); q.Has("artifact") {
+		override = q.Get("artifact")
+		if err := checkArtifactParam(override); err != nil {
+			reject(http.StatusBadRequest, codeInvalidParam, err.Error()+".")
+			return
+		}
+	}
 	limit := i.opts.MaxReportBytes
 	if r.ContentLength > limit {
 		reject(http.StatusRequestEntityTooLarge, codeTooLarge, tooLargeMessage(limit))
@@ -452,6 +463,13 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The override was checked above, so the key cannot fail.
+	key, err := ArtifactKey(kind, rep.ArtifactName, claims.ProjectPath, override)
+	if err != nil {
+		reject(http.StatusBadRequest, codeInvalidParam, err.Error()+".")
+		return
+	}
+
 	now := i.opts.Now()
 	scanned := rep.CreatedAt
 	// The uploader controls CreatedAt: scanned_at is the earlier of it and the
@@ -482,7 +500,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := func() (Result, error) {
 		defer func() { <-i.dbSlots }()
-		return i.store.save(ctx, &saveInput{claims: claims, kind: kind, report: rep, raw: raw, findings: replay, scanTime: scanned})
+		return i.store.save(ctx, &saveInput{claims: claims, kind: kind, key: key, report: rep, raw: raw, findings: replay, scanTime: scanned})
 	}()
 	switch {
 	case errors.Is(err, errServiceArchived):
@@ -514,7 +532,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	}
 	i.log.InfoContext(ctx, "scan ingested",
 		"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
-		"job_id", claims.JobID, "artifact", rep.ArtifactName, "kind", kind, "scan_id", res.ScanID,
+		"job_id", claims.JobID, "artifact", rep.ArtifactName, "artifact_key", key, "kind", kind, "scan_id", res.ScanID,
 		"service_id", res.ServiceID, "service_created", res.ServiceCreated, "replaced", res.Replaced,
 		"critical", res.Counts.Critical, "high", res.Counts.High, "medium", res.Counts.Medium,
 		"low", res.Counts.Low, "unknown", res.Counts.Unknown, "fixable", res.Fixable,

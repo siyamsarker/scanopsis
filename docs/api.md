@@ -591,7 +591,7 @@ Responses:
 
 Upload one Trivy JSON report from a GitLab CI job.
 
-Authenticated with the job's GitLab CI/CD ID token (`Authorization: Bearer <token>`), whose audience must be the Scanopsis public URL. The project, pipeline, job, ref and commit come from the verified token, never from the report. The body is the raw report (`Content-Type: application/json`), optionally gzip-compressed (`Content-Encoding: gzip`). A repeated upload for the same job, artifact and kind replaces the earlier one. Rejections are written to the audit log, except requests limited per client address (429, code too_many_requests), and at most a bounded number per client address for rejections before the namespace and protected-ref checks and for the per-project limits. A job stores at most 50 different artifacts (artifact name and kind); a project may upload 100 reports at once and then one every 10 seconds. The body must arrive within 5 minutes of the upload being accepted.
+Authenticated with the job's GitLab CI/CD ID token (`Authorization: Bearer <token>`), whose audience must be the Scanopsis public URL. The project, pipeline, job, ref and commit come from the verified token, never from the report. The body is the raw report (`Content-Type: application/json`), optionally gzip-compressed (`Content-Encoding: gzip`). A repeated upload for the same job, artifact name (as the report gives it) and kind replaces the earlier one. The newest scan of an artifact on a ref is its current state, whatever job uploaded it. Rejections are written to the audit log, except requests limited per client address (429, code too_many_requests), and at most a bounded number per client address for rejections before the namespace and protected-ref checks and for the per-project limits. A job stores at most 50 different artifacts (artifact name and kind); a project may upload 100 reports at once and then one every 10 seconds. The body must arrive within 5 minutes of the upload being accepted.
 
 - Operation ID: `ingestTrivy`
 - Authentication: CI ID token
@@ -600,6 +600,7 @@ Parameters:
 
 | Name | In | Required | Type | Description |
 |---|---|---|---|---|
+| `artifact` | query | no | string (minLength 1, maxLength 200) | Names the artifact for this upload instead of the report, to keep apart variants that Scanopsis would otherwise treat as one, such as the builds of an image for two platforms (web-frontend-stage-amd64, web-frontend-stage-arm64). Without it the artifact is the image name without its tag and digest (every tag of an image is the same artifact), and for secret-fs the scanned folder, with the runner's build folder of the project read as `.` and a folder inside it as its path in the repository (services/api). 1 to 200 printable characters, without control characters. |
 | `kind` | query | no | string (one of `image`, `secret-fs`, default image) | image (default) for `trivy image`, secret-fs for `trivy fs --scanners secret`. |
 
 Request body (required):
@@ -611,7 +612,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 201 | Stored. | `application/json` [IngestResult](#ingestresult) |
-| 400 | Malformed body or gzip stream (code invalid_report), or an unknown kind (code invalid_parameter). | `application/json` [Error](#error) |
+| 400 | Malformed body or gzip stream (code invalid_report), or an unknown kind or an invalid artifact (code invalid_parameter). | `application/json` [Error](#error) |
 | 401 | Missing or invalid ID token (code invalid_token; the message names the failed check). | `application/json` [Error](#error) |
 | 403 | Project namespace not allowed (code namespace_not_allowed) or ref not protected (code ref_not_protected). | `application/json` [Error](#error) |
 | 408 | The body did not arrive within the read deadline of 5 minutes (code request_timeout). The connection is closed. Retry the upload. | `application/json` [Error](#error) |
