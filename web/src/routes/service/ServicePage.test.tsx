@@ -474,6 +474,36 @@ describe('service dashboard', () => {
     expect(await screen.findByRole('region', { name: 'Code quality' })).toBeInTheDocument();
   });
 
+  it('names each recent scan as it shows it', async () => {
+    setup('/services/7', {
+      overrides: (call) =>
+        call.path === '/api/v1/services/7/scans'
+          ? json(200, {
+              items: [
+                scan(11),
+                scan(12, {
+                  kind: 'secret-fs',
+                  artifact_key: '.',
+                  artifact_name: '/builds/x/0/platform/payments-api',
+                }),
+              ],
+              next_before: null,
+            })
+          : undefined,
+    });
+    const table = await screen.findByRole('table', { name: 'Recent scans' });
+    expect(
+      await within(table).findByRole('link', {
+        name: 'Open the scan of Source tree from pipeline 912',
+      }),
+    ).toHaveTextContent('Source tree');
+    expect(
+      within(table).getByRole('link', {
+        name: 'Open the scan of registry.example.com/payments/api:1.4 from pipeline 911',
+      }),
+    ).toBeInTheDocument();
+  });
+
   it('lists recent scans and loads more with next_before', async () => {
     const { calls } = setup('/services/7', {
       overrides: (call) => {

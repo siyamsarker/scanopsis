@@ -5,14 +5,17 @@ import type { Vulnerability } from '../../api/findings';
 import { targetLabel } from './FindingsList';
 import {
   applyFilters,
+  artifactIdOf,
   compareVersions,
   groupRows,
   highestFixed,
   parseFilters,
   parseGroupBy,
+  resolveFilters,
   suggestedFix,
   upgradeCommand,
   upgradeGroups,
+  withScanKinds,
 } from './model';
 
 function v(id: number, over: Partial<Vulnerability> = {}): Vulnerability {
@@ -196,21 +199,41 @@ describe('artifact key', () => {
       pkg_name: 'openssl',
       fixed_version: '3.3.2',
     }),
+    v(4, {
+      artifact_key: 'registry.example.com:5000/team/app',
+      artifact_name: 'registry.example.com:5000/team/app:7',
+      pkg_name: 'zlib',
+    }),
   ];
   const ids = (list: Vulnerability[]) => list.map((r) => r.id);
-  const filter = (query: string) =>
-    ids(applyFilters(rows, parseFilters(new URLSearchParams(query))));
+  const filter = (query: string, list: Vulnerability[] = rows) =>
+    ids(applyFilters(list, resolveFilters(parseFilters(new URLSearchParams(query)), list)));
 
   it('filters by the key, and by a full name from an older link', () => {
     expect(filter('artifact=web-frontend-stage')).toEqual([1, 2]);
     expect(filter('artifact=web-frontend-stage:4')).toEqual([1, 2]);
     expect(filter('artifact=worker,web-frontend-stage')).toEqual([1, 2, 3]);
-    expect(filter('artifact=web-frontend-stage:3')).toEqual([]);
+    expect(filter('artifact=other')).toEqual([]);
+  });
+
+  it('filters an older tag or digest of an image by the image', () => {
+    expect(filter('artifact=web-frontend-stage:3')).toEqual([1, 2]);
+    expect(filter('artifact=worker@sha256:0d2b1e8f')).toEqual([3]);
+    // A registry port is not a tag.
+    expect(filter('artifact=registry.example.com:5000/team/app:6')).toEqual([4]);
+    expect(filter('artifact=registry.example.com:5000/team/app')).toEqual([4]);
+    expect(filter('artifact=registry.example.com:5000/team')).toEqual([]);
+  });
+
+  it('turns every name of the filter into its artifact', () => {
+    const f = resolveFilters(parseFilters(new URLSearchParams('artifact=worker:1,worker')), rows);
+    expect(f.artifacts).toEqual(['worker']);
   });
 
   it('groups by image under the key, with the latest name as detail', () => {
     expect(groupRows(rows, 'image').map((g) => [g.label, g.latest, g.rows.length])).toEqual([
       ['web-frontend-stage', 'web-frontend-stage:4', 2],
+      ['registry.example.com:5000/team/app', 'registry.example.com:5000/team/app:7', 1],
       ['worker', 'worker:9', 1],
     ]);
   });
@@ -219,5 +242,46 @@ describe('artifact key', () => {
     expect(upgradeGroups(rows).map((g) => [g.pkg, g.artifacts])).toEqual([
       ['openssl', ['web-frontend-stage', 'worker']],
     ]);
+  });
+
+  describe('a secret scan with the key of an image', () => {
+    // Scan 9 is a secret scan of the folder "worker" that also reported packages.
+    const secret = v(5, {
+      scan_id: 9,
+      artifact_key: 'worker',
+      artifact_name: '/builds/x/0/demo/web-frontend/worker',
+      pkg_name: 'openssl',
+      fixed_version: '3.3.2',
+    });
+    const mixed = withScanKinds(
+      [...rows, secret],
+      [
+        { id: 1, kind: 'image' },
+        { id: 9, kind: 'secret-fs' },
+      ],
+    );
+
+    it('is an artifact of its own', () => {
+      expect(artifactIdOf(mixed[2])).toBe('worker');
+      expect(artifactIdOf(mixed[4])).toBe('secret-fs:worker');
+      expect(filter('artifact=worker', mixed)).toEqual([3]);
+      expect(filter('artifact=secret-fs:worker', mixed)).toEqual([5]);
+      expect(groupRows(mixed, 'image').map((g) => [g.label, g.rows.map((r) => r.id)])).toEqual([
+        ['web-frontend-stage', [1, 2]],
+        ['registry.example.com:5000/team/app', [4]],
+        ['worker', [3]],
+        ['worker (secret scan)', [5]],
+      ]);
+      expect(upgradeGroups(mixed)[0].artifacts).toEqual([
+        'web-frontend-stage',
+        'worker',
+        'worker (secret scan)',
+      ]);
+    });
+
+    it('leaves the rows as they are when every scan is an image', () => {
+      expect(withScanKinds(rows, [{ id: 1, kind: 'image' }])).toBe(rows);
+      expect(withScanKinds(rows, undefined)).toBe(rows);
+    });
   });
 });

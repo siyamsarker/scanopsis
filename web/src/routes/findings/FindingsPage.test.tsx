@@ -330,6 +330,8 @@ describe('findings explorer', () => {
     ['?artifact=worker', '2 vulnerabilities, 2 fixable'],
     // A link from before images were named by key still filters.
     ['?artifact=worker:2', '2 vulnerabilities, 2 fixable'],
+    // An older tag of the image: the image it was a tag of.
+    ['?artifact=worker:1', '2 vulnerabilities, 2 fixable'],
   ])('applies URL filters %s client-side', async (query, expected) => {
     const { calls } = mockFetch(api());
     renderApp(`/services/5/findings${query}`);
@@ -356,9 +358,9 @@ describe('findings explorer', () => {
     expect(screen.getByTestId('location')).not.toHaveTextContent('worker%3A2');
   });
 
-  it('marks the image chip of an older link that names the tag', async () => {
+  it.each(['worker:2', 'worker:1'])('marks the image chip of an older link to %s', async (name) => {
     mockFetch(api());
-    renderApp('/services/5/findings?artifact=worker:2');
+    renderApp(`/services/5/findings?artifact=${name}`);
     await summary('2 vulnerabilities, 2 fixable');
     const images = screen.getByRole('group', { name: 'Filter by image' });
     expect(within(images).getByRole('button', { name: /worker/ })).toHaveAttribute(

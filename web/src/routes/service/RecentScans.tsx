@@ -9,7 +9,7 @@ import { DataTable } from '../../components/DataTable';
 import { Mono } from '../../components/Mono';
 import { EmptyState } from '../../components/states';
 import type { Column } from '../../components/tableCore';
-import { countOf, formatInt, relativeTime } from '../../format';
+import { artifactLabel, countOf, formatInt, relativeTime, scannedName } from '../../format';
 import { buttonClass } from '../../ui';
 import { DistributionMini } from '../../viz';
 import { SCAN_KIND_LABEL, SectionError } from './parts';
@@ -31,7 +31,7 @@ const columns: Column<ScanSummary>[] = [
       <Link
         to={`/scans/${s.id}`}
         className="block max-w-72 font-medium text-text hover:underline"
-        aria-label={`Open the scan of ${s.artifact_name} from pipeline ${s.gitlab_pipeline_id}`}
+        aria-label={`Open the scan of ${scannedName(s) ?? artifactLabel(s.artifact_key, s.kind)} from pipeline ${s.gitlab_pipeline_id}`}
       >
         <ArtifactName artifact={s} truncate />
         <ArtifactDetail artifact={s} className="font-normal" />

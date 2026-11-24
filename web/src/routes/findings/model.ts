@@ -8,6 +8,7 @@ import {
   type SeverityCountValues,
   type SeverityKey,
 } from '../../components/severityModel';
+import { artifactLabel } from '../../format';
 import { RISK_WEIGHTS, riskPoints } from '../../viz/risk';
 
 export const SEVERITY_RANK: Record<SeverityKey, number> = {
@@ -29,7 +30,7 @@ export interface Filters {
   /** 'true' keeps fixable, 'false' keeps findings without a fix, null keeps both. */
   fixable: 'true' | 'false' | null;
   classes: VulnClass[];
-  /** Artifact keys; a full name, from a link made before keys, is matched too. */
+  /** Artifacts (see artifactIdOf); a name from an older link until resolveFilters. */
   artifacts: string[];
   q: string;
 }
@@ -58,10 +59,77 @@ export function parseFilters(params: URLSearchParams): Filters {
   };
 }
 
+/**
+ * A finding, with the kind of the scan it is in when that is not an image. A
+ * finding names only the artifact key, and a secret scan of a folder may
+ * have the key of an image; the kind keeps the two apart.
+ */
+export type Finding = Vulnerability & { scan_kind?: string };
+
+/**
+ * Marks the findings of scans that are not images with their kind, from the
+ * current scans of the ref. The same array when every scan is an image.
+ */
+export function withScanKinds(
+  rows: Vulnerability[],
+  scans: readonly { id: number; kind: string }[] | undefined,
+): Finding[] {
+  const kinds = new Map((scans ?? []).filter((s) => s.kind !== 'image').map((s) => [s.id, s.kind]));
+  if (kinds.size === 0) return rows;
+  return rows.map((v) => {
+    const kind = kinds.get(v.scan_id);
+    return kind ? { ...v, scan_kind: kind } : v;
+  });
+}
+
+/** The artifact of a finding: its key for an image, else "<kind>:<key>". */
+export function artifactIdOf(v: Finding): string {
+  return v.scan_kind ? `${v.scan_kind}:${v.artifact_key}` : v.artifact_key;
+}
+
+/** How the artifact of a finding is named: its key, a secret scan marked as one. */
+export function artifactLabelOf(v: Finding): string {
+  if (!v.scan_kind) return v.artifact_key;
+  const label = artifactLabel(v.artifact_key, v.scan_kind);
+  return label === v.artifact_key ? `${label} (secret scan)` : label;
+}
+
+/**
+ * The image an image name belongs to, as the server derives it: the name
+ * without its digest, then without the tag of its last part (a registry port
+ * is not a tag).
+ */
+export function imageKey(name: string): string {
+  const bare = name.split('@')[0];
+  const colon = bare.indexOf(':', bare.lastIndexOf('/') + 1);
+  return colon === -1 ? bare : bare.slice(0, colon);
+}
+
+/**
+ * Turns every artifact the filters name into the artifact it is: an artifact
+ * as is, a current name into its artifact, and any other name, such as an
+ * older tag from a link made before, into its image.
+ */
+export function resolveFilters(f: Filters, rows: Finding[]): Filters {
+  if (f.artifacts.length === 0) return f;
+  const ids = new Set<string>();
+  const byName = new Map<string, string>();
+  for (const v of rows) {
+    const id = artifactIdOf(v);
+    ids.add(id);
+    if (!byName.has(v.artifact_name)) byName.set(v.artifact_name, id);
+  }
+  const artifacts = f.artifacts.map((a) => (ids.has(a) ? a : (byName.get(a) ?? imageKey(a))));
+  return { ...f, artifacts: [...new Set(artifacts)] };
+}
+
 type Facet = 'severity' | 'fixable' | 'classes' | 'artifacts';
 
-/** Applies the filters; `skip` leaves one facet out, to count what its chips would show. */
-export function applyFilters(rows: Vulnerability[], f: Filters, skip?: Facet): Vulnerability[] {
+/**
+ * Applies the filters, whose artifacts resolveFilters has resolved; `skip`
+ * leaves one facet out, to count what its chips would show.
+ */
+export function applyFilters<T extends Finding>(rows: T[], f: Filters, skip?: Facet): T[] {
   const q = f.q.toLowerCase();
   return rows.filter((v) => {
     if (skip !== 'severity' && f.severity.length && !f.severity.includes(severityKey(v.severity)))
@@ -69,12 +137,7 @@ export function applyFilters(rows: Vulnerability[], f: Filters, skip?: Facet): V
     if (skip !== 'fixable' && f.fixable !== null && isFixable(v) !== (f.fixable === 'true'))
       return false;
     if (skip !== 'classes' && f.classes.length && !f.classes.includes(vulnClass(v))) return false;
-    if (
-      skip !== 'artifacts' &&
-      f.artifacts.length &&
-      !f.artifacts.includes(v.artifact_key) &&
-      !f.artifacts.includes(v.artifact_name)
-    )
+    if (skip !== 'artifacts' && f.artifacts.length && !f.artifacts.includes(artifactIdOf(v)))
       return false;
     if (
       q &&
@@ -227,7 +290,7 @@ export function upgradeGroups(rows: Vulnerability[]): UpgradeGroup[] {
         counts,
         risk: riskPoints(counts),
         vulnIds: [...new Set(bySeverity.map((v) => v.vuln_id))],
-        artifacts: [...new Set(items.map((v) => v.artifact_key))].sort(),
+        artifacts: [...new Set(items.map(artifactLabelOf))].sort(),
       };
     })
     .sort(
@@ -339,17 +402,17 @@ export interface FindingGroup {
   latest?: string;
 }
 
-function groupKey(v: Vulnerability, by: Exclude<GroupBy, 'none'>): [string, string] {
+function groupKey(v: Finding, by: Exclude<GroupBy, 'none'>): [string, string] {
   if (by === 'package') return [JSON.stringify([v.pkg_name, v.installed_version]), v.pkg_name];
   if (by === 'vulnerability') return [v.vuln_id, v.vuln_id];
-  return [v.artifact_key, v.artifact_key];
+  return [artifactIdOf(v), artifactLabelOf(v)];
 }
 
 /**
  * Groups rows that are already sorted; rows keep their order inside a group.
  * Groups come by risk points, then size, then name.
  */
-export function groupRows(rows: Vulnerability[], by: Exclude<GroupBy, 'none'>): FindingGroup[] {
+export function groupRows(rows: Finding[], by: Exclude<GroupBy, 'none'>): FindingGroup[] {
   const groups = new Map<string, FindingGroup>();
   for (const v of rows) {
     const [key, label] = groupKey(v, by);
@@ -357,7 +420,9 @@ export function groupRows(rows: Vulnerability[], by: Exclude<GroupBy, 'none'>): 
     if (!group) {
       group = { key, label, rows: [], counts: emptyCounts(), risk: 0, fixable: 0 };
       if (by === 'package') group.version = v.installed_version;
-      if (by === 'image' && v.artifact_name !== v.artifact_key) group.latest = v.artifact_name;
+      const image = !v.scan_kind;
+      if (by === 'image' && image && v.artifact_name !== v.artifact_key)
+        group.latest = v.artifact_name;
       groups.set(key, group);
     }
     group.rows.push(v);

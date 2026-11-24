@@ -7,7 +7,7 @@ import { Tooltip } from '../../components/Tooltip';
 import { countOf, formatInt, formatPercent } from '../../format';
 import { buttonClass } from '../../ui';
 import { RISK_SOURCE, SeverityBar, riskTerms } from '../../viz';
-import { countSeverities, isFixable } from './model';
+import { artifactIdOf, countSeverities, isFixable } from './model';
 import type { SeverityCountValues } from '../../components/severityModel';
 import { riskPoints } from '../../viz';
 
@@ -83,7 +83,7 @@ export function LensSummary({
   const allRisk = riskPoints(countSeverities(all));
   const fixable = selected.filter(isFixable).length;
   const packages = new Set(selected.map((v) => v.pkg_name)).size;
-  const images = new Set(selected.map((v) => v.artifact_key)).size;
+  const images = new Set(selected.map(artifactIdOf)).size;
   const share = selected.length ? fixable / selected.length : 0;
   const atLeast = incomplete ? 'at least ' : '';
 

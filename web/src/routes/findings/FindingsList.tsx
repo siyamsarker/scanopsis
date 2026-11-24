@@ -22,6 +22,7 @@ import { SkeletonTable } from '../../components/states';
 import { countOf, formatExactTime, formatInt, relativeTime } from '../../format';
 import { DistributionMini } from '../../viz';
 import {
+  artifactLabelOf,
   groupRows,
   isFixable,
   type FindingGroup,
@@ -453,7 +454,7 @@ export function FindingsList({
               </span>
               <span role="gridcell" className="hidden min-w-0 md:block">
                 <span className="block truncate text-body-s text-text" title={v.artifact_name}>
-                  {v.artifact_key}
+                  {artifactLabelOf(v)}
                 </span>
                 <span className="mt-1 block truncate text-caption text-text-faint" title={v.target}>
                   {findingTarget(v)}

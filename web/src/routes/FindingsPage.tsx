@@ -1,6 +1,7 @@
 // Copyright 2026 Siyam Sarker
 // SPDX-License-Identifier: Apache-2.0
 
+import { useMemo } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { ApiError } from '../api/client';
 import {
@@ -16,7 +17,7 @@ import { EmptyState, ErrorState, Skeleton, SkeletonTable } from '../components/s
 import { TabPanel, Tabs } from '../components/Tabs';
 import { countOf, formatExactTime, relativeTime } from '../format';
 import { linkClass } from '../ui';
-import { parseFilters } from './findings/model';
+import { parseFilters, withScanKinds } from './findings/model';
 import { refChoices } from './service/refSource';
 import { FixTab } from './findings/FixTab';
 import { SecretsTab } from './findings/SecretsTab';
@@ -70,6 +71,9 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
     serverFilters,
     rowCeiling,
   );
+  // Findings of a scan that is not an image are told apart by its kind.
+  const artifacts = overview.data?.artifacts;
+  const rows = useMemo(() => withScanKinds(vulns.rows, artifacts), [vulns.rows, artifacts]);
 
   const notFound = [service.error, overview.error].some(
     (e) => e instanceof ApiError && e.status === 404,
@@ -196,7 +200,7 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
           <TabPanel idBase="findings" tab="vulnerabilities" value={tab}>
             <VulnerabilitiesTab
               serviceId={id}
-              rows={vulns.rows}
+              rows={rows}
               loading={vulns.loading}
               loadingMore={vulns.loadingMore}
               truncated={vulns.truncated}
@@ -208,7 +212,7 @@ export function FindingsPage({ rowCeiling = MAX_ROWS }: { rowCeiling?: number } 
             <FixTab
               serviceId={id}
               urlRef={urlRef}
-              rows={vulns.rows}
+              rows={rows}
               loading={vulns.loading}
               loadingMore={vulns.loadingMore}
               truncated={vulns.truncated}

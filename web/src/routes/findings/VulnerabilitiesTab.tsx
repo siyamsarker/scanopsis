@@ -19,10 +19,13 @@ import { VulnDrawer } from './VulnDrawer';
 import {
   DEFAULT_SORT,
   applyFilters,
+  artifactIdOf,
+  artifactLabelOf,
   countBy,
   isFixable,
   parseFilters,
   parseGroupBy,
+  resolveFilters,
   sortVulns,
   vulnClass,
   type GroupBy,
@@ -77,7 +80,8 @@ export function VulnerabilitiesTab({
   const [open, setOpen] = useState<Vulnerability | null>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const facetsId = useId();
-  const filters = useMemo(() => parseFilters(params), [params]);
+  // Artifacts named by an older link (a tag) are read as the artifact they are.
+  const filters = useMemo(() => resolveFilters(parseFilters(params), rows), [params, rows]);
   const groupBy = parseGroupBy(params.get('group'));
   const includeSuppressed = params.get('suppressed') === 'true';
 
@@ -102,7 +106,7 @@ export function VulnerabilitiesTab({
     const sev = countBy(applyFilters(rows, filters, 'severity'), (v) => severityKey(v.severity));
     const fix = applyFilters(rows, filters, 'fixable');
     const cls = countBy(applyFilters(rows, filters, 'classes'), vulnClass);
-    const art = countBy(applyFilters(rows, filters, 'artifacts'), (v) => v.artifact_key);
+    const art = countBy(applyFilters(rows, filters, 'artifacts'), artifactIdOf);
     const fixable = fix.filter(isFixable).length;
     const severity: ChipOption[] = SEVERITY_ORDER.map((key) => ({
       value: key,
@@ -117,13 +121,12 @@ export function VulnerabilitiesTab({
     const classes = CLASS_OPTIONS.map((o) => ({ ...o, count: cls.get(o.value) ?? 0 })).filter(
       (o) => o.count > 0 || filters.classes.includes(o.value as never),
     );
-    // One chip per artifact key, so every tag of an image is one image.
-    const keys = [...new Set(rows.map((v) => v.artifact_key))].sort();
-    const artifacts = keys.map((key) => ({ value: key, label: key, count: art.get(key) ?? 0 }));
-    // A link from before keys may name an image with its tag: mark its key.
-    const keyOf = new Map(rows.map((v) => [v.artifact_name, v.artifact_key]));
-    const selectedArtifacts = [...new Set(filters.artifacts.map((a) => keyOf.get(a) ?? a))];
-    return { severity, fixOptions, classes, artifacts, selectedArtifacts };
+    // One chip per artifact, so every tag of an image is one image.
+    const labels = new Map(rows.map((v) => [artifactIdOf(v), artifactLabelOf(v)]));
+    const artifacts = [...labels.keys()]
+      .sort()
+      .map((id) => ({ value: id, label: labels.get(id) ?? id, count: art.get(id) ?? 0 }));
+    return { severity, fixOptions, classes, artifacts };
   }, [rows, filters]);
 
   if (error && rows.length === 0) {
@@ -252,7 +255,7 @@ export function VulnerabilitiesTab({
                 <FilterChips
                   label="Filter by image"
                   options={chips.artifacts}
-                  selected={chips.selectedArtifacts}
+                  selected={filters.artifacts}
                   onChange={(s) => setParam('artifact', s.join(',') || null)}
                 />
               </Facet>
