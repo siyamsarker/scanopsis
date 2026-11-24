@@ -135,6 +135,13 @@ export function ServiceActions({
           onSave={(body) =>
             patch(body, 'Changes saved', `${body.name ?? service.name} is up to date.`)
           }
+          onCancelWaiting={() =>
+            patch(
+              { sonar_project_key: null },
+              'Waiting key cancelled',
+              `${service.name} no longer waits for ${service.sonar_key_declared ?? 'a SonarQube key'}.`,
+            )
+          }
         />
       ) : null}
 
@@ -175,12 +182,14 @@ function EditDialog({
   problem,
   onCancel,
   onSave,
+  onCancelWaiting,
 }: {
   service: Service;
   pending: boolean;
   problem: string;
   onCancel: () => void;
   onSave: (body: ServiceUpdate) => void;
+  onCancelWaiting: () => void;
 }) {
   const ids = useId();
   const nameInput = useRef<HTMLInputElement>(null);
@@ -195,9 +204,16 @@ function EditDialog({
       return;
     }
     setNameError('');
-    // An empty key unlinks the SonarQube project.
-    onSave({ name: name.trim(), sonar_project_key: sonar.trim() === '' ? null : sonar.trim() });
+    const body: ServiceUpdate = { name: name.trim() };
+    // The key is sent only when it changed: setting or clearing it also
+    // cancels a key the pipeline declared that waits for SonarQube. An empty
+    // key unlinks the SonarQube project.
+    if (sonar.trim() !== (service.sonar_project_key ?? '')) {
+      body.sonar_project_key = sonar.trim() === '' ? null : sonar.trim();
+    }
+    onSave(body);
   }
+  const waiting = !service.sonar_project_key ? service.sonar_key_declared : null;
 
   return (
     <Dialog
@@ -270,15 +286,27 @@ function EditDialog({
           />
           <p id={`${ids}-sonar-hint`} className="text-caption text-text-muted">
             The key of the project in SonarQube. Leave it empty to unlink.
-            {service.sonar_key_declared ? (
+            {waiting ? (
               <>
                 {' '}
-                Waiting for SonarQube project{' '}
-                <span className="font-mono">{service.sonar_key_declared}</span>, declared by the
-                pipeline. Saving a key here, or an empty one, cancels it.
+                Waiting for SonarQube project <span className="font-mono">{waiting}</span>, declared
+                by the pipeline. Setting a key here, or cancelling, stops waiting for{' '}
+                <span className="font-mono">{waiting}</span>.
               </>
             ) : null}
           </p>
+          {waiting ? (
+            <div>
+              <button
+                type="button"
+                className={buttonClass('secondary', 'sm')}
+                onClick={onCancelWaiting}
+                disabled={pending}
+              >
+                Cancel waiting key
+              </button>
+            </div>
+          ) : null}
         </div>
         {problem ? <Problem>{problem}</Problem> : null}
       </form>

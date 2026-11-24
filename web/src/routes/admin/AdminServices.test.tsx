@@ -326,8 +326,92 @@ describe('admin services page', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
     expect(within(dialog).getByLabelText('SonarQube project key')).toHaveValue('');
     expect(within(dialog).getByLabelText('SonarQube project key')).toHaveAccessibleDescription(
-      /Waiting for SonarQube project platform:docs, declared by the pipeline\. Saving a key here, or an empty one, cancels it\./,
+      /Waiting for SonarQube project platform:docs, declared by the pipeline\. Setting a key here, or cancelling, stops waiting for platform:docs\./,
     );
+  });
+
+  describe('a key that waits for SonarQube', () => {
+    const waiting: Service = {
+      ...docs,
+      sonar_key_declared: 'platform:docs',
+      sonar_key_declared_at: '2026-11-20T10:00:00Z',
+    };
+    const waitingApi = () =>
+      mockFetch(
+        api((call) => {
+          if (call.method === 'GET' && call.path.startsWith('/api/v1/services?'))
+            return json(200, { items: [pay, waiting], next_after: null });
+          if (call.method === 'PATCH') return json(200, { ...waiting, ...(call.body as object) });
+          return undefined;
+        }),
+      );
+
+    it('keeps the waiting key when only the name changes', async () => {
+      const { calls } = waitingApi();
+      renderApp('/admin/services');
+      await chooseAction('Docs', 'Edit');
+      const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
+      fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Docs site' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      const patch = calls.find((c) => c.method === 'PATCH');
+      expect(patch).toMatchObject({ path: '/api/v1/services/2', body: { name: 'Docs site' } });
+      expect(patch?.body).not.toHaveProperty('sonar_project_key');
+    });
+
+    it('sends a key typed in its place', async () => {
+      const { calls } = waitingApi();
+      renderApp('/admin/services');
+      await chooseAction('Docs', 'Edit');
+      const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
+      fireEvent.change(within(dialog).getByLabelText('SonarQube project key'), {
+        target: { value: ' platform:docs-site ' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+      expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+      expect(calls.find((c) => c.method === 'PATCH')).toMatchObject({
+        body: { name: 'Docs', sonar_project_key: 'platform:docs-site' },
+      });
+    });
+
+    it('cancels the waiting key with null', async () => {
+      const { calls } = waitingApi();
+      renderApp('/admin/services');
+      await chooseAction('Docs', 'Edit');
+      const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel waiting key' }));
+      expect(await screen.findByText('Waiting key cancelled')).toBeInTheDocument();
+      const patch = calls.find((c) => c.method === 'PATCH');
+      expect(patch).toMatchObject({
+        path: '/api/v1/services/2',
+        body: { sonar_project_key: null },
+      });
+      expect(patch?.body).not.toHaveProperty('name');
+    });
+
+    it('offers no cancel without a waiting key', async () => {
+      waitingApi();
+      renderApp('/admin/services');
+      await chooseAction('Payments', 'Edit');
+      const dialog = await screen.findByRole('dialog', { name: 'Edit Payments' });
+      expect(within(dialog).queryByRole('button', { name: 'Cancel waiting key' })).toBeNull();
+    });
+  });
+
+  it('leaves the SonarQube key out when only the name changes', async () => {
+    const { calls } = mockFetch(
+      api((call) =>
+        call.method === 'PATCH' ? json(200, { ...pay, name: 'Payments API' }) : undefined,
+      ),
+    );
+    renderApp('/admin/services');
+    await chooseAction('Payments', 'Edit');
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Payments' });
+    fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Payments API' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText('Changes saved')).toBeInTheDocument();
+    const patch = calls.find((c) => c.method === 'PATCH');
+    expect(patch?.body).toEqual({ name: 'Payments API' });
   });
 
   it('edits the name and unlinks SonarQube with null', async () => {

@@ -66,8 +66,9 @@ type Result struct {
 	Secrets        int32          `json:"secrets"`
 	Suppressed     int32          `json:"suppressed"`
 	// SonarKeyIgnored says why the sonar_key of the upload was not set on
-	// the service (SonarKeyOtherService or SonarKeyServiceHasOther); nil when
-	// it was set, was the service's key already or was not given.
+	// the service (SonarKeyPending, SonarKeyOtherService or
+	// SonarKeyServiceHasOther); nil when it was set, was the service's key
+	// already or was not given.
 	SonarKeyIgnored *string `json:"sonar_key_ignored"`
 	// sonarKeySet is set when the upload set the service's SonarQube key.
 	sonarKeySet bool

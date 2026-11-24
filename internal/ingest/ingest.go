@@ -566,6 +566,13 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		i.log.InfoContext(ctx, "the SonarQube key declared by the upload waits for a SonarQube analysis of the project",
 			"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
 			"job_id", claims.JobID, "service_id", res.ServiceID, "sonar_key", sonarKey, "sonar_key_ignored", SonarKeyPending)
+		if res.gotProjectID && i.opts.SonarLinker != nil {
+			// The analyses of the pipeline that waited for the service are
+			// linked by the rule of a declared key: one of the declared key
+			// that arrived after the check above (while this upload
+			// committed) is linked, and any other says it waits for it.
+			i.linkSonar(ctx, res.ServiceID, claims)
+		}
 	case res.SonarKeyIgnored != nil:
 		// Recorded in the audit log by the store; logged for the operator.
 		i.log.WarnContext(ctx, "the SonarQube key declared by the upload was ignored",

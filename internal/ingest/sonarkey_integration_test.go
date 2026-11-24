@@ -145,8 +145,8 @@ func TestIntegrationSonarKeyDeclaredLinksKeylessService(t *testing.T) {
 // declaration without a SonarQube delivery of the key that names the same
 // GitLab project in the last 7 days is kept pending: the upload is stored,
 // the answer says sonar_key_pending, the declaration is audited once, and
-// neither the declaration nor the claims of the pipeline's waiting analyses
-// link anything. Once a delivery confirms it, a later upload links it.
+// the declaration links nothing. Once a delivery confirms it, a later upload
+// links it.
 func TestIntegrationSonarKeyPending(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
@@ -184,8 +184,12 @@ func TestIntegrationSonarKeyPending(t *testing.T) {
 			if got := e.auditOf("service.updated"); !reflect.DeepEqual(got, want) {
 				t.Errorf("audit = %v\nwant %v", got, want)
 			}
-			if len(l.got()) != 0 || len(l.gotDeclared()) != 0 {
-				t.Errorf("linker called: waiting %v declared %v", l.got(), l.gotDeclared())
+			// The upload that created the service has the waiting analyses
+			// of its pipeline linked, by the rule of the declared key (see
+			// TestIntegrationSonarKeyPendingLinksWaiting); nothing is linked
+			// by the declaration itself.
+			if got := l.got(); !reflect.DeepEqual(got, [][3]int64{{sid, 42, 1001}}) || len(l.gotDeclared()) != 0 {
+				t.Errorf("linker called: waiting %v declared %v", got, l.gotDeclared())
 			}
 			if !strings.Contains(e.logs.String(), "sonar_key_ignored=sonar_key_pending") {
 				t.Errorf("not logged:\n%s", e.logs.String())

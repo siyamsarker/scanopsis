@@ -204,8 +204,9 @@ Each is accepted for the reason given, and each has a way to soften it.
    once SonarQube delivers one that names the project. What is left is
    SonarQube's own boundary: a user with the Execute Analysis permission on
    that key can run such an analysis, and nobody without it can. An
-   administrator who sets or clears the key cancels a waiting declaration;
-   the project's next upload declares the key again.
+   administrator who sets or clears the key cancels a waiting declaration
+   (on the Services page: a new key, or **Cancel waiting key**; a new name
+   alone keeps it); the project's next upload declares the key again.
 
 3. **An `http` SonarQube URL is allowed.** Internal SonarQube servers often
    have no TLS, but then the token and the results cross the network in clear

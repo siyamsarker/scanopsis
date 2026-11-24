@@ -422,9 +422,12 @@ The upload is stored in every case. Its answer says what became of the key:
 | `service_has_other_key` | The service is linked to another SonarQube project. Scanopsis keeps that link. | If the project was renamed, an administrator changes the key on the Services page. |
 
 The last two are written to the server log as a warning on every upload, and
-to the audit log as `ingest.sonar_key_ignored`, with the declared key, once
-for each new reason or key. An administrator who sets or clears the key on the
-Services page always wins, and cancels a key that waits.
+to the audit log as `ingest.sonar_key_ignored`, with the declared key: not
+again while the service is unchanged, but again for a new reason or key, or
+after any change of the service. An administrator who sets or clears the key
+on the Services page always wins, and cancels a key that waits: in the
+service's **Edit** dialog, enter a key or select **Cancel waiting key**.
+Saving only a new name keeps the waiting key.
 
 ## A central scan script with separate jobs
 

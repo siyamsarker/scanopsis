@@ -186,8 +186,10 @@ newer upload that declares another key replaces the waiting one.
   `sonar_key_declared` and `sonar_key_declared_at` of the service. When an
   analysis is not linked to a service, check this first.
 - **Override it.** An administrator who sets or clears the SonarQube key of
-  the service on the Services page cancels the waiting key. The audit event
-  then has `cleared_sonar_key_declared`.
+  the service cancels the waiting key. On the Services page, open **Edit**
+  and enter a key, or select **Cancel waiting key**; saving only a new name
+  keeps the waiting key. The audit event then has
+  `cleared_sonar_key_declared`.
 - **A taken key.** If another service gets `K` while it waits, the next upload
   of the project that declares `K` drops the waiting key and answers
   `key_linked_to_other_service`. Until that upload, the waiting key still
@@ -204,7 +206,7 @@ Every step is in the audit log:
 | --- | --- | --- |
 | `service.updated` with the reason "declared by the pipeline's upload and confirmed by a SonarQube analysis of the same project" | `ci:<project path>` with the pipeline and job, or `sonarqube` when the webhook confirms a waiting key | The key is set. |
 | `service.updated` with `sonar_key_declared` and the reason "declared by the pipeline's upload; set when a SonarQube analysis of the same project confirms it" | `ci:<project path>` | The key starts to wait. A repeated upload of the same waiting key is not recorded again. |
-| `ingest.sonar_key_ignored` (**SonarQube key ignored**) with the reason, the declared key, for `service_has_other_key` the current one, and `cleared_sonar_key_declared` when it dropped a waiting key | `ci:<project path>` | The upload's key was not used. Recorded once for each new reason or key; the server log has a warning for every such upload. |
+| `ingest.sonar_key_ignored` (**SonarQube key ignored**) with the reason, the declared key, for `service_has_other_key` the current one, and `cleared_sonar_key_declared` when it dropped a waiting key | `ci:<project path>` | The upload's key was not used. Not recorded again while the service is unchanged: a new reason or key, or any change of the service, is recorded again. The server log has a warning for every such upload. |
 | `service.updated` with `cleared_sonar_key_declared` | The administrator | An administrator set or cleared the key while a declared key waited. |
 
 ### Link from the analysis
@@ -370,7 +372,7 @@ calling the endpoint.
 | Linked: `The analysis was already stored by a sync.` | The sync was faster than the webhook. | Nothing to do. |
 | Linked: `A newer analysis (...) already exists in SonarQube; the measures are from it. The next sync will add it.` | Another analysis finished before this one was read. | Nothing to do. |
 | Unlinked: `No service is linked to SonarQube project "...". Pass -Dsonar.analysis.gitlabProjectId=... and -Dsonar.analysis.pipelineId=... ...` | No service has this project key, and the pipeline passed no usable `sonar.analysis.gitlabProjectId`. | Set the key on the service, or add both properties. See [step 4](#step-4-link-projects-to-services). |
-| Unlinked: `No service is linked to SonarQube project "..." yet. The analysis is linked when the scan of the same pipeline (...) reaches Scanopsis ...` | The analysis ran before the first Trivy scan of the project, so there is no service yet. | Nothing to do: the first scan of that pipeline links it, and the delivery then shows Linked. Or set the key on the service. |
+| Unlinked: `No service is linked to SonarQube project "..." yet. The analysis is linked when the scan of the same pipeline (...) reaches Scanopsis ...` | The analysis ran before the first Trivy scan of the project, so there is no service yet. | Nothing to do: the first scan of that pipeline links it, and the delivery then shows Linked. If that upload declares another key with `sonar_key`, only an analysis of the declared key is linked, and this delivery then says the service waits for it (see below). If the upload's `sonar_key` is ignored, the delivery stays as it is: set the key on the service. |
 | Unlinked: `No service is linked to SonarQube project "...", and no service has GitLab project ... yet. Pass -Dsonar.analysis.pipelineId=... ...` | As above, but without `sonar.analysis.pipelineId`, so the analysis cannot be tied to the first scan. | Add `-Dsonar.analysis.pipelineId="$CI_PIPELINE_ID"`, or set the key on the service. |
 | Unlinked: `The service of GitLab project ... is archived, so SonarQube project "..." was not linked. ...` | The service of the project is archived. | An administrator unarchives the service and sets its SonarQube key. |
 | Unlinked: `More than one SonarQube project names GitLab project ... in pipeline ..., so none was linked automatically. ...` | Analyses of two SonarQube projects came from the pipeline of the first scan. | An administrator sets the right key on the service. |

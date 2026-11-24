@@ -279,11 +279,22 @@ func (q *Queries) LastSonarDeliveryAt(ctx context.Context) (pgtype.Timestamptz, 
 }
 
 const lastSonarKeyEvent = `-- name: LastSonarKeyEvent :one
-SELECT action, COALESCE(detail->>'reason', '')::text AS reason,
-       COALESCE(detail->>'sonar_project_key', '')::text AS sonar_project_key
-FROM audit_log
-WHERE action IN ('ingest.sonar_key_ignored', 'service.updated') AND detail->>'id' = $1::text
-ORDER BY at DESC, id DESC
+SELECT e.action, e.reason, e.sonar_project_key
+FROM (
+    (SELECT action, at, id, COALESCE(detail->>'reason', '')::text AS reason,
+            COALESCE(detail->>'sonar_project_key', '')::text AS sonar_project_key
+     FROM audit_log
+     WHERE action = 'ingest.sonar_key_ignored' AND detail->>'id' = $1::text
+     ORDER BY at DESC, id DESC
+     LIMIT 1)
+    UNION ALL
+    (SELECT action, at, id, ''::text, ''::text
+     FROM audit_log
+     WHERE action = 'service.updated' AND detail->>'id' = $1::text
+     ORDER BY at DESC, id DESC
+     LIMIT 1)
+) e
+ORDER BY e.at DESC, e.id DESC
 LIMIT 1
 `
 
@@ -296,7 +307,10 @@ type LastSonarKeyEventRow struct {
 // LastSonarKeyEvent returns the newest ingest.sonar_key_ignored or
 // service.updated event of a service, with the reason and key of an ignored
 // one. Any change of the service is a service.updated event, so an ignored
-// key is a new situation again after one.
+// key is a new situation again after one. It runs on uploads, under the
+// project's locks, so each action is read on its own, newest first, from
+// audit_log_action_at_idx: one query over both would walk the whole audit
+// log by time.
 func (q *Queries) LastSonarKeyEvent(ctx context.Context, serviceID string) (LastSonarKeyEventRow, error) {
 	row := q.db.QueryRow(ctx, lastSonarKeyEvent, serviceID)
 	var i LastSonarKeyEventRow
