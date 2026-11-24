@@ -113,22 +113,43 @@ change it finds missing.
    instead" (the Backups page exists only from 0.4.0). If you run 0.4.0, use the
    Backups page. The upgrade changes the database, so do not skip this.
 
-3. Get 0.4.1 in your existing clone and build it:
+3. Get 0.4.1 in your existing clone, and compare its Compose files with the
+   ones you run before you switch, because the switch replaces them:
 
    ```sh
    git fetch --depth 1 origin release/0.4.1:release/0.4.1 tag v0.4.1
+   git diff HEAD v0.4.1 -- deploy/compose
+   git status --short deploy/compose
+   ```
+
+   The diff shows what changes in `compose.yaml` and `.env.example`: lines
+   with `+` are new. Note each new setting for your `.env`. Your `.env`,
+   secrets and data are not tracked by git, so the switch leaves them alone.
+   `git status` lists the tracked files you changed yourself, marked `M`. If
+   it lists `compose.yaml`, keep your copy and undo the change, or the switch
+   refuses with `Your local changes ... would be overwritten`:
+
+   ```sh
+   cp deploy/compose/compose.yaml ../compose.yaml.mine
+   git restore deploy/compose/compose.yaml
+   ```
+
+   After the switch, carry your changes over into the new file, or better
+   into `compose.override.yaml`, which no version replaces.
+
+4. Switch and build:
+
+   ```sh
    git switch release/0.4.1
    make image IMAGE=scanopsis:v0.4.1
    ```
 
    A fresh clone, as in [install the newest version](#install-the-newest-version),
-   works too.
+   works too; compare its `deploy/compose` folder with yours.
 
-4. Compare `deploy/compose/compose.yaml` and `deploy/compose/.env.example` of
-   0.4.1 with your copies and take over new settings. Copy the new
-   `compose.yaml` if you did not change yours: it keeps the database and the
-   backups in folders. Leave `SCANOPSIS_IMAGE` in `.env` on your old image for
-   now.
+   The new `compose.yaml` is now in place: it keeps the database and the
+   backups in folders. Add the new settings you noted to `.env`. Leave
+   `SCANOPSIS_IMAGE` in `.env` on your old image for now.
 
 5. If your database is still in a Docker volume (every version before 0.4.0
    does this), [move it into a folder](#move-the-database-into-a-folder)
@@ -147,7 +168,14 @@ change it finds missing.
 
    The database changes now. On a large database this takes a while: the
    change that gives every scan its artifact key took about 25 seconds on a
-   laptop with 540,000 scans and 4.3 million findings. The log shows each step.
+   laptop with 540,000 scans and 4.3 million findings. The log has an
+   `applying migration` and an `applied migration` line for each change, the
+   second with its duration, for example `"duration":"41ms"`:
+
+   ```sh
+   docker compose logs scanopsis | grep -E 'applying migration|applied migration'
+   ```
+
    If it stops partway (for example when the host restarts), start 0.4.1 again
    and it continues. Do not start 0.4.0 on a database that is half upgraded.
 
