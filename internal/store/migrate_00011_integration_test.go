@@ -21,9 +21,11 @@ import (
 
 // artifactKeyFixtures stores, at schema 10, the scans whose keys migration
 // 00011 fills in. Service 1 is the project demo/web-frontend; service 2 is
-// another project whose secret scan names a folder of demo/web-frontend. The
-// image scans of service 1 are all older than the retention cutoff the test
-// uses, so retention decides by "latest of its artifact" alone.
+// another project whose secret scan names a folder of demo/web-frontend.
+// Every scan is older than the retention cutoff the test uses, so retention
+// decides by "latest of its artifact" alone. The last scan is stored after a
+// jump of the id sequence, so the keys are filled in more than one batch,
+// and names the project path in another letter case.
 const artifactKeyFixtures = `
 INSERT INTO services (name, gitlab_project_path, created_via) VALUES
     ('web-frontend', 'demo/web-frontend', 'manual'),
@@ -47,6 +49,11 @@ FROM (VALUES
     (12, 1, 'secret-fs', '/builds/x/0/demo/web-frontend-old/services/api'),
     (13, 2, 'secret-fs', '/builds/x/0/demo/web-frontend/services/api')
 ) AS f(n, service_id, kind, name);
+SELECT setval(pg_get_serial_sequence('scans', 'id'), 20000);
+INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected,
+                   commit_sha, schema_version, scanned_at, count_high, raw_report)
+VALUES (1, 'secret-fs', '/builds/x/0/Demo/Web-Frontend/services/api', 14, 14, 'main', true, 'c14', 2,
+        now() - interval '100 days' + 14 * interval '1 hour', 14, '\x1f8b');
 `
 
 // wantArtifactKeys is the key migration 00011 gives each scan of
@@ -65,6 +72,7 @@ var wantArtifactKeys = map[int64]string{
 	11: "services/web",
 	12: "/builds/x/0/demo/web-frontend-old/services/api",
 	13: "/builds/x/0/demo/web-frontend/services/api",
+	14: "services/api",
 }
 
 // artifactKeys returns the artifact key of every scan by gitlab_job_id.
@@ -101,12 +109,39 @@ func sameKeys(t *testing.T, got map[int64]string) {
 	}
 }
 
+// keysOfJobs checks the key of every scan that is left, by gitlab_job_id.
+func keysOfJobs(t *testing.T, got map[int64]string, jobs []int64) {
+	t.Helper()
+	for _, job := range jobs {
+		if k, ok := got[job]; !ok || k != wantArtifactKeys[job] {
+			t.Errorf("scan of job %d: artifact key %q (present %v), want %q", job, k, ok, wantArtifactKeys[job])
+		}
+	}
+	if len(got) != len(jobs) {
+		t.Errorf("%d scans, want %d", len(got), len(jobs))
+	}
+}
+
+// batchesUsed fails unless the scans span more than one batch of the
+// backfill (5000 ids).
+func batchesUsed(t *testing.T, db store.DBTX) {
+	t.Helper()
+	var lo, hi int64
+	if err := db.QueryRow(context.Background(), `SELECT min(id), max(id) FROM scans`).Scan(&lo, &hi); err != nil {
+		t.Fatal(err)
+	}
+	if hi-lo < 3*5000 {
+		t.Errorf("scan ids %d to %d span less than three batches", lo, hi)
+	}
+}
+
 // TestMigrate00011Backfill stores scans at schema 10 and migrates with
 // goose: every scan gets the key of its artifact, the current state holds
 // one scan per key (the latest tag of an image), retention keeps the latest
 // scan per key, the column refuses NULL, and the indexes on artifact_name
 // are replaced by indexes on artifact_key. A start that was interrupted
-// after the key was filled in applies the migration again.
+// after the key was filled in, or part-way through filling it in, applies
+// the migration again and fills in the rest.
 func TestMigrate00011Backfill(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -117,6 +152,7 @@ func TestMigrate00011Backfill(t *testing.T) {
 	if _, err := pool.Exec(ctx, artifactKeyFixtures); err != nil {
 		t.Fatal(err)
 	}
+	batchesUsed(t, pool)
 	if err := store.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -147,8 +183,9 @@ func TestMigrate00011Backfill(t *testing.T) {
 		t.Errorf("current image scans %q, want %q", images, want)
 	}
 	// "." and the build folder of the project are one artifact; its latest
-	// scan is the one named ".".
-	if want := []string{".", "/builds/x/0/demo/web-frontend-old/services/api", "/builds/x/0/demo/web-frontend/services/api", "services/web"}; !slices.Equal(secrets, want) {
+	// scan is the one named ".". The folder services/api, named with the
+	// project path in two letter cases, is one artifact too.
+	if want := []string{".", "/builds/x/0/Demo/Web-Frontend/services/api", "/builds/x/0/demo/web-frontend-old/services/api", "services/web"}; !slices.Equal(secrets, want) {
 		t.Errorf("current secret scans %q, want %q", secrets, want)
 	}
 
@@ -161,11 +198,11 @@ func TestMigrate00011Backfill(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(deleted) != 3 {
-		t.Errorf("retention deleted %d scans, want 3 (the tags 2 and 3 and the build folder scan)", len(deleted))
+	if len(deleted) != 4 {
+		t.Errorf("retention deleted %d scans, want 4 (the tags 2 and 3, the build folder scan and the first services/api scan)", len(deleted))
 	}
 	left := artifactKeys(t, pool)
-	for _, job := range []int64{1, 2, 8} {
+	for _, job := range []int64{1, 2, 8, 9} {
 		if _, ok := left[job]; ok {
 			t.Errorf("retention kept the scan of job %d (%s), which is not the latest of its key", job, wantArtifactKeys[job])
 		}
@@ -182,6 +219,8 @@ func TestMigrate00011Backfill(t *testing.T) {
 
 	checkArtifactKeyIndexes(t, pool)
 
+	kept := []int64{3, 4, 5, 6, 7, 10, 11, 12, 13, 14}
+
 	// A start that stopped after the key was filled in, with an index left
 	// invalid by an interrupted build, applies the whole migration again.
 	for _, q := range []string{
@@ -194,6 +233,31 @@ func TestMigrate00011Backfill(t *testing.T) {
 	}
 	if err := store.Migrate(ctx, pool); err != nil {
 		t.Fatalf("migrate again: %v", err)
+	}
+	checkArtifactKeyIndexes(t, pool)
+	keysOfJobs(t, artifactKeys(t, pool), kept)
+
+	// A start that stopped part-way through the backfill: some scans have
+	// a key, the others none, and NOT NULL is not set yet. The next start
+	// fills in the rest, in more than one batch, and sets NOT NULL.
+	for _, q := range []string{
+		`ALTER TABLE scans ALTER COLUMN artifact_key DROP NOT NULL`,
+		`UPDATE scans SET artifact_key = NULL WHERE gitlab_job_id IN (3, 7, 12, 14)`,
+		`DELETE FROM goose_db_version WHERE version_id = 11`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batchesUsed(t, pool)
+	if err := store.Migrate(ctx, pool); err != nil {
+		t.Fatalf("migrate after an interrupted backfill: %v", err)
+	}
+	keysOfJobs(t, artifactKeys(t, pool), kept)
+	var notNull bool
+	if err := pool.QueryRow(ctx, `SELECT attnotnull FROM pg_attribute
+		WHERE attrelid = 'scans'::regclass AND attname = 'artifact_key'`).Scan(&notNull); err != nil || !notNull {
+		t.Errorf("artifact_key NOT NULL after the interrupted backfill: %v (%v)", notNull, err)
 	}
 	checkArtifactKeyIndexes(t, pool)
 
@@ -244,6 +308,7 @@ func TestReplay00011Backfill(t *testing.T) {
 		if _, err := tx.Exec(ctx, artifactKeyFixtures); err != nil {
 			return err
 		}
+		batchesUsed(t, tx)
 		if err := store.ReplayMigrations(ctx, tx, 10, store.LatestVersion()); err != nil {
 			return err
 		}

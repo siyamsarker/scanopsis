@@ -17,8 +17,10 @@
 --     was given. "." stays "."; an absolute path that ends in
 --     /<project path> (the runner's build folder) becomes "."; an absolute
 --     path that contains /<project path>/ becomes the part after it
---     (services/api), "." if nothing follows. The project path is the
---     service's GitLab project path. Any other name is its own key.
+--     (services/api, in the letter case of the name), "." if nothing
+--     follows. The project path is the service's GitLab project path,
+--     matched in any letter case, as GitLab treats paths. Any other name is
+--     its own key.
 -- A name for which these rules leave nothing is its own key.
 --
 -- scans can hold hundreds of thousands of rows, so the migration runs
@@ -59,11 +61,11 @@ BEGIN
                     regexp_replace(regexp_replace(s.artifact_name, '@.*$', ''), ':[^/]*$', '')
                 WHEN left(s.artifact_name, 1) <> '/' THEN
                     s.artifact_name
-                WHEN right(s.artifact_name, length(sv.gitlab_project_path) + 1) = '/' || sv.gitlab_project_path THEN
+                WHEN lower(right(s.artifact_name, length(sv.gitlab_project_path) + 1)) = '/' || lower(sv.gitlab_project_path) THEN
                     '.'
-                WHEN strpos(s.artifact_name, '/' || sv.gitlab_project_path || '/') > 0 THEN
+                WHEN strpos(lower(s.artifact_name), '/' || lower(sv.gitlab_project_path) || '/') > 0 THEN
                     coalesce(nullif(rtrim(substr(s.artifact_name,
-                        strpos(s.artifact_name, '/' || sv.gitlab_project_path || '/') + length(sv.gitlab_project_path) + 2), '/'), ''), '.')
+                        strpos(lower(s.artifact_name), '/' || lower(sv.gitlab_project_path) || '/') + length(sv.gitlab_project_path) + 2), '/'), ''), '.')
                 ELSE s.artifact_name
             END, ''), s.artifact_name)
         FROM services sv
