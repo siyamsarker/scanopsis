@@ -29,6 +29,36 @@ func checkArtifactParam(v string) error {
 	return nil
 }
 
+// maxSonarKeyLen is the longest SonarQube project key SonarQube accepts.
+const maxSonarKeyLen = 400
+
+// errSonarKeyParam is the answer to a sonar_key upload parameter that cannot
+// be a SonarQube project key.
+var errSonarKeyParam = errors.New("sonar_key must be a SonarQube project key: 1 to 400 characters, only ASCII letters, digits, '-', '_', '.' and ':', and at least one that is not a digit")
+
+// checkSonarKeyParam checks the sonar_key upload parameter by SonarQube's
+// rule for project keys: 1 to 400 characters, each an ASCII letter or digit,
+// '-', '_', '.' or ':', and not digits only.
+func checkSonarKeyParam(v string) error {
+	if v == "" || len(v) > maxSonarKeyLen {
+		return errSonarKeyParam
+	}
+	digitsOnly := true
+	for i := range len(v) {
+		switch c := v[i]; {
+		case c >= '0' && c <= '9':
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c == '-', c == '_', c == '.', c == ':':
+			digitsOnly = false
+		default:
+			return errSonarKeyParam
+		}
+	}
+	if digitsOnly {
+		return errSonarKeyParam
+	}
+	return nil
+}
+
 // ArtifactKey returns the key that says which scans are of the same artifact:
 // the scan of an upload replaces, as the current state, the earlier scans
 // with its key, kind and ref, and new and fixed findings are counted against

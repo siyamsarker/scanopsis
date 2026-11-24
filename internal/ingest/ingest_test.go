@@ -245,7 +245,7 @@ func TestIngestCreated(t *testing.T) {
 	want := map[string]any{
 		"scan_id": 7.0, "service_id": 3.0, "service_created": true, "replaced": false,
 		"counts":  map[string]any{"critical": 1.0, "high": 43.0, "medium": 57.0, "low": 31.0, "unknown": 3.0},
-		"fixable": 64.0, "secrets": 0.0, "suppressed": 3.0,
+		"fixable": 64.0, "secrets": 0.0, "suppressed": 3.0, "sonar_key_ignored": nil,
 	}
 	if !jsonEqual(got, want) {
 		t.Errorf("body = %v\nwant   %v", got, want)
@@ -305,6 +305,46 @@ func TestIngestArtifactKey(t *testing.T) {
 		if !strings.Contains(e.logs.String(), "artifact_key=") {
 			t.Errorf("the success log does not name the key: %s", e.logs.String())
 		}
+	}
+}
+
+// The sonar_key parameter reaches the store. The answer always has
+// sonar_key_ignored: null unless the store ignored the key, and then the
+// reason, with a warning in the log.
+func TestIngestSonarKeyParam(t *testing.T) {
+	body := []byte(`{"SchemaVersion":2,"ArtifactName":"a"}`)
+	e := newHEnv(t, nil)
+	w := e.do(req{body: body, query: "?sonar_key=demo:orders-api"})
+	if w.Code != http.StatusCreated || len(e.save.calls) != 1 || e.save.calls[0].sonarKey != "demo:orders-api" {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	var res map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := res["sonar_key_ignored"]; !ok || v != nil {
+		t.Errorf("sonar_key_ignored = %v (present %v), want null", v, ok)
+	}
+	if w := e.do(req{body: body}); w.Code != http.StatusCreated || e.save.calls[1].sonarKey != "" {
+		t.Fatalf("without the parameter: %d %s", w.Code, w.Body)
+	}
+
+	e = newHEnv(t, nil)
+	reason := SonarKeyOtherService
+	e.save.res.SonarKeyIgnored = &reason
+	w = e.do(req{body: body, query: "?sonar_key=demo:orders-api"})
+	if w.Code != http.StatusCreated {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res["sonar_key_ignored"] != "key_linked_to_other_service" {
+		t.Errorf("sonar_key_ignored = %v", res["sonar_key_ignored"])
+	}
+	if logs := e.logs.String(); !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "sonar_key=demo:orders-api") ||
+		!strings.Contains(logs, "sonar_key_ignored=key_linked_to_other_service") {
+		t.Errorf("no warning about the ignored key: %s", logs)
 	}
 }
 
@@ -387,6 +427,12 @@ func TestIngestRejections(t *testing.T) {
 		{name: "artifact too long", req: req{body: valid, query: "?artifact=" + strings.Repeat("a", 201)}, status: 400, code: "invalid_parameter", project: true},
 		{name: "artifact control", req: req{body: valid, query: "?artifact=app%09amd64"}, status: 400, code: "invalid_parameter", project: true},
 		{name: "artifact not utf-8", req: req{body: valid, query: "?artifact=%FF"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "sonar_key empty", req: req{body: valid, query: "?sonar_key="}, status: 400, code: "invalid_parameter", project: true},
+		{name: "sonar_key digits", req: req{body: valid, query: "?sonar_key=12345"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "sonar_key space", req: req{body: valid, query: "?sonar_key=demo%20app"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "sonar_key slash", req: req{body: valid, query: "?sonar_key=demo/app"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "sonar_key non-ascii", req: req{body: valid, query: "?sonar_key=b%C3%A4ckend"}, status: 400, code: "invalid_parameter", project: true},
+		{name: "sonar_key too long", req: req{body: valid, query: "?sonar_key=" + strings.Repeat("a", 401)}, status: 400, code: "invalid_parameter", project: true},
 		{name: "invalid json", req: req{body: []byte(`{"SchemaVersion":`)}, status: 400, code: "invalid_report", project: true},
 		{name: "empty body", req: req{body: nil}, status: 400, code: "invalid_report", project: true},
 		{name: "trailing data", req: req{body: append(append([]byte{}, valid...), []byte(`{}`)...)}, status: 400, code: "invalid_report", project: true},

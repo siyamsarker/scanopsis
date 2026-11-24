@@ -331,6 +331,7 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 		if l.Waiting {
 			s.linkLate(ctx, l.WaitingFor, l.WaitPipeline)
 		}
+		s.linkKeyLate(ctx, p.Project.Key)
 		return
 	}
 	sid := l.ServiceID

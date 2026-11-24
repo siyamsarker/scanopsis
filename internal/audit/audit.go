@@ -45,6 +45,13 @@ const (
 	ActionServiceCreated = "service.created"
 	ActionServiceUpdated = "service.updated"
 	ActionServiceDeleted = "service.deleted"
+	// ActionIngestSonarKeyIgnored: an upload declared a SonarQube key
+	// (sonar_key) that was not set because another service has it or the
+	// service has another key. The upload was stored. The detail carries
+	// "reason", the service "id", "sonar_project_key", the service's
+	// "current_sonar_project_key" when it has one, "pipeline_id" and
+	// "job_id".
+	ActionIngestSonarKeyIgnored = "ingest.sonar_key_ignored"
 
 	// A SonarQube webhook that was refused. The actor is "sonarqube:unknown";
 	// the detail carries "reason" and "ip".

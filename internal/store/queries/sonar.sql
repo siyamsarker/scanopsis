@@ -111,6 +111,16 @@ WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
   AND claimed_project_id = @claimed_project_id AND claimed_pipeline_id = @claimed_pipeline_id
   AND project_key = @project_key;
 
+-- LinkSonarDeliveriesOfKey marks the unlinked deliveries of a SonarQube
+-- project since a time linked to the service that now has its key, and
+-- returns when each arrived, the pipeline it named and its analysedAt.
+-- name: LinkSonarDeliveriesOfKey :many
+UPDATE sonar_deliveries
+SET outcome = 'linked', service_id = @service_id, detail = @detail::text
+WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
+  AND project_key = @project_key
+RETURNING received_at, claimed_pipeline_id, analysed_at;
+
 -- ExplainWaitingSonarDeliveries replaces the detail of the waiting deliveries
 -- of a pipeline that were not linked, and says why.
 -- name: ExplainWaitingSonarDeliveries :execrows

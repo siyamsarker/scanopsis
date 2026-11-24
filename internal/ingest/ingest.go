@@ -168,16 +168,20 @@ type Options struct {
 	Logger   *slog.Logger
 	Now      func() time.Time
 	// SonarLinker links the SonarQube analyses of the upload's pipeline that
-	// arrived before the service of their project existed. nil links
-	// nothing.
+	// arrived before the service of their project existed, or of the key the
+	// upload declared. nil links nothing.
 	SonarLinker SonarLinker
 }
 
-// SonarLinker links a service that has just received its GitLab project ID
-// to the SonarQube project of analyses that named that project and the
-// pipeline of the upload before the service existed.
+// SonarLinker links the SonarQube analyses of a service after an upload.
 type SonarLinker interface {
+	// LinkWaiting links a service that has just received its GitLab project
+	// ID to the SonarQube project of analyses that named that project and
+	// the pipeline of the upload before the service existed.
 	LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pipelineID int64) error
+	// LinkDeclared links the deliveries of key, which the upload has just
+	// set as the service's SonarQube key, and reads its newest analysis.
+	LinkDeclared(ctx context.Context, serviceID, gitlabProjectID int64, key string) error
 }
 
 // sonarLinkTimeout bounds the linking that follows an upload, which reads
@@ -429,6 +433,18 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// sonar_key declares the SonarQube project of the service. The upload is
+	// authenticated by the project's own CI token, so it may set the key of
+	// its own service, but never replace one or take another service's (see
+	// declareSonarKey).
+	var sonarKey string
+	if q := r.URL.Query(); q.Has("sonar_key") {
+		sonarKey = q.Get("sonar_key")
+		if err := checkSonarKeyParam(sonarKey); err != nil {
+			reject(http.StatusBadRequest, codeInvalidParam, err.Error()+".")
+			return
+		}
+	}
 	limit := i.opts.MaxReportBytes
 	if r.ContentLength > limit {
 		reject(http.StatusRequestEntityTooLarge, codeTooLarge, tooLargeMessage(limit))
@@ -515,7 +531,7 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := func() (Result, error) {
 		defer func() { <-i.dbSlots }()
-		return i.store.save(ctx, &saveInput{claims: claims, kind: kind, key: key, report: rep, raw: raw, findings: replay, scanTime: scanned})
+		return i.store.save(ctx, &saveInput{claims: claims, kind: kind, key: key, report: rep, raw: raw, findings: replay, scanTime: scanned, sonarKey: sonarKey})
 	}()
 	switch {
 	case errors.Is(err, errServiceArchived):
@@ -545,7 +561,18 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		httpapi.WriteError(w, http.StatusInternalServerError, "internal_error", "Something went wrong. Try again later.")
 		return
 	}
-	if res.gotProjectID && i.opts.SonarLinker != nil {
+	switch {
+	case res.SonarKeyIgnored != nil:
+		// Recorded in the audit log by the store; logged for the operator.
+		i.log.WarnContext(ctx, "the SonarQube key declared by the upload was ignored",
+			"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
+			"job_id", claims.JobID, "service_id", res.ServiceID, "sonar_key", sonarKey, "sonar_key_ignored", *res.SonarKeyIgnored)
+	case i.opts.SonarLinker == nil:
+	case res.sonarKeySet:
+		i.linkDeclared(ctx, res.ServiceID, claims, sonarKey)
+	case res.gotProjectID && sonarKey == "":
+		// A declared key wins: the analyses that merely name the project and
+		// pipeline are linked only when the upload declared none.
 		i.linkSonar(ctx, res.ServiceID, claims)
 	}
 	i.log.InfoContext(ctx, "scan ingested",
@@ -572,6 +599,19 @@ func (i *Ingest) linkSonar(ctx context.Context, serviceID int64, claims *Claims)
 		i.log.WarnContext(ctx, "cannot link waiting SonarQube analyses to the service",
 			"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
 			"service_id", serviceID, "error", err)
+	}
+}
+
+// linkDeclared links the SonarQube deliveries of the key the upload has just
+// set on its service and has the project read. A failure is only logged,
+// like that of linkSonar; the next sync reads the project anyway.
+func (i *Ingest) linkDeclared(ctx context.Context, serviceID int64, claims *Claims, key string) {
+	lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), sonarLinkTimeout)
+	defer cancel()
+	if err := i.opts.SonarLinker.LinkDeclared(lctx, serviceID, claims.ProjectID, key); err != nil {
+		i.log.WarnContext(ctx, "cannot link the SonarQube analyses of the declared key to the service",
+			"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
+			"service_id", serviceID, "sonar_key", key, "error", err)
 	}
 }
 

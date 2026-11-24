@@ -1259,6 +1259,11 @@ export interface components {
             fixable: number;
             secrets: number;
             suppressed: number;
+            /**
+             * @description Why the sonar_key of the upload was not set on the service: key_linked_to_other_service (another service, maybe an archived one, has the key) or service_has_other_key (the service has a different key, which is kept). null when the key was set, was the service's key already, or sonar_key was not given. The scan is stored either way.
+             * @enum {string|null}
+             */
+            sonar_key_ignored: "key_linked_to_other_service" | "service_has_other_key" | null;
         };
         Service: {
             /** Format: int64 */
@@ -3093,6 +3098,25 @@ export interface operations {
                  *     is allowed), and not only spaces.
                  */
                 artifact?: string;
+                /**
+                 * @description The SonarQube project key of this project (the `sonar.projectKey` the scanner uses), so
+                 *     that the service is linked to its SonarQube project without an administrator's step and
+                 *     without the scanner properties. The upload
+                 *     is authenticated by the project's own CI ID token, so it may set the key of its own
+                 *     service only. When the service has no SonarQube key and no other service (archived
+                 *     ones included) has this one, the key is set in the same transaction as the scan,
+                 *     recorded as `service.updated` by `ci:<project path>` with the pipeline and job, the
+                 *     analyses of the key that arrived in the last 7 days are linked, and the newest analysis
+                 *     is read from SonarQube at once. When the service has this key already, nothing
+                 *     changes. Otherwise nothing changes either: the upload is still stored and answered
+                 *     201, `sonar_key_ignored` says why, and the event is recorded as
+                 *     `ingest.sonar_key_ignored` and logged as a warning. An upload that gives this parameter
+                 *     never links the service by the `sonar.analysis.gitlabProjectId` and
+                 *     `sonar.analysis.pipelineId` scanner properties: the declared key wins. SonarQube's rule
+                 *     for project keys: 1 to 400 characters, only ASCII letters, digits, `-`, `_`, `.` and
+                 *     `:`, and at least one character that is not a digit.
+                 */
+                sonar_key?: string;
             };
             header?: never;
             path?: never;
@@ -3113,7 +3137,7 @@ export interface operations {
                     "application/json": components["schemas"]["IngestResult"];
                 };
             };
-            /** @description Malformed body or gzip stream (code invalid_report), or an unknown kind or an invalid artifact (code invalid_parameter). */
+            /** @description Malformed body or gzip stream (code invalid_report), or an unknown kind, an invalid artifact or an invalid sonar_key (code invalid_parameter). */
             400: {
                 headers: {
                     [name: string]: unknown;

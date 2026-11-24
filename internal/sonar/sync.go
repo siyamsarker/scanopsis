@@ -206,9 +206,9 @@ func (s *Sonar) finishSync(lastErr string) {
 }
 
 // syncProject stores the newest analysis of a project unless it is known.
-// from is the delivery that has just linked the project, if any: the
-// analysis is stored with its pipeline when it is the delivered one.
-func (s *Sonar) syncProject(ctx context.Context, cl *client, svc store.SonarLinkedServicesRow, from *delivered) error {
+// from are the deliveries that have just linked the project, if any: the
+// analysis is stored with the pipeline of the one it was delivered by.
+func (s *Sonar) syncProject(ctx context.Context, cl *client, svc store.SonarLinkedServicesRow, from deliveries) error {
 	latest, err := cl.latestAnalysis(ctx, svc.SonarProjectKey)
 	if err != nil {
 		return err

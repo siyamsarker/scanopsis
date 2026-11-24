@@ -366,3 +366,128 @@ func TestIntegrationSonarBeforeFirstScan(t *testing.T) {
 		t.Fatalf("sonar latest = %v", latest)
 	}
 }
+
+// TestIntegrationSonarKeyDeclared follows a pipeline whose upload declares
+// its SonarQube key: an analysis of another project that names the same
+// GitLab project and pipeline is never linked, the declared project's
+// analysis that waited is, and the card says in which pipeline it ran.
+func TestIntegrationSonarKeyDeclared(t *testing.T) {
+	c, publicURL := bootAdmin(t)
+
+	gl := httptest.NewUnstartedServer(nil)
+	gitlabURL := "http://" + gl.Listener.Addr().String()
+	fake, err := fakegitlab.New(gitlabURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gl.Config.Handler = fake.Handler()
+	gl.Start()
+	defer gl.Close()
+
+	sq := fakesonar.New("squ_e2e_token")
+	defer sq.Close()
+	analysed := time.Date(2026, 11, 19, 10, 0, 0, 0, time.UTC)
+	for _, key := range []string{"demo:orders-api", "other:planted"} {
+		sq.Set(key, fakesonar.Project{
+			Measures: fakesonar.StandardMeasures(), GateStatus: "OK",
+			Analyses: []fakesonar.Analysis{{Key: "AX-" + key, Date: analysed}},
+		})
+	}
+	if code, body := c.do("PATCH", "/api/v1/settings", map[string]any{
+		"gitlab.url": gitlabURL, "sonar.url": sq.URL, "sonar.token": "squ_e2e_token", "sonar.webhook_secret": "whsec-e2e",
+	}); code != 200 {
+		t.Fatalf("settings = %d %v", code, body)
+	}
+
+	// 1. The planted analysis arrives first, then the real one; both name
+	// GitLab project 7 and pipeline 1001, and both wait.
+	for _, d := range []struct{ task, key string }{{"task-planted", "other:planted"}, {"task-real", "demo:orders-api"}} {
+		hook, _ := json.Marshal(map[string]any{
+			"serverUrl": sq.URL, "taskId": d.task, "status": "SUCCESS",
+			"analysedAt": analysed.Format("2006-01-02T15:04:05-0700"),
+			"project":    map[string]any{"key": d.key, "name": d.key},
+			"properties": map[string]string{"sonar.analysis.gitlabProjectId": "7", "sonar.analysis.pipelineId": "1001"},
+		})
+		mac := hmac.New(sha256.New, []byte("whsec-e2e"))
+		mac.Write(hook)
+		if code, body := raw(t, "POST", c.base+"/api/v1/hooks/sonarqube", hook, map[string]string{
+			"X-Sonar-Webhook-HMAC-SHA256": hex.EncodeToString(mac.Sum(nil)), "Content-Type": "application/json",
+		}); code != 202 {
+			t.Fatalf("webhook = %d %v", code, body)
+		}
+	}
+	deliveries := func() map[string]map[string]any {
+		_, sh := c.do("GET", "/api/v1/admin/integrations/sonarqube", nil)
+		list, _ := sh["recent_deliveries"].([]any)
+		out := map[string]map[string]any{}
+		for _, d := range list {
+			m := d.(map[string]any)
+			out[m["task_id"].(string)] = m
+		}
+		return out
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for ds := deliveries(); len(ds) != 2 || ds["task-planted"]["outcome"] == "pending" || ds["task-real"]["outcome"] == "pending"; ds = deliveries() {
+		if time.Now().After(deadline) {
+			t.Fatalf("deliveries not processed: %v", ds)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// 2. The first upload of the pipeline declares the key.
+	now := time.Now()
+	token, err := fake.SignJWT(map[string]any{
+		"iss": gitlabURL, "aud": publicURL, "sub": "project_path:demo/orders-api:ref_type:branch:ref:main",
+		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nbf": now.Add(-time.Minute).Unix(),
+		"project_id": "7", "project_path": "demo/orders-api", "namespace_path": "demo",
+		"pipeline_id": "1001", "job_id": "5001", "ref": "main", "ref_type": "branch", "ref_protected": "true",
+		"sha": "0123456789abcdef0123456789abcdef01234567",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, res := raw(t, "POST", c.base+"/api/v1/ingest/trivy?sonar_key=demo:orders-api", []byte(`{"SchemaVersion":2,"ArtifactName":"orders-api:1"}`), map[string]string{
+		"Authorization": "Bearer " + token, "Content-Type": "application/json",
+	})
+	if code != 201 || res["service_created"] != true || res["sonar_key_ignored"] != nil {
+		t.Fatalf("upload = %d %v", code, res)
+	}
+	serviceID := int64(res["service_id"].(float64))
+	_, svc := c.do("GET", fmt.Sprintf("/api/v1/services/%d", serviceID), nil)
+	if svc["sonar_project_key"] != "demo:orders-api" {
+		t.Errorf("service = %v", svc)
+	}
+	ds := deliveries()
+	if ds["task-real"]["outcome"] != "linked" || ds["task-planted"]["outcome"] != "unlinked" {
+		t.Errorf("deliveries after the upload: %v", ds)
+	}
+	var latest map[string]any
+	for deadline = time.Now().Add(10 * time.Second); latest == nil && time.Now().Before(deadline); {
+		_, sonar := c.do("GET", fmt.Sprintf("/api/v1/services/%d/sonar", serviceID), nil)
+		if latest, _ = sonar["latest"].(map[string]any); latest == nil {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if latest == nil || latest["gitlab_pipeline_id"] != float64(1001) {
+		t.Fatalf("sonar latest = %v", latest)
+	}
+
+	// 3. A second project's upload cannot take the key: it is stored, and
+	// the answer says why the key was ignored.
+	token2, err := fake.SignJWT(map[string]any{
+		"iss": gitlabURL, "aud": publicURL, "sub": "project_path:demo/copycat:ref_type:branch:ref:main",
+		"exp": now.Add(time.Hour).Unix(), "iat": now.Unix(), "nbf": now.Add(-time.Minute).Unix(),
+		"project_id": "8", "project_path": "demo/copycat", "namespace_path": "demo",
+		"pipeline_id": "1002", "job_id": "5002", "ref": "main", "ref_type": "branch", "ref_protected": "true",
+		"sha": "0123456789abcdef0123456789abcdef01234567",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, res = raw(t, "POST", c.base+"/api/v1/ingest/trivy?sonar_key=demo:orders-api", []byte(`{"SchemaVersion":2,"ArtifactName":"copycat:1"}`), map[string]string{
+		"Authorization": "Bearer " + token2, "Content-Type": "application/json",
+	})
+	if code != 201 || res["sonar_key_ignored"] != "key_linked_to_other_service" {
+		t.Fatalf("copycat upload = %d %v", code, res)
+	}
+}

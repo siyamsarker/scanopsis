@@ -89,22 +89,28 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 	}
 	l := linkedProject{
 		SonarLinkedServicesRow: store.SonarLinkedServicesRow{ID: serviceID, SonarProjectKey: k.ProjectKey},
-		from:                   &delivered{pipeline: pipelineID, analysedAt: k.AnalysedAt.Time},
+		from:                   deliveries{{pipeline: pipelineID, analysedAt: k.AnalysedAt.Time}},
 	}
+	s.queueSync(ctx, l)
+	return nil
+}
+
+// queueSync hands a newly linked project to the workers. When the queue is
+// full, the next sync reads it, as it is linked.
+func (s *Sonar) queueSync(ctx context.Context, l linkedProject) {
 	select {
 	case s.linked <- l:
 	default:
-		s.log.InfoContext(ctx, "SonarQube project linked; the next sync reads its analysis", "project", k.ProjectKey, "service_id", serviceID)
+		s.log.InfoContext(ctx, "SonarQube project linked; the next sync reads its analysis", "project", l.SonarProjectKey, "service_id", l.ID)
 	}
-	return nil
 }
 
 // linkedProject is a project that has just been linked to a service, for a
 // worker to read its newest analysis at once.
 type linkedProject struct {
 	store.SonarLinkedServicesRow
-	// from is the delivery that linked it, nil when there is none.
-	from *delivered
+	// from are the deliveries that linked it.
+	from deliveries
 }
 
 // delivered is a webhook delivery that named the pipeline of an analysis.
@@ -116,17 +122,30 @@ type delivered struct {
 	analysedAt time.Time
 }
 
-// pipelineOf returns the pipeline of the delivery for an analysis dated
-// date, or nil unless the analysis is provably the delivered one: its date
-// must be exactly the delivered analysedAt, as a webhook's analysis is
-// matched in process. Any other analysis, a newer one included, is stored
-// without a pipeline rather than with a wrong one.
-func (d *delivered) pipelineOf(date time.Time) *int64 {
-	if d == nil || d.pipeline == 0 || d.analysedAt.IsZero() || !date.Equal(d.analysedAt) {
+// deliveries are the deliveries that linked a project.
+type deliveries []delivered
+
+// pipelineOf returns the pipeline of the delivered analysis dated date, or
+// nil unless the analysis is provably a delivered one: its date must be
+// exactly the analysedAt of a delivery that named a pipeline, as a
+// webhook's analysis is matched in process, and the deliveries of that
+// analysis must not name different pipelines. Any other analysis, a newer
+// one included, is stored without a pipeline rather than with a wrong one.
+func (ds deliveries) pipelineOf(date time.Time) *int64 {
+	var found int64
+	for _, d := range ds {
+		if d.pipeline == 0 || d.analysedAt.IsZero() || !date.Equal(d.analysedAt) {
+			continue
+		}
+		if found != 0 && found != d.pipeline {
+			return nil
+		}
+		found = d.pipeline
+	}
+	if found == 0 {
 		return nil
 	}
-	p := d.pipeline
-	return &p
+	return &found
 }
 
 // waiting names the deliveries LinkWaiting may link.

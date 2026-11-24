@@ -14,11 +14,31 @@ import (
 	"testing"
 )
 
-// fakeLinker records the calls of LinkWaiting.
+// fakeLinker records the calls of LinkWaiting and LinkDeclared.
 type fakeLinker struct {
-	mu    sync.Mutex
-	calls [][3]int64
-	err   error
+	mu       sync.Mutex
+	calls    [][3]int64
+	declared []declaredCall
+	err      error
+}
+
+// declaredCall is a call of LinkDeclared.
+type declaredCall struct {
+	serviceID, gitlabProjectID int64
+	key                        string
+}
+
+func (f *fakeLinker) LinkDeclared(_ context.Context, serviceID, gitlabProjectID int64, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.declared = append(f.declared, declaredCall{serviceID, gitlabProjectID, key})
+	return f.err
+}
+
+func (f *fakeLinker) gotDeclared() []declaredCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.declared)
 }
 
 func (f *fakeLinker) LinkWaiting(_ context.Context, serviceID, gitlabProjectID, pipelineID int64) error {

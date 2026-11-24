@@ -248,6 +248,55 @@ func (q *Queries) LastSonarDeliveryAt(ctx context.Context) (pgtype.Timestamptz, 
 	return last_at, err
 }
 
+const linkSonarDeliveriesOfKey = `-- name: LinkSonarDeliveriesOfKey :many
+UPDATE sonar_deliveries
+SET outcome = 'linked', service_id = $1, detail = $2::text
+WHERE outcome = 'unlinked' AND received_at >= $3::timestamptz
+  AND project_key = $4
+RETURNING received_at, claimed_pipeline_id, analysed_at
+`
+
+type LinkSonarDeliveriesOfKeyParams struct {
+	ServiceID  pgtype.Int8
+	Detail     string
+	Since      pgtype.Timestamptz
+	ProjectKey string
+}
+
+type LinkSonarDeliveriesOfKeyRow struct {
+	ReceivedAt        pgtype.Timestamptz
+	ClaimedPipelineID pgtype.Int8
+	AnalysedAt        pgtype.Timestamptz
+}
+
+// LinkSonarDeliveriesOfKey marks the unlinked deliveries of a SonarQube
+// project since a time linked to the service that now has its key, and
+// returns when each arrived, the pipeline it named and its analysedAt.
+func (q *Queries) LinkSonarDeliveriesOfKey(ctx context.Context, arg LinkSonarDeliveriesOfKeyParams) ([]LinkSonarDeliveriesOfKeyRow, error) {
+	rows, err := q.db.Query(ctx, linkSonarDeliveriesOfKey,
+		arg.ServiceID,
+		arg.Detail,
+		arg.Since,
+		arg.ProjectKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LinkSonarDeliveriesOfKeyRow{}
+	for rows.Next() {
+		var i LinkSonarDeliveriesOfKeyRow
+		if err := rows.Scan(&i.ReceivedAt, &i.ClaimedPipelineID, &i.AnalysedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const linkWaitingSonarDeliveries = `-- name: LinkWaitingSonarDeliveries :execrows
 UPDATE sonar_deliveries
 SET outcome = 'linked', service_id = $1, detail = $2::text

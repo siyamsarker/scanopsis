@@ -152,3 +152,30 @@ func TestArtifactParamMessage(t *testing.T) {
 		t.Errorf("plain name refused: %v", err)
 	}
 }
+
+// The sonar_key upload parameter follows SonarQube's rule for project keys.
+func TestCheckSonarKeyParam(t *testing.T) {
+	for _, ok := range []string{
+		"demo:orders-api", "a", "1a", "_", "my_project.v2", "org:team:app-1", "123-456",
+		strings.Repeat("a", 400), "0" + strings.Repeat("9", 398) + "x",
+	} {
+		if err := checkSonarKeyParam(ok); err != nil {
+			t.Errorf("checkSonarKeyParam(%q) refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		"", "1", "0123456789", strings.Repeat("a", 401), "a b", " a", "a/b", "a\tb", "a\x00b",
+		"bäckend", "a+b", "a@b", "a,b", "\xff", "ａ",
+	} {
+		err := checkSonarKeyParam(bad)
+		if err == nil {
+			t.Errorf("checkSonarKeyParam(%q) accepted", bad)
+			continue
+		}
+		for _, want := range []string{"1 to 400", "not a digit"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("message %q lacks %q", err.Error(), want)
+			}
+		}
+	}
+}

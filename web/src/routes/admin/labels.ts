@@ -63,6 +63,7 @@ export const auditActions: Record<string, string> = {
   'service.updated': 'Service updated',
   'service.deleted': 'Service deleted',
   'ingest.rejected': 'Upload rejected',
+  'ingest.sonar_key_ignored': 'SonarQube key ignored',
   'webhook.rejected': 'Webhook rejected',
   'report.exported': 'Scan report exported',
   'retention.deleted': 'Old data deleted',
