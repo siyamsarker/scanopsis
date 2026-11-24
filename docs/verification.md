@@ -15,8 +15,9 @@ runs it before it publishes a version. The rule is strict:
 > finding is a defect. Do not round it and do not explain it away. Record it,
 > find the cause, and run the check again after the fix.
 
-The Trivy and `jq` commands below were run with Trivy 0.76.2 on the real
-reports in `internal/ingest/testdata`. The upload and API outputs come from a
+The Trivy and `jq` commands below were run with Trivy 0.76.2 and 0.72.0 on
+the real reports in `internal/ingest/testdata`, and on an image report with
+secrets in its layers. The upload and API outputs come from a
 test instance with a stand-in GitLab. Commands marked **example** need your
 GitLab or SonarQube.
 
@@ -204,8 +205,12 @@ For every report, get three sets of numbers: A, B and C.
 
 ### A. What Trivy says
 
-Trivy prints one `Total:` line per result (for example the OS packages, then
-the Python packages). The artifact's numbers are their sums:
+Trivy prints one table per result, each under a heading with its own `Total:`
+line: the OS packages, then the language packages, and, in an image report made
+with `--scanners vuln,secret`, one table per file with secrets, under a heading
+that ends in `(secrets)`. Run the command in a folder without a `.trivyignore`:
+`trivy convert` applies the ignore file of the current folder, and would
+suppress more than the pipeline did.
 
 ```sh
 trivy convert --format table --quiet --show-suppressed --output table.txt image-suppressed.json
@@ -219,20 +224,40 @@ Total: 11 (UNKNOWN: 0, LOW: 2, MEDIUM: 6, HIGH: 3, CRITICAL: 0)
 Suppressed Vulnerabilities (Total: 2)
 ```
 
-Add up the `Total:` lines per severity:
+Add up the `Total:` lines per severity, and count the ones under a
+`(secrets)` heading as secrets, as Scanopsis does. Save this as `count.sh`:
 
 ```sh
-grep -E '^Total:' table.txt \
-  | sed -E 's/.*UNKNOWN: ([0-9]+), LOW: ([0-9]+), MEDIUM: ([0-9]+), HIGH: ([0-9]+), CRITICAL: ([0-9]+).*/\1 \2 \3 \4 \5/' \
-  | awk '{u+=$1;l+=$2;m+=$3;h+=$4;c+=$5} END{print "critical="c, "high="h, "medium="m, "low="l, "unknown="u}'
+#!/bin/sh
+# count.sh: sums the Total lines of table.txt per severity, the secrets apart
+awk '
+  /^=+$/ { secrets = (prev ~ /\(secrets\)$/) }
+  { prev = $0 }
+  /^Total:/ {
+    for (i = 3; i < NF; i += 2) {
+      sev = $i; sub(/^\(/, "", sev); sub(/:$/, "", sev)
+      if (secrets) n["secrets"] += $(i + 1); else n[sev] += $(i + 1)
+    }
+  }
+  /^Suppressed .*\(Total: [0-9]+\)$/ { x = $NF; sub(/\)$/, "", x); n["suppressed"] += x }
+  END {
+    printf "critical=%d high=%d medium=%d low=%d unknown=%d secrets=%d suppressed=%d\n",
+      n["CRITICAL"], n["HIGH"], n["MEDIUM"], n["LOW"], n["UNKNOWN"], n["secrets"], n["suppressed"]
+  }' table.txt
+```
+
+```sh
+sh count.sh
 ```
 
 ```text
-critical=1 high=43 medium=57 low=31 unknown=3
+critical=1 high=43 medium=57 low=31 unknown=3 secrets=0 suppressed=3
 ```
 
 The suppressed total is the sum of the `Suppressed ... (Total: N)` lines:
-1 + 2 = 3.
+1 + 2 = 3. A secret never adds to a severity: in an image report with two
+secrets in its layers, the `(secrets)` tables add 2 to `secrets=`, not to
+`critical=`. The same command gives `secrets=2` for `secret-fs.json`.
 
 **Already uploaded?** You do not need the original file. Scanopsis keeps the
 report of every scan while it is current, and for 30 days otherwise. Get it
@@ -360,8 +385,8 @@ id=$1; after=0
 : > "vulns-$id.jsonl"
 while :; do
   page=$(curl -sS -b jar.txt "$URL/api/v1/services/$id/vulnerabilities?limit=500&after=$after")
-  echo "$page" | jq -c '.items[]' >> "vulns-$id.jsonl"
-  after=$(echo "$page" | jq -r '.next_after // empty')
+  printf '%s\n' "$page" | jq -c '.items[]' >> "vulns-$id.jsonl"
+  after=$(printf '%s\n' "$page" | jq -r '.next_after // empty')
   [ -n "$after" ] || break
 done
 ```
@@ -379,6 +404,12 @@ jq -s 'group_by(.severity) | map({(.[0].severity | ascii_downcase): length}) | a
 
 138 rows, and the same five numbers as A and B. Secrets work the same way at
 `/api/v1/services/<id>/secrets`.
+
+The script passes the answer on with `printf '%s\n'`, not `echo`. In `/bin/sh`
+on macOS and in `dash`, the `/bin/sh` of Debian and Ubuntu, `echo` turns the
+`\\` of a JSON string into a single backslash. A title with a backslash, which
+Go vulnerabilities have, then breaks the JSON, `jq` stops with `Invalid
+escape`, and the file has no rows for that service.
 
 Write A, B and C next to each other for every artifact. They must match in
 every column: critical, high, medium, low, unknown, fixable, secrets and
