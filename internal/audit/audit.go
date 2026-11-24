@@ -87,6 +87,15 @@ const (
 	ActionBackupScheduleAlertDismissed = "backup.schedule_alert_dismissed"
 )
 
+// Reasons in the service.updated detail of a SonarQube key declared by an
+// upload (the sonar_key upload parameter): the key was set because a
+// SonarQube analysis that names the same GitLab project confirmed it, or the
+// declaration was kept until one does.
+const (
+	ReasonSonarKeyConfirmed = "declared by the pipeline's upload and confirmed by a SonarQube analysis of the same project"
+	ReasonSonarKeyPending   = "declared by the pipeline's upload; set when a SonarQube analysis of the same project confirms it"
+)
+
 // Inserter is the query the recorder needs; *store.Queries implements it.
 type Inserter interface {
 	InsertAudit(ctx context.Context, arg store.InsertAuditParams) error

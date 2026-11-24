@@ -213,6 +213,9 @@ type link struct {
 	// Pin is set when the service has no SonarQube key yet and must be linked
 	// to the project when its first analysis is stored.
 	Pin bool
+	// PinReason is the reason of the audit record of the pin; "" for a link
+	// by the gitlabProjectId scanner property alone.
+	PinReason string
 	// Unlinked explains why no service was found; empty when one was.
 	Unlinked string
 	// Waiting is set when the delivery names a GitLab project that has no
@@ -226,7 +229,9 @@ type link struct {
 // project key decides first. The gitlabProjectId scanner property, which any
 // pipeline can set, is used only for a service that is not linked to a
 // SonarQube project yet, and then pins that link; it can never move a
-// service to another project.
+// service to another project. A service whose pipeline declared a key in an
+// upload (sonar_key) is linked by the property only to that key, which the
+// delivery then confirms.
 func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (link, error) {
 	sid, err := s.q.SonarServiceByKey(ctx, pgtype.Text{String: p.Project.Key, Valid: true})
 	if err == nil {
@@ -249,6 +254,14 @@ func (s *Sonar) linkService(ctx context.Context, p webhookPayload) (link, error)
 		return link{}, err
 	}
 	if !svc.SonarProjectKey.Valid {
+		if d := svc.SonarKeyDeclared; d.Valid {
+			if d.String != p.Project.Key {
+				return link{Unlinked: fmt.Sprintf(
+					"The service of GitLab project %d waits for SonarQube project %q, the key its pipeline declared in an upload, so project %q was not linked to it. An administrator can set the SonarQube key on the service.",
+					id, d.String, p.Project.Key)}, nil
+			}
+			return link{ServiceID: svc.ID, Pin: true, PinReason: audit.ReasonSonarKeyConfirmed}, nil
+		}
 		return link{ServiceID: svc.ID, Pin: true}, nil
 	}
 	return link{Unlinked: fmt.Sprintf(
@@ -406,7 +419,7 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 	}
 	pin := ""
 	if l.Pin {
-		pin = p.Project.Key
+		pin, a.PinReason = p.Project.Key, l.PinReason
 	}
 	switch err := s.save(ctx, a, pin); {
 	case errors.Is(err, errPinConflict):
@@ -434,6 +447,9 @@ type snapshot struct {
 	// ClaimedProjectID is the gitlabProjectId scanner property, recorded in
 	// the audit event when the analysis links a service.
 	ClaimedProjectID string
+	// PinReason is the audit reason when the analysis links a service; ""
+	// for the gitlabProjectId scanner property alone.
+	PinReason string
 }
 
 // errPinConflict is returned when a service cannot be linked to a project.
@@ -485,7 +501,7 @@ func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
 	if err != nil {
 		return err
 	}
-	if err := auditPin(ctx, q, a.ServiceID, path, pinKey, a.TaskID, a.ClaimedProjectID, a.Pipeline); err != nil {
+	if err := auditPin(ctx, q, a.ServiceID, path, pinKey, a.TaskID, a.ClaimedProjectID, a.Pipeline, a.PinReason); err != nil {
 		return err
 	}
 	if err := q.InsertSonarAnalysis(ctx, arg); err != nil {
@@ -496,11 +512,15 @@ func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
 
 // auditPin records, in the transaction of q, that a service was linked to a
 // SonarQube project by the gitlabProjectId scanner property of the delivery
-// taskID.
-func auditPin(ctx context.Context, q *store.Queries, serviceID int64, path, key, taskID, claimed string, pipeline *int64) error {
+// taskID, or with reason when the property confirmed a key the service's
+// pipeline declared.
+func auditPin(ctx context.Context, q *store.Queries, serviceID int64, path, key, taskID, claimed string, pipeline *int64, reason string) error {
+	if reason == "" {
+		reason = "linked by the sonar.analysis.gitlabProjectId scanner property"
+	}
 	detail, err := json.Marshal(map[string]any{
 		"id": serviceID, "gitlab_project_path": path, "fields": []string{"sonar_project_key"},
-		"sonar_project_key": key, "reason": "linked by the sonar.analysis.gitlabProjectId scanner property",
+		"sonar_project_key": key, "reason": reason,
 		"task_id": taskID, "claimed_gitlab_project_id": claimed, "pipeline_id": pipeline,
 	})
 	if err != nil {

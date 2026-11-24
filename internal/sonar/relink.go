@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
@@ -44,7 +46,9 @@ var (
 // The rules are those of a webhook link: only a service without a SonarQube
 // key is linked, a key is never linked to a second service, and the link has
 // the same audit record. When analyses of more than one SonarQube project
-// match, none is linked and an administrator must set the key. After a link
+// match, none is linked and an administrator must set the key. When the
+// service's pipeline declared a key in an upload (sonar_key), only an
+// analysis of that key is linked, which confirms it. After a link
 // the project is synced in the background by Run's workers, and every other
 // unlinked delivery naming the GitLab project says why it was not linked.
 func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pipelineID int64) error {
@@ -66,9 +70,21 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 	keys, err := s.q.WaitingSonarKeys(ctx, store.WaitingSonarKeysParams{
 		Since: w.since, ClaimedProjectID: w.project, ClaimedPipelineID: w.pipeline,
 	})
-	switch {
-	case err != nil:
+	if err != nil {
 		return err
+	}
+	if d := svc.SonarKeyDeclared; d.Valid && len(keys) > 0 {
+		// The pipeline declared the key in an upload: only that key is
+		// linked, and the waiting analysis confirms it.
+		i := slices.IndexFunc(keys, func(k store.WaitingSonarKeysRow) bool { return k.ProjectKey == d.String })
+		if i < 0 {
+			return s.explainWaiting(ctx, w, fmt.Sprintf(
+				"The service of GitLab project %d waits for SonarQube project %q, the key its pipeline declared in an upload, so this analysis was not linked to it. An administrator can set the SonarQube key on the service.",
+				gitlabProjectID, d.String))
+		}
+		keys, w.reason = keys[i:i+1], audit.ReasonSonarKeyConfirmed
+	}
+	switch {
 	case len(keys) == 0:
 		return nil
 	case len(keys) > 1:
@@ -153,6 +169,8 @@ type waiting struct {
 	serviceID         int64
 	project, pipeline pgtype.Int8
 	since             pgtype.Timestamptz
+	// reason is the audit reason of the link (see auditPin).
+	reason string
 }
 
 // explainWaiting sets the detail of the waiting deliveries of the pipeline
@@ -186,7 +204,7 @@ func (s *Sonar) pinWaiting(ctx context.Context, w waiting, k store.WaitingSonarK
 		return err
 	}
 	claimed := strconv.FormatInt(w.project.Int64, 10)
-	if err := auditPin(ctx, q, w.serviceID, path, k.ProjectKey, k.TaskID, claimed, &w.pipeline.Int64); err != nil {
+	if err := auditPin(ctx, q, w.serviceID, path, k.ProjectKey, k.TaskID, claimed, &w.pipeline.Int64, w.reason); err != nil {
 		return err
 	}
 	if _, err := q.LinkWaitingSonarDeliveries(ctx, store.LinkWaitingSonarDeliveriesParams{

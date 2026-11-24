@@ -23,14 +23,14 @@ const declaredLinkedDetail = "Linked when an upload of the service's pipeline de
 const keyLinkedDetail = "Linked when a service was given this SonarQube project key while the delivery was processed; the newest analysis is read from SonarQube."
 
 // LinkDeclared follows an upload that set key as the SonarQube key of its
-// service (the sonar_key upload parameter). The upload is authenticated by
-// the CI token of the service's own GitLab project, so the key is the
-// service's, and it was set in the upload's transaction, before any other
-// key could be linked by an analysis that merely names the project. The
-// unlinked deliveries of key from the last 7 days are marked linked, every
-// other unlinked delivery naming gitlabProjectID says why it was not linked,
-// and the project is synced in the background by Run's workers. Nothing is
-// done unless the service has key now.
+// service (the sonar_key upload parameter), because a delivery of key named
+// the service's GitLab project and so confirmed the declaration. The key
+// was set in the upload's transaction, before any other key could be linked
+// by an analysis that merely names the project. The unlinked deliveries of
+// key from the last 7 days that name the service's GitLab project are
+// marked linked, every other unlinked delivery naming gitlabProjectID says
+// why it was not linked, and the project is synced in the background by
+// Run's workers. Nothing is done unless the service has key now.
 func (s *Sonar) LinkDeclared(ctx context.Context, serviceID, gitlabProjectID int64, key string) error {
 	cur, err := s.q.SonarServiceKey(ctx, serviceID)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && (!cur.Valid || cur.String != key) {
@@ -65,10 +65,10 @@ func (s *Sonar) LinkDeclared(ctx context.Context, serviceID, gitlabProjectID int
 }
 
 // linkKeyLate links a delivery that has just finished unlinked, if a service
-// has its project key by now. An upload may declare the key while the
-// delivery is processed: it then links the deliveries of the key before
-// this one is marked unlinked, and this check finds the service instead. A
-// failure is logged.
+// has its project key by now and the delivery names the service's GitLab
+// project. An upload may set the key while the delivery is processed: it
+// then links the deliveries of the key before this one is marked unlinked,
+// and this check finds the service instead. A failure is logged.
 func (s *Sonar) linkKeyLate(ctx context.Context, key string) {
 	sid, err := s.q.SonarServiceByKey(ctx, pgtype.Text{String: key, Valid: true})
 	var rows []store.LinkSonarDeliveriesOfKeyRow
@@ -83,7 +83,7 @@ func (s *Sonar) linkKeyLate(ctx context.Context, key string) {
 }
 
 // linkKeyDeliveries marks the unlinked deliveries of key from the last 7
-// days linked to the service, with detail.
+// days that name the service's GitLab project linked to it, with detail.
 func (s *Sonar) linkKeyDeliveries(ctx context.Context, q *store.Queries, serviceID int64, key, detail string) ([]store.LinkSonarDeliveriesOfKeyRow, error) {
 	return q.LinkSonarDeliveriesOfKey(ctx, store.LinkSonarDeliveriesOfKeyParams{
 		ServiceID: pgtype.Int8{Int64: serviceID, Valid: true}, Detail: detail,

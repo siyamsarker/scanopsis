@@ -3,7 +3,7 @@
 
 -- name: ListServices :many
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at, default_ref
+       created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 FROM services
 WHERE id > @after AND archived = @archived
   AND (@q::text = '' OR strpos(lower(name), lower(@q)) > 0
@@ -13,14 +13,14 @@ LIMIT @max_rows;
 
 -- name: GetService :one
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at, default_ref
+       created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 FROM services WHERE id = $1;
 
 -- name: CreateService :one
 INSERT INTO services (name, gitlab_project_path, sonar_project_key, created_via)
 VALUES (@name, @gitlab_project_path, sqlc.narg(sonar_project_key), 'manual')
 RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-          created_via, archived, created_at, default_ref;
+          created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at;
 
 -- UpdateService applies the given changes and also returns the previous
 -- default ref, read under the same row lock, for the audit event.

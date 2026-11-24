@@ -179,8 +179,9 @@ type SonarLinker interface {
 	// ID to the SonarQube project of analyses that named that project and
 	// the pipeline of the upload before the service existed.
 	LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pipelineID int64) error
-	// LinkDeclared links the deliveries of key, which the upload has just
-	// set as the service's SonarQube key, and reads its newest analysis.
+	// LinkDeclared links the deliveries of key that name the service's
+	// GitLab project, after the upload has just set key as the service's
+	// SonarQube key, and reads its newest analysis.
 	LinkDeclared(ctx context.Context, serviceID, gitlabProjectID int64, key string) error
 }
 
@@ -433,10 +434,9 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// sonar_key declares the SonarQube project of the service. The upload is
-	// authenticated by the project's own CI token, so it may set the key of
-	// its own service, but never replace one or take another service's (see
-	// declareSonarKey).
+	// sonar_key declares the SonarQube project of the service. It is set
+	// once SonarQube confirms it, never replaces a key and never takes
+	// another service's (see declareSonarKey).
 	var sonarKey string
 	if q := r.URL.Query(); q.Has("sonar_key") {
 		sonarKey = q.Get("sonar_key")
@@ -562,6 +562,10 @@ func (i *Ingest) ingestTrivy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case res.SonarKeyIgnored != nil && *res.SonarKeyIgnored == SonarKeyPending:
+		i.log.InfoContext(ctx, "the SonarQube key declared by the upload waits for a SonarQube analysis of the project",
+			"project", claims.ProjectPath, "project_id", claims.ProjectID, "pipeline_id", claims.PipelineID,
+			"job_id", claims.JobID, "service_id", res.ServiceID, "sonar_key", sonarKey, "sonar_key_ignored", SonarKeyPending)
 	case res.SonarKeyIgnored != nil:
 		// Recorded in the audit log by the store; logged for the operator.
 		i.log.WarnContext(ctx, "the SonarQube key declared by the upload was ignored",

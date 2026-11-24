@@ -22,15 +22,20 @@ func TestLinkDeclaredKeyWins(t *testing.T) {
 	wantStatus(t, e, hook("task-planted", "evil:project", claims("7", "1001")), 202)
 	wantStatus(t, e, hook("task-real", "demo:orders-api", claims("7", "1001")), 202)
 	wantStatus(t, e, hook("task-plain", "demo:orders-api", nil), 202)
-	e.drain(t, 3)
+	wantStatus(t, e, hook("task-elsewhere", "demo:orders-api", claims("8", "2001")), 202)
+	e.drain(t, 4)
 
 	// The upload created the service with the declared key.
 	sid := e.service(t, "demo/orders-api", 7, "demo:orders-api")
 	if err := e.s.LinkDeclared(context.Background(), sid, 7, "demo:orders-api"); err != nil {
 		t.Fatal(err)
 	}
-	for _, task := range []string{"task-real", "task-plain"} {
-		if d := e.delivery(t, task); d.Outcome != "linked" || d.ServiceID.Int64 != sid || d.Detail != declaredLinkedDetail {
+	if d := e.delivery(t, "task-real"); d.Outcome != "linked" || d.ServiceID.Int64 != sid || d.Detail != declaredLinkedDetail {
+		t.Errorf("task-real: %+v", d)
+	}
+	// Only the deliveries that name the service's GitLab project are linked.
+	for _, task := range []string{"task-plain", "task-elsewhere"} {
+		if d := e.delivery(t, task); d.Outcome != "unlinked" || d.ServiceID.Valid {
 			t.Errorf("%s: %+v", task, d)
 		}
 	}
@@ -88,12 +93,16 @@ func TestLinkDeclaredOnlyServiceKey(t *testing.T) {
 func TestLinkKeyLateAfterRace(t *testing.T) {
 	e := newEnv(t)
 	e.project("demo:orders-api")
-	wantStatus(t, e, hook("task-r", "demo:orders-api", nil), 202)
-	e.drain(t, 1)
+	wantStatus(t, e, hook("task-r", "demo:orders-api", claims("7", "1001")), 202)
+	wantStatus(t, e, hook("task-8", "demo:orders-api", claims("8", "1001")), 202)
+	e.drain(t, 2)
 	sid := e.service(t, "demo/orders-api", 7, "demo:orders-api")
 	e.s.linkKeyLate(context.Background(), "demo:orders-api")
 	if d := e.delivery(t, "task-r"); d.Outcome != "linked" || d.ServiceID.Int64 != sid || d.Detail != keyLinkedDetail {
 		t.Errorf("delivery: %+v", d)
+	}
+	if d := e.delivery(t, "task-8"); d.Outcome != "unlinked" {
+		t.Errorf("delivery naming another project: %+v", d)
 	}
 	select {
 	case l := <-e.s.linked:
@@ -105,4 +114,93 @@ func TestLinkKeyLateAfterRace(t *testing.T) {
 	}
 	// Without a service for the key it does nothing.
 	e.s.linkKeyLate(context.Background(), "demo:none")
+}
+
+// declare records a key the service's pipeline declared in an upload, still
+// pending, as the upload does.
+func (e *env) declare(t *testing.T, sid int64, key string) {
+	t.Helper()
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE services SET sonar_key_declared = $2, sonar_key_declared_at = now() WHERE id = $1`, sid, key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The upload came first and its declaration is pending. An analysis of
+// another key that names the project is not linked; one of the declared key
+// that names the project confirms it and links it, with the audit reason of
+// a confirmed declaration and the pipeline of the delivery. An analysis of
+// the declared key that names another project confirms nothing.
+func TestWebhookConfirmsPendingDeclaration(t *testing.T) {
+	e := newEnv(t)
+	e.project("evil:project")
+	e.project("demo:orders-api")
+	sid := e.service(t, "demo/orders-api", 7, "")
+	e.declare(t, sid, "demo:orders-api")
+
+	wantStatus(t, e, hook("task-planted", "evil:project", claims("7", "1001")), 202)
+	wantStatus(t, e, hook("task-elsewhere", "demo:orders-api", claims("8", "1001")), 202)
+	e.drain(t, 2)
+	want := `The service of GitLab project 7 waits for SonarQube project "demo:orders-api", the key its pipeline declared in an upload, so project "evil:project" was not linked to it. An administrator can set the SonarQube key on the service.`
+	if d := e.delivery(t, "task-planted"); d.Outcome != "unlinked" || d.Detail != want {
+		t.Errorf("planted: %+v", d)
+	}
+	if d := e.delivery(t, "task-elsewhere"); d.Outcome != "unlinked" || d.ServiceID.Valid {
+		t.Errorf("naming another project: %+v", d)
+	}
+	e.noneLinked(t, sid)
+
+	wantStatus(t, e, hook("task-real", "demo:orders-api", claims("7", "1001")), 202)
+	e.drain(t, 1)
+	if d := e.delivery(t, "task-real"); d.Outcome != "linked" || d.ServiceID.Int64 != sid {
+		t.Errorf("confirming delivery: %+v", d)
+	}
+	if k, _ := e.serviceKey(t, sid); k != "demo:orders-api" {
+		t.Errorf("key %q", k)
+	}
+	got := e.audits(t)
+	if len(got) != 1 || got[0]["detail"].(map[string]any)["reason"] != "declared by the pipeline's upload and confirmed by a SonarQube analysis of the same project" {
+		t.Errorf("audit events: %v", got)
+	}
+	if a := e.analyses(t, sid); len(a) != 1 || a[0].GitlabPipelineID.Int64 != 1001 {
+		t.Errorf("analyses: %+v", a)
+	}
+}
+
+// A pending declaration blocks the link of the same pipeline's waiting
+// analysis of another key; an analysis of the declared key is linked even
+// beside one of another key.
+func TestPendingDeclarationBlocksLinkWaiting(t *testing.T) {
+	e := newEnv(t)
+	e.project("evil:project")
+	wantStatus(t, e, hook("task-planted", "evil:project", claims("7", "1001")), 202)
+	e.drain(t, 1)
+	sid := e.service(t, "demo/orders-api", 7, "")
+	e.declare(t, sid, "demo:orders-api")
+	if err := e.s.LinkWaiting(context.Background(), sid, 7, 1001); err != nil {
+		t.Fatal(err)
+	}
+	e.noneLinked(t, sid)
+	want := `The service of GitLab project 7 waits for SonarQube project "demo:orders-api", the key its pipeline declared in an upload, so this analysis was not linked to it. An administrator can set the SonarQube key on the service.`
+	if d := e.delivery(t, "task-planted"); d.Outcome != "unlinked" || d.Detail != want {
+		t.Errorf("planted: %+v", d)
+	}
+
+	e2 := newEnv(t)
+	e2.project("evil:project")
+	e2.project("demo:orders-api")
+	wantStatus(t, e2, hook("task-planted", "evil:project", claims("7", "1001")), 202)
+	wantStatus(t, e2, hook("task-real", "demo:orders-api", claims("7", "1001")), 202)
+	e2.drain(t, 2)
+	sid = e2.service(t, "demo/orders-api", 7, "")
+	e2.declare(t, sid, "demo:orders-api")
+	if err := e2.s.LinkWaiting(context.Background(), sid, 7, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if k, _ := e2.serviceKey(t, sid); k != "demo:orders-api" {
+		t.Errorf("key %q", k)
+	}
+	if d := e2.delivery(t, "task-planted"); d.Outcome != "unlinked" {
+		t.Errorf("planted: %+v", d)
+	}
 }

@@ -11,6 +11,27 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const declareSonarKey = `-- name: DeclareSonarKey :execrows
+UPDATE services SET sonar_key_declared = $1::text, sonar_key_declared_at = $2::timestamptz
+WHERE id = $3 AND sonar_key_declared IS DISTINCT FROM $1::text
+`
+
+type DeclareSonarKeyParams struct {
+	Key string
+	At  pgtype.Timestamptz
+	ID  int64
+}
+
+// DeclareSonarKey records the SonarQube key a service's pipeline declared.
+// It affects no row when that key is already the declared one.
+func (q *Queries) DeclareSonarKey(ctx context.Context, arg DeclareSonarKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, declareSonarKey, arg.Key, arg.At, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const explainUnlinkedSonarClaims = `-- name: ExplainUnlinkedSonarClaims :execrows
 UPDATE sonar_deliveries
 SET detail = $1::text
@@ -253,6 +274,7 @@ UPDATE sonar_deliveries
 SET outcome = 'linked', service_id = $1, detail = $2::text
 WHERE outcome = 'unlinked' AND received_at >= $3::timestamptz
   AND project_key = $4
+  AND claimed_project_id = (SELECT gitlab_project_id FROM services WHERE id = $1)
 RETURNING received_at, claimed_pipeline_id, analysed_at
 `
 
@@ -270,8 +292,9 @@ type LinkSonarDeliveriesOfKeyRow struct {
 }
 
 // LinkSonarDeliveriesOfKey marks the unlinked deliveries of a SonarQube
-// project since a time linked to the service that now has its key, and
-// returns when each arrived, the pipeline it named and its analysedAt.
+// project since a time linked to the service that now has its key, but only
+// those that name the service's own GitLab project, and returns when each
+// arrived, the pipeline it named and its analysedAt.
 func (q *Queries) LinkSonarDeliveriesOfKey(ctx context.Context, arg LinkSonarDeliveriesOfKeyParams) ([]LinkSonarDeliveriesOfKeyRow, error) {
 	rows, err := q.db.Query(ctx, linkSonarDeliveriesOfKey,
 		arg.ServiceID,
@@ -505,6 +528,43 @@ func (q *Queries) SonarArchivedProject(ctx context.Context, gitlabProjectID pgty
 	return archived, err
 }
 
+const sonarKeyConfirmed = `-- name: SonarKeyConfirmed :one
+SELECT EXISTS (
+    SELECT 1 FROM sonar_deliveries
+    WHERE project_key = $1 AND claimed_project_id = $2
+      AND received_at >= now() - interval '7 days'
+) AS confirmed
+`
+
+type SonarKeyConfirmedParams struct {
+	ProjectKey       string
+	ClaimedProjectID pgtype.Int8
+}
+
+// SonarKeyConfirmed reports whether SonarQube delivered, in the last 7 days
+// (the window of the waiting deliveries), an analysis of a key that names a
+// GitLab project in its gitlabProjectId scanner property. Only a SonarQube
+// user with the Execute Analysis permission on the project can cause one.
+func (q *Queries) SonarKeyConfirmed(ctx context.Context, arg SonarKeyConfirmedParams) (bool, error) {
+	row := q.db.QueryRow(ctx, sonarKeyConfirmed, arg.ProjectKey, arg.ClaimedProjectID)
+	var confirmed bool
+	err := row.Scan(&confirmed)
+	return confirmed, err
+}
+
+const sonarKeyHeld = `-- name: SonarKeyHeld :one
+SELECT EXISTS (SELECT 1 FROM services WHERE sonar_project_key = $1) AS held
+`
+
+// SonarKeyHeld reports whether any service, archived or not, has a
+// SonarQube key.
+func (q *Queries) SonarKeyHeld(ctx context.Context, sonarProjectKey pgtype.Text) (bool, error) {
+	row := q.db.QueryRow(ctx, sonarKeyHeld, sonarProjectKey)
+	var held bool
+	err := row.Scan(&held)
+	return held, err
+}
+
 const sonarLinkedServices = `-- name: SonarLinkedServices :many
 SELECT id, sonar_project_key::text AS sonar_project_key
 FROM services
@@ -539,12 +599,13 @@ func (q *Queries) SonarLinkedServices(ctx context.Context) ([]SonarLinkedService
 
 const sonarServiceByGitlabProject = `-- name: SonarServiceByGitlabProject :one
 
-SELECT id, sonar_project_key FROM services WHERE gitlab_project_id = $1 AND NOT archived
+SELECT id, sonar_project_key, sonar_key_declared FROM services WHERE gitlab_project_id = $1 AND NOT archived
 `
 
 type SonarServiceByGitlabProjectRow struct {
-	ID              int64
-	SonarProjectKey pgtype.Text
+	ID               int64
+	SonarProjectKey  pgtype.Text
+	SonarKeyDeclared pgtype.Text
 }
 
 // Copyright 2026 Siyam Sarker
@@ -552,7 +613,7 @@ type SonarServiceByGitlabProjectRow struct {
 func (q *Queries) SonarServiceByGitlabProject(ctx context.Context, gitlabProjectID pgtype.Int8) (SonarServiceByGitlabProjectRow, error) {
 	row := q.db.QueryRow(ctx, sonarServiceByGitlabProject, gitlabProjectID)
 	var i SonarServiceByGitlabProjectRow
-	err := row.Scan(&i.ID, &i.SonarProjectKey)
+	err := row.Scan(&i.ID, &i.SonarProjectKey, &i.SonarKeyDeclared)
 	return i, err
 }
 

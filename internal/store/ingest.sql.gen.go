@@ -20,7 +20,7 @@ WITH old AS (
 UPDATE services SET gitlab_project_id = $1, gitlab_project_path = $2
 FROM old
 WHERE services.id = old.id
-RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, services.default_ref, old.gitlab_project_path AS previous_path
+RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, services.default_ref, services.sonar_key_declared, services.sonar_key_declared_at, old.gitlab_project_path AS previous_path
 `
 
 type AdoptServiceByPathParams struct {
@@ -50,6 +50,8 @@ func (q *Queries) AdoptServiceByPath(ctx context.Context, arg AdoptServiceByPath
 		&i.Service.Archived,
 		&i.Service.CreatedAt,
 		&i.Service.DefaultRef,
+		&i.Service.SonarKeyDeclared,
+		&i.Service.SonarKeyDeclaredAt,
 		&i.PreviousPath,
 	)
 	return i, err
@@ -83,7 +85,7 @@ func (q *Queries) DeleteScanForJob(ctx context.Context, arg DeleteScanForJobPara
 }
 
 const getServiceByPath = `-- name: GetServiceByPath :one
-SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref FROM services WHERE lower(gitlab_project_path) = lower($1)
+SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at FROM services WHERE lower(gitlab_project_path) = lower($1)
 `
 
 func (q *Queries) GetServiceByPath(ctx context.Context, lower string) (Service, error) {
@@ -99,12 +101,14 @@ func (q *Queries) GetServiceByPath(ctx context.Context, lower string) (Service, 
 		&i.Archived,
 		&i.CreatedAt,
 		&i.DefaultRef,
+		&i.SonarKeyDeclared,
+		&i.SonarKeyDeclaredAt,
 	)
 	return i, err
 }
 
 const getServiceByProjectID = `-- name: GetServiceByProjectID :one
-SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref FROM services WHERE gitlab_project_id = $1
+SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at FROM services WHERE gitlab_project_id = $1
 `
 
 func (q *Queries) GetServiceByProjectID(ctx context.Context, gitlabProjectID pgtype.Int8) (Service, error) {
@@ -120,6 +124,8 @@ func (q *Queries) GetServiceByProjectID(ctx context.Context, gitlabProjectID pgt
 		&i.Archived,
 		&i.CreatedAt,
 		&i.DefaultRef,
+		&i.SonarKeyDeclared,
+		&i.SonarKeyDeclaredAt,
 	)
 	return i, err
 }
@@ -128,7 +134,7 @@ const insertIngestService = `-- name: InsertIngestService :one
 INSERT INTO services (name, gitlab_project_id, gitlab_project_path, created_via)
 VALUES ($1, $2, $3, 'ingest')
 ON CONFLICT DO NOTHING
-RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref
+RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 `
 
 type InsertIngestServiceParams struct {
@@ -151,6 +157,8 @@ func (q *Queries) InsertIngestService(ctx context.Context, arg InsertIngestServi
 		&i.Archived,
 		&i.CreatedAt,
 		&i.DefaultRef,
+		&i.SonarKeyDeclared,
+		&i.SonarKeyDeclaredAt,
 	)
 	return i, err
 }

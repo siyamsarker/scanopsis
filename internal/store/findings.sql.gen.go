@@ -410,7 +410,7 @@ const findingsGetService = `-- name: FindingsGetService :one
 
 
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at, default_ref
+       created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 FROM services
 WHERE id = $1
 `
@@ -433,6 +433,8 @@ func (q *Queries) FindingsGetService(ctx context.Context, id int64) (Service, er
 		&i.Archived,
 		&i.CreatedAt,
 		&i.DefaultRef,
+		&i.SonarKeyDeclared,
+		&i.SonarKeyDeclaredAt,
 	)
 	return i, err
 }

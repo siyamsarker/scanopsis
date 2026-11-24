@@ -7,7 +7,7 @@
 
 -- name: FindingsGetService :one
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at, default_ref
+       created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 FROM services
 WHERE id = $1;
 

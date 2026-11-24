@@ -63,15 +63,17 @@ type SecretFinding struct {
 }
 
 type Service struct {
-	ID                int64
-	Name              string
-	GitlabProjectID   pgtype.Int8
-	GitlabProjectPath string
-	SonarProjectKey   pgtype.Text
-	CreatedVia        string
-	Archived          bool
-	CreatedAt         pgtype.Timestamptz
-	DefaultRef        pgtype.Text
+	ID                 int64
+	Name               string
+	GitlabProjectID    pgtype.Int8
+	GitlabProjectPath  string
+	SonarProjectKey    pgtype.Text
+	CreatedVia         string
+	Archived           bool
+	CreatedAt          pgtype.Timestamptz
+	DefaultRef         pgtype.Text
+	SonarKeyDeclared   pgtype.Text
+	SonarKeyDeclaredAt pgtype.Timestamptz
 }
 
 type Session struct {

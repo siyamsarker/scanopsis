@@ -76,9 +76,13 @@ type Result struct {
 	gotProjectID bool
 }
 
-// Reasons for ignoring the sonar_key of an upload (IngestResult
+// Reasons why the sonar_key of an upload was not set (IngestResult
 // sonar_key_ignored).
 const (
+	// SonarKeyPending: no SonarQube analysis of the key that names the
+	// project arrived in the last 7 days yet. The declaration is kept and
+	// the key is set when one arrives.
+	SonarKeyPending = "sonar_key_pending"
 	// SonarKeyOtherService: another service, maybe an archived one, has the
 	// key.
 	SonarKeyOtherService = "key_linked_to_other_service"
@@ -371,62 +375,100 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 	return svc, false, false, fmt.Errorf("create service: %w", err)
 }
 
-// declareSonarKey gives the service the SonarQube key its upload declared,
-// in the transaction tx of the upload, when the service has no key and no
-// other service has it. set reports a new key; ignored says why the key was
-// not set. The same key again changes nothing. A set key is audited as a
-// change of the service by the upload's project; an ignored one is audited
-// too, so an administrator sees the conflict.
-func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, c *Claims, key string) (set bool, ignored *string, err error) {
-	current := svc.SonarProjectKey
-	if !current.Valid {
-		// A savepoint, so a key taken by another service leaves the upload's
-		// transaction usable.
-		sp, err := tx.Begin(ctx)
+// declareSonarKey handles the SonarQube key the upload declared, in the
+// transaction tx of the upload. set reports a new key; notSet says why the
+// key was not set (SonarKeyPending, SonarKeyOtherService or
+// SonarKeyServiceHasOther).
+//
+// The CI token proves which GitLab project uploads, not that the project
+// owns the key, so a key is set only when SonarQube confirms it: a delivery
+// of the key from the last 7 days names the same GitLab project in its
+// gitlabProjectId scanner property, which only a SonarQube user who may run
+// analyses of the key can cause. Without one the declaration is kept on the
+// service, pending, and the webhook sets the key when such a delivery
+// arrives; meanwhile no analysis of another key is linked to the service by
+// the scanner properties. A key is never set on a service that has a key,
+// nor taken from another service, archived or not. Every change is audited
+// as a change of the service by the upload's project; an ignored key is
+// audited too, so an administrator sees the conflict.
+func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, c *Claims, key string) (set bool, notSet *string, err error) {
+	q := store.New(tx)
+	reason := func(r string) *string { return &r }
+	ignore := func(r string, d map[string]any) (bool, *string, error) {
+		d["sonar_project_key"], d["reason"] = key, r
+		return false, reason(r), auditSonarKey(ctx, q, audit.ActionIngestSonarKeyIgnored, svc, c, d)
+	}
+	if svc.SonarProjectKey.Valid {
+		if svc.SonarProjectKey.String == key {
+			return false, nil, nil
+		}
+		return ignore(SonarKeyServiceHasOther, map[string]any{"current_sonar_project_key": svc.SonarProjectKey.String})
+	}
+	held, err := q.SonarKeyHeld(ctx, pgtype.Text{String: key, Valid: true})
+	if err != nil {
+		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+	}
+	if held {
+		return ignore(SonarKeyOtherService, map[string]any{})
+	}
+	changed, err := q.DeclareSonarKey(ctx, store.DeclareSonarKeyParams{
+		ID: svc.ID, Key: key, At: pgtype.Timestamptz{Time: time.Now(), Valid: true},
+	})
+	if err != nil {
+		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+	}
+	confirmed, err := q.SonarKeyConfirmed(ctx, store.SonarKeyConfirmedParams{
+		ProjectKey: key, ClaimedProjectID: pgtype.Int8{Int64: c.ProjectID, Valid: true},
+	})
+	if err != nil {
+		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+	}
+	if !confirmed {
+		if changed == 0 {
+			return false, reason(SonarKeyPending), nil // the same pending declaration again
+		}
+		return false, reason(SonarKeyPending), auditSonarKey(ctx, q, audit.ActionServiceUpdated, svc, c, map[string]any{
+			"fields": []string{"sonar_key_declared"}, "sonar_key_declared": key, "reason": audit.ReasonSonarKeyPending,
+		})
+	}
+	// A savepoint, so a key another service takes in the meantime leaves the
+	// upload's transaction usable.
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+	}
+	_, err = store.New(sp).PinSonarKey(ctx, store.PinSonarKeyParams{ID: svc.ID, SonarProjectKey: pgtype.Text{String: key, Valid: true}})
+	var pgErr *pgconn.PgError
+	switch {
+	case err == nil:
+		if err := sp.Commit(ctx); err != nil {
+			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		}
+		return true, nil, auditSonarKey(ctx, q, audit.ActionServiceUpdated, svc, c, map[string]any{
+			"fields": []string{"sonar_project_key"}, "sonar_project_key": key, "reason": audit.ReasonSonarKeyConfirmed,
+		})
+	case errors.As(err, &pgErr) && pgErr.Code == "23505": // unique_violation
+		if err := sp.Rollback(ctx); err != nil {
+			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		}
+		return ignore(SonarKeyOtherService, map[string]any{})
+	case errors.Is(err, pgx.ErrNoRows):
+		// A webhook linked the service in the meantime, or it was archived.
+		if err := sp.Rollback(ctx); err != nil {
+			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		}
+		current, err := q.SonarServiceKey(ctx, svc.ID)
 		if err != nil {
 			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
 		}
-		_, err = store.New(sp).PinSonarKey(ctx, store.PinSonarKeyParams{ID: svc.ID, SonarProjectKey: pgtype.Text{String: key, Valid: true}})
-		var pgErr *pgconn.PgError
-		switch {
-		case err == nil:
-			if err := sp.Commit(ctx); err != nil {
-				return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
-			}
-			return true, nil, auditSonarKey(ctx, store.New(tx), audit.ActionServiceUpdated, svc, c, map[string]any{
-				"fields": []string{"sonar_project_key"}, "sonar_project_key": key, "reason": "declared by the pipeline's upload",
-			})
-		case errors.As(err, &pgErr) && pgErr.Code == "23505": // unique_violation
-			if err := sp.Rollback(ctx); err != nil {
-				return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
-			}
-			reason := SonarKeyOtherService
-			return false, &reason, auditSonarKey(ctx, store.New(tx), audit.ActionIngestSonarKeyIgnored, svc, c, map[string]any{
-				"sonar_project_key": key, "reason": reason,
-			})
-		case errors.Is(err, pgx.ErrNoRows):
-			// A webhook linked the service in the meantime.
-			if err := sp.Rollback(ctx); err != nil {
-				return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
-			}
-			if current, err = store.New(tx).SonarServiceKey(ctx, svc.ID); err != nil {
-				return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
-			}
-			if !current.Valid {
-				return false, nil, nil // archived in the meantime: nothing to link
-			}
-		default:
-			_ = sp.Rollback(ctx)
-			return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
+		if !current.Valid || current.String == key {
+			return false, nil, nil
 		}
+		return ignore(SonarKeyServiceHasOther, map[string]any{"current_sonar_project_key": current.String})
+	default:
+		_ = sp.Rollback(ctx)
+		return false, nil, fmt.Errorf("declare SonarQube key: %w", err)
 	}
-	if current.String == key {
-		return false, nil, nil
-	}
-	reason := SonarKeyServiceHasOther
-	return false, &reason, auditSonarKey(ctx, store.New(tx), audit.ActionIngestSonarKeyIgnored, svc, c, map[string]any{
-		"sonar_project_key": key, "current_sonar_project_key": current.String, "reason": reason,
-	})
 }
 
 // auditSonarKey records an event about the declared SonarQube key of svc,

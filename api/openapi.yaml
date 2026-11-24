@@ -529,21 +529,31 @@ paths:
           in: query
           description: |
             The SonarQube project key of this project (the `sonar.projectKey` the scanner uses), so
-            that the service is linked to its SonarQube project without an administrator's step and
-            without the scanner properties. The upload
-            is authenticated by the project's own CI ID token, so it may set the key of its own
-            service only. When the service has no SonarQube key and no other service (archived
-            ones included) has this one, the key is set in the same transaction as the scan,
-            recorded as `service.updated` by `ci:<project path>` with the pipeline and job, the
-            analyses of the key that arrived in the last 7 days are linked, and the newest analysis
-            is read from SonarQube at once. When the service has this key already, nothing
-            changes. Otherwise nothing changes either: the upload is still stored and answered
-            201, `sonar_key_ignored` says why, and the event is recorded as
-            `ingest.sonar_key_ignored` and logged as a warning. An upload that gives this parameter
-            never links the service by the `sonar.analysis.gitlabProjectId` and
-            `sonar.analysis.pipelineId` scanner properties: the declared key wins. SonarQube's rule
-            for project keys: 1 to 400 characters, only ASCII letters, digits, `-`, `_`, `.` and
-            `:`, and at least one character that is not a digit.
+            that the service is linked to its SonarQube project without an administrator's step.
+            The CI ID token proves which GitLab project uploads, not that it owns the key, so
+            SonarQube must confirm it: the key is set only when a SonarQube analysis of the key that
+            names this GitLab project in `sonar.analysis.gitlabProjectId` was delivered by the
+            webhook in the last 7 days, which only a SonarQube user who may run analyses of the
+            project can cause. When the service has no SonarQube key, no other service (archived
+            ones included) has this one and such an analysis arrived, the key is set in the same
+            transaction as the scan, recorded as `service.updated` by `ci:<project path>` with the
+            pipeline and job, the analyses of the key that name this project and arrived in the
+            last 7 days are linked, the newest analysis is read from SonarQube at once, and
+            `sonar_key_ignored` is null. Without such an analysis the declaration is kept on the
+            service (recorded once as `service.updated`), `sonar_key_ignored` is
+            `sonar_key_pending`, and the key is set when the webhook delivers an analysis of the
+            key that names this project, provided the service still has no key and no other
+            service took the key; until then no analysis of another key is linked to the service
+            by the scanner properties. When the service has this key already, nothing changes and
+            `sonar_key_ignored` is null. When the service has another key
+            (`service_has_other_key`) or another service has this one
+            (`key_linked_to_other_service`), nothing changes, and the event is recorded as
+            `ingest.sonar_key_ignored` and logged as a warning. The scan is stored and answered 201
+            in every case. An upload that gives this parameter never links the service by the
+            `sonar.analysis.gitlabProjectId` and `sonar.analysis.pipelineId` scanner properties
+            alone: the declared key wins. SonarQube's rule for project keys: 1 to 400 characters,
+            only ASCII letters, digits, `-`, `_`, `.` and `:`, and at least one character that is
+            not a digit.
           schema: { type: string, minLength: 1, maxLength: 400, pattern: "^[A-Za-z0-9_.:-]*[A-Za-z_.:-][A-Za-z0-9_.:-]*$", example: "platform:payments-api" }
       requestBody:
         required: true
@@ -1472,8 +1482,8 @@ components:
         suppressed: { type: integer }
         sonar_key_ignored:
           type: [string, "null"]
-          enum: [key_linked_to_other_service, service_has_other_key, null]
-          description: "Why the sonar_key of the upload was not set on the service: key_linked_to_other_service (another service, maybe an archived one, has the key) or service_has_other_key (the service has a different key, which is kept). null when the key was set, was the service's key already, or sonar_key was not given. The scan is stored either way."
+          enum: [sonar_key_pending, key_linked_to_other_service, service_has_other_key, null]
+          description: "Why the sonar_key of the upload was not set on the service by this upload: sonar_key_pending (no SonarQube analysis of the key that names this GitLab project arrived in the last 7 days; the declaration is kept and the key is set when one arrives), key_linked_to_other_service (another service, maybe an archived one, has the key) or service_has_other_key (the service has a different key, which is kept). null when the key was set, was the service's key already, or sonar_key was not given. The scan is stored either way."
     Service:
       type: object
       required: [id, name, gitlab_project_id, gitlab_project_path, sonar_project_key, created_via, archived, created_at, default_ref]

@@ -2,7 +2,29 @@
 -- SPDX-License-Identifier: Apache-2.0
 
 -- name: SonarServiceByGitlabProject :one
-SELECT id, sonar_project_key FROM services WHERE gitlab_project_id = $1 AND NOT archived;
+SELECT id, sonar_project_key, sonar_key_declared FROM services WHERE gitlab_project_id = $1 AND NOT archived;
+
+-- SonarKeyHeld reports whether any service, archived or not, has a
+-- SonarQube key.
+-- name: SonarKeyHeld :one
+SELECT EXISTS (SELECT 1 FROM services WHERE sonar_project_key = $1) AS held;
+
+-- DeclareSonarKey records the SonarQube key a service's pipeline declared.
+-- It affects no row when that key is already the declared one.
+-- name: DeclareSonarKey :execrows
+UPDATE services SET sonar_key_declared = @key::text, sonar_key_declared_at = @at::timestamptz
+WHERE id = @id AND sonar_key_declared IS DISTINCT FROM @key::text;
+
+-- SonarKeyConfirmed reports whether SonarQube delivered, in the last 7 days
+-- (the window of the waiting deliveries), an analysis of a key that names a
+-- GitLab project in its gitlabProjectId scanner property. Only a SonarQube
+-- user with the Execute Analysis permission on the project can cause one.
+-- name: SonarKeyConfirmed :one
+SELECT EXISTS (
+    SELECT 1 FROM sonar_deliveries
+    WHERE project_key = @project_key AND claimed_project_id = @claimed_project_id
+      AND received_at >= now() - interval '7 days'
+) AS confirmed;
 
 -- name: SonarServiceByKey :one
 SELECT id FROM services WHERE sonar_project_key = $1 AND NOT archived;
@@ -112,13 +134,15 @@ WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
   AND project_key = @project_key;
 
 -- LinkSonarDeliveriesOfKey marks the unlinked deliveries of a SonarQube
--- project since a time linked to the service that now has its key, and
--- returns when each arrived, the pipeline it named and its analysedAt.
+-- project since a time linked to the service that now has its key, but only
+-- those that name the service's own GitLab project, and returns when each
+-- arrived, the pipeline it named and its analysedAt.
 -- name: LinkSonarDeliveriesOfKey :many
 UPDATE sonar_deliveries
 SET outcome = 'linked', service_id = @service_id, detail = @detail::text
 WHERE outcome = 'unlinked' AND received_at >= @since::timestamptz
   AND project_key = @project_key
+  AND claimed_project_id = (SELECT gitlab_project_id FROM services WHERE id = @service_id)
 RETURNING received_at, claimed_pipeline_id, analysed_at;
 
 -- ExplainWaitingSonarDeliveries replaces the detail of the waiting deliveries

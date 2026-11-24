@@ -15,7 +15,7 @@ const createService = `-- name: CreateService :one
 INSERT INTO services (name, gitlab_project_path, sonar_project_key, created_via)
 VALUES ($1, $2, $3, 'manual')
 RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-          created_via, archived, created_at, default_ref
+          created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 `
 
 type CreateServiceParams struct {
@@ -37,6 +37,8 @@ func (q *Queries) CreateService(ctx context.Context, arg CreateServiceParams) (S
 		&i.Archived,
 		&i.CreatedAt,
 		&i.DefaultRef,
+		&i.SonarKeyDeclared,
+		&i.SonarKeyDeclaredAt,
 	)
 	return i, err
 }
@@ -54,7 +56,7 @@ func (q *Queries) DeleteService(ctx context.Context, id int64) (string, error) {
 
 const getService = `-- name: GetService :one
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at, default_ref
+       created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 FROM services WHERE id = $1
 `
 
@@ -71,6 +73,8 @@ func (q *Queries) GetService(ctx context.Context, id int64) (Service, error) {
 		&i.Archived,
 		&i.CreatedAt,
 		&i.DefaultRef,
+		&i.SonarKeyDeclared,
+		&i.SonarKeyDeclaredAt,
 	)
 	return i, err
 }
@@ -78,7 +82,7 @@ func (q *Queries) GetService(ctx context.Context, id int64) (Service, error) {
 const listServices = `-- name: ListServices :many
 
 SELECT id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
-       created_via, archived, created_at, default_ref
+       created_via, archived, created_at, default_ref, sonar_key_declared, sonar_key_declared_at
 FROM services
 WHERE id > $1 AND archived = $2
   AND ($3::text = '' OR strpos(lower(name), lower($3)) > 0
@@ -120,6 +124,8 @@ func (q *Queries) ListServices(ctx context.Context, arg ListServicesParams) ([]S
 			&i.Archived,
 			&i.CreatedAt,
 			&i.DefaultRef,
+			&i.SonarKeyDeclared,
+			&i.SonarKeyDeclaredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -259,7 +265,7 @@ UPDATE services SET
     default_ref = CASE WHEN $5::boolean THEN $6 ELSE services.default_ref END
 FROM (SELECT p.id, p.default_ref FROM services p WHERE p.id = $7 FOR UPDATE) old
 WHERE services.id = old.id
-RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, services.default_ref, old.default_ref AS previous_default_ref
+RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, services.default_ref, services.sonar_key_declared, services.sonar_key_declared_at, old.default_ref AS previous_default_ref
 `
 
 type UpdateServiceParams struct {
@@ -300,6 +306,8 @@ func (q *Queries) UpdateService(ctx context.Context, arg UpdateServiceParams) (U
 		&i.Service.Archived,
 		&i.Service.CreatedAt,
 		&i.Service.DefaultRef,
+		&i.Service.SonarKeyDeclared,
+		&i.Service.SonarKeyDeclaredAt,
 		&i.PreviousDefaultRef,
 	)
 	return i, err
