@@ -181,7 +181,7 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 			return fmt.Errorf("insert scan: %w", err)
 		}
 
-		cp := &copier{ctx: ctx, tx: tx, scanID: res.ScanID}
+		cp := &copier{ctx: ctx, tx: tx, scanID: res.ScanID, kind: in.kind, name: rep.ArtifactName, key: in.key}
 		if err := in.findings(cp); err != nil {
 			return fmt.Errorf("insert findings: %w", err)
 		}
@@ -202,15 +202,18 @@ const copyBatch = 2048
 // that only one batch is held in memory. All batches belong to the
 // transaction of the upload, so a failure anywhere stores nothing.
 type copier struct {
-	ctx     context.Context
-	tx      pgx.Tx
-	scanID  int64
-	vulns   [][]any
-	secrets [][]any
+	ctx    context.Context
+	tx     pgx.Tx
+	scanID int64
+	// kind, name and key say how vulnerability targets are stored (see
+	// vulnTarget).
+	kind, name, key string
+	vulns           [][]any
+	secrets         [][]any
 }
 
 func (c *copier) vuln(v *Vuln) error {
-	c.vulns = append(c.vulns, []any{c.scanID, v.Target, v.Class, v.PkgType, v.PkgName, v.PkgPath, v.InstalledVersion,
+	c.vulns = append(c.vulns, []any{c.scanID, vulnTarget(c.kind, c.name, c.key, v.Target), v.Class, v.PkgType, v.PkgName, v.PkgPath, v.InstalledVersion,
 		v.FixedVersion, v.VulnID, v.Severity, v.Status, v.Title, v.PrimaryURL, v.Suppressed, v.Suppression})
 	if len(c.vulns) >= copyBatch {
 		return c.flushVulns()

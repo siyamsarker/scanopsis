@@ -90,3 +90,46 @@ func TestArtifactKeyOverride(t *testing.T) {
 		}
 	}
 }
+
+// targetCase is the target a vulnerability of a scan is stored with. The same
+// cases are run against migration 00011 (key_integration_test.go).
+type targetCase struct {
+	kind, name, key, target, want string
+}
+
+var targetCases = []targetCase{
+	// Trivy names the OS packages of an image "<artifact name> (<os> <version>)".
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "web-frontend-stage:3 (alpine 3.20.3)", "web-frontend-stage (alpine 3.20.3)"},
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "web-frontend-stage:3", "web-frontend-stage"},
+	{KindImage, "app@sha256:0d2b1e8f", "app", "app@sha256:0d2b1e8f (debian 12.8)", "app (debian 12.8)"},
+	{KindImage, "registry:5000/team/app:1", "registry:5000/team/app", "registry:5000/team/app:1 (ubuntu 22.04)", "registry:5000/team/app (ubuntu 22.04)"},
+	{KindImage, "ünïcode/äpp:1", "ünïcode/äpp", "ünïcode/äpp:1 (alpine 3.20.3)", "ünïcode/äpp (alpine 3.20.3)"},
+	// An artifact named by the upload.
+	{KindImage, "web-frontend-stage:4", "web-frontend-stage-amd64", "web-frontend-stage:4 (alpine 3.20.3)", "web-frontend-stage-amd64 (alpine 3.20.3)"},
+	// Anything else is kept.
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "app/package-lock.json", "app/package-lock.json"},
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "Python", "Python"},
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "web-frontend-stage:30 (alpine 3.20.3)", "web-frontend-stage:30 (alpine 3.20.3)"},
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "web-frontend-stage:3(alpine 3.20.3)", "web-frontend-stage:3(alpine 3.20.3)"},
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "Web-frontend-stage:3 (alpine 3.20.3)", "Web-frontend-stage:3 (alpine 3.20.3)"},
+	{KindImage, "web-frontend-stage:3", "web-frontend-stage", "web-frontend-stage (alpine 3.20.3)", "web-frontend-stage (alpine 3.20.3)"},
+	{KindImage, "registry:5000/team/tool", "registry:5000/team/tool", "registry:5000/team/tool (debian 12.8)", "registry:5000/team/tool (debian 12.8)"},
+	{KindImage, "", "", " (debian 12.8)", " (debian 12.8)"},
+	{KindImage, "", "", "", ""},
+	{KindSecretFS, "/builds/x/0/demo/web-frontend", ".", "/builds/x/0/demo/web-frontend (debian 12.8)", "/builds/x/0/demo/web-frontend (debian 12.8)"},
+}
+
+func TestVulnTarget(t *testing.T) {
+	for _, tc := range targetCases {
+		if got := vulnTarget(tc.kind, tc.name, tc.key, tc.target); got != tc.want {
+			t.Errorf("vulnTarget(%q, %q, %q, %q) = %q, want %q", tc.kind, tc.name, tc.key, tc.target, got, tc.want)
+		}
+	}
+	// A longer name given by the upload keeps the target within its limit.
+	long := strings.Repeat("ü", 200)
+	target := "app:1 (" + strings.Repeat("x", maxFieldLen-8) + ")"
+	got := vulnTarget(KindImage, "app:1", long, target)
+	if len(got) > maxFieldLen || !strings.HasPrefix(got, long+" (xxx") {
+		t.Errorf("long target: %d bytes, %.20q", len(got), got)
+	}
+}

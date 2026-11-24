@@ -111,3 +111,19 @@ func indexFold(s, sub string) int {
 	}
 	return -1
 }
+
+// vulnTarget returns the target a vulnerability of a scan is stored with.
+// Trivy names the OS packages of an image after the image, tag included
+// ("app:3 (alpine 3.20.3)"), and a finding is the same from one scan to the
+// next only if its target is, so in an image scan a target that is the
+// artifact name, alone or followed by a space, is stored with the name
+// replaced by the artifact key ("app (alpine 3.20.3)"). Other targets (the
+// files of language packages) are kept. Migration 00011 renames the targets
+// of older scans by the same rule.
+func vulnTarget(kind, name, key, target string) string {
+	if kind != KindImage || name == "" || key == name || !strings.HasPrefix(target, name) ||
+		len(target) > len(name) && target[len(name)] != ' ' {
+		return target
+	}
+	return clip(key+target[len(name):], maxFieldLen)
+}

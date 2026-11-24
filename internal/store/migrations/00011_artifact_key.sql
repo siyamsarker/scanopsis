@@ -22,6 +22,8 @@
 --     matched in any letter case, as GitLab treats paths. Any other name is
 --     its own key.
 -- A name for which these rules leave nothing is its own key.
+-- The OS packages of an image scan, which Trivy names after the image and its
+-- tag, are then stored under the key as well (see the second batch below).
 --
 -- scans can hold hundreds of thousands of rows, so the migration runs
 -- outside a transaction, like 00007: the column is added without a default
@@ -72,6 +74,52 @@ BEGIN
         WHERE sv.id = s.service_id
           AND s.id > done AND s.id <= done + batch
           AND s.artifact_key IS NULL;
+        done := done + batch;
+        IF own_transaction THEN
+            COMMIT;
+        END IF;
+    END LOOP;
+END $$;
+-- +goose StatementEnd
+
+-- Trivy names the OS packages of an image after the image, tag included
+-- ("app:3 (alpine 3.20.3)"), and a finding is the same from one scan to the
+-- next only if its target is. In an image scan, a target that is the
+-- artifact name, alone or followed by a space, gets the artifact key in
+-- place of the name ("app (alpine 3.20.3)"), as uploads now store it. Other
+-- targets (the files of language packages) are kept. The table can hold
+-- millions of findings, so they are walked in batches of 20000 by id, each
+-- committed on its own like the batches above. The findings of a scan are
+-- stored together, so a batch belongs to a narrow range of scans, and only
+-- that range of scans is read for it. A renamed target no longer starts with
+-- the name, so running this again changes nothing it changed before.
+-- +goose StatementBegin
+DO $$
+DECLARE
+    own_transaction constant boolean := pg_current_xact_id_if_assigned() IS NULL;
+    batch constant bigint := 20000;
+    done bigint;
+    first_scan bigint;
+    last_scan bigint;
+BEGIN
+    SELECT min(id) - 1 INTO done FROM vulnerabilities;
+    WHILE done < (SELECT max(id) FROM vulnerabilities) LOOP
+        -- OFFSET 0 keeps the planner from finding the bounds by walking
+        -- vulnerabilities_scan_idx from either end, which reads most of the
+        -- index for a batch late in the table.
+        SELECT min(scan_id), max(scan_id) INTO first_scan, last_scan
+        FROM (SELECT scan_id FROM vulnerabilities WHERE id > done AND id <= done + batch OFFSET 0) b;
+        -- Planned for each batch with its own bounds.
+        EXECUTE $q$
+            UPDATE vulnerabilities v
+            SET target = s.artifact_key || substr(v.target, length(s.artifact_name) + 1)
+            FROM scans s
+            WHERE s.id = v.scan_id
+              AND v.id > $1 AND v.id <= $2
+              AND s.id BETWEEN $3 AND $4
+              AND s.kind = 'image' AND s.artifact_name <> '' AND s.artifact_key <> s.artifact_name
+              AND (v.target = s.artifact_name OR starts_with(v.target, s.artifact_name || ' '))
+        $q$ USING done, done + batch, first_scan, last_scan;
         done := done + batch;
         IF own_transaction THEN
             COMMIT;
@@ -135,7 +183,8 @@ DROP INDEX CONCURRENTLY IF EXISTS scans_protected_idx;
 
 -- +goose Down
 -- Recreates the indexes of the earlier schema; dropping the column drops
--- the indexes on it.
+-- the indexes on it. Renamed vulnerability targets keep their new name:
+-- the earlier schema reads them like any other target.
 CREATE INDEX CONCURRENTLY IF NOT EXISTS scans_current_cover_idx
     ON scans (service_id, ref, artifact_name, kind, scanned_at DESC, id DESC)
     INCLUDE (count_critical, count_high, count_medium, count_low, count_unknown, count_fixable, count_secrets);

@@ -115,16 +115,31 @@ func (e *iEnv) count(table string) int {
 }
 
 // expectedRows walks the report JSON without Parse and lists what must be
-// stored: one line per finding.
-func expectedRows(t testing.TB, raw []byte) (vulns, secrets []string) {
+// stored: one line per finding. In an image scan, a vulnerability target
+// named after the image is stored under the artifact key.
+func expectedRows(t testing.TB, raw []byte, kind string) (vulns, secrets []string) {
 	t.Helper()
-	var doc struct{ Results []map[string]any }
+	var doc struct {
+		ArtifactName string
+		Results      []map[string]any
+	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
+	key, err := ArtifactKey(kind, doc.ArtifactName, "platform/payments-api", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	s := func(m map[string]any, k string) string { v, _ := m[k].(string); return v }
+	target := func(res map[string]any) string {
+		tg, name := s(res, "Target"), doc.ArtifactName
+		if kind == KindImage && name != "" && (tg == name || strings.HasPrefix(tg, name+" ")) {
+			return key + tg[len(name):]
+		}
+		return tg
+	}
 	vuln := func(res, f map[string]any, supp bool, why string) string {
-		return strings.Join([]string{s(res, "Target"), s(res, "Class"), s(res, "Type"), s(f, "PkgName"), s(f, "PkgPath"),
+		return strings.Join([]string{target(res), s(res, "Class"), s(res, "Type"), s(f, "PkgName"), s(f, "PkgPath"),
 			s(f, "InstalledVersion"), s(f, "FixedVersion"), s(f, "VulnerabilityID"), s(f, "Severity"), s(f, "Status"),
 			s(f, "Title"), s(f, "PrimaryURL"), fmt.Sprint(supp), why}, "|")
 	}
@@ -262,7 +277,7 @@ func TestIntegrationUploadMatchesFixture(t *testing.T) {
 				t.Error("stored report does not decompress to the upload")
 			}
 
-			wantV, wantS := expectedRows(t, body)
+			wantV, wantS := expectedRows(t, body, tc.kind)
 			gotV, gotS := e.storedRows(res.ScanID)
 			if strings.Join(gotV, "\n") != strings.Join(wantV, "\n") {
 				t.Errorf("vulnerability rows differ: %d stored, %d expected", len(gotV), len(wantV))

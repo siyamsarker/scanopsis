@@ -2443,7 +2443,7 @@ Type: object
 | `status` | string | yes |  |
 | `suppressed` | boolean | yes |  |
 | `suppression` | string | yes | Reason recorded by Trivy for a suppressed finding. |
-| `target` | string | yes |  |
+| `target` | string | yes | The Trivy target. The OS packages of an image, which Trivy names after the scanned image and tag, are named after the artifact instead (web-frontend-stage (alpine 3.20.3)), so the same finding has the same target in every tag. |
 | `title` | string | yes |  |
 | `vuln_id` | string | yes |  |
 

@@ -125,7 +125,7 @@ func TestEmbeddedMigrations(t *testing.T) {
 	if got := LatestVersion(); got != ms[len(ms)-1].version {
 		t.Errorf("LatestVersion() = %d, want %d", got, ms[len(ms)-1].version)
 	}
-	counts := map[int64]int{7: 11, 10: 2, 11: 13}
+	counts := map[int64]int{7: 11, 10: 2, 11: 14}
 	for v, want := range counts {
 		if got := len(ms[v-1].up); got != want {
 			t.Errorf("migration %s: %d statements, want %d", ms[v-1].name, got, want)

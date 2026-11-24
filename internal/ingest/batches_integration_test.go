@@ -42,7 +42,7 @@ func TestIntegrationStoresFindingsInBatches(t *testing.T) {
 
 	e := newIEnv(t, nil)
 	res := e.mustUpload(upload{body: body})
-	wantV, wantS := expectedRows(t, body)
+	wantV, wantS := expectedRows(t, body, KindImage)
 	gotV, gotS := e.storedRows(res.ScanID)
 	sort.Strings(gotV)
 	sort.Strings(gotS)

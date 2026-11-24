@@ -54,7 +54,72 @@ INSERT INTO scans (service_id, kind, artifact_name, gitlab_pipeline_id, gitlab_j
                    commit_sha, schema_version, scanned_at, count_high, raw_report)
 VALUES (1, 'secret-fs', '/builds/x/0/Demo/Web-Frontend/services/api', 14, 14, 'main', true, 'c14', 2,
         now() - interval '100 days' + 14 * interval '1 hour', 14, '\x1f8b');
+INSERT INTO vulnerabilities (scan_id, target, class, pkg_type, pkg_name, installed_version, fixed_version,
+                             vuln_id, severity, title, suppressed)
+SELECT s.id, f.target, 'os-pkgs', 'alpine', 'pkg', '1', '', 'CVE-2026-' || f.n, 'HIGH', 't', false
+FROM (VALUES
+    (1, 3, 'web-frontend-stage:4 (alpine 3.20.3)'),
+    (2, 3, 'web-frontend-stage:4'),
+    (3, 3, 'app/package-lock.json'),
+    (4, 3, 'web-frontend-stage:40 (alpine 3.20.3)'),
+    (5, 4, 'registry:5000/team/app:1 (ubuntu 22.04)'),
+    (6, 5, 'app@sha256:4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945 (debian 12.8)'),
+    (7, 6, 'registry:5000/team/tool (debian 12.8)'),
+    (8, 12, '/builds/x/0/demo/web-frontend-old/services/api (debian 12.8)')
+) AS f(n, job, target)
+JOIN scans s ON s.gitlab_job_id = f.job;
+SELECT setval(pg_get_serial_sequence('vulnerabilities', 'id'), 60000);
+INSERT INTO vulnerabilities (scan_id, target, class, pkg_type, pkg_name, installed_version, fixed_version,
+                             vuln_id, severity, title, suppressed)
+SELECT id, 'Registry.example.com/Team/Worker:1.2@sha256:0d2b1e8f (alpine 3.20.3)', 'os-pkgs', 'alpine', 'pkg', '1', '',
+       'CVE-2026-9', 'HIGH', 't', false
+FROM scans WHERE gitlab_job_id = 7;
 `
+
+// wantTargets is the target of each vulnerability of artifactKeyFixtures
+// after migration 00011, by vuln_id: the OS packages of an image scan named
+// after the image get its key in place of the name.
+var wantTargets = map[string]string{
+	"CVE-2026-1": "web-frontend-stage (alpine 3.20.3)",
+	"CVE-2026-2": "web-frontend-stage",
+	"CVE-2026-3": "app/package-lock.json",
+	"CVE-2026-4": "web-frontend-stage:40 (alpine 3.20.3)",
+	"CVE-2026-5": "registry:5000/team/app (ubuntu 22.04)",
+	"CVE-2026-6": "app (debian 12.8)",
+	"CVE-2026-7": "registry:5000/team/tool (debian 12.8)",
+	"CVE-2026-8": "/builds/x/0/demo/web-frontend-old/services/api (debian 12.8)",
+	"CVE-2026-9": "Registry.example.com/Team/Worker (alpine 3.20.3)",
+}
+
+// sameTargets checks the targets of the vulnerabilities of
+// artifactKeyFixtures, which span more than one batch of the rename.
+func sameTargets(t *testing.T, db store.DBTX) {
+	t.Helper()
+	rows, err := db.Query(context.Background(), `SELECT vuln_id, target FROM vulnerabilities`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type row struct{ ID, Target string }
+	list, err := pgx.CollectRows(rows, pgx.RowToStructByPos[row])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range list {
+		if want, ok := wantTargets[r.ID]; !ok || r.Target != want {
+			t.Errorf("%s: target %q, want %q", r.ID, r.Target, want)
+		}
+	}
+	if len(list) != len(wantTargets) {
+		t.Errorf("%d vulnerabilities, want %d", len(list), len(wantTargets))
+	}
+	var lo, hi int64
+	if err := db.QueryRow(context.Background(), `SELECT min(id), max(id) FROM vulnerabilities`).Scan(&lo, &hi); err != nil {
+		t.Fatal(err)
+	}
+	if hi-lo < 2*20000 {
+		t.Errorf("vulnerability ids %d to %d span less than two batches", lo, hi)
+	}
+}
 
 // wantArtifactKeys is the key migration 00011 gives each scan of
 // artifactKeyFixtures, by gitlab_job_id.
@@ -157,6 +222,7 @@ func TestMigrate00011Backfill(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 	sameKeys(t, artifactKeys(t, pool))
+	sameTargets(t, pool)
 
 	q := store.New(pool)
 	cur, err := q.CurrentScans(ctx, store.CurrentScansParams{ServiceID: 1, Ref: "main"})
@@ -236,6 +302,7 @@ func TestMigrate00011Backfill(t *testing.T) {
 	}
 	checkArtifactKeyIndexes(t, pool)
 	keysOfJobs(t, artifactKeys(t, pool), kept)
+	sameTargets(t, pool)
 
 	// A start that stopped part-way through the backfill: some scans have
 	// a key, the others none, and NOT NULL is not set yet. The next start
@@ -243,6 +310,9 @@ func TestMigrate00011Backfill(t *testing.T) {
 	for _, q := range []string{
 		`ALTER TABLE scans ALTER COLUMN artifact_key DROP NOT NULL`,
 		`UPDATE scans SET artifact_key = NULL WHERE gitlab_job_id IN (3, 7, 12, 14)`,
+		// ... and part-way through renaming the targets.
+		`UPDATE vulnerabilities SET target = 'web-frontend-stage:4 (alpine 3.20.3)' WHERE vuln_id = 'CVE-2026-1'`,
+		`UPDATE vulnerabilities SET target = 'Registry.example.com/Team/Worker:1.2@sha256:0d2b1e8f (alpine 3.20.3)' WHERE vuln_id = 'CVE-2026-9'`,
 		`DELETE FROM goose_db_version WHERE version_id = 11`,
 	} {
 		if _, err := pool.Exec(ctx, q); err != nil {
@@ -254,6 +324,7 @@ func TestMigrate00011Backfill(t *testing.T) {
 		t.Fatalf("migrate after an interrupted backfill: %v", err)
 	}
 	keysOfJobs(t, artifactKeys(t, pool), kept)
+	sameTargets(t, pool)
 	var notNull bool
 	if err := pool.QueryRow(ctx, `SELECT attnotnull FROM pg_attribute
 		WHERE attrelid = 'scans'::regclass AND attname = 'artifact_key'`).Scan(&notNull); err != nil || !notNull {
@@ -315,6 +386,7 @@ func TestReplay00011Backfill(t *testing.T) {
 		return store.RecordGooseVersions(ctx, tx, store.LatestVersion())
 	})
 	sameKeys(t, artifactKeys(t, pool))
+	sameTargets(t, pool)
 	checkArtifactKeyIndexes(t, pool)
 	gooseAppliesNothing(t, pool)
 }

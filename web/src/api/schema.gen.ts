@@ -1339,6 +1339,7 @@ export interface components {
             /** Format: int64 */
             scan_id: number;
             artifact_name: string;
+            /** @description The Trivy target. The OS packages of an image, which Trivy names after the scanned image and tag, are named after the artifact instead (web-frontend-stage (alpine 3.20.3)), so the same finding has the same target in every tag. */
             target: string;
             /** @example os-pkgs */
             class: string;
