@@ -242,6 +242,7 @@ for the same project, at least a minute after the last try, up to five times.
 |---|---|---|
 | "No services yet" | No upload was accepted yet. A service appears with its first accepted upload, or when an administrator adds it. | On **Integrations**, "Last upload" and the rejections show why. See [uploads from CI](#uploads-from-ci). |
 | "No services match" | A filter or search hides everything. | Clear it. |
+| A service you deleted is back | Its pipeline uploaded again. An upload that was in progress when you deleted the service creates it again too, and stores its scan; a pipeline never fails because of a delete. | [Archive](user-guide.md#what-admins-also-see) the service instead: an archived service refuses uploads. Or remove the upload step from the pipeline. |
 | "No scans yet" on a service | An administrator added the service, but no upload came. | Add the upload step to the pipeline. |
 | "No scans of main yet" | `main` is the dashboard branch and no upload came from it. Other branches are never shown instead. | Run the pipeline on that branch, or [choose another branch](operations.md#choose-the-dashboard-branch-of-a-service). |
 | "Stale" next to "Last scan" | The latest scan is older than 7 days. | Run the pipeline, or archive a retired service. |
