@@ -417,8 +417,11 @@ suppressed.
 
 ## Step 6. Compare the SonarQube numbers
 
-Scanopsis shows SonarQube's values for the whole project (**Overall Code**),
-not for new code. Compare with the **Overall Code** tab in SonarQube.
+The **Code quality** card of a service shows the ratings, the coverage and the
+duplication of the whole project, and the coverage of new code, each labelled
+**Overall** or **New code**. Compare the overall values with the **Overall
+Code** tab in SonarQube, and the coverage of new code with the **New Code**
+tab.
 
 For every project in your sample:
 
@@ -426,12 +429,15 @@ For every project in your sample:
    **Reliability**, **Security**, **Maintainability** and **Security Review**
    ratings (A to E), and **Coverage** and **Duplications** (percent, one
    decimal).
-2. In Scanopsis, open the service. The quality gate card shows the gate, the
-   four ratings, coverage and duplication.
+2. In Scanopsis, open the service. The **Code quality** card shows the gate
+   (**Passed** or **Failed**) with its conditions, the coverage of the
+   overall code and of new code, the duplication, and the four ratings under
+   **Ratings (overall code)**.
 3. Compare. Percentages have at most one decimal, as in SonarQube. A value
    SonarQube does not report must read "Not available", never `0%`.
-4. Check that both show the same analysis: **Last analysis** on the portfolio
-   card (or `analysed_at` in the API) must be SonarQube's last analysis time.
+4. Check that both show the same analysis: the time after "SonarQube
+   analysed" at the top of the service page (point at it for the exact time),
+   or `analysed_at` in the API, must be SonarQube's last analysis time.
    If SonarQube has a newer one, wait for the webhook or the next sync (every
    15 minutes by default) and look again.
 
