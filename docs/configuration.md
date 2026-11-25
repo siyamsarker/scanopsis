@@ -370,6 +370,11 @@ internal certificate authority:
          - ./ca.pem:/etc/scanopsis/ca.pem:ro
    ```
 
+   If the file already has a `scanopsis:` entry, add the line to its
+   `volumes:` list instead; a second `scanopsis:` key is an error. The
+   [deployment guide](deployment.md#trust-an-internal-certificate-authority)
+   shows a combined example.
+
 3. Set `SCANOPSIS_CA_FILE=/etc/scanopsis/ca.pem` in `.env` and run
    `docker compose up -d`.
 
@@ -392,11 +397,17 @@ address. Then tell Scanopsis which proxy to believe:
    Compose network connects from its own address, so give it a fixed one, as
    the [deployment guide](deployment.md#reverse-proxy-and-tls) does. A proxy
    on the host connects through the port that Compose publishes, and
-   Scanopsis sees the gateway of the Compose network. Print it:
+   Scanopsis sees the gateway of the Compose network. Print it (one address
+   per line; with IPv6 on the network there are two, use the IPv4 one):
 
    ```sh
-   docker network inspect scanopsis_frontend --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+   docker network inspect scanopsis_frontend --format '{{range .IPAM.Config}}{{println .Gateway}}{{end}}'
    ```
+
+   Trust the gateway only while `SCANOPSIS_BIND` is `127.0.0.1`, the default.
+   Then only programs on the host reach the port. With another address,
+   clients on other machines can reach the port too, and those that arrive
+   through the gateway could choose the address Scanopsis logs and limits.
 
    To check it, send a request from the host and read the log:
 
