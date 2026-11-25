@@ -242,8 +242,10 @@ func TestMemBudget(t *testing.T) {
 	behind := make(chan struct{})
 	go func() {
 		rel, _ := b.acquire(ctx, 10*u) // fits beside 90 but waits behind the 80
-		close(behind)
+		// Released before the signal, so the check of the memory in use
+		// below cannot see it still held.
 		rel()
+		close(behind)
 	}()
 	select {
 	case <-behind:
