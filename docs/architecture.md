@@ -107,7 +107,7 @@ sequenceDiagram
     S->>S: Check allowed namespaces, protected refs and the project rate
     S->>S: Wait for memory, then read and parse the report
     S->>S: Wait for a database slot
-    S->>D: One transaction: find or create the service, replace the scan of the same job, insert scan and findings
+    S->>D: One transaction: find or create the service and lock it, replace the scan of the same job, insert scan and findings
     S-->>J: 201 with the stored counts
     Note over S,D: A refused upload gets an error code and is written to the audit log
 ```
@@ -116,7 +116,11 @@ The project, pipeline, job, branch and commit come from the checked token, never
 from the report. Uploading the same job, reported artifact name and kind again
 replaces the earlier scan, so a retried job never duplicates data. Uploads of one GitLab
 project take a database advisory lock, one at a time, so two first uploads
-create one service, not two.
+create one service, not two. Each upload also locks the row of its service
+before it writes the scan, so an administrator's archive or delete of the
+service waits until the upload has finished. A service archived before that
+lock refuses the upload (`409 service_archived`); a service deleted before it
+is created again, as for a first upload, and the scan is stored.
 
 Uploads are admitted by the memory they need, which grows with their size, so
 many small reports run at once and large ones fewer at a time. At most a quarter
@@ -194,7 +198,7 @@ server starts. The tables:
 | `recovery_codes` | The stored form of each recovery code: an HMAC keyed from the secret key, or the SHA-256 of a code issued by version 0.1.0. Also its version and when it was used. |
 | `settings` | The runtime settings. Plain values are JSON, secret values are encrypted. Each row records whether the value came from the environment or the Settings page, who changed it and when. |
 | `audit_log` | Security events: actor, action and a JSON detail. |
-| `services` | One service per GitLab project: name, GitLab project ID and path, the optional SonarQube project key, the key its pipeline declared in an upload while it waits for SonarQube to confirm it, how it was created (`ingest` or `manual`), and whether it is archived. |
+| `services` | One service per GitLab project: name, GitLab project ID and path, the optional SonarQube project key, the key its pipeline declared in an upload while it waits for SonarQube to confirm it, the dashboard branch an administrator chose (`default_ref`), how it was created (`ingest` or `manual`), and whether it is archived. |
 | `scans` | One Trivy report for one artifact in one CI job: pipeline, job, ref, whether the ref was protected, commit, the time Trivy ran (`scanned_at`), the time Scanopsis received it, the counts per severity and of fixable, secret and suppressed findings, and the report as uploaded, gzip-compressed (`raw_report`). The artifact is stored twice: `artifact_name` as the report named it (`web-frontend:4`) and `artifact_key`, the identity (see [Artifact identity](#artifact-identity)). A job, reported artifact name and kind exist once per service. |
 | `vulnerabilities` | The vulnerabilities of a scan: target, class, package, installed and fixed version, ID, severity, status, title, link, and whether and why Trivy suppressed it. |
 | `secret_findings` | The secret findings of a scan: target, rule, category, severity and line numbers. The matched text is never stored. |
