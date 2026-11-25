@@ -13,9 +13,10 @@
 # image.
 #
 # Data: the database lives in ./data/postgres and the backups in ./backups,
-# plain folders next to this file. No Docker cleanup command (`docker compose down -v`,
-# `docker volume prune`, `docker system prune`) deletes a folder.
-# Create both before the first start (see docs/getting-started.md).
+# plain folders next to this file. No Docker cleanup command
+# (`docker compose down -v`, `docker volume prune`, `docker system prune`)
+# deletes a folder. Create both before the first start (see
+# docs/getting-started.md).
 # ./data/postgres must belong to user 70 (the user the PostgreSQL image runs
 # as) and ./backups to user 65532 (the user Scanopsis runs as).
 #
@@ -51,8 +52,9 @@ services:
     volumes:
       # A host folder, not a named volume, so that no Docker cleanup command
       # deletes the data. Create it with mode 700 for user 70, the user the
-      # PostgreSQL image runs as (only it may open the database files). PostgreSQL 18 keeps its
-      # files in a versioned subfolder (18/docker) below this path.
+      # PostgreSQL image runs as (only it may open the database files).
+      # PostgreSQL 18 keeps its files in a versioned subfolder (18/docker)
+      # below this path.
       - ./data/postgres:/var/lib/postgresql
     # Only Scanopsis can reach the database; it has no route to other networks.
     networks:
@@ -143,7 +145,7 @@ secrets:
     file: ./secrets/postgres_password
 
 networks:
-  # Published port and outgoing connections (GitLab).
+  # The published port and the outgoing connections to GitLab and SonarQube.
   frontend:
   backend:
     internal: true
