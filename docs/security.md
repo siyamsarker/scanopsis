@@ -312,7 +312,7 @@ Go through this when you deploy, and again after each upgrade.
     paths and, before setup, the setup token.
 20. **Keep the resource and log limits** of `compose.yaml` (memory with
     `GOMEMLIMIT`, `pids_limit`, log rotation), and set the same with
-    `docker run` or Kubernetes. See [host settings](deployment.md#host-settings).
+    `docker run` or Podman. See [host settings](deployment.md#host-settings).
 21. **Alert on the database disk at 70% and 85%.** A full disk stops the
     database. See [watch the database disk](operations.md#watch-the-database-disk).
 22. **Stay current.** Build the newest version branch, see

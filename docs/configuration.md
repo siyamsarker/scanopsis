@@ -146,7 +146,7 @@ The [GitLab CI guide](integrations/gitlab-ci.md) shows the pipeline side.
 | `sonar.url` | `SCANOPSIS_SONAR_URL` | empty | Base URL of your SonarQube server. Same URL rules as the GitLab URL. Prefer `https`: the token travels with every request. |
 | `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | not set | Token of a SonarQube user with Browse permission on the projects. Stored encrypted and never shown again. |
 | `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | not set | Secret of the SonarQube webhook. Deliveries without a valid signature are rejected. Stored encrypted and never shown again. |
-| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | `15m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. |
+| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | `15m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. A shorter value from the environment is saved at start, the sync still runs at most once a minute, and the Settings page refuses every save until you set `1m` or more. |
 
 The [SonarQube guide](integrations/sonarqube.md) shows how to connect it.
 
@@ -201,7 +201,8 @@ message next to the field:
 
 At start, Scanopsis checks the environment values against the GitLab,
 SonarQube, session, retention and local sign-in rules, and refuses to start
-when one is broken. Until GitLab sign-in is fully set up, the sign-in page
+when one is broken. The one exception is the minimum sync interval, see the
+SonarQube table above. Until GitLab sign-in is fully set up, the sign-in page
 does not offer it and Scanopsis does not contact GitLab for sign-in.
 
 > **Do not lock yourself out.** If the settings at start would leave no way to
@@ -369,6 +370,11 @@ internal certificate authority:
          - ./ca.pem:/etc/scanopsis/ca.pem:ro
    ```
 
+   If the file already has a `scanopsis:` entry, add the line to its
+   `volumes:` list instead; a second `scanopsis:` key is an error. The
+   [deployment guide](deployment.md#trust-an-internal-certificate-authority)
+   shows a combined example.
+
 3. Set `SCANOPSIS_CA_FILE=/etc/scanopsis/ca.pem` in `.env` and run
    `docker compose up -d`.
 
@@ -387,23 +393,37 @@ In production, a reverse proxy in front of Scanopsis terminates TLS. The
 pass the `Host` header unchanged and set `X-Forwarded-For` to the client's
 address. Then tell Scanopsis which proxy to believe:
 
-1. Find the address the proxy connects from. With the port that Compose
-   publishes, that is the gateway of the Compose network. Send a request from
-   the Docker host and read the log:
+1. Find the address the proxy connects from. A proxy in a container on the
+   Compose network connects from its own address, so give it a fixed one, as
+   the [deployment guide](deployment.md#reverse-proxy-and-tls) does. A proxy
+   on the host connects through the port that Compose publishes, and
+   Scanopsis sees the gateway of the Compose network. Print it (one address
+   per line; with IPv6 on the network there are two, use the IPv4 one):
+
+   ```sh
+   docker network inspect scanopsis_frontend --format '{{range .IPAM.Config}}{{println .Gateway}}{{end}}'
+   ```
+
+   Trust the gateway only while `SCANOPSIS_BIND` is `127.0.0.1`, the default.
+   Then only programs on the host reach the port. With another address,
+   clients on other machines can reach the port too, and those that arrive
+   through the gateway could choose the address Scanopsis logs and limits.
+
+   To check it, send a request from the host and read the log:
 
    ```sh
    curl -s http://127.0.0.1:8080/healthz
-   docker compose logs scanopsis | tail -1
+   docker compose logs scanopsis | grep '"path":"/healthz"' | grep -v '"127.0.0.1"' | tail -1
    ```
 
-   Read `client_ip` in the last line, for example `"client_ip":"172.18.0.1"`.
-   Ignore lines with `"client_ip":"127.0.0.1"`: they come from the
-   container's own health check.
+   `client_ip` in that line is the same address, for example
+   `"client_ip":"172.20.0.1"`. Lines with `"client_ip":"127.0.0.1"` come from
+   the container's own health check.
 
 2. Set it in `.env` and apply it:
 
    ```text
-   SCANOPSIS_TRUSTED_PROXIES=172.18.0.1
+   SCANOPSIS_TRUSTED_PROXIES=172.20.0.1
    ```
 
    ```sh
@@ -416,10 +436,10 @@ address. Then tell Scanopsis which proxy to believe:
 
    ```sh
    curl -s -H 'X-Forwarded-For: 203.0.113.9' http://127.0.0.1:8080/healthz
-   docker compose logs scanopsis | tail -1
+   docker compose logs scanopsis | grep '"path":"/healthz"' | grep -v '"127.0.0.1"' | tail -1
    ```
 
-   The last log line shows `"client_ip":"203.0.113.9"`. If it still shows the
+   The line shows `"client_ip":"203.0.113.9"`. If it still shows the
    gateway, the address in `SCANOPSIS_TRUSTED_PROXIES` is wrong, or you did
    not run `docker compose up -d` after editing `.env`.
 

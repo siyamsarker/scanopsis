@@ -9,8 +9,9 @@ This guide takes you from nothing to a running Scanopsis with one administrator 
 ## What you need
 
 - A Linux or macOS host with Docker Engine and the Compose plugin
-  (`docker compose`). These steps were run with Docker 29.9.3 and Compose
-  5.7.0.
+  (`docker compose`). These steps were run on macOS with Docker Desktop
+  (Docker 29.9.3, Compose 5.7.1); where Linux needs another command, the
+  step shows both.
 - Git, GNU Make and OpenSSL on the host where you build the image.
 - An authenticator app on your phone that supports time-based one-time
   passwords (TOTP), for example Aegis, 2FAS or Google Authenticator.
@@ -25,41 +26,55 @@ if you use it, your SonarQube.
 ## Step 1. Build the image
 
 Scanopsis publishes no container image, so you build one from a version
-branch. This guide uses **0.4.2**, the newest version. Always deploy a
+branch. This guide uses **0.4.3**, the newest version. Always deploy a
 version branch, never `main`: `main` is development code.
 
 1. Clone the version branch:
 
    ```sh
-   git clone --branch release/0.4.2 --depth 1 https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/0.4.3 --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    ```
 
 2. Build the image with a tag that names the version:
 
    ```sh
-   make image IMAGE=scanopsis:v0.4.2
+   make image IMAGE=scanopsis:v0.4.3
    ```
 
-   The first build downloads dependencies and takes a few minutes. The last
-   lines look like this:
+   The first build downloads dependencies and takes a few minutes. It ends
+   with lines like these (the step number and the times differ from build to
+   build):
 
    ```text
-   #24 unpacking to docker.io/library/scanopsis:v0.4.2 0.0s done
-   #24 DONE 0.3s
+   #22 naming to docker.io/library/scanopsis:v0.4.3 done
+   #22 unpacking to docker.io/library/scanopsis:v0.4.3 0.0s done
+   #22 DONE 0.4s
    ```
+
+   Docker Desktop adds a last line that starts with `View build details:`.
+   Docker Engine on Linux with the classic image store prints no
+   `unpacking` line.
 
 3. Check that the image exists:
 
    ```sh
-   docker image ls scanopsis:v0.4.2
+   docker image ls scanopsis:v0.4.3
    ```
 
-   You see one line with the repository `scanopsis` and the tag `v0.4.2`.
+   You see the image, for example:
+
+   ```text
+   IMAGE              ID             DISK USAGE   CONTENT SIZE   EXTRA
+   scanopsis:v0.4.3   75fce01a01fb       28.6MB         6.84MB
+   ```
+
+   Docker 28 and older print other columns: `REPOSITORY`, `TAG`,
+   `IMAGE ID`, `CREATED` and `SIZE`.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, the version
 string has unusual characters. Pass a plain one, for example
-`make image IMAGE=scanopsis:v0.4.2 VERSION=v0.4.2`. If it fails while
+`make image IMAGE=scanopsis:v0.4.3 VERSION=v0.4.3`. If it fails while
 downloading, check the network access and proxy settings of Docker on the
 host.
 
@@ -96,12 +111,13 @@ Check:
 ls -l secrets
 ```
 
-You see three files with a size above zero:
+You see three files with these sizes (owner, group and dates differ):
 
 ```text
--rw-r--r--  1 you  staff  103 Nov 22 11:11 database_url
--rw-r--r--  1 you  staff   49 Nov 22 11:11 postgres_password
--rw-r--r--  1 you  staff   45 Nov 22 11:11 secret_key
+total 24
+-rw-r--r--  1 you  staff  103 Nov 25 10:02 database_url
+-rw-r--r--  1 you  staff   49 Nov 25 10:02 postgres_password
+-rw-r--r--  1 you  staff   45 Nov 25 10:02 secret_key
 ```
 
 Back up `secrets/secret_key` now, somewhere apart from your database
@@ -113,7 +129,9 @@ Never commit the `secrets` directory or the `.env` file.
 ## Step 3. Create the data folders
 
 Scanopsis keeps its two kinds of data in plain folders next to
-`compose.yaml`, not in Docker volumes. Create them in `deploy/compose`:
+`compose.yaml`, not in Docker volumes. Create them in `deploy/compose`.
+
+On Linux:
 
 ```sh
 sudo install -d -m 700 -o 70 -g 70 data/postgres
@@ -125,9 +143,9 @@ sudo install -d -m 700 -o 65532 -g 65532 backups
 | `data/postgres` | The database. Mode 700, because it holds the database files. 70 is the user the PostgreSQL image runs as; only it may open the database files, so the folder must belong to it. Leave the owner alone afterwards. |
 | `backups` | The backup files Scanopsis writes. The container runs as user 65532, so that user must own the folder; `sudo install` sets owner and mode 700 in one step, which keeps other users on the host out. |
 
-On macOS with Docker Desktop, you do not need `sudo` or the owner options:
-create the folders with plain `mkdir`, because Docker Desktop handles the file
-ownership of the folders it shares with its containers:
+On macOS with Docker Desktop, you need neither `sudo` nor the owner options,
+because Docker Desktop handles the file ownership of the folders it shares
+with its containers:
 
 ```sh
 mkdir -p data/postgres backups
@@ -159,7 +177,7 @@ host, as the [operations guide](operations.md) describes.
    this host name. Another name makes sign-in fail.
 
 3. Check that `SCANOPSIS_IMAGE` names the image from step 1:
-   `SCANOPSIS_IMAGE=scanopsis:v0.4.2`, which `.env.example` already sets.
+   `SCANOPSIS_IMAGE=scanopsis:v0.4.3`, which `.env.example` already sets.
    Compose runs exactly this image, and an
    [upgrade](versions.md#upgrade-to-the-newest-version) later changes only this
    line.
@@ -197,8 +215,8 @@ missing secret file shows up in the next step.
 docker compose up -d
 ```
 
-Compose starts the database, waits until it is healthy, then starts
-Scanopsis:
+Compose creates the networks and the containers, starts the database, waits
+until it is healthy, then starts Scanopsis. The output ends like this:
 
 ```text
  Container scanopsis-db-1 Healthy
@@ -215,16 +233,16 @@ Create it as in step 2 and run `docker compose up -d` again.
 1. Wait about 30 seconds, then list the containers:
 
    ```sh
-   docker compose ps
+   docker compose ps --format 'table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}'
    ```
 
-   Both containers are `Up` and `(healthy)`. The image health check takes up
-   to 20 seconds to start.
+   Both containers are `Up` and `(healthy)`. Until the first health check of
+   Scanopsis has passed, its status says `(health: starting)`.
 
    ```text
    NAME                    SERVICE     STATUS                    PORTS
-   scanopsis-db-1          db          Up 34 seconds (healthy)   5432/tcp
-   scanopsis-scanopsis-1   scanopsis   Up 28 seconds (healthy)   127.0.0.1:8080->8080/tcp
+   scanopsis-db-1          db          Up 41 seconds (healthy)   5432/tcp
+   scanopsis-scanopsis-1   scanopsis   Up 35 seconds (healthy)   127.0.0.1:8080->8080/tcp
    ```
 
 2. Check that the process is alive:
@@ -250,7 +268,7 @@ If this step fails:
 | `scanopsis-scanopsis-1` is `Restarting` | Run `docker compose logs scanopsis`. The server prints `configuration error:` and one line per problem, for example `SCANOPSIS_PUBLIC_URL is required, for example https://scanopsis.example.com`. Fix `.env` and run `docker compose up -d` again. |
 | The log says `SCANOPSIS_SECRET_KEY is not valid` | `secrets/secret_key` is not a base64 encoded 32-byte key. Create it again as in step 2. |
 | `curl` cannot connect | The container is not running, or another program uses port 8080 on the host. Run `docker compose ps`. |
-| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when `data/postgres` is first filled. If you changed the password after the first start and have not finished the setup yet, run `docker compose down`, delete the folder with `sudo rm -rf data/postgres`, create it again with `sudo install -d -m 700 -o 70 -g 70 data/postgres`, and start again. This deletes all data. |
+| `/readyz` answers `503` | The database is not reachable. Check `docker compose logs db`, and check that the password in `secrets/database_url` matches `secrets/postgres_password`. The database user gets its password only when `data/postgres` is first filled. If you changed the password after the first start and have not finished the setup yet, run `docker compose down`, delete the folder with `sudo rm -rf data/postgres` (macOS: `rm -rf data/postgres`), create it again as in step 3, and start again. This deletes all data. |
 
 ## Step 7. Get the setup token
 
@@ -299,8 +317,9 @@ If the command prints nothing, an administrator already exists. Go to
 6. Store the recovery codes in a password manager or another safe place. Use
    **Copy all** or **Download as text file**. Each code works once, in place of
    an app code, and you see them only now.
-7. Select **I have saved these codes**, then **Continue**. You land on the home
-   page and see **Users** and **Settings** in the sidebar.
+7. Select **I have saved these codes**, then **Continue**. You land on the
+   **Portfolio** page, which says **No services yet**. The sidebar shows
+   **Users** and **Settings** under **Admin**.
 
 If this step fails:
 
@@ -321,12 +340,12 @@ supported one.
 
 ## Step 9. Sign in again
 
-1. Sign out with the button in the navigation bar.
+1. Select your name at the foot of the sidebar, then **Sign out**.
 2. On the sign-in page, enter your username and password and select
    **Sign in**.
 3. On **Enter your code**, enter the 6-digit code from the app.
 
-You are back on the home page.
+You are back on the **Portfolio** page.
 
 Lost your phone? Select **Use a recovery code** and enter one of the codes you
 saved. Each works once.
@@ -352,8 +371,8 @@ recover access.
 3. Connect SonarQube: [SonarQube guide](integrations/sonarqube.md).
 4. Let your colleagues sign in with GitLab:
    [GitLab sign-in guide](integrations/gitlab-sso.md).
-5. Turn on scheduled backups: after your first sign-in, open **Backups** in
-   the Admin menu, switch on **Scheduled backups** and select **Save
+5. Turn on scheduled backups: open **Backups** under **Admin** in the
+   sidebar, switch on **Scheduled backups** and select **Save
    schedule**. Copy `backups` and `secrets/secret_key` off the host, apart
    from each other. The [operations guide](operations.md#backup-and-restore)
    has the details, and the administration commands. Once services exist, choose the branch

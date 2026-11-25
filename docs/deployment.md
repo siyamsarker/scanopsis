@@ -18,9 +18,10 @@ You need:
 Run every `docker compose` command in `deploy/compose`. The host names in this
 guide (`scanopsis.example.com`, `gitlab.example.com`, `db.example.com`) are
 placeholders. Commands marked **example** need systems outside your machine,
-such as public DNS or a cluster, and were not run for this guide. Everything
-else was run on Docker Desktop with Docker 29.9.3 and Compose 5.7.0. Names,
-times and addresses in your output will differ.
+such as public DNS, and were not run for this guide. Everything
+else was run on macOS with Docker Desktop (Docker 29.9.3, Compose 5.7.1),
+except the steps marked Linux. Names, times and addresses in your output
+will differ.
 
 This is what you build:
 
@@ -77,7 +78,7 @@ deny everything else.
 
 Both services restart on their own (`restart: unless-stopped`) as long as the
 Docker daemon starts at boot. On Linux with systemd, check that it does
-(example, needs `sudo`):
+(Linux, needs `sudo`, not run for this guide):
 
 ```sh
 systemctl is-enabled docker
@@ -143,8 +144,14 @@ and run `docker compose up -d`:
 TZ=Europe/Berlin
 ```
 
+Check it:
+
+```sh
+docker compose logs scanopsis | grep 'scanopsis listening' | tail -1
+```
+
 ```text
-{"time":"2026-11-22T12:14:46.852206508+01:00","level":"INFO","msg":"scanopsis listening","addr":"[::]:8080"}
+scanopsis-1  | {"time":"2026-11-25T05:10:14.290979715+01:00","level":"INFO","msg":"scanopsis listening","addr":"[::]:8080"}
 ```
 
 Only the log changes. The database stores points in time, so the data is the
@@ -313,7 +320,8 @@ compression.
        gzip_types text/css text/javascript application/javascript application/json image/svg+xml;
 
        # These apply to every location below that sets none of its own.
-       proxy_set_header Host $host;
+       # $http_host passes the Host header unchanged, with its port.
+       proxy_set_header Host $http_host;
        proxy_set_header X-Forwarded-For $remote_addr;
        proxy_read_timeout 90s;
 
@@ -327,7 +335,15 @@ compression.
    `$proxy_add_x_forwarded_for` only if you also list the proxies in front of
    nginx in `SCANOPSIS_TRUSTED_PROXIES`.
 
-2. Use this `compose.override.yaml` instead of the Caddy one:
+   Use `$http_host`, not `$host`: `$host` drops the port. On a port other
+   than 443 (such as 9443 below), a request that names the port in `Origin`
+   but sends no `Sec-Fetch-Site` header, such as one from an older browser or
+   a script, is then refused with `403` and the code `cross_origin`. Current
+   browsers send `Sec-Fetch-Site: same-origin` over HTTPS, and Scanopsis
+   accepts that without comparing `Origin` with `Host`.
+
+2. Use this `compose.override.yaml` instead of the Caddy one. If you tried
+   Caddy first, see the note after step 3 to remove its container:
 
    ```yaml
    services:
@@ -360,6 +376,11 @@ compression.
    nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
    nginx: configuration file /etc/nginx/nginx.conf test is successful
    ```
+
+If you tried Caddy first, `docker compose up -d` warns
+`Found orphan containers (scanopsis-caddy-1)`. Remove the container with
+`docker compose up -d --remove-orphans`, and its volume with
+`docker volume rm scanopsis_caddy-data`.
 
 After you edit `nginx.conf`, run `docker compose restart nginx`. A reload
 (`nginx -s reload`) can miss the change when your editor replaces the file
@@ -399,6 +420,9 @@ and `--cacert` trusts the test certificate.
    x-frame-options: DENY
    ```
 
+   Through nginx, the first line is `HTTP/1.1 200 OK` and the header names
+   start with capitals (`Strict-Transport-Security`, `X-Frame-Options`).
+
    No `strict-transport-security`? Then `SCANOPSIS_PUBLIC_URL` does not start
    with `https://`.
 
@@ -416,16 +440,42 @@ and `--cacert` trusts the test certificate.
    for every user, and all users share one rate limit:
 
    ```text
-   {"time":"2026-11-22T11:13:35.975316503Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.10"}
+   scanopsis-1  | {"time":"2026-11-25T04:11:47.48065955Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.10"}
    ```
 
    With the proxy listed, the start-up line shows `"trusted_proxies":1`, and
-   `client_ip` is the address the proxy saw: `172.30.0.1` (the network gateway)
-   on Docker Desktop, the real client on a Linux server. The fake
-   `203.0.113.9` is never used.
+   `client_ip` is the address the proxy saw. For this curl that is the gateway
+   of the Compose network (`172.30.0.1`), on Docker Desktop and on Linux
+   alike, because the proxy port is published on `127.0.0.1`. Once you
+   publish `"443:443"` for your users, it depends on the host. On Linux, a
+   user on another machine shows up with their own address. On Docker
+   Desktop, every connection through that port, from another machine or from
+   the host itself, comes from one address of Docker Desktop's virtual
+   network (`192.168.65.1` here), so all users share one address and one rate
+   limit. The fake `203.0.113.9` is never used.
 
-4. **Large uploads pass.** Without `client_max_body_size`, nginx answers a
-   3 MB upload itself with `413` and an HTML page, not JSON from Scanopsis:
+4. **Large uploads pass.** Send 3 MB to the upload address:
+
+   ```sh
+   head -c 3000000 /dev/zero | curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 \
+     --cacert tls/cert.pem -H 'Content-Type: application/json' --data-binary @- \
+     -w '\nHTTP %{http_code}\n' https://scanopsis.example.com:8443/api/v1/ingest/trivy
+   ```
+
+   The request reaches Scanopsis, which answers in JSON. Until the GitLab URL
+   is set on the Settings page it says that uploads are not enabled:
+
+   ```text
+   {"error":{"code":"ingest_not_configured","message":"Uploads are not enabled: the GitLab URL is not configured in Scanopsis."}}
+
+   HTTP 503
+   ```
+
+   Once the GitLab URL is set, it answers `HTTP 401` with the code
+   `invalid_token`, because the request has no token.
+
+   Through nginx without `client_max_body_size`, nginx answers itself with an
+   HTML page:
 
    ```text
    <html>
@@ -451,9 +501,9 @@ and `--cacert` trusts the test certificate.
    content-encoding: gzip
    ```
 
-   The script shrank from 278,866 bytes to 89,238 through Caddy and about
-   100,900 through nginx. Small JSON answers such as `/readyz` stay
-   uncompressed, which is normal.
+   nginx writes the header as `Content-Encoding: gzip`. The script shrank
+   from 518,340 bytes to 170,172 through Caddy and to 192,035 through nginx.
+   Small JSON answers such as `/readyz` stay uncompressed, which is normal.
 
 If a check fails, see [reverse proxy problems](troubleshooting.md#reverse-proxy-and-tls).
 
@@ -506,8 +556,11 @@ gets `403`, and 13 wrong sign-ins in a row from one address look like this:
 401 401 401 401 401 401 401 401 401 401 429 429 429
 ```
 
-The first ten reach Scanopsis (`401`), then nginx answers `429`. The exact
-count depends on timing, because the allowance refills while you test.
+The first ten get `401` from Scanopsis. The eleventh gets `429` from
+Scanopsis itself, which allows 10 sign-in attempts per address (JSON with the
+code `too_many_attempts`). From the twelfth on, nginx answers `429` with an
+HTML page and the request never reaches Scanopsis. The exact count depends on
+timing, because both allowances refill while you test.
 
 The webhook is also protected by its HMAC signature; the address rule stops
 everyone else from even trying. If another proxy stands in front of nginx,
@@ -554,13 +607,14 @@ Backups cross the proxy in two ways:
   ```
 
   `proxy_max_temp_file_size 0;` is the other option: nginx then never writes
-  the answer to disk. A test proxied a 400 MB file through nginx 1.29 to a
-  client limited to 5 MB/s, once with the default settings and once with
-  `proxy_buffering off`. Both downloads were complete, and a `Range` request
-  answered `206`. That test used a plain file server behind nginx, not
-  Scanopsis, and no temporary file showed up. So the settings above
-  are a precaution that you do not need to apply to get a working download.
-  Watch the disk of the proxy during the first large download if you keep the
+  the answer to disk. A 200 MiB file in the backup folder was downloaded from
+  Scanopsis with `curl --limit-rate 5M`: through nginx 1.30 with the default
+  settings, through nginx with `proxy_buffering off`, and through Caddy 2.11.
+  Each download was complete (209,715,200 bytes in 40 seconds, the same bytes
+  as the file), a `Range` request for the second half answered `206`, and
+  nginx kept no temporary file open while it ran. So the settings above are a
+  precaution that you do not need to apply to get a working download. Watch
+  the disk of the proxy during the first large download if you keep the
   default.
 
 ### Set proxy timeouts
@@ -595,6 +649,23 @@ Scanopsis never turns certificate checks off. Give it your CA instead.
          - ./ca.pem:/etc/scanopsis/ca.pem:ro
    ```
 
+   If `compose.override.yaml` already has a `scanopsis:` entry (for example
+   `extra_hosts`, or the CA of your database from
+   [step 3](#step-3-remove-the-bundled-database) below), add the line to its
+   `volumes:` list instead. A second `scanopsis:` key is an error:
+   `mapping key "scanopsis" already defined`. All three together look like
+   this:
+
+   ```yaml
+   services:
+     scanopsis:
+       extra_hosts:
+         - "gitlab.example.com:10.0.0.5"
+       volumes:
+         - ./ca.pem:/etc/scanopsis/ca.pem:ro
+         - ./db-ca.pem:/etc/scanopsis/db-ca.pem:ro
+   ```
+
 3. In `.env`, set `SCANOPSIS_CA_FILE=/etc/scanopsis/ca.pem` and run
    `docker compose up -d`.
 4. Check that it was read. The start-up line shows `"custom_ca":true`:
@@ -604,7 +675,7 @@ Scanopsis never turns certificate checks off. Give it your CA instead.
    ```
 
    ```text
-   ...,"config":{"listen_addr":":8080","public_url":"https://scanopsis.example.com","seeded_settings":3,"trusted_proxies":1,"custom_ca":true}}
+   scanopsis-1  | {"time":"2026-11-25T04:17:12.923843173Z","level":"INFO","msg":"scanopsis starting","version":"v0.4.3","commit":"76b3b67","config":{"listen_addr":":8080","public_url":"https://scanopsis.example.com","seeded_settings":0,"trusted_proxies":1,"custom_ca":true}}
    ```
 
 The CA applies to GitLab and SonarQube, not to the database (see
@@ -645,6 +716,11 @@ needs no extension and no superuser. The steps below were run against a
 separate PostgreSQL 18 server with TLS and a certificate from a private CA.
 The host name and the password are examples.
 
+The order: step 1 creates the role and the database. To keep your users,
+settings and scans, [move your data](#move-your-data-from-the-bundled-database)
+next, while Scanopsis is stopped. Then step 2 writes the new URL and step 3
+starts Scanopsis on the new server.
+
 ### Step 1. Create the role and the database
 
 As an administrator of the server, create a role that can log in and a
@@ -669,6 +745,7 @@ SELECT current_user, has_schema_privilege('public', 'CREATE') AS can_create_in_p
  current_user | can_create_in_public
 --------------+----------------------
  scanopsis    | t
+(1 row)
 ```
 
 If the role cannot create tables, Scanopsis stops at start:
@@ -714,8 +791,9 @@ Always encrypt the connection. `sslmode` decides how:
 
 With `verify-full` and a certificate from your own CA, add `sslrootcert=` with
 the path of the CA file inside the container. Managed services publish their
-CA certificate. Save it as `db-ca.pem` next to `compose.yaml`. A certificate
-from a public CA needs no `sslrootcert`.
+CA certificate. Save it as `db-ca.pem` next to `compose.yaml`; step 3 mounts
+it at `/etc/scanopsis/db-ca.pem`. A certificate from a public CA needs no
+`sslrootcert`.
 
 The characters `@`, `/`, `:`, `?`, `#` and `%` in the password break the URL,
 so percent-encode the password. Either command works (the second needs `jq`):
@@ -755,21 +833,34 @@ does not help here):
 
 `compose.external-db.yaml` removes the `db` service and its password secret,
 and puts Scanopsis on the `frontend` network only, which can reach
-your server. It needs Docker Compose 2.24 or later.
+your server. It needs Docker Compose 2.24.4 or later, the first version that
+reads its `!override` tag (`docker compose version` shows yours).
 
-1. If you use `sslrootcert`, open `compose.external-db.yaml` and uncomment the
-   two `volumes` lines, so Compose mounts `db-ca.pem` at
-   `/etc/scanopsis/db-ca.pem`.
-2. Tell Compose to use both files, so every `docker compose` command picks them
-   up. Add this line to `.env`:
+1. If you use `sslrootcert`, mount `db-ca.pem` in `compose.override.yaml`
+   (create the file if you have none). Do not edit `compose.external-db.yaml`:
+   an upgrade replaces it, and a changed copy stops `git switch`.
 
-   ```text
-   COMPOSE_FILE=compose.yaml:compose.external-db.yaml
+   ```yaml
+   services:
+     scanopsis:
+       volumes:
+         - ./db-ca.pem:/etc/scanopsis/db-ca.pem:ro
    ```
 
-   Compose reads `compose.override.yaml` on its own only when you name no
-   files, so add it to the list if you have one:
-   `COMPOSE_FILE=compose.yaml:compose.override.yaml:compose.external-db.yaml`.
+   If the file already has a `scanopsis:` entry, add the line to its
+   `volumes:` list instead, as
+   [trust an internal certificate authority](#trust-an-internal-certificate-authority)
+   shows. The URL must name exactly `/etc/scanopsis/db-ca.pem`, as in step 2.
+2. Tell Compose which files to use, so every `docker compose` command picks
+   them up. Compose reads `compose.override.yaml` on its own only when you
+   name no files, so the list must include it. Add this line to `.env`:
+
+   ```text
+   COMPOSE_FILE=compose.yaml:compose.override.yaml:compose.external-db.yaml
+   ```
+
+   Only if you have no `compose.override.yaml` at all, leave it out:
+   `COMPOSE_FILE=compose.yaml:compose.external-db.yaml`.
 3. Check that `db` is gone from the list of services:
 
    ```sh
@@ -780,19 +871,27 @@ your server. It needs Docker Compose 2.24 or later.
    scanopsis
    ```
 
-4. Start Scanopsis. `--remove-orphans` removes the old `db` container (not its
-   volume); without it, Compose only warns about `orphan containers`:
+   Services from `compose.override.yaml`, such as a proxy, are listed too.
+
+4. Start Scanopsis. `--remove-orphans` removes the old `db` container (not
+   its data folder); without it, Compose only warns about
+   `orphan containers`:
 
    ```sh
    docker compose up -d --remove-orphans
    ```
 
+   The output names the old `db` container as removed, for example:
+
    ```text
-    Container scanopsis-scanopsis-1 Running
+    Container scanopsis-scanopsis-1 Recreate
     Container scanopsis-db-1 Stopping
+    Container scanopsis-scanopsis-1 Recreated
     Container scanopsis-db-1 Stopped
     Container scanopsis-db-1 Removing
     Container scanopsis-db-1 Removed
+    Container scanopsis-scanopsis-1 Starting
+    Container scanopsis-scanopsis-1 Started
    ```
 
 5. Check that it is ready:
@@ -815,6 +914,7 @@ your server. It needs Docker Compose 2.24 or later.
      usename  | ssl | version
    -----------+-----+---------
     scanopsis | t   | TLSv1.3
+   (1 row)
    ```
 
 The folder `data/postgres` with the bundled data stays on the host. Delete it
@@ -822,33 +922,61 @@ only once you are sure you moved everything you need.
 
 ### Move your data from the bundled database
 
-To keep users, settings and scans, [back up](operations.md#back-up-the-database)
-the bundled database first, then restore the file into the new server before
-step 4 above (or while Scanopsis is stopped). The restore needs a PostgreSQL
-client of the same major version or newer. This runs it from the PostgreSQL
-image, on a Docker network that can reach the server:
+Do this after step 1 and before step 2, so that Scanopsis cannot start on the
+new, empty server in between. The bundled `db` service still runs and
+`secrets/database_url` still names it. Run the commands in `deploy/compose`.
+If the new server uses a certificate from your own CA, save that CA as
+`db-ca.pem` next to `compose.yaml` first (step 2 says where to get it).
 
-```sh
-docker run --rm -i --network scanopsis_frontend \
-  -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=require \
-  postgres:18.7-alpine pg_restore -h db.example.com -U scanopsis -d scanopsis \
-  --no-owner --exit-on-error < scanopsis-2026-11-22.dump
-echo "restore exit=$?"
-```
+1. Stop Scanopsis, so that nothing changes after the backup, and back up the
+   bundled database. A container you stopped stays stopped, even after a
+   reboot:
 
-```text
-restore exit=0
-```
+   ```sh
+   docker compose stop scanopsis
+   (umask 077; docker compose exec -T db pg_dump -U scanopsis -d scanopsis \
+     --format=custom > scanopsis-move.dump)
+   ```
+
+2. Restore the file into the new server. This runs `pg_restore` from the
+   PostgreSQL image that the bundled database uses, on the Docker network
+   that reaches the server, with the password of the new role (not encoded).
+   `PGSSLMODE=verify-full` checks the server's certificate against
+   `db-ca.pem` before the password is sent:
+
+   ```sh
+   docker run --rm -i --network scanopsis_frontend \
+     -v "$PWD/db-ca.pem:/db-ca.pem:ro" \
+     -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=verify-full -e PGSSLROOTCERT=/db-ca.pem \
+     postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71 \
+     pg_restore -h db.example.com -U scanopsis -d scanopsis \
+     --no-owner --exit-on-error < scanopsis-move.dump
+   echo "restore exit=$?"
+   ```
+
+   ```text
+   restore exit=0
+   ```
+
+   With a certificate from a public CA, use `-e PGSSLROOTCERT=system` and
+   leave out the `-v` line.
+
+3. Go on with [step 2](#step-2-write-the-database-url) and
+   [step 3](#step-3-remove-the-bundled-database).
+   `docker compose up -d --remove-orphans` in step 3 starts Scanopsis on the
+   new server.
 
 Keep the same `secrets/secret_key`. When Scanopsis starts on the new database,
 its log has no `setup_token` line, because the restored database already has
-an administrator.
+an administrator. Sign in as before.
 
 ## Run without Compose
 
-Compose is the supported way, but the container does not depend on it. It
-needs a database URL, a secret key and a public URL. The rules are the same
-everywhere:
+Scanopsis runs only as a container. Compose is the main way; the container
+does not depend on it, and this guide also covers plain `docker run` and
+Podman. There is no guide for Kubernetes or for running the binary on a host
+without a container. The container needs a database URL, a secret key and a
+public URL. The rules are the same for both:
 
 - **Run one instance.** Scanopsis keeps rate limits and the setup token in
   memory, and two versions must never run on one database while the new one
@@ -858,63 +986,117 @@ everywhere:
   with `docker inspect` can read. Setting both forms of one variable stops the
   server: `SCANOPSIS_SECRET_KEY and SCANOPSIS_SECRET_KEY_FILE are both set; set only one`.
 - **Keep it locked down.** The image runs as user 65532. Add a read-only root
-  file system and drop all capabilities; Scanopsis writes nothing to disk.
+  file system and drop all capabilities; Scanopsis writes only to its backup
+  folder (`/var/lib/scanopsis/backups`).
 - **No migration step.** Scanopsis applies schema changes before it listens.
 
 ### Use plain `docker run`
 
-These commands start a database and Scanopsis on one network, with the same
-limits as the Compose file. Create the three secret files first, like in
-[step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets), but use the host name `scanopsis-db` instead of `db`
-in `secrets/database_url`. The names are examples.
+These commands give the two containers the same settings as the Compose file:
+the database on an internal network with no route out, health checks, limits,
+log rotation, and a restart after a reboot. They were run on macOS with Docker
+Desktop (Docker 29.9.3) and on Linux (Docker 29.10.1), and need Docker 25 or
+newer: Docker 24 refuses the second `--network` with `Container cannot be
+connected to network endpoints`. Build the image first, as in
+[step 1 of the getting started guide](getting-started.md#step-1-build-the-image).
+Then run the commands in an empty folder. The container and network names
+are examples.
 
-```sh
-# 70 is the user the PostgreSQL image runs as; only it may open the database files.
-docker network create scanopsis-net
-sudo install -d -m 700 -o 70 -g 70 data/postgres
-sudo install -d -m 700 -o 65532 -g 65532 backups
+1. Create the three secret files. These are the commands of
+   [step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets),
+   with the host name `scanopsis-db` instead of `db` in the database URL:
 
-docker run -d --name scanopsis-db --network scanopsis-net \
-  -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \
-  -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
-  -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro" \
-  --stop-timeout 120 --shm-size 256m \
-  -v "$PWD/data/postgres:/var/lib/postgresql" \
-  postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
+   ```sh
+   mkdir secrets
+   chmod 700 secrets
+   openssl rand -base64 32 > secrets/secret_key
+   openssl rand -hex 24 > secrets/postgres_password
+   printf 'postgres://scanopsis:%s@scanopsis-db:5432/scanopsis?sslmode=disable' \
+     "$(cat secrets/postgres_password)" > secrets/database_url
+   chmod 644 secrets/*
+   ```
 
-docker run -d --name scanopsis --network scanopsis-net \
-  --restart unless-stopped \
-  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
-  --pids-limit 100 --memory 512m --stop-timeout 30 \
-  --log-opt max-size=10m --log-opt max-file=5 \
-  -p 127.0.0.1:8080:8080 \
-  -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
-  -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
-  -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
-  -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
-  -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
-  -v "$PWD/backups:/var/lib/scanopsis/backups" \
-  scanopsis:v0.4.2
-```
+2. Create the data folders. On Linux, they must belong to the users the
+   containers run as (70 for PostgreSQL, 65532 for Scanopsis):
 
-The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`. Wait
-about 30 seconds, then check:
+   ```sh
+   sudo install -d -m 700 -o 70 -g 70 data/postgres
+   sudo install -d -m 700 -o 65532 -g 65532 backups
+   ```
 
-```sh
-docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-curl -s http://127.0.0.1:8080/readyz
-```
+   On macOS with Docker Desktop:
 
-```text
-NAMES          STATUS                    PORTS
-scanopsis      Up 29 seconds (healthy)   127.0.0.1:8080->8080/tcp
-scanopsis-db   Up 30 seconds             5432/tcp
-{"status":"ready"}
-```
+   ```sh
+   mkdir -p data/postgres backups
+   ```
+
+3. Create the networks and start the containers:
+
+   ```sh
+   docker network create --internal scanopsis-backend
+   docker network create scanopsis-frontend
+
+   docker run -d --name scanopsis-db --network scanopsis-backend \
+     --restart unless-stopped \
+     --read-only --tmpfs /var/run/postgresql --tmpfs /tmp \
+     --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+     --cap-add SETGID --cap-add SETUID --security-opt no-new-privileges:true \
+     --pids-limit 200 --shm-size 256m --stop-timeout 120 \
+     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     --health-cmd 'pg_isready -U scanopsis -d scanopsis' \
+     --health-interval 5s --health-timeout 5s --health-retries 10 \
+     --health-start-period 10s \
+     -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \
+     -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
+     -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro" \
+     -v "$PWD/data/postgres:/var/lib/postgresql" \
+     postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
+
+   docker run -d --name scanopsis \
+     --network scanopsis-backend --network scanopsis-frontend \
+     --restart unless-stopped \
+     --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+     --pids-limit 100 --memory 512m --stop-timeout 30 \
+     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     -p 127.0.0.1:8080:8080 \
+     -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
+     -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
+     -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
+     -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
+     -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
+     -v "$PWD/backups:/var/lib/scanopsis/backups" \
+     scanopsis:v0.4.3
+   ```
+
+   Set `SCANOPSIS_PUBLIC_URL` to your address, as in
+   [step 4 of the getting started guide](getting-started.md#step-4-create-the-configuration-file).
+   The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`.
+
+4. Wait about 30 seconds, then check:
+
+   ```sh
+   docker ps --filter name=scanopsis --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+   curl -s http://127.0.0.1:8080/readyz
+   ```
+
+   Both containers are `(healthy)`:
+
+   ```text
+   NAMES          STATUS                    PORTS
+   scanopsis      Up 31 seconds (healthy)   127.0.0.1:8080->8080/tcp
+   scanopsis-db   Up 35 seconds (healthy)   5432/tcp
+   {"status":"ready"}
+   ```
+
+5. Read the setup token with `docker logs scanopsis 2>&1 | grep setup_token`
+   and go on with
+   [step 8 of the getting started guide](getting-started.md#step-8-complete-the-setup-in-the-browser).
 
 Unlike Compose, `docker run` does not wait for the database. If Scanopsis
 starts first, it exits, and `--restart unless-stopped` starts it again until
-the database answers.
+the database answers. After a reboot, Docker starts both containers again, as
+long as Docker itself starts at boot (see
+[start Scanopsis after a reboot](#start-scanopsis-after-a-reboot)).
 
 The container has no shell. Run the
 [administration commands](operations.md#administration-commands) with
@@ -922,165 +1104,135 @@ The container has no shell. Run the
 
 ### Use Podman
 
-Podman runs the same image and accepts the same `run` options. This was not
-tested, so treat these notes as a starting point:
+Podman runs the same image without a daemon and, by default, rootless: the
+containers run under your own user. These steps were run with Podman 6.2.1,
+rootless, on macOS (in the Podman machine) and on Linux (Fedora 45 with
+SELinux enforcing). They are the [`docker run` steps](#use-plain-docker-run)
+with five differences: the build, the data folders, an SELinux label on each
+mount, the log size, and the restart after a reboot.
 
-- Instead of bind-mounted files you can use Podman secrets, for example
-  `podman secret create scanopsis_secret_key secrets/secret_key` and
-  `--secret scanopsis_secret_key,target=/run/secrets/secret_key,mode=0444`.
-  User 65532 must be able to read them.
-- Rootless Podman maps container users to your sub-user IDs, so bind-mounted
-  files need the `U` option (`:ro,U`).
-- To start at boot, use a Quadlet unit (systemd) instead of `--restart`.
+1. Build the image with Podman, in the clone of the version branch from
+   [step 1 of the getting started guide](getting-started.md#step-1-build-the-image)
+   (instead of `make image`, which calls Docker):
 
-### Use Kubernetes
+   ```sh
+   podman build --format docker --build-arg VERSION=v0.4.3 \
+     --build-arg COMMIT="$(git rev-parse --short HEAD)" -t scanopsis:v0.4.3 .
+   ```
 
-Scanopsis needs no operator and no custom resources. Run it as one pod:
+   `--format docker` keeps the health check of the image. Without it, Podman
+   prints `HEALTHCHECK is not supported for OCI image format and will be
+   ignored` and builds the image without a health check.
 
-- A `Deployment` with `replicas: 1` and `strategy: Recreate`, which stops the
-  old pod before the new one starts. A rolling update would run two versions
-  on one database while the new one migrates it.
-- A `Secret` with `database_url` and `secret_key`, mounted as files. Create it
-  from the same files as for Compose (example). Do not commit its YAML: the
-  values are only base64 encoded.
+2. In an empty folder, create the three secret files as in
+   [step 1 of the `docker run` steps](#use-plain-docker-run).
 
-  ```sh
-  kubectl create secret generic scanopsis \
-    --from-file=database_url=secrets/database_url \
-    --from-file=secret_key=secrets/secret_key
-  ```
+3. Create the data folders. On Linux, the users 70 and 65532 in the containers
+   are sub-user IDs of your user, so set the owners with `podman unshare`:
 
-- Probes: `/healthz` for liveness (the process runs) and `/readyz` for
-  readiness (the database answers). A startup probe gives the first start of a
-  new version, with its migrations, time.
-- A `terminationGracePeriodSeconds` of 30, above the 15 seconds Scanopsis
-  needs to finish its requests and the time a running backup needs to close
-  its file.
-- A second `PersistentVolumeClaim` for the backups, mounted at
-  `/var/lib/scanopsis/backups`. `fsGroup: 65532` makes the volume writable for
-  the user that runs Scanopsis. Keep the backups on storage that is not the
-  database's own, and copy them off the cluster.
-- An Ingress or Gateway that follows the [proxy rules](#reverse-proxy-and-tls):
-  `Host` unchanged, `X-Forwarded-For` set, a body of up to 100 MB, Scanopsis at
-  the root of its own host name. Set `SCANOPSIS_TRUSTED_PROXIES` to the
-  addresses of the ingress controller pods.
-- PostgreSQL outside the pod, see
-  [use an existing PostgreSQL](#use-an-existing-postgresql).
+   ```sh
+   mkdir -p data/postgres backups
+   chmod 700 data/postgres backups
+   podman unshare chown 70:70 data/postgres
+   podman unshare chown 65532:65532 backups
+   ```
 
-The manifest below follows this model. Replace the image with one you built
-and pushed to a registry the cluster can pull from, and the public URL. It
-passes `kubectl apply --dry-run=client` with kubectl 1.37.2, but it was not
-run on a cluster, so check the probes and the first start in yours.
+   Do not create them with `sudo install -o 70` as for Docker: rootless Podman
+   cannot open them and stops with `Error: open .../data/postgres: permission
+   denied`. On macOS, `mkdir -p data/postgres backups` is enough.
 
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: scanopsis-backups
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 20Gi
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: scanopsis
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: scanopsis
-  template:
-    metadata:
-      labels:
-        app: scanopsis
-    spec:
-      terminationGracePeriodSeconds: 30
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - name: scanopsis
-          image: registry.example.com/platform/scanopsis:v0.4.2
-          ports:
-            - name: http
-              containerPort: 8080
-          env:
-            - name: SCANOPSIS_PUBLIC_URL
-              value: https://scanopsis.example.com
-            - name: SCANOPSIS_DATABASE_URL_FILE
-              value: /run/secrets/scanopsis/database_url
-            - name: SCANOPSIS_SECRET_KEY_FILE
-              value: /run/secrets/scanopsis/secret_key
-            - name: GOMEMLIMIT
-              value: 400MiB
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            periodSeconds: 10
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-            periodSeconds: 5
-          startupProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            periodSeconds: 2
-            failureThreshold: 30
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          volumeMounts:
-            - name: secrets
-              mountPath: /run/secrets/scanopsis
-              readOnly: true
-            - name: backups
-              mountPath: /var/lib/scanopsis/backups
-      volumes:
-        - name: secrets
-          secret:
-            secretName: scanopsis
-            defaultMode: 0440
-        - name: backups
-          persistentVolumeClaim:
-            claimName: scanopsis-backups
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: scanopsis
-spec:
-  selector:
-    app: scanopsis
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
-```
+4. Create the networks and start the containers. The `Z` at the end of each
+   mount labels the files for SELinux, so that the container may read them;
+   without it, on a host with SELinux enforcing such as Fedora, both
+   containers stop because they may not read their secret files. On macOS it
+   does no harm. Podman keeps one log file per container and starts it over
+   when it reaches `max-size`; it ignores `max-file`, so that option is left
+   out.
 
-A CPU limit can slow uploads down, so set one only if your cluster requires
-it. After `kubectl apply`, `kubectl rollout status deployment/scanopsis`
-should end with the pod `1/1` ready (example).
+   ```sh
+   podman network create --internal scanopsis-backend
+   podman network create scanopsis-frontend
+
+   podman run -d --name scanopsis-db --network scanopsis-backend \
+     --restart unless-stopped \
+     --read-only --tmpfs /var/run/postgresql --tmpfs /tmp \
+     --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+     --cap-add SETGID --cap-add SETUID --security-opt no-new-privileges:true \
+     --pids-limit 200 --shm-size 256m --stop-timeout 120 \
+     --log-driver json-file --log-opt max-size=10m \
+     --health-cmd 'pg_isready -U scanopsis -d scanopsis' \
+     --health-interval 5s --health-timeout 5s --health-retries 10 \
+     --health-start-period 10s \
+     -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \
+     -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
+     -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro,Z" \
+     -v "$PWD/data/postgres:/var/lib/postgresql:Z" \
+     postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
+
+   podman run -d --name scanopsis \
+     --network scanopsis-backend --network scanopsis-frontend \
+     --restart unless-stopped \
+     --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+     --pids-limit 100 --memory 512m --stop-timeout 30 \
+     --log-driver json-file --log-opt max-size=10m \
+     -p 127.0.0.1:8080:8080 \
+     -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
+     -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
+     -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
+     -v "$PWD/secrets/database_url:/run/secrets/database_url:ro,Z" \
+     -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro,Z" \
+     -v "$PWD/backups:/var/lib/scanopsis/backups:Z" \
+     scanopsis:v0.4.3
+   ```
+
+5. Wait about a minute (Podman runs the first health check of Scanopsis 30
+   seconds after its start), then check:
+
+   ```sh
+   podman ps --filter name=scanopsis --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+   curl -s http://127.0.0.1:8080/readyz
+   ```
+
+   ```text
+   NAMES         STATUS                       PORTS
+   scanopsis-db  Up About a minute (healthy)  5432/tcp
+   scanopsis     Up 56 seconds (healthy)      127.0.0.1:8080->8080/tcp
+   {"status":"ready"}
+   ```
+
+   Read the setup token with `podman logs scanopsis 2>&1 | grep setup_token`
+   and go on with
+   [step 8 of the getting started guide](getting-started.md#step-8-complete-the-setup-in-the-browser).
+
+6. Let the containers start after a reboot. Podman has no daemon that starts
+   them, so `--restart unless-stopped` alone does not bring them back. Its
+   `podman-restart` service does. On Linux:
+
+   ```sh
+   systemctl --user enable podman-restart.service
+   loginctl enable-linger
+   ```
+
+   `enable-linger` starts your user services at boot, without a login. On
+   macOS, enable the service inside the Podman machine, which has linger on
+   already, and start the machine after each login with `podman machine start`
+   (Podman does not start it on its own):
+
+   ```sh
+   podman machine ssh systemctl --user enable podman-restart.service
+   ```
+
+   Podman before 5.8 (Debian 12 ships 4.3.1, Ubuntu 24.04 ships 4.9.3)
+   starts at boot only the containers with `--restart always`. There, use
+   `--restart always` in both commands. Unlike `unless-stopped`, it also
+   starts a container that you stopped yourself.
+
+On Linux, the backup files belong to a sub-user ID, so your user cannot read
+them directly. Use `podman unshare`, for example
+`podman unshare ls -l backups` and
+`podman unshare cp backups/<name> ~/` (the copy belongs to you). Run the
+[administration commands](operations.md#administration-commands) with
+`podman exec scanopsis /scanopsis admin ...`.
 
 ## Sizing
 
@@ -1193,7 +1345,7 @@ Some rules keep one client from crowding out the rest:
   Trivy upload, which has its own rules (above).
 
 `/readyz` checks the database over a connection of its own, so a busy server
-stays ready and an orchestrator does not restart it. That connection is one
+stays ready for a proxy or monitor that checks it. That connection is one
 more than `pool_max_conns` against the database's `max_connections`. The
 check runs at most once a second and callers share its result, so a hanging
 database cannot pile up probes; each caller gets an answer within 2 seconds.
@@ -1293,13 +1445,12 @@ You deploy a new version by building its image from its version branch, see
 [upgrade to the newest version](versions.md#upgrade-to-the-newest-version) for the
 build steps, and [roll back to the previous version](versions.md#roll-back-to-the-previous-version)
 for the way back. Schema changes run when the new version starts; there is no
-separate migration step. The recorded run below
-upgraded from 0.1.0 straight to 0.3.0. 0.4.0 added no migration, 0.4.1
-added two (00011 and 00012), and 0.4.2 adds two (00013 and 00014), so an
-upgrade to 0.4.2 ends at schema version 14; the version line and the schema
-numbers in the output are the ones of that run, and yours show `v0.4.2`,
-another commit and 14. Before the upgrade the version is 12 from 0.4.1, and 10
-from 0.4.0. Before an upgrade from a version before 0.4.0, also
+separate migration step. The output below is from an upgrade from 0.4.2 to
+0.4.3 and back; the commits on your build differ. 0.4.0 added no migration,
+0.4.1 added two (00011 and 00012), 0.4.2 two (00013 and 00014), and 0.4.3
+none, so an upgrade to 0.4.3 ends at schema version 14. Before the upgrade
+the version is 14 from 0.4.2, 12 from 0.4.1 and 10 from 0.4.0. Before an
+upgrade from a version before 0.4.0, also
 [move the database into a folder](versions.md#move-the-database-into-a-folder).
 
 ### Upgrade
@@ -1322,7 +1473,7 @@ from 0.4.0. Before an upgrade from a version before 0.4.0, also
    ```
 
    ```text
-      6
+     14
    ```
 
 3. **Switch the image.** Set `SCANOPSIS_IMAGE` in `.env` to the new image and
@@ -1339,14 +1490,14 @@ from 0.4.0. Before an upgrade from a version before 0.4.0, also
 
    ```text
    SERVICE     STATUS
-   db          Up 24 seconds (healthy)
-   scanopsis   Up 10 seconds (healthy)
-   {"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}
-     10
+   db          Up About a minute (healthy)
+   scanopsis   Up 30 seconds (healthy)
+   {"version":"v0.4.3","commit":"7ad0f55","go":"go1.27.4"}
+     14
    ```
 
    The log has one `applying migration` and one `applied migration` line for
-   each change, with its duration. Sign in: your users and scans are still
+   each change, with its duration; from 0.4.2 it has none. Sign in: your users and scans are still
    there.
 
 If the container does not become healthy, read `docker compose logs scanopsis`.
@@ -1360,8 +1511,10 @@ that database.
 
 ### Roll back
 
-Go back to your backup. Do not start the old image on the migrated database:
-the old version does not know what the new migrations changed.
+If the upgrade changed no schema (from 0.4.2), only set the old image again
+in `.env` and run `docker compose up -d`. Otherwise go back to your backup. Do
+not start the old image on the migrated database: the old version does not
+know what the new migrations changed.
 
 1. Set `SCANOPSIS_IMAGE` in `.env` back to the old image.
 2. Stop Scanopsis and restore the backup over the database:
@@ -1377,7 +1530,7 @@ the old version does not know what the new migrations changed.
    restore exit=0
    ```
 
-3. Start the old version and check it:
+3. Start the old version, wait a few seconds until it listens, and check it:
 
    ```sh
    docker compose up -d scanopsis
@@ -1386,8 +1539,8 @@ the old version does not know what the new migrations changed.
    ```
 
    ```text
-   {"version":"v0.1.0","commit":"6eaa325","go":"go1.27.4"}
-      6
+   {"version":"v0.4.2","commit":"03f390f","go":"go1.27.4"}
+     14
    ```
 
 Everything that changed after the backup is gone, including scans uploaded

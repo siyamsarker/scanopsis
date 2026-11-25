@@ -8,28 +8,28 @@ Which version to install, and how to upgrade or roll back.
 
 ## The short version
 
-Install **0.4.2**, the newest version. It is on the branch `release/0.4.2`
-with the tag `v0.4.2`. Scanopsis publishes no container image, so you build
+Install **0.4.3**, the newest version. It is on the branch `release/0.4.3`
+with the tag `v0.4.3`. Scanopsis publishes no container image, so you build
 it yourself from that branch, as [install the newest version](#install-the-newest-version)
 shows.
 
 | Do | Do not |
 | --- | --- |
-| Deploy the newest version branch, `release/0.4.2`. | Deploy from `main`. It is development code and can be broken at any time. |
+| Deploy the newest version branch, `release/0.4.3`. | Deploy from `main`. It is development code and can be broken at any time. |
 | Upgrade as soon as a newer version is published. Only the newest version receives fixes. | Install an older version, or stay on one. |
 | Back up the database and the secret key before every upgrade. | Upgrade without a backup. Some versions change the database, and that cannot be undone. |
-| Tag your image with the version: `scanopsis:v0.4.2`. | Reuse one image name for different versions; you lose the way back. |
+| Tag your image with the version: `scanopsis:v0.4.3`. | Reuse one image name for different versions; you lose the way back. |
 
 A version branch never changes once it is published. Fixes go into the next
 version.
 
 > **Older versions:** the branches `release/0.1.0`, `release/0.2.0`,
-> `release/0.3.0`, `release/0.4.0` and `release/0.4.1` stay on GitHub only as
-> a record. They
+> `release/0.3.0`, `release/0.4.0`, `release/0.4.1` and `release/0.4.2` stay
+> on GitHub only as a record. They
 > receive no fixes,
 > including security fixes, and are not meant for new installations. If you
 > run one,
-> [upgrade to 0.4.2](#upgrade-to-the-newest-version); you can go straight
+> [upgrade to 0.4.3](#upgrade-to-the-newest-version); you can go straight
 > there from any older version.
 
 Versions before 1.0.0 are early versions: compare the numbers with your own
@@ -56,22 +56,22 @@ Do this for a new installation.
 1. Get the version and check it:
 
    ```sh
-   git clone --branch release/0.4.2 --depth 1 https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/0.4.3 --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    git describe --tags --always --dirty
    ```
 
-   The last command prints `v0.4.2`. If it prints a commit hash, run
-   `git fetch --depth 1 origin tag v0.4.2` and try again.
+   The last command prints `v0.4.3`. If it prints a commit hash, run
+   `git fetch --depth 1 origin tag v0.4.3` and try again.
 
 2. Build the image:
 
    ```sh
-   make image IMAGE=scanopsis:v0.4.2
+   make image IMAGE=scanopsis:v0.4.3
    ```
 
 3. Continue with [step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets).
-   `deploy/compose/.env.example` already names the image `scanopsis:v0.4.2`.
+   `deploy/compose/.env.example` already names the image `scanopsis:v0.4.3`.
 
 ## Check the running version
 
@@ -83,10 +83,10 @@ It prints the version the image was built from. The line looks like this
 (an example: the commit and the Go version on your build differ):
 
 ```text
-{"version":"v0.4.2","commit":"<commit>","go":"<go version>"}
+{"version":"v0.4.3","commit":"<commit>","go":"<go version>"}
 ```
 
-`version` must be `v0.4.2`.
+`version` must be `v0.4.3`.
 
 If `version` is not the one you expect, the container runs another image.
 Build the image again from the version branch.
@@ -96,17 +96,18 @@ Build the image again from the version branch.
 **When:** a newer version is published. **Takes:** about 10 minutes, plus
 the backup.
 
-You can upgrade from any older version straight to 0.4.2; you do not need to
+You can upgrade from any older version straight to 0.4.3; you do not need to
 install the versions in between. The newest version applies every database
 change it finds missing.
 
 | You run | Database change | Read first |
 | --- | --- | --- |
-| 0.4.1 | Yes: two small migrations, applied when 0.4.2 starts | [From 0.4.1](#from-041) |
+| 0.4.2 | No | [From 0.4.2](#from-042) |
+| 0.4.1 | Yes: the two small migrations of 0.4.2, applied when 0.4.3 starts | [From 0.4.1](#from-041) |
 | 0.4.0 | Yes: four migrations, the two of 0.4.1 and the two of 0.4.2 | [From 0.4.0](#from-040) |
 | 0.3.0 | Yes: the same four | [From 0.3.0](#from-030) |
 | 0.2.0 | Yes: the same four | [From 0.2.0](#from-020) |
-| 0.1.0 | Yes: all the changes since 0.1.0, applied when 0.4.2 starts | [From 0.1.0](#from-010) |
+| 0.1.0 | Yes: all the changes since 0.1.0, applied when 0.4.3 starts | [From 0.1.0](#from-010) |
 
 1. Read [before you upgrade](#before-you-upgrade) for the version you run.
 
@@ -115,24 +116,27 @@ change it finds missing.
    instead" (the Backups page exists only from 0.4.0). If you run 0.4.0 or
    later, use **Back up now** on the Backups page; it backs up the database,
    so also copy `deploy/compose/secrets/secret_key` to a password manager or
-   vault, not next to the backups. The upgrade changes the database, so do
-   not skip this.
+   vault, not next to the backups. An upgrade from 0.4.1 or older changes the
+   database, so do not skip this.
 
-3. Get 0.4.2 in your existing clone, and compare its Compose files with the
+3. Get 0.4.3 in your existing clone, and compare its Compose files with the
    ones you run before you switch, because the switch replaces them:
 
    ```sh
-   git fetch --depth 1 origin release/0.4.2:release/0.4.2 tag v0.4.2
-   git diff HEAD v0.4.2 -- deploy/compose
+   git fetch --depth 1 origin release/0.4.3:release/0.4.3 tag v0.4.3
+   git diff HEAD v0.4.3 -- deploy/compose
    git status --short deploy/compose
    ```
 
    The diff shows what changes in `compose.yaml` and `.env.example`: lines
    with `+` are new. Note each new setting for your `.env`. Your `.env`,
    secrets and data are not tracked by git, so the switch leaves them alone.
-   `git status` lists the tracked files you changed yourself, marked `M`. If
-   it lists `compose.yaml`, keep your copy and undo the change, or the switch
-   refuses with `Your local changes ... would be overwritten`:
+   `git status` lists the tracked files you changed yourself, marked `M`, and
+   files git does not track, marked `??` (such as `compose.override.yaml`, a
+   `Caddyfile` or a dump); the switch leaves the `??` files alone. If it lists
+   `compose.yaml` or `compose.external-db.yaml` with `M`, keep your copy and
+   undo the change, or the switch refuses with
+   `Your local changes ... would be overwritten`:
 
    ```sh
    cp deploy/compose/compose.yaml ../compose.yaml.mine
@@ -145,8 +149,8 @@ change it finds missing.
 4. Switch and build:
 
    ```sh
-   git switch release/0.4.2
-   make image IMAGE=scanopsis:v0.4.2
+   git switch release/0.4.3
+   make image IMAGE=scanopsis:v0.4.3
    ```
 
    A fresh clone, as in [install the newest version](#install-the-newest-version),
@@ -158,12 +162,12 @@ change it finds missing.
 
 5. If your database is still in a Docker volume (every version before 0.4.0
    does this), [move it into a folder](#move-the-database-into-a-folder)
-   now, while the old image is still set. A new 0.4.2 `compose.yaml` started
+   now, while the old image is still set. A new 0.4.3 `compose.yaml` started
    without the move would create an empty database in `data/postgres` and
    leave your data behind in the volume. If `deploy/compose/data/postgres`
    exists already, skip this step.
 
-6. Set `SCANOPSIS_IMAGE=scanopsis:v0.4.2` in `deploy/compose/.env` and start
+6. Set `SCANOPSIS_IMAGE=scanopsis:v0.4.3` in `deploy/compose/.env` and start
    it:
 
    ```sh
@@ -171,8 +175,8 @@ change it finds missing.
    docker compose up -d
    ```
 
-   The database changes now. From 0.4.1 this takes a moment. From an older
-   version it takes a while on a large database: the change that gives every
+   From 0.4.2 the database does not change. From 0.4.1 it changes in a
+   moment. From an older version it takes a while on a large database: the change that gives every
    scan its artifact key took about 25 seconds on a laptop with 540,000 scans
    and 4.3 million findings. The log has an `applying migration` and an
    `applied migration` line for each change, the second with its duration,
@@ -182,14 +186,14 @@ change it finds missing.
    docker compose logs scanopsis | grep -E 'applying migration|applied migration'
    ```
 
-   If it stops partway (for example when the host restarts), start 0.4.2 again
+   If it stops partway (for example when the host restarts), start 0.4.3 again
    and it continues. Do not start the old version on a database that is half
    upgraded.
 
 7. [Check the running version](#check-the-running-version). It must show
-   `v0.4.2`.
+   `v0.4.3`.
 
-8. Once 0.4.2 runs well and the backup you made before the upgrade (step 2)
+8. Once 0.4.3 runs well and the backup you made before the upgrade (step 2)
    still exists, remove the old volume, if you moved one. Until then it is
    your way back:
 
@@ -198,7 +202,7 @@ change it finds missing.
    ```
 
 The [deployment guide](deployment.md#upgrade-and-roll-back) shows the output
-of each step in a recorded upgrade (made with 0.3.0; the schema version of 0.4.2 is 14).
+of each step in a recorded upgrade (made with 0.3.0; the schema version of 0.4.3 is 14, the same as 0.4.2).
 
 ### Move the database into a folder
 
@@ -296,9 +300,30 @@ network, and the database is still there after `docker compose up -d`.
 
 ### Before you upgrade
 
+#### From 0.4.2
+
+- 0.4.3 does not change the database: the schema version stays 14, and the
+  log has no `applying migration` line. **Back up first** anyway, with **Back
+  up now** on the Backups page. To go back, set the 0.4.2 image again; no
+  restore is needed.
+- Every upload now locks its service before it stores the scan. An upload
+  that arrives while an administrator archives the service is refused with
+  `409` and the code `service_archived`, and nothing is stored. An upload for
+  a service that an administrator deleted meanwhile creates the service again
+  and stores the scan with `201`, as the next upload would; it failed with a
+  server error before. An upload can wait a moment while an administrator
+  archives, deletes or renames that same service.
+- **Cancel waiting key** on the Services page never removes a SonarQube key
+  any more. If SonarQube confirmed the waiting key just before you selected
+  it, the key stays linked and the page says "SonarQube already confirmed
+  <key>.". Scripts can do the same with
+  `PATCH /api/v1/services/{id}` and the body `{"sonar_key_declared": null}`.
+
 #### From 0.4.1
 
-- Two migrations run when 0.4.2 starts. **Back up first**, with **Back up
+Everything in [from 0.4.2](#from-042), and also:
+
+- The two migrations of 0.4.2 run when 0.4.3 starts. **Back up first**, with **Back up
   now** on the Backups page. Going back to the version you ran before needs
   that backup.
   - Migration 00013 adds the analysis time to the SonarQube deliveries, so an
@@ -346,7 +371,7 @@ Everything in [from 0.4.1](#from-041), and also:
     table and its indexes while it runs.
   - Migration 00012 adds two columns to the SonarQube deliveries, used to link
     analyses that arrive before the first scan.
-- If the upgrade stops partway, start 0.4.2 again. Do not go back to 0.4.0:
+- If the upgrade stops partway, start 0.4.3 again. Do not go back to 0.4.0:
   0.4.0 cannot handle a database where 00011 ran only in part. Going back to
   0.4.0 after a finished upgrade needs the backup you made first.
 - Totals are correct at once. A service whose pipelines tagged each image per
@@ -386,7 +411,7 @@ Everything in [from 0.4.0](#from-040), and also:
   volume. Going back to 0.3.0 needs the backup you made before the upgrade.
 - The database lives in a folder now, not in the Docker volume. Follow
   [move the database into a folder](#move-the-database-into-a-folder) before
-  you start 0.4.2.
+  you start 0.4.3.
 - Take over the new `compose.yaml`: longer stop times (2 minutes for the
   database, 30 seconds for Scanopsis), 256 MB of shared memory for the
   database, and the `backups` folder mounted into Scanopsis.
@@ -398,7 +423,7 @@ Everything in [from 0.4.0](#from-040), and also:
 
 Everything in [from 0.3.0](#from-030), and also:
 
-- The database changes on the way to 0.4.2. If you need to go back, restore
+- The database changes on the way to 0.4.3. If you need to go back, restore
   the backup you made before the upgrade.
 - The web interface is new. Ask users to reload pages that are open during the
   upgrade.

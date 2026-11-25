@@ -3,9 +3,15 @@
 
 # Override for an existing PostgreSQL server. It removes the bundled `db`
 # service and its password secret. Scanopsis keeps its ./backups mount. Use it
-# together with compose.yaml:
+# together with compose.yaml and compose.override.yaml, with this line in
+# .env:
 #
-#   docker compose -f compose.yaml -f compose.external-db.yaml up -d
+#   COMPOSE_FILE=compose.yaml:compose.override.yaml:compose.external-db.yaml
+#
+# Leave compose.override.yaml out of the list only if you have none.
+#
+# It needs Docker Compose 2.24.4 or later, the first version that reads the
+# !override tag below.
 #
 # Put the connection URL of your server in ./secrets/database_url, see
 # docs/deployment.md ("Use an existing PostgreSQL"). Scanopsis reaches the
@@ -17,11 +23,11 @@ services:
     depends_on: !reset null
     networks: !override
       - frontend
-    # Only if the server presents a certificate from your own certificate
-    # authority and the URL uses sslmode=verify-full. Uncomment the next two
-    # lines and put the CA in ./db-ca.pem.
-    # volumes:
-    #   - ./db-ca.pem:/etc/scanopsis/db-ca.pem:ro
+    # A certificate from your own certificate authority: do not edit this
+    # file. Mount ./db-ca.pem at /etc/scanopsis/db-ca.pem in
+    # compose.override.yaml, as docs/deployment.md shows ("Step 3. Remove the
+    # bundled database"), and end the URL in ./secrets/database_url with
+    # sslmode=verify-full&sslrootcert=/etc/scanopsis/db-ca.pem
 
 secrets:
   postgres_password: !reset null

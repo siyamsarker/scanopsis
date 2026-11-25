@@ -7,7 +7,7 @@
 **Code quality and container security for every service, in one view.**<br>
 SonarQube and Trivy results from your GitLab CI/CD pipelines, side by side.
 
-[![Version](https://img.shields.io/badge/version-0.4.2-4f46e5?style=flat-square)](docs/versions.md)
+[![Version](https://img.shields.io/badge/version-0.4.3-4f46e5?style=flat-square)](docs/versions.md)
 [![Go](https://img.shields.io/badge/Go-1.27-00ADD8?style=flat-square&logo=go&logoColor=white)](go.mod)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black)](web/package.json)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?style=flat-square&logo=postgresql&logoColor=white)](docs/deployment.md)
@@ -29,8 +29,8 @@ instead of clicking through job logs and SonarQube projects.
 
 ![The service dashboard of payments-api in the dark theme: a risk ring around the risk score with the failed quality gate, a one-line verdict of what changed since the previous pipeline, and the pipeline strip with new and fixed findings per pipeline, gate results and coverage on new code](docs/images/service-dark.png)
 
-> **Status:** install **0.4.2**, the newest version (branch `release/0.4.2`,
-> tag `v0.4.2`). It is an early version: every feature below works and is
+> **Status:** install **0.4.3**, the newest version (branch `release/0.4.3`,
+> tag `v0.4.3`). It is an early version: every feature below works and is
 > tested end to end, but the accuracy check against real pipeline data is
 > still open. Deploy the version branch, never `main`, which is development
 > code.
@@ -68,9 +68,9 @@ installing and running a large platform.
   and commit that produced it.
 - **No shared secrets.** CI jobs prove who they are with GitLab CI/CD ID
   tokens; there is no upload key to store, leak or rotate.
-- **Small and self-hosted.** One Go binary with the web interface built in,
-  plus PostgreSQL. Nothing leaves your network except the calls to your GitLab
-  and SonarQube.
+- **Small and self-hosted.** One container image (a single Go binary with the
+  web interface built in), plus PostgreSQL. Nothing leaves your network except
+  the calls to your GitLab and SonarQube.
 - **Secure by default.** Two-factor authentication for every user, secrets
   encrypted in the database, and an audit log of sign-ins and administrative
   changes.
@@ -159,9 +159,9 @@ scanners, a full vulnerability management workflow, or SBOM-based tracking.
 
 To run Scanopsis:
 
-- A host with Docker Engine and the Compose plugin. The
-  [deployment guide](docs/deployment.md) also covers plain `docker run`,
-  Podman and Kubernetes.
+- A host with Docker Engine and the Compose plugin. Scanopsis runs only as a
+  container; the [deployment guide](docs/deployment.md) also covers plain
+  `docker run` and Podman.
 - PostgreSQL. The Compose file brings PostgreSQL 18; an existing server works
   too.
 - About 512 MiB of memory for the Scanopsis container (the Compose default).
@@ -176,12 +176,12 @@ Node.js 26 as well.
 ## Quick start
 
 Scanopsis publishes no container image. You build it from the newest
-**version branch**, `release/0.4.2`, never from `main`:
+**version branch**, `release/0.4.3`, never from `main`:
 
 ```sh
-git clone --branch release/0.4.2 --depth 1 https://github.com/siyamsarker/scanopsis.git
+git clone --branch release/0.4.3 --depth 1 https://github.com/siyamsarker/scanopsis.git
 cd scanopsis
-make image IMAGE=scanopsis:v0.4.2
+make image IMAGE=scanopsis:v0.4.3
 cd deploy/compose
 ```
 
@@ -189,11 +189,12 @@ Then:
 
 1. Create the secret files in `secrets/` (database URL, database password,
    encryption key).
-2. Create the data folders: `sudo install -d -m 700 -o 70 -g 70 data/postgres`
-   for the database and `sudo install -d -m 700 -o 65532 -g 65532 backups`
-   for the backups.
+2. Create the data folders. On Linux:
+   `sudo install -d -m 700 -o 70 -g 70 data/postgres` for the database and
+   `sudo install -d -m 700 -o 65532 -g 65532 backups` for the backups. On
+   macOS with Docker Desktop: `mkdir -p data/postgres backups`.
 3. Copy `.env.example` to `.env` and set `SCANOPSIS_PUBLIC_URL`. It already
-   runs the image you built, `scanopsis:v0.4.2`.
+   runs the image you built, `scanopsis:v0.4.3`.
 4. Run `docker compose up -d`.
 5. Read the one-time setup token from the log and create the first
    administrator in the browser.
@@ -229,19 +230,21 @@ takes about 15 minutes. Then connect your pipelines with the
 
 ## Versions and upgrading
 
-The newest version is **0.4.2**. Each version is a branch, such as
-`release/0.4.2`, with a tag, such as `v0.4.2`, and never changes once
+The newest version is **0.4.3**. Each version is a branch, such as
+`release/0.4.3`, with a tag, such as `v0.4.3`, and never changes once
 published. `main` is development code.
 
-Already running Scanopsis? Upgrade to 0.4.2 from any older version in one
-step: back up, move the database into a folder (the versions guide shows
-how), build the 0.4.2 image and point `SCANOPSIS_IMAGE` at it. It updates
-the database when it starts, if it has to (0.4.2 changes the database, so
-back up first). The [versions guide](docs/versions.md)
-lists what to check for the version you run, and how to roll back.
+Already running Scanopsis? Upgrade to 0.4.3 from any older version in one
+step: back up, build the 0.4.3 image and point `SCANOPSIS_IMAGE` at it. From
+0.4.2 the database does not change. From an older version, Scanopsis updates
+the database when it starts, and a version before 0.4.0 first needs its
+database moved into a folder (the versions guide shows how). The
+[versions guide](docs/versions.md) lists what to check for the version you
+run, and how to roll back.
 
-The branches of older versions (0.1.0, 0.2.0, 0.3.0, 0.4.0 and 0.4.1) stay on GitHub only as a
-record. They receive no fixes, so do not install them.
+The branches of older versions (0.1.0, 0.2.0, 0.3.0, 0.4.0, 0.4.1 and 0.4.2)
+stay on GitHub only as a record. They receive no fixes, so do not install
+them.
 
 ## Security
 
