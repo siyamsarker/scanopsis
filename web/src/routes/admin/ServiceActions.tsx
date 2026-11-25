@@ -147,16 +147,19 @@ export function ServiceActions({
             patch(body, 'Changes saved', `${body.name ?? service.name} is up to date.`)
           }
           onCancelWaiting={() =>
-            // Never unlinks: when SonarQube confirmed the key first, the
-            // answer shows it linked and nothing was cancelled.
+            // Never unlinks: when the service was linked first, the answer
+            // shows the key and nothing was cancelled. It is the waiting key
+            // when SonarQube confirmed it, or another one an administrator set.
             patch(
               { sonar_key_declared: null },
               'Waiting key cancelled',
               `${service.name} no longer waits for ${service.sonar_key_declared ?? 'a SonarQube key'}.`,
-              (updated) =>
-                updated.sonar_project_key
-                  ? `SonarQube already confirmed ${updated.sonar_project_key}.`
-                  : null,
+              ({ name, sonar_project_key: key }) => {
+                if (!key) return null;
+                return key === service.sonar_key_declared
+                  ? `SonarQube already confirmed ${key}.`
+                  : `${name} is already linked to ${key}.`;
+              },
             )
           }
         />

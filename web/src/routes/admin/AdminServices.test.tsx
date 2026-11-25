@@ -390,9 +390,13 @@ describe('admin services page', () => {
       expect(patch?.body).not.toHaveProperty('name');
     });
 
-    it('says when SonarQube confirmed the key before the cancel', async () => {
+    it.each([
       // The webhook linked the declared key just before the cancel arrived.
-      const linked: Service = { ...docs, sonar_project_key: 'platform:docs' };
+      ['platform:docs', 'SonarQube already confirmed platform:docs.'],
+      // An administrator set another key just before the cancel arrived.
+      ['platform:docs-site', 'Docs is already linked to platform:docs-site.'],
+    ])('says when the service was linked to %s before the cancel', async (key, notice) => {
+      const linked: Service = { ...docs, sonar_project_key: key };
       let confirmed = false;
       mockFetch(
         api((call) => {
@@ -409,13 +413,11 @@ describe('admin services page', () => {
       await chooseAction('Docs', 'Edit');
       const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
       fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel waiting key' }));
-      expect(
-        await screen.findByText('SonarQube already confirmed platform:docs.'),
-      ).toBeInTheDocument();
+      expect(await screen.findByText(notice)).toBeInTheDocument();
       expect(screen.queryByText('Waiting key cancelled')).not.toBeInTheDocument();
       await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
       const docsRow = await rowOf(/Docs/);
-      await waitFor(() => expect(within(docsRow).getByText('platform:docs')).toBeInTheDocument());
+      await waitFor(() => expect(within(docsRow).getByText(key)).toBeInTheDocument());
       expect(docsRow).not.toHaveTextContent('Waiting for SonarQube project');
     });
 
