@@ -146,7 +146,7 @@ The [GitLab CI guide](integrations/gitlab-ci.md) shows the pipeline side.
 | `sonar.url` | `SCANOPSIS_SONAR_URL` | empty | Base URL of your SonarQube server. Same URL rules as the GitLab URL. Prefer `https`: the token travels with every request. |
 | `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | not set | Token of a SonarQube user with Browse permission on the projects. Stored encrypted and never shown again. |
 | `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | not set | Secret of the SonarQube webhook. Deliveries without a valid signature are rejected. Stored encrypted and never shown again. |
-| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | `15m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. A start that would save a shorter value from the environment stops with `SCANOPSIS_SONAR_SYNC_INTERVAL must be at least 1m`. Once the interval is saved, the variable is ignored like the others, and a shorter value only logs a warning. A shorter interval saved by 0.4.2 or older still runs at most once a minute, and the Settings page asks for `1m` or more at the next save. |
+| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | `15m` | How often linked SonarQube projects are refreshed, in case a webhook was missed. At least `1m`. A new installation, one without an administrator yet, does not start with a shorter value from the environment: the log says `SCANOPSIS_SONAR_SYNC_INTERVAL must be at least 1m`. An installation that exists ignores a shorter value, logs a warning, and uses the saved interval, else the default. A shorter interval saved by 0.4.2 or older still runs at most once a minute, and the Settings page asks for `1m` or more at the next save. |
 
 The [SonarQube guide](integrations/sonarqube.md) shows how to connect it.
 
@@ -201,9 +201,9 @@ message next to the field:
 
 At start, Scanopsis checks the environment values against the GitLab,
 SonarQube, session, retention and local sign-in rules, and refuses to start
-when one is broken. The sync interval is checked when it is saved: a value
-below `1m` stops the start that would save it, and is only warned about once
-the interval is saved. Until GitLab sign-in is fully set up, the sign-in page
+when one is broken. A sync interval below `1m` stops only a new installation,
+one without an administrator yet; an installation that exists ignores it and
+logs a warning. Until GitLab sign-in is fully set up, the sign-in page
 does not offer it and Scanopsis does not contact GitLab for sign-in.
 
 > **Do not lock yourself out.** If the settings at start would leave no way to

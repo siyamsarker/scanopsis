@@ -25,10 +25,8 @@ version.
 
 > **Older versions:** the branches `release/0.1.0`, `release/0.2.0`,
 > `release/0.3.0`, `release/0.4.0`, `release/0.4.1` and `release/0.4.2` stay
-> on GitHub only as a record. They
-> receive no fixes,
-> including security fixes, and are not meant for new installations. If you
-> run one,
+> on GitHub only as a record. They receive no fixes, including security
+> fixes, and are not meant for new installations. If you run one,
 > [upgrade to 0.4.3](#upgrade-to-the-newest-version); you can go straight
 > there from any older version.
 
@@ -320,12 +318,14 @@ network, and the database is still there after `docker compose up -d`.
   `PATCH /api/v1/services/{id}` and the body `{"sonar_key_declared": null}`.
   If another key was set on the service just before, the page says
   "<service> is already linked to <key>." instead.
-- If 0.4.2 ran with `SCANOPSIS_SONAR_SYNC_INTERVAL` below `1m`, which it
-  accepted, nothing is needed: it saved the interval, so 0.4.3 starts, and the
-  log warns that the variable is ignored and below the minimum. Remove the
-  variable or set `1m` or more. The saved interval, if below `1m`, still runs
-  at most once a minute, and the Settings page asks for `1m` or more at the
-  next save. A new installation with such a value does not start.
+- If `SCANOPSIS_SONAR_SYNC_INTERVAL` is below `1m`, which 0.4.2 accepted,
+  nothing is needed: 0.4.3 starts, ignores the variable and logs a warning
+  that it is below the minimum, and uses the saved interval, else the default
+  of `15m`, also after a reset of the interval or a restore. Remove the
+  variable or set `1m` or more. A saved interval below `1m` still runs at most
+  once a minute, and the Settings page asks for `1m` or more at the next save.
+  Only a new installation, one without an administrator yet, does not start
+  with such a value.
 
 #### From 0.4.1
 
