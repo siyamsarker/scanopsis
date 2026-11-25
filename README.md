@@ -189,9 +189,10 @@ Then:
 
 1. Create the secret files in `secrets/` (database URL, database password,
    encryption key).
-2. Create the data folders: `sudo install -d -m 700 -o 70 -g 70 data/postgres`
-   for the database and `sudo install -d -m 700 -o 65532 -g 65532 backups`
-   for the backups.
+2. Create the data folders. On Linux:
+   `sudo install -d -m 700 -o 70 -g 70 data/postgres` for the database and
+   `sudo install -d -m 700 -o 65532 -g 65532 backups` for the backups. On
+   macOS with Docker Desktop: `mkdir -p data/postgres backups`.
 3. Copy `.env.example` to `.env` and set `SCANOPSIS_PUBLIC_URL`. It already
    runs the image you built, `scanopsis:v0.4.3`.
 4. Run `docker compose up -d`.
