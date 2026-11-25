@@ -69,7 +69,7 @@ version branch, never `main`: `main` is development code.
    scanopsis:v0.4.3   75fce01a01fb       28.6MB         6.84MB
    ```
 
-   With the classic image store, the columns are `REPOSITORY`, `TAG`,
+   Docker 28 and older print other columns: `REPOSITORY`, `TAG`,
    `IMAGE ID`, `CREATED` and `SIZE`.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, the version

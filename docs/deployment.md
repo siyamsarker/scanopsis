@@ -447,8 +447,11 @@ and `--cacert` trusts the test certificate.
    `client_ip` is the address the proxy saw. For this curl on the same host
    that is the gateway of the Compose network (`172.30.0.1`), on Docker
    Desktop and on Linux alike, because the request comes in through the port
-   published on `127.0.0.1`. A user on another machine who reaches the proxy on
-   its published port 443 shows up with their own address. The fake
+   published on `127.0.0.1`. On Linux, a user on another machine who reaches
+   the proxy on its published port 443 shows up with their own address. On
+   Docker Desktop, every connection through a published port, from this host
+   or another machine, comes from one address of its virtual network
+   (`192.168.65.1` here), so all users share one address there. The fake
    `203.0.113.9` is never used.
 
 4. **Large uploads pass.** Send 3 MB to the upload address:
