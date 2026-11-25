@@ -209,6 +209,7 @@ takes about 15 minutes. Then connect your pipelines with the
 | Guide | What you find there | For whom |
 | --- | --- | --- |
 | [Getting started](docs/getting-started.md) | Build, start and set up Scanopsis step by step. | Operators |
+| [Use the dashboard](docs/user-guide.md) | What each page shows, what its numbers mean, and the everyday jobs. | Everyone who uses the dashboard |
 | [Versions and upgrades](docs/versions.md) | Which version to deploy, and how to upgrade and roll back. | Everyone |
 | [Configuration reference](docs/configuration.md) | Every setting and variable, defaults, validation, the secret key, rate limits. | Operators |
 | [Deployment](docs/deployment.md) | Reverse proxy and TLS, existing PostgreSQL, other ways to run, sizing, upgrades. | Operators |

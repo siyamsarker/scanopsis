@@ -118,6 +118,7 @@ finished.
 | If you change... | Update |
 | --- | --- |
 | Features, requirements, screenshots | [README](README.md) |
+| A page, label, control or number of the web interface | [Use the dashboard](docs/user-guide.md) |
 | Install steps, first start | [Getting started](docs/getting-started.md) |
 | A setting, variable, default or validation message | [Configuration reference](docs/configuration.md) |
 | Compose files, proxy, sizing, other ways to run | [Deployment](docs/deployment.md) |

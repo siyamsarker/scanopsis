@@ -61,11 +61,11 @@ The application now appears in the list with the three scopes.
    - **Application ID** (`gitlab.client_id`): the application ID.
    - **Application secret** (`gitlab.client_secret`): the secret. Scanopsis stores it encrypted and never
      shows it again.
-   - `gitlab.allowed_groups`: the groups whose members may sign in, one per
-     line. Read [Choose who may sign in](#choose-who-may-sign-in) first. If you
+   - **Groups that may sign in** (`gitlab.allowed_groups`): the groups whose
+     members may sign in, one per line. Read [Choose who may sign in](#choose-who-may-sign-in) first. If you
      leave it empty, every user of your GitLab can sign in.
-3. Select **Save changes**. The page shows "Settings saved. Changes apply now."
-   No restart is needed.
+3. Select **Save changes**. The page shows "Settings saved" and how many
+   changes apply now, for example "3 changes apply now." No restart is needed.
 
 If saving fails, the page names the field:
 

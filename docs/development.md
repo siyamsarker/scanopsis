@@ -69,10 +69,13 @@ nvm use
    It prints the version, the commit and the Go version, for example:
 
    ```text
-   scanopsis v0.4.2 (commit <commit>, <go version>)
+   scanopsis v0.4.3 (commit <commit>, <go version>)
    ```
 
-   The commit and the Go version are those of your build.
+   The commit and the Go version are those of your build. The version comes
+   from `git describe`: on a commit after the newest tag it reads like
+   `v0.4.3-12-g19e676b`, the tag, the number of commits since it and the
+   commit.
 
 3. Start a PostgreSQL database for development:
 
@@ -99,6 +102,12 @@ nvm use
    no administrator exists, a warning line holds the `setup_url` and the
    `setup_token`. Open <http://localhost:8080> and finish the setup with that
    token.
+
+   The log also warns `backups are unavailable until the backup folder is
+   fixed`, because the default backup folder, `/var/lib/scanopsis/backups`,
+   does not exist on your machine. Everything else works. To try backups, set
+   `SCANOPSIS_BACKUP_DIR` to an absolute path of a folder you can write, before
+   you start the server.
 
    Press `Ctrl+C` to stop the server. It shuts down gracefully and logs
    `scanopsis stopped`.
@@ -307,7 +316,7 @@ git diff scripts/apidocs/testdata/golden.md
      --security-opt no-new-privileges scanopsis:dev --version
    ```
 
-   It prints the version line, for example `scanopsis v0.4.2 (commit <commit>,
+   It prints the version line, for example `scanopsis v0.4.3 (commit <commit>,
    <go version>)`, with the commit and Go version of your build.
 
 3. To run the whole stack with a database, use the Compose deployment in
@@ -382,7 +391,7 @@ When you add a fixture, write down here how you made it.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | The browser shows "The web interface is not included in this build." | The binary was built with `go build` before the web interface was built. | Run `make build`, or `(cd web && npm run build)` before `go build`. |
-| `make image` fails with `VERSION and COMMIT may only contain A-Z a-z 0-9 . _ + -` | A build argument has other characters. | Pass a plain version, for example `make image VERSION=v0.4.2`. |
+| `make image` fails with `VERSION and COMMIT may only contain A-Z a-z 0-9 . _ + -` | A build argument has other characters. | Pass a plain version, for example `make image VERSION=v0.4.3`. |
 | `make check` fails in `headers` | A new source file has no SPDX header. | Add the header from CONTRIBUTING.md to the file it names. |
 | `make generate` fails with `openapi-typescript: command not found` | The web dependencies are missing. | Run `make web-install`, then `make generate` again. |
 | Integration tests fail with `start PostgreSQL container` | Docker is not running, or your user cannot reach the Docker socket. | Start Docker, or fix the socket permissions. |

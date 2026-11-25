@@ -74,13 +74,13 @@ can also seed these values at the first start with the environment variables:
 
 | Setting | Environment variable | Value |
 | --- | --- | --- |
-| `sonar.url` | `SCANOPSIS_SONAR_URL` | The base URL, for example `https://sonarqube.example.com`. |
-| `sonar.token` | `SCANOPSIS_SONAR_TOKEN` | The user token from step 1. |
-| `sonar.webhook_secret` | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | The random secret you just created. |
-| `sonar.sync_interval` | `SCANOPSIS_SONAR_SYNC_INTERVAL` | How often to read every linked project. Default `15m`, at least `1m`. |
+| **SonarQube URL** (`sonar.url`) | `SCANOPSIS_SONAR_URL` | The base URL, for example `https://sonarqube.example.com`. |
+| **Access token** (`sonar.token`) | `SCANOPSIS_SONAR_TOKEN` | The user token from step 1. |
+| **Webhook secret** (`sonar.webhook_secret`) | `SCANOPSIS_SONAR_WEBHOOK_SECRET` | The random secret you just created. |
+| **Sync interval** (`sonar.sync_interval`) | `SCANOPSIS_SONAR_SYNC_INTERVAL` | How often to read every linked project. Default `15m`, at least `1m`. |
 
-Select **Save changes**. The page shows "Settings saved. Changes apply now." No
-restart is needed.
+Select **Save changes**. The page shows "Settings saved" and how many changes
+apply now, for example "3 changes apply now." No restart is needed.
 
 The token and the secret are stored encrypted and never shown or logged. The URL
 and the token need each other: saving one without the other fails with "Required
@@ -187,9 +187,9 @@ newer upload that declares another key replaces the waiting one.
   analysis is not linked to a service, check this first.
 - **Override it.** An administrator who sets or clears the SonarQube key of
   the service cancels the waiting key. On the Services page, open **Edit**
-  and enter a key, or select **Cancel waiting key**; saving only a new name
-  keeps the waiting key. The audit event then has
-  `cleared_sonar_key_declared`.
+  and enter a key (in the API, `sonar_project_key` in an update of the
+  service, where `null` clears it); saving only a new name keeps the waiting
+  key. The audit event then has `cleared_sonar_key_declared`.
 - **Cancel it.** **Cancel waiting key** stops the wait and never unlinks (in
   the API: `"sonar_key_declared": null` in an update of the service). If an
   analysis confirmed `K` just before, the service keeps `K`, nothing is
@@ -261,12 +261,14 @@ service has one SonarQube result.
 ## Step 5. Check that it works
 
 1. Run an analysis in SonarQube.
-2. In Scanopsis, open **Integrations**. The **SonarQube** card shows **Ready**,
-   the server version, the last webhook, the last sync and the recent
-   deliveries. The server version appears after the first sync, about 10 seconds
-   after Scanopsis starts.
-3. Find your analysis under **Recent deliveries** with the outcome **Linked**,
-   then open the service. The analysis appears within a few seconds.
+2. In Scanopsis, open **Integrations**. The **SonarQube** card says "SonarQube
+   analyses are arriving" ("Ready, waiting for the first webhook" until the
+   first delivery), and shows the **Server** version, the **Last webhook** and
+   the **Last sync**. The server version appears after the first sync, about
+   10 seconds after Scanopsis starts.
+3. Find your analysis under **SonarQube deliveries** with the outcome
+   **Linked**, then open the service. The analysis appears within a few
+   seconds.
 
 In SonarQube, the delivery log of the webhook shows the HTTP status that
 Scanopsis answered.
@@ -282,8 +284,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://scanopsis.example.com/a
   --data "$BODY"
 ```
 
-It prints `202`. The delivery then appears on the Integrations page as
-**Unlinked** unless a service has that project key. A real service with that key
+It prints `202`. The delivery then appears on the Integrations page with the
+outcome **No service** unless a service has that project key. A real service with that key
 would make Scanopsis read the analysis from SonarQube, which fails for a made-up
 task, so use a key that no service has.
 
@@ -376,19 +378,19 @@ calling the endpoint.
 | Linked: `The processing queue was full; the sync read the analysis.` | The delivery waited for the sync, which stored the analysis. | Nothing to do. |
 | Linked: `The analysis was already stored by a sync.` | The sync was faster than the webhook. | Nothing to do. |
 | Linked: `A newer analysis (...) already exists in SonarQube; the measures are from it. The next sync will add it.` | Another analysis finished before this one was read. | Nothing to do. |
-| Unlinked: `No service is linked to SonarQube project "...". Pass -Dsonar.analysis.gitlabProjectId=... and -Dsonar.analysis.pipelineId=... ...` | No service has this project key, and the pipeline passed no usable `sonar.analysis.gitlabProjectId`. | Set the key on the service, or add both properties. See [step 4](#step-4-link-projects-to-services). |
-| Unlinked: `No service is linked to SonarQube project "..." yet. The analysis is linked when the scan of the same pipeline (...) reaches Scanopsis ...` | The analysis ran before the first Trivy scan of the project, so there is no service yet. | Nothing to do: the first scan of that pipeline links it, and the delivery then shows Linked. If that upload declares another key with `sonar_key`, only an analysis of the declared key is linked and this delivery is not. Its detail then says why: `Not linked: the service of GitLab project ... is linked to SonarQube project "...", the key its pipeline declared in its upload.` when an analysis already confirmed the declared key, `Not linked: the service of GitLab project ... was linked to SonarQube project "..." by the analysis of the pipeline of its first scan.` when one of the declared key arrived just as the upload finished, or `The service of GitLab project ... waits for SonarQube project "...", the key its pipeline declared in an upload, so this analysis was not linked to it.` while the declared key waits (see below). If the upload's `sonar_key` is ignored, the delivery stays as it is: set the key on the service. |
-| Unlinked: `No service is linked to SonarQube project "...", and no service has GitLab project ... yet. Pass -Dsonar.analysis.pipelineId=... ...` | As above, but without `sonar.analysis.pipelineId`, so the analysis cannot be tied to the first scan. | Add `-Dsonar.analysis.pipelineId="$CI_PIPELINE_ID"`, or set the key on the service. |
-| Unlinked: `The service of GitLab project ... is archived, so SonarQube project "..." was not linked. ...` | The service of the project is archived. | An administrator unarchives the service and sets its SonarQube key. |
-| Unlinked: `More than one SonarQube project names GitLab project ... in pipeline ..., so none was linked automatically. ...` | Analyses of two SonarQube projects came from the pipeline of the first scan. | An administrator sets the right key on the service. |
-| Unlinked: `Not linked: the service of GitLab project ... was linked to SonarQube project "..." by the analysis of the pipeline of its first scan. ...` | Another analysis, of the first scan's pipeline, was linked. This one came from another pipeline or named another project. | Nothing to do if the link is right; otherwise change the key on the service. |
+| No service: `No service is linked to SonarQube project "...". Pass -Dsonar.analysis.gitlabProjectId=... and -Dsonar.analysis.pipelineId=... ...` | No service has this project key, and the pipeline passed no usable `sonar.analysis.gitlabProjectId`. | Set the key on the service, or add both properties. See [step 4](#step-4-link-projects-to-services). |
+| No service: `No service is linked to SonarQube project "..." yet. The analysis is linked when the scan of the same pipeline (...) reaches Scanopsis ...` | The analysis ran before the first Trivy scan of the project, so there is no service yet. | Nothing to do: the first scan of that pipeline links it, and the delivery then shows Linked. If that upload declares another key with `sonar_key`, only an analysis of the declared key is linked and this delivery is not. Its detail then says why: `Not linked: the service of GitLab project ... is linked to SonarQube project "...", the key its pipeline declared in its upload.` when an analysis already confirmed the declared key, `Not linked: the service of GitLab project ... was linked to SonarQube project "..." by the analysis of the pipeline of its first scan.` when one of the declared key arrived just as the upload finished, or `The service of GitLab project ... waits for SonarQube project "...", the key its pipeline declared in an upload, so this analysis was not linked to it.` while the declared key waits (see below). If the upload's `sonar_key` is ignored, the delivery stays as it is: set the key on the service. |
+| No service: `No service is linked to SonarQube project "...", and no service has GitLab project ... yet. Pass -Dsonar.analysis.pipelineId=... ...` | As above, but without `sonar.analysis.pipelineId`, so the analysis cannot be tied to the first scan. | Add `-Dsonar.analysis.pipelineId="$CI_PIPELINE_ID"`, or set the key on the service. |
+| No service: `The service of GitLab project ... is archived, so SonarQube project "..." was not linked. ...` | The service of the project is archived. | An administrator unarchives the service and sets its SonarQube key. |
+| No service: `More than one SonarQube project names GitLab project ... in pipeline ..., so none was linked automatically. ...` | Analyses of two SonarQube projects came from the pipeline of the first scan. | An administrator sets the right key on the service. |
+| No service: `Not linked: the service of GitLab project ... was linked to SonarQube project "..." by the analysis of the pipeline of its first scan. ...` | Another analysis, of the first scan's pipeline, was linked. This one came from another pipeline or named another project. | Nothing to do if the link is right; otherwise change the key on the service. |
 | Linked: `Linked when the first scan of the same pipeline created the service of the GitLab project; ...` | The analysis waited for the first scan of its pipeline. | Nothing to do. |
 | Linked: `Linked when an upload of the service's pipeline declared this SonarQube project key; ...` | The analysis arrived first, and a later upload declared its key (`sonar_key`). | Nothing to do. |
 | Linked: `Linked when a service was given this SonarQube project key while the delivery was processed; ...` | The service got the key, by an upload or an administrator, while the delivery was processed. | Nothing to do. |
-| Unlinked: `The service of GitLab project ... waits for SonarQube project "...", the key its pipeline declared in an upload, so ...` | An upload declared another key, which waits for its own analysis. | Nothing to do if the declared key is right. Otherwise correct `SONAR_PROJECT_KEY`, or set the key on the service. |
-| Unlinked: `Not linked: the service of GitLab project ... is linked to SonarQube project "...", the key its pipeline declared in its upload. ...` | The declared key was set, and this analysis is of another project. | Nothing to do if the link is right; otherwise change the key on the service. |
-| Unlinked: `The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, ...` | The service already has another key, for example because the project was renamed. | Change the SonarQube key on the service. |
-| Unlinked: `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "..." because the service or the key is already linked, or the service's pipeline declared another key in an upload.` | Another service, maybe an archived one, has this key, or the service waits for the key its pipeline declared. | Look at the service on the Services page: a waiting key shows there. Free the key on the other service, correct `SONAR_PROJECT_KEY`, or set the key on the service. |
+| No service: `The service of GitLab project ... waits for SonarQube project "...", the key its pipeline declared in an upload, so ...` | An upload declared another key, which waits for its own analysis. | Nothing to do if the declared key is right. Otherwise correct `SONAR_PROJECT_KEY`, or set the key on the service. |
+| No service: `Not linked: the service of GitLab project ... is linked to SonarQube project "...", the key its pipeline declared in its upload. ...` | The declared key was set, and this analysis is of another project. | Nothing to do if the link is right; otherwise change the key on the service. |
+| No service: `The service named by sonar.analysis.gitlabProjectId is linked to a different SonarQube project, ...` | The service already has another key, for example because the project was renamed. | Change the SonarQube key on the service. |
+| No service: `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "..." because the service or the key is already linked, or the service's pipeline declared another key in an upload.` | Another service, maybe an archived one, has this key, or the service waits for the key its pipeline declared. | Look at the service on the Services page: a waiting key shows there. Free the key on the other service, correct `SONAR_PROJECT_KEY`, or set the key on the service. |
 | Failed: `The analysis task ended with status "..."; nothing was stored.` | The analysis failed in SonarQube. | Fix the analysis. The next successful one is stored. |
 | Failed: `Reading measures failed: SonarQube answered 401 on api/measures/component. ...` | The token is wrong or revoked. | Create a new token and save it in Settings. |
 | Failed: `... SonarQube answered 403 on ...` or `... answered 404 on ...` | The user lacks Browse on the project, or the project key does not exist. Newer versions answer 404 for a missing permission. | Give the user Browse on the project. |
@@ -405,7 +407,7 @@ calling the endpoint.
 | --- | --- | --- |
 | SonarQube shows the delivery as failed, with a timeout or a connection error. | SonarQube cannot reach Scanopsis, or blocks private addresses. | See [If SonarQube refuses a private address](#if-sonarqube-refuses-a-private-address). |
 | A service shows no SonarQube data. | It has no SonarQube key, and no analysis arrived with its GitLab project ID. Or its pipeline declared a key that waits: the Services page shows "Waiting for SonarQube project ...". | Link it, see [step 4](#step-4-link-projects-to-services). For a waiting key, run an analysis of that key with `-Dsonar.analysis.gitlabProjectId="$CI_PROJECT_ID"`, or set the key on the service. |
-| The Integrations page shows "The last sync failed". | The last sync could not read a project. The text names the project and the SonarQube status. | Fix the cause. The next good sync clears it. |
+| The Integrations page shows "The last sync with SonarQube failed". | The last sync could not read a project. The text names the project and the SonarQube status. | Fix the cause. The next good sync clears it. |
 | A rating or the coverage says "Not available". | SonarQube did not report that metric for the analysis. | Check the project in SonarQube. |
 
 ---
