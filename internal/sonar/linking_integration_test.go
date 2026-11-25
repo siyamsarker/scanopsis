@@ -13,6 +13,10 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
 func (e *env) serviceKey(t *testing.T, id int64) (string, bool) {
@@ -155,6 +159,79 @@ func TestWebhookConcurrentDeliveriesOfOneProjectBothLink(t *testing.T) {
 				t.Errorf("%d link records, want 1", pins)
 			}
 		})
+	}
+}
+
+// A delivery whose link finds the service taken stores its analysis only if
+// the service is still linked to its key, read under the service's row lock
+// in the transaction that stores. Here another link takes the service first,
+// and an administrator changes the key just as the delivery looks again: the
+// delivery is not linked and stores nothing on the service.
+func TestWebhookLinkedMeanwhileFollowsTheLockedKey(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	sid := e.service(t, "platform/payments-api", 5, "")
+	e.project("platform:payments-api")
+	props := map[string]string{"sonar.analysis.gitlabProjectId": "5"}
+	wantStatus(t, e, hook("task-k1", "platform:payments-api", map[string]any{"properties": props}), 202)
+
+	// The other link holds the service's row until the delivery waits for it.
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := e.q.WithTx(tx).PinSonarKey(ctx, store.PinSonarKeyParams{
+		ID: sid, SonarProjectKey: pgtype.Text{String: "platform:payments-api", Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	adminDone := make(chan error, 1)
+	e.s.beforeStoreLinked = func() {
+		admin, err := e.pool.Begin(ctx)
+		if err != nil {
+			adminDone <- err
+			return
+		}
+		if _, err := admin.Exec(ctx, `UPDATE services SET sonar_project_key = 'platform:other' WHERE id = $1`, sid); err != nil {
+			_ = admin.Rollback(ctx)
+			adminDone <- err
+			return
+		}
+		go func() {
+			waitFor(t, func() bool {
+				select {
+				case <-done:
+					return true
+				default:
+				}
+				return e.lockWaits(t, "") == 1
+			})
+			adminDone <- admin.Commit(ctx)
+		}()
+	}
+	d := <-e.s.queue
+	go func() { e.s.process(ctx, d); close(done) }()
+	waitFor(t, func() bool { return e.lockWaits(t, "UPDATE services SET sonar_project_key") == 1 })
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-adminDone; err != nil {
+		t.Fatal(err)
+	}
+	<-done
+
+	got := e.delivery(t, "task-k1")
+	want := `The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project "platform:payments-api" because the service or the key is already linked, or the service's pipeline declared another key in an upload.`
+	if got.Outcome != "unlinked" || got.ServiceID.Valid || got.Detail != want {
+		t.Errorf("delivery: %+v", got)
+	}
+	if n := len(e.analyses(t, sid)); n != 0 {
+		t.Errorf("%d analyses stored on a service linked to another key", n)
+	}
+	if k, _ := e.serviceKey(t, sid); k != "platform:other" {
+		t.Errorf("key %q", k)
 	}
 }
 

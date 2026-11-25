@@ -417,13 +417,8 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 		// pipeline, may have linked the service to this very key while this
 		// delivery was processed. The analysis is then stored as for a
 		// delivery that arrived after the link.
-		switch linked, lerr := s.linkedTo(ctx, sid, pin); {
-		case lerr != nil:
-			err = lerr
-		case linked:
-			known, err = s.storeAnalysis(ctx, a, "")
-			knownDetail = storedMeanwhileDetail
-		}
+		known, err = s.storeLinked(ctx, a, pin)
+		knownDetail = storedMeanwhileDetail
 	}
 	switch {
 	case errors.Is(err, errPinConflict):
@@ -453,24 +448,59 @@ var errKnownCheck = errors.New("checking stored analyses")
 // save).
 func (s *Sonar) storeAnalysis(ctx context.Context, a snapshot, pinKey string) (known bool, err error) {
 	if a.AnalysisKey != "" {
-		known, err := s.q.SonarAnalysisKnown(ctx, store.SonarAnalysisKnownParams{ServiceID: a.ServiceID, AnalysisKey: a.AnalysisKey})
-		if err != nil {
-			return false, fmt.Errorf("%w: %w", errKnownCheck, err)
-		}
-		if known {
-			return true, nil
+		if known, err = s.analysisKnown(ctx, s.q, a); known || err != nil {
+			return known, err
 		}
 	}
 	return false, s.save(ctx, a, pinKey)
 }
 
-// linkedTo reports whether the service, not archived, is linked to key now.
-func (s *Sonar) linkedTo(ctx context.Context, serviceID int64, key string) (bool, error) {
-	id, err := s.q.SonarServiceByKey(ctx, pgtype.Text{String: key, Valid: true})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
+// storeLinked stores an analysis, unless the service already has it, only
+// if the service is linked to key: its row is locked and its key read in
+// the transaction that stores, so a change of the key either comes first
+// and is seen, or waits. errPinConflict when the service is linked to
+// another key, archived or gone.
+func (s *Sonar) storeLinked(ctx context.Context, a snapshot, key string) (known bool, err error) {
+	if s.beforeStoreLinked != nil {
+		s.beforeStoreLinked()
 	}
-	return err == nil && id == serviceID, err
+	arg, err := s.analysisParams(a)
+	if err != nil {
+		return false, err
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
+	q := s.q.WithTx(tx)
+	cur, err := q.LockSonarService(ctx, a.ServiceID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return false, errPinConflict
+	case err != nil:
+		return false, err
+	case !cur.SonarProjectKey.Valid || cur.SonarProjectKey.String != key:
+		return false, errPinConflict
+	}
+	if a.AnalysisKey != "" {
+		if known, err = s.analysisKnown(ctx, q, a); known || err != nil {
+			return known, err
+		}
+	}
+	if err := q.InsertSonarAnalysis(ctx, arg); err != nil {
+		return false, err
+	}
+	return false, tx.Commit(ctx)
+}
+
+// analysisKnown reports whether the service already has the analysis.
+func (s *Sonar) analysisKnown(ctx context.Context, q *store.Queries, a snapshot) (bool, error) {
+	known, err := q.SonarAnalysisKnown(ctx, store.SonarAnalysisKnownParams{ServiceID: a.ServiceID, AnalysisKey: a.AnalysisKey})
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", errKnownCheck, err)
+	}
+	return known, nil
 }
 
 // snapshot is an analysis ready to be stored.
@@ -498,31 +528,9 @@ var errPinConflict = errors.New("service or SonarQube key already linked")
 // save stores an analysis. With a pin key it first links the service to that
 // SonarQube project, in the same transaction.
 func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
-	conds, err := json.Marshal(a.Conditions)
+	arg, err := s.analysisParams(a)
 	if err != nil {
 		return err
-	}
-	measures, err := json.Marshal(a.Measures)
-	if err != nil {
-		return err
-	}
-	n := normalise(a.Measures)
-	arg := store.InsertSonarAnalysisParams{
-		ServiceID: a.ServiceID, TaskID: a.TaskID, AnalysisKey: a.AnalysisKey,
-		AnalysedAt: pgtype.Timestamptz{Time: a.AnalysedAt, Valid: true}, Revision: a.Revision,
-		QualityGateStatus: a.Gate, GateConditions: conds, Measures: measures, Mode: n.Mode,
-		ReliabilityRating: n.Reliability, SecurityRating: n.Security,
-		MaintainabilityRating: n.Maintainability, SecurityReviewRating: n.SecurityReview,
-		ReceivedAt: pgtype.Timestamptz{Time: s.now(), Valid: true},
-	}
-	if n.Coverage != nil {
-		arg.Coverage = pgtype.Float8{Float64: *n.Coverage, Valid: true}
-	}
-	if n.Duplication != nil {
-		arg.DuplicatedLinesDensity = pgtype.Float8{Float64: *n.Duplication, Valid: true}
-	}
-	if a.Pipeline != nil {
-		arg.GitlabPipelineID = pgtype.Int8{Int64: *a.Pipeline, Valid: true}
 	}
 	if pinKey == "" {
 		return s.q.InsertSonarAnalysis(ctx, arg)
@@ -548,6 +556,37 @@ func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// analysisParams are the values of a stored analysis.
+func (s *Sonar) analysisParams(a snapshot) (store.InsertSonarAnalysisParams, error) {
+	conds, err := json.Marshal(a.Conditions)
+	if err != nil {
+		return store.InsertSonarAnalysisParams{}, err
+	}
+	measures, err := json.Marshal(a.Measures)
+	if err != nil {
+		return store.InsertSonarAnalysisParams{}, err
+	}
+	n := normalise(a.Measures)
+	arg := store.InsertSonarAnalysisParams{
+		ServiceID: a.ServiceID, TaskID: a.TaskID, AnalysisKey: a.AnalysisKey,
+		AnalysedAt: pgtype.Timestamptz{Time: a.AnalysedAt, Valid: true}, Revision: a.Revision,
+		QualityGateStatus: a.Gate, GateConditions: conds, Measures: measures, Mode: n.Mode,
+		ReliabilityRating: n.Reliability, SecurityRating: n.Security,
+		MaintainabilityRating: n.Maintainability, SecurityReviewRating: n.SecurityReview,
+		ReceivedAt: pgtype.Timestamptz{Time: s.now(), Valid: true},
+	}
+	if n.Coverage != nil {
+		arg.Coverage = pgtype.Float8{Float64: *n.Coverage, Valid: true}
+	}
+	if n.Duplication != nil {
+		arg.DuplicatedLinesDensity = pgtype.Float8{Float64: *n.Duplication, Valid: true}
+	}
+	if a.Pipeline != nil {
+		arg.GitlabPipelineID = pgtype.Int8{Int64: *a.Pipeline, Valid: true}
+	}
+	return arg, nil
 }
 
 // auditPin records, in the transaction of q, that a service was linked to a

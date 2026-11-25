@@ -90,6 +90,9 @@ type Sonar struct {
 	minInterval time.Duration
 	// beforeLinkTaken, when set by a test, runs as linkWaitingTaken starts.
 	beforeLinkTaken func()
+	// beforeStoreLinked, when set by a test, runs before a delivery whose
+	// link found the service taken checks the service's key again.
+	beforeStoreLinked func()
 
 	mu         sync.Mutex
 	version    string
