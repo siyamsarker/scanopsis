@@ -335,10 +335,12 @@ compression.
    `$proxy_add_x_forwarded_for` only if you also list the proxies in front of
    nginx in `SCANOPSIS_TRUSTED_PROXIES`.
 
-   Use `$http_host`, not `$host`: `$host` drops the port, and on a port other
-   than 443 (such as 9443 below) Scanopsis then refuses every sign-in and
-   every change from the browser with `403` and the code `cross_origin`,
-   because the browser's `Origin` names the port.
+   Use `$http_host`, not `$host`: `$host` drops the port. On a port other
+   than 443 (such as 9443 below), a request that names the port in `Origin`
+   but sends no `Sec-Fetch-Site` header, such as one from an older browser or
+   a script, is then refused with `403` and the code `cross_origin`. Current
+   browsers send `Sec-Fetch-Site: same-origin` over HTTPS, and Scanopsis
+   accepts that without comparing `Origin` with `Host`.
 
 2. Use this `compose.override.yaml` instead of the Caddy one. If you tried
    Caddy first, see the note after step 3 to remove its container:
@@ -442,17 +444,19 @@ and `--cacert` trusts the test certificate.
    ```
 
    With the proxy listed, the start-up line shows `"trusted_proxies":1`, and
-   `client_ip` is the address the proxy saw: `172.30.0.1` (the network gateway)
-   on Docker Desktop, the real client on a Linux server. The fake
+   `client_ip` is the address the proxy saw. For this curl on the same host
+   that is the gateway of the Compose network (`172.30.0.1`), on Docker
+   Desktop and on Linux alike, because the request comes in through the port
+   published on `127.0.0.1`. A user on another machine who reaches the proxy on
+   its published port 443 shows up with their own address. The fake
    `203.0.113.9` is never used.
 
-4. **Large uploads pass.** Send 3 MB to the upload address (for Caddy, use
-   8443):
+4. **Large uploads pass.** Send 3 MB to the upload address:
 
    ```sh
-   head -c 3000000 /dev/zero | curl -sS --resolve scanopsis.example.com:9443:127.0.0.1 \
+   head -c 3000000 /dev/zero | curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 \
      --cacert tls/cert.pem -H 'Content-Type: application/json' --data-binary @- \
-     -w '\nHTTP %{http_code}\n' https://scanopsis.example.com:9443/api/v1/ingest/trivy
+     -w '\nHTTP %{http_code}\n' https://scanopsis.example.com:8443/api/v1/ingest/trivy
    ```
 
    The request reaches Scanopsis, which answers in JSON that the token is
@@ -464,7 +468,8 @@ and `--cacert` trusts the test certificate.
    HTTP 401
    ```
 
-   Without `client_max_body_size`, nginx answers itself with an HTML page:
+   Through nginx without `client_max_body_size`, nginx answers itself with an
+   HTML page:
 
    ```text
    <html>
@@ -491,8 +496,8 @@ and `--cacert` trusts the test certificate.
    ```
 
    nginx writes the header as `Content-Encoding: gzip`. The script shrank
-   from 518,340 bytes to 170,172 through Caddy and to 192,035 through nginx. Small JSON answers such as `/readyz` stay
-   uncompressed, which is normal.
+   from 518,340 bytes to 170,172 through Caddy and to 192,035 through nginx.
+   Small JSON answers such as `/readyz` stay uncompressed, which is normal.
 
 If a check fails, see [reverse proxy problems](troubleshooting.md#reverse-proxy-and-tls).
 
@@ -596,13 +601,14 @@ Backups cross the proxy in two ways:
   ```
 
   `proxy_max_temp_file_size 0;` is the other option: nginx then never writes
-  the answer to disk. A test proxied a 400 MB file through nginx 1.29 to a
-  client limited to 5 MB/s, once with the default settings and once with
-  `proxy_buffering off`. Both downloads were complete, and a `Range` request
-  answered `206`. That test used a plain file server behind nginx, not
-  Scanopsis, and no temporary file showed up. So the settings above
-  are a precaution that you do not need to apply to get a working download.
-  Watch the disk of the proxy during the first large download if you keep the
+  the answer to disk. A 200 MiB file in the backup folder was downloaded from
+  Scanopsis with `curl --limit-rate 5M`: through nginx 1.30 with the default
+  settings, through nginx with `proxy_buffering off`, and through Caddy 2.11.
+  Each download was complete (209,715,200 bytes in 40 seconds, the same bytes
+  as the file), a `Range` request for the second half answered `206`, and
+  nginx kept no temporary file open while it ran. So the settings above are a
+  precaution that you do not need to apply to get a working download. Watch
+  the disk of the proxy during the first large download if you keep the
   default.
 
 ### Set proxy timeouts
@@ -635,6 +641,23 @@ Scanopsis never turns certificate checks off. Give it your CA instead.
      scanopsis:
        volumes:
          - ./ca.pem:/etc/scanopsis/ca.pem:ro
+   ```
+
+   If `compose.override.yaml` already has a `scanopsis:` entry (for example
+   `extra_hosts`, or the CA of your database from
+   [step 3](#step-3-remove-the-bundled-database) below), add the line to its
+   `volumes:` list instead. A second `scanopsis:` key is an error:
+   `mapping key "scanopsis" already defined`. All three together look like
+   this:
+
+   ```yaml
+   services:
+     scanopsis:
+       extra_hosts:
+         - "gitlab.example.com:10.0.0.5"
+       volumes:
+         - ./ca.pem:/etc/scanopsis/ca.pem:ro
+         - ./db-ca.pem:/etc/scanopsis/db-ca.pem:ro
    ```
 
 3. In `.env`, set `SCANOPSIS_CA_FILE=/etc/scanopsis/ca.pem` and run
@@ -686,6 +709,11 @@ you do not want the `db` container. Scanopsis was tested with PostgreSQL 18. It
 needs no extension and no superuser. The steps below were run against a
 separate PostgreSQL 18 server with TLS and a certificate from a private CA.
 The host name and the password are examples.
+
+The order: step 1 creates the role and the database. To keep your users,
+settings and scans, [move your data](#move-your-data-from-the-bundled-database)
+next, while Scanopsis is stopped. Then step 2 writes the new URL and step 3
+starts Scanopsis on the new server.
 
 ### Step 1. Create the role and the database
 
@@ -757,8 +785,9 @@ Always encrypt the connection. `sslmode` decides how:
 
 With `verify-full` and a certificate from your own CA, add `sslrootcert=` with
 the path of the CA file inside the container. Managed services publish their
-CA certificate. Save it as `db-ca.pem` next to `compose.yaml`. A certificate
-from a public CA needs no `sslrootcert`.
+CA certificate. Save it as `db-ca.pem` next to `compose.yaml`; step 3 mounts
+it at `/etc/scanopsis/db-ca.pem`. A certificate from a public CA needs no
+`sslrootcert`.
 
 The characters `@`, `/`, `:`, `?`, `#` and `%` in the password break the URL,
 so percent-encode the password. Either command works (the second needs `jq`):
@@ -801,20 +830,31 @@ and puts Scanopsis on the `frontend` network only, which can reach
 your server. It needs Docker Compose 2.24.4 or later, the first version that
 reads its `!override` tag (`docker compose version` shows yours).
 
-1. If you use `sslrootcert`, open `compose.external-db.yaml` and uncomment the
-   two `volumes` lines, so Compose mounts `db-ca.pem` at
-   `/etc/scanopsis/db-ca.pem`. The URL must name exactly this file, as in
-   step 2.
-2. Tell Compose to use both files, so every `docker compose` command picks them
-   up. Add this line to `.env`:
+1. If you use `sslrootcert`, mount `db-ca.pem` in `compose.override.yaml`
+   (create the file if you have none). Do not edit `compose.external-db.yaml`:
+   an upgrade replaces it, and a changed copy stops `git switch`.
 
-   ```text
-   COMPOSE_FILE=compose.yaml:compose.external-db.yaml
+   ```yaml
+   services:
+     scanopsis:
+       volumes:
+         - ./db-ca.pem:/etc/scanopsis/db-ca.pem:ro
    ```
 
-   Compose reads `compose.override.yaml` on its own only when you name no
-   files, so add it to the list if you have one:
-   `COMPOSE_FILE=compose.yaml:compose.override.yaml:compose.external-db.yaml`.
+   If the file already has a `scanopsis:` entry, add the line to its
+   `volumes:` list instead, as
+   [trust an internal certificate authority](#trust-an-internal-certificate-authority)
+   shows. The URL must name exactly `/etc/scanopsis/db-ca.pem`, as in step 2.
+2. Tell Compose which files to use, so every `docker compose` command picks
+   them up. Compose reads `compose.override.yaml` on its own only when you
+   name no files, so the list must include it. Add this line to `.env`:
+
+   ```text
+   COMPOSE_FILE=compose.yaml:compose.override.yaml:compose.external-db.yaml
+   ```
+
+   Only if you have no `compose.override.yaml` at all, leave it out:
+   `COMPOSE_FILE=compose.yaml:compose.external-db.yaml`.
 3. Check that `db` is gone from the list of services:
 
    ```sh
@@ -827,10 +867,9 @@ reads its `!override` tag (`docker compose version` shows yours).
 
    Services from `compose.override.yaml`, such as a proxy, are listed too.
 
-4. To keep your users, settings and scans, do
-   [move your data from the bundled database](#move-your-data-from-the-bundled-database)
-   now. Then start Scanopsis. `--remove-orphans` removes the old `db` container (not its
-   volume); without it, Compose only warns about `orphan containers`:
+4. Start Scanopsis. `--remove-orphans` removes the old `db` container (not
+   its data folder); without it, Compose only warns about
+   `orphan containers`:
 
    ```sh
    docker compose up -d --remove-orphans
@@ -877,12 +916,15 @@ only once you are sure you moved everything you need.
 
 ### Move your data from the bundled database
 
-Do this in step 4 of step 3, before Scanopsis starts on the new server. The
-bundled `db` service still runs at that point. Run the commands in
-`deploy/compose`.
+Do this after step 1 and before step 2, so that Scanopsis cannot start on the
+new, empty server in between. The bundled `db` service still runs and
+`secrets/database_url` still names it. Run the commands in `deploy/compose`.
+If the new server uses a certificate from your own CA, save that CA as
+`db-ca.pem` next to `compose.yaml` first (step 2 says where to get it).
 
 1. Stop Scanopsis, so that nothing changes after the backup, and back up the
-   bundled database:
+   bundled database. A container you stopped stays stopped, even after a
+   reboot:
 
    ```sh
    docker compose stop scanopsis
@@ -892,11 +934,14 @@ bundled `db` service still runs at that point. Run the commands in
 
 2. Restore the file into the new server. This runs `pg_restore` from the
    PostgreSQL image that the bundled database uses, on the Docker network
-   that reaches the server, with the password of the new role (not encoded):
+   that reaches the server, with the password of the new role (not encoded).
+   `PGSSLMODE=verify-full` checks the server's certificate against
+   `db-ca.pem` before the password is sent:
 
    ```sh
    docker run --rm -i --network scanopsis_frontend \
-     -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=require \
+     -v "$PWD/db-ca.pem:/db-ca.pem:ro" \
+     -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=verify-full -e PGSSLROOTCERT=/db-ca.pem \
      postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71 \
      pg_restore -h db.example.com -U scanopsis -d scanopsis \
      --no-owner --exit-on-error < scanopsis-move.dump
@@ -907,8 +952,13 @@ bundled `db` service still runs at that point. Run the commands in
    restore exit=0
    ```
 
-3. Go on with step 4 of step 3. `docker compose up -d --remove-orphans` starts
-   Scanopsis on the new server.
+   With a certificate from a public CA, use `-e PGSSLROOTCERT=system` and
+   leave out the `-v` line.
+
+3. Go on with [step 2](#step-2-write-the-database-url) and
+   [step 3](#step-3-remove-the-bundled-database).
+   `docker compose up -d --remove-orphans` in step 3 starts Scanopsis on the
+   new server.
 
 Keep the same `secrets/secret_key`. When Scanopsis starts on the new database,
 its log has no `setup_token` line, because the restored database already has
@@ -1363,13 +1413,12 @@ You deploy a new version by building its image from its version branch, see
 [upgrade to the newest version](versions.md#upgrade-to-the-newest-version) for the
 build steps, and [roll back to the previous version](versions.md#roll-back-to-the-previous-version)
 for the way back. Schema changes run when the new version starts; there is no
-separate migration step. The recorded run below
-upgraded from 0.1.0 straight to 0.3.0. 0.4.0 added no migration, 0.4.1
-added two (00011 and 00012), 0.4.2 two (00013 and 00014), and 0.4.3 none, so
-an upgrade to 0.4.3 ends at schema version 14; the version line and the
-schema numbers in the output are the ones of that run, and yours show
-`v0.4.3`, another commit and 14. Before the upgrade the version is 14 from
-0.4.2, 12 from 0.4.1 and 10 from 0.4.0. Before an upgrade from a version before 0.4.0, also
+separate migration step. The output below is from an upgrade from 0.4.2 to
+0.4.3 and back; the commits on your build differ. 0.4.0 added no migration,
+0.4.1 added two (00011 and 00012), 0.4.2 two (00013 and 00014), and 0.4.3
+none, so an upgrade to 0.4.3 ends at schema version 14. Before the upgrade
+the version is 14 from 0.4.2, 12 from 0.4.1 and 10 from 0.4.0. Before an
+upgrade from a version before 0.4.0, also
 [move the database into a folder](versions.md#move-the-database-into-a-folder).
 
 ### Upgrade
@@ -1392,7 +1441,7 @@ schema numbers in the output are the ones of that run, and yours show
    ```
 
    ```text
-      6
+     14
    ```
 
 3. **Switch the image.** Set `SCANOPSIS_IMAGE` in `.env` to the new image and
@@ -1409,14 +1458,14 @@ schema numbers in the output are the ones of that run, and yours show
 
    ```text
    SERVICE     STATUS
-   db          Up 24 seconds (healthy)
-   scanopsis   Up 10 seconds (healthy)
-   {"version":"v0.3.0","commit":"55748a2","go":"go1.27.4"}
-     10
+   db          Up About a minute (healthy)
+   scanopsis   Up 30 seconds (healthy)
+   {"version":"v0.4.3","commit":"7ad0f55","go":"go1.27.4"}
+     14
    ```
 
    The log has one `applying migration` and one `applied migration` line for
-   each change, with its duration. Sign in: your users and scans are still
+   each change, with its duration; from 0.4.2 it has none. Sign in: your users and scans are still
    there.
 
 If the container does not become healthy, read `docker compose logs scanopsis`.
@@ -1430,8 +1479,10 @@ that database.
 
 ### Roll back
 
-Go back to your backup. Do not start the old image on the migrated database:
-the old version does not know what the new migrations changed.
+If the upgrade changed no schema (from 0.4.2), only set the old image again
+in `.env` and run `docker compose up -d`. Otherwise go back to your backup. Do
+not start the old image on the migrated database: the old version does not
+know what the new migrations changed.
 
 1. Set `SCANOPSIS_IMAGE` in `.env` back to the old image.
 2. Stop Scanopsis and restore the backup over the database:
@@ -1447,7 +1498,7 @@ the old version does not know what the new migrations changed.
    restore exit=0
    ```
 
-3. Start the old version and check it:
+3. Start the old version, wait a few seconds until it listens, and check it:
 
    ```sh
    docker compose up -d scanopsis
@@ -1456,8 +1507,8 @@ the old version does not know what the new migrations changed.
    ```
 
    ```text
-   {"version":"v0.1.0","commit":"6eaa325","go":"go1.27.4"}
-      6
+   {"version":"v0.4.2","commit":"03f390f","go":"go1.27.4"}
+     14
    ```
 
 Everything that changed after the backup is gone, including scans uploaded
