@@ -58,8 +58,9 @@ After ten wrong codes in a row, Scanopsis signs you out everywhere and says
 authentication." Even the right code is refused until an administrator resets
 your two-factor setup; you then set it up again at the next sign-in.
 
-If an administrator gave you a temporary password, Scanopsis asks you to
-**Choose a new password** right after the code. The new password needs at
+If whoever runs the server gave you a temporary password with the
+[`reset-password` command](operations.md#reset-a-password), Scanopsis asks you
+to **Choose a new password** right after the code. The new password needs at
 least 12 characters and must not be your user name.
 
 ## Find your way around
@@ -94,11 +95,14 @@ every service that has it.
 Filters, sorting and the chosen branch are part of the page address, so you
 can bookmark a view or send it to a colleague. Pages do not reload by
 themselves: reload the page to see a pipeline that finished since you opened
-it. Only the Integrations page updates itself, every 30 seconds.
+it. Only two admin pages update themselves: **Integrations** every 30
+seconds, and **Backups** every 30 seconds, or every second while a backup or
+a restore runs.
 
 ## Words and numbers
 
-These words mean the same on every page.
+These words mean the same throughout Scanopsis. Only the scan page of a first
+scan counts new findings differently, as the row on new and fixed says.
 
 | Word | Meaning |
 | --- | --- |
@@ -109,7 +113,7 @@ These words mean the same on every page.
 | **Open finding** | A vulnerability in a current scan that is not suppressed. |
 | **Fixable** | An open finding for which Trivy reports a fixed version. |
 | **Suppressed** | A finding your pipeline told Trivy to ignore, for example in `.trivyignore` or a VEX document. Scanopsis keeps it with the reason, but leaves it out of every count unless you ask for it. |
-| **New** and **fixed** | Compared with an earlier scan of the same artifact: **new** findings are in this scan only, **fixed** findings in the earlier scan only. A finding is the same when the vulnerability ID, the package and the target match. The first scan of an artifact is its starting point and counts nothing as new. |
+| **New** and **fixed** | Compared with an earlier scan of the same artifact: **new** findings are in this scan only, **fixed** findings in the earlier scan only. A finding is the same when the vulnerability ID, the package and the target match. The portfolio, the sentence at the top of a service and its **Pipelines** chart treat the first scan of an artifact as the starting point and count nothing in it as new. The scan page of a first scan has nothing to compare with, so it says "First scan of this artifact on this ref: every finding is new." and lists every finding as new. |
 | **First seen** | The time of the earliest scan of the same branch and artifact that had the finding. |
 | **Quality gate** | SonarQube's verdict on the code: passed or failed. |
 
@@ -133,7 +137,8 @@ too:
 OWASP Dependency-Track shown above. For example, 1 critical, 32 high,
 34 medium, 24 low and 1 unknown finding make
 10 + 160 + 102 + 24 + 5 = **301** risk points. Secrets add no points, and
-suppressed findings only when you include them on the findings page. Hover over or focus a risk number to see its arithmetic.
+suppressed findings only when you include them on the findings page. Hover
+over or focus a risk number to see its arithmetic.
 
 The **risk ring** around a risk number has one segment per severity, sized by
 its share of the points. The thin outer ring is the quality gate, in the
@@ -214,9 +219,11 @@ scans.
 
 The chart shows what each pipeline changed: new findings above the line,
 coloured by severity, and fixed findings below it in grey. Above a pipeline, a
-tick (passed) or a cross (failed) shows its quality gate. The line under the bars is
-the coverage on new code, and the dashed line the coverage the quality gate
-asks for (in the legend, for example, "Gate 80%").
+tick (passed) or a cross (failed) shows its quality gate. The line under the
+bars is the coverage: **Coverage on new code** when the quality gate has a
+condition on it, otherwise the overall coverage, labelled **Coverage**. The
+dashed line is the coverage the quality gate asks for, when it has such a
+condition (in the legend, for example, "Gate 80%").
 
 - **This branch** or **All branches** chooses which pipelines are shown.
 - **30 days**, **90 days** or **180 days** chooses the period.
@@ -281,7 +288,9 @@ list:
 - **Fix**: **Fixable** or **No fix yet**;
 - **Include suppressed**: adds the suppressed findings, each marked
   **Suppressed**. The counts and the risk then include them too;
-- **Packages**: **OS packages** or **Language packages**.
+- **Packages**: **OS packages**, **Language packages** or **Other**, shown
+  when the findings come from more than one of these classes;
+- **Image**: one or more images, shown when the branch has more than one.
 
 Each filter shows its number of findings. Under the filters, the
 summary counts what is left: the findings, their risk points, the share that
@@ -419,15 +428,18 @@ tour; the linked guides give the steps.
   **Archive** (or **Unarchive**) and **Delete**. **Add service** adds a
   service before its first upload. An archived service leaves the portfolio
   and its uploads are refused; its history stays. Delete removes all its scans
-  and analyses. An archive or delete waits for an upload of the service that
-  is in progress to finish, a few seconds at most. If you delete a service
+  and analyses. An archive or delete waits until an upload of the service that
+  is in progress has stored its scan; storing a report of 20 MB took 0.3 to
+  1.1 seconds in the project's tests. If you delete a service
   while its pipeline uploads, that upload creates the service again and stores
   its scan; the pipeline does not fail. See
   [choose the dashboard branch](operations.md#choose-the-dashboard-branch-of-a-service)
   and [link projects to services](integrations/sonarqube.md#step-4-link-projects-to-services).
 - **Users**: everyone who has signed in, with the sign-in method, the role,
   whether two-factor is on and the last sign-in. Change a role in the **Role**
-  menu. The actions menu has **Reset two-factor**, **Disable user** (or
+  menu, or with **Make admin** or **Make viewer** in the actions menu (**⋯**),
+  which is the way on a narrow screen, where the **Role** column is hidden.
+  The actions menu also has **Reset two-factor**, **Disable user** (or
   **Enable user**) and **Delete user**. See
   [disable, enable or delete a user](operations.md#disable-enable-or-delete-a-user)
   and [recovering access](operations.md#recovering-access-when-locked-out).
