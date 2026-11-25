@@ -207,6 +207,8 @@ Each is accepted for the reason given, and each has a way to soften it.
    administrator who sets or clears the key cancels a waiting declaration
    (on the Services page: a new key, or **Cancel waiting key**; a new name
    alone keeps it); the project's next upload declares the key again.
+   **Cancel waiting key** never unlinks: a key SonarQube confirmed just
+   before stays linked.
 
 3. **An `http` SonarQube URL is allowed.** Internal SonarQube servers often
    have no TLS, but then the token and the results cross the network in clear

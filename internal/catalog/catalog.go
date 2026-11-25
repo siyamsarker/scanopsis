@@ -288,6 +288,15 @@ func (o *optString) UnmarshalJSON(b []byte) error {
 	return json.Unmarshal(b, &o.val)
 }
 
+// optNull records whether a JSON field was present, and whether null; any
+// other value is kept for the handler to refuse.
+type optNull struct{ set, null bool }
+
+func (o *optNull) UnmarshalJSON(b []byte) error {
+	o.set, o.null = true, string(b) == "null"
+	return nil
+}
+
 func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 	id, ok := pathID(r)
 	if !ok {
@@ -299,15 +308,24 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		Key      optString `json:"sonar_project_key"`
 		Archived *bool     `json:"archived"`
 		Ref      optString `json:"default_ref"`
+		// Declared null cancels a waiting declared key; it is never set here.
+		Declared optNull `json:"sonar_key_declared"`
 	}
 	if !decodeBody(w, r, &in) {
 		return
 	}
-	if err := validateUpdate(in.Name, in.Key.set, in.Key.val, in.Archived, in.Ref.set, in.Ref.val); err != nil {
+	if in.Declared.set && !in.Declared.null {
+		httpapi.WriteError(w, http.StatusBadRequest, "invalid_parameter",
+			"sonar_key_declared can only be null, which cancels the waiting key.")
+		return
+	}
+	if err := validateUpdate(in.Name, in.Key.set, in.Key.val, in.Archived, in.Ref.set, in.Ref.val, in.Declared.set); err != nil {
 		badRequest(w, err.Error())
 		return
 	}
-	arg := store.UpdateServiceParams{ID: id, SetSonarKey: in.Key.set, SetDefaultRef: in.Ref.set}
+	arg := store.UpdateServiceParams{
+		ID: id, SetSonarKey: in.Key.set, SetDefaultRef: in.Ref.set, CancelDeclared: in.Declared.set,
+	}
 	changed := []string{}
 	if in.Name != nil {
 		arg.Name.String, arg.Name.Valid = *in.Name, true
@@ -344,14 +362,26 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s := row.Service
+	// A cancel clears nothing when no key waited, or when the key was linked
+	// meanwhile: the answer then shows the linked key, and only the other
+	// changes, if any, are recorded.
+	cleared := row.PreviousSonarKeyDeclared.Valid && !s.SonarKeyDeclared.Valid
+	if in.Declared.set && cleared && !in.Key.set {
+		changed = append(changed, "sonar_key_declared")
+	}
+	if len(changed) == 0 {
+		httpapi.WriteJSON(w, http.StatusOK, toService(s))
+		return
+	}
 	detail := map[string]any{"id": s.ID, "gitlab_project_path": s.GitlabProjectPath, "fields": changed}
 	if in.Ref.set {
 		detail["default_ref"] = map[string]any{
 			"from": textOrNil(row.PreviousDefaultRef), "to": textOrNil(s.DefaultRef),
 		}
 	}
-	if in.Key.set && row.PreviousSonarKeyDeclared.Valid {
-		// The administrator's key replaces the one the pipeline declared.
+	if (in.Key.set || in.Declared.set) && cleared {
+		// The administrator's key, or cancel, replaces the one the pipeline
+		// declared.
 		detail["cleared_sonar_key_declared"] = row.PreviousSonarKeyDeclared.String
 	}
 	c.audit.Record(r.Context(), c.actor(r.Context()), audit.ActionServiceUpdated, detail)

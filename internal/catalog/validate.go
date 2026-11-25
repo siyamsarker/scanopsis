@@ -87,10 +87,11 @@ func validateRef(ref string) (string, error) {
 }
 
 // validateUpdate checks a service update. ref is the default ref as sent,
-// valid only when refSet and not null.
-func validateUpdate(name *string, keySet bool, key *string, archived *bool, refSet bool, ref *string) error {
-	if name == nil && !keySet && archived == nil && !refSet {
-		return errors.New("provide at least one of name, sonar_project_key, archived and default_ref")
+// valid only when refSet and not null. cancelDeclared is a
+// sonar_key_declared of null.
+func validateUpdate(name *string, keySet bool, key *string, archived *bool, refSet bool, ref *string, cancelDeclared bool) error {
+	if name == nil && !keySet && archived == nil && !refSet && !cancelDeclared {
+		return errors.New("provide at least one of name, sonar_project_key, archived, default_ref and sonar_key_declared")
 	}
 	if name != nil {
 		if err := validateName(*name); err != nil {

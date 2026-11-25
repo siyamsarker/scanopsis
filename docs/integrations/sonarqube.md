@@ -190,6 +190,11 @@ newer upload that declares another key replaces the waiting one.
   and enter a key, or select **Cancel waiting key**; saving only a new name
   keeps the waiting key. The audit event then has
   `cleared_sonar_key_declared`.
+- **Cancel it.** **Cancel waiting key** stops the wait and never unlinks (in
+  the API: `"sonar_key_declared": null` in an update of the service). If an
+  analysis confirmed `K` just before, the service keeps `K`, nothing is
+  recorded, and a notice says so: "SonarQube already confirmed `K`." Clear
+  the key in **Edit** if you want it unlinked.
 - **A taken key.** If another service gets `K` while it waits, the next upload
   of the project that declares `K` drops the waiting key and answers
   `key_linked_to_other_service`. Until that upload, the waiting key still
@@ -207,7 +212,7 @@ Every step is in the audit log:
 | `service.updated` with the reason "declared by the pipeline's upload and confirmed by a SonarQube analysis of the same project" | `ci:<project path>` with the pipeline and job, or `sonarqube` when the webhook confirms a waiting key | The key is set. |
 | `service.updated` with `sonar_key_declared` and the reason "declared by the pipeline's upload; set when a SonarQube analysis of the same project confirms it" | `ci:<project path>` | The key starts to wait. A repeated upload of the same waiting key is not recorded again. |
 | `ingest.sonar_key_ignored` (**SonarQube key ignored**) with the reason, the declared key, for `service_has_other_key` the current one, and `cleared_sonar_key_declared` when it dropped a waiting key | `ci:<project path>` | The upload's key was not used. Not recorded again while the service is unchanged: a new reason or key, or any change of the service, is recorded again. The server log has a warning for every such upload. |
-| `service.updated` with `cleared_sonar_key_declared` | The administrator | An administrator set or cleared the key while a declared key waited. |
+| `service.updated` with `cleared_sonar_key_declared` | The administrator | An administrator set or cleared the key, or selected **Cancel waiting key**, while a declared key waited. A cancel that finds the key already linked is not recorded. |
 
 ### Link from the analysis
 

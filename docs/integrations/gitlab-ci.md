@@ -427,7 +427,9 @@ again while the service is unchanged, but again for a new reason or key, or
 after any change of the service. An administrator who sets or clears the key
 on the Services page always wins, and cancels a key that waits: in the
 service's **Edit** dialog, enter a key or select **Cancel waiting key**.
-Saving only a new name keeps the waiting key.
+Saving only a new name keeps the waiting key. **Cancel waiting key** never
+unlinks: if SonarQube confirmed the key just before, the page says
+"SonarQube already confirmed ..." and the key stays.
 
 ## A central scan script with separate jobs
 

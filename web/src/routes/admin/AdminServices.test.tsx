@@ -374,7 +374,7 @@ describe('admin services page', () => {
       });
     });
 
-    it('cancels the waiting key with null', async () => {
+    it('cancels the waiting key without unlinking', async () => {
       const { calls } = waitingApi();
       renderApp('/admin/services');
       await chooseAction('Docs', 'Edit');
@@ -384,9 +384,39 @@ describe('admin services page', () => {
       const patch = calls.find((c) => c.method === 'PATCH');
       expect(patch).toMatchObject({
         path: '/api/v1/services/2',
-        body: { sonar_project_key: null },
+        body: { sonar_key_declared: null },
       });
+      expect(patch?.body).not.toHaveProperty('sonar_project_key');
       expect(patch?.body).not.toHaveProperty('name');
+    });
+
+    it('says when SonarQube confirmed the key before the cancel', async () => {
+      // The webhook linked the declared key just before the cancel arrived.
+      const linked: Service = { ...docs, sonar_project_key: 'platform:docs' };
+      let confirmed = false;
+      mockFetch(
+        api((call) => {
+          if (call.method === 'GET' && call.path.startsWith('/api/v1/services?'))
+            return json(200, { items: [pay, confirmed ? linked : waiting], next_after: null });
+          if (call.method === 'PATCH') {
+            confirmed = true;
+            return json(200, linked);
+          }
+          return undefined;
+        }),
+      );
+      renderApp('/admin/services');
+      await chooseAction('Docs', 'Edit');
+      const dialog = await screen.findByRole('dialog', { name: 'Edit Docs' });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel waiting key' }));
+      expect(
+        await screen.findByText('SonarQube already confirmed platform:docs.'),
+      ).toBeInTheDocument();
+      expect(screen.queryByText('Waiting key cancelled')).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+      const docsRow = await rowOf(/Docs/);
+      await waitFor(() => expect(within(docsRow).getByText('platform:docs')).toBeInTheDocument());
+      expect(docsRow).not.toHaveTextContent('Waiting for SonarQube project');
     });
 
     it('offers no cancel without a waiting key', async () => {

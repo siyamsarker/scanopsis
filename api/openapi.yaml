@@ -656,7 +656,7 @@ paths:
         "503": { $ref: "#/components/responses/Busy" }
     patch:
       tags: [services]
-      summary: "Rename, link a SonarQube project key, choose the dashboard branch, or archive (admin only)."
+      summary: "Rename, link a SonarQube project key, cancel a waiting key, choose the dashboard branch, or archive (admin only)."
       operationId: updateService
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, format: int64 } }
@@ -665,7 +665,7 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ServiceUpdate" } } }
       responses:
         "200": { description: Updated., content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
-        "400": { description: Invalid request., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { description: "Invalid request (code invalid_request), or a sonar_key_declared other than null (code invalid_parameter).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
@@ -1497,7 +1497,7 @@ components:
         archived: { type: boolean }
         created_at: { type: string, format: date-time }
         default_ref: { type: [string, "null"], description: "The branch (ref) an administrator chose for the dashboards of this service. null when none was chosen; the dashboards then show the ref with the most recent scan. The ref need not have scans yet." }
-        sonar_key_declared: { type: [string, "null"], readOnly: true, description: "The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it. Given by the service endpoints (list, get, create, update) only." }
+        sonar_key_declared: { type: [string, "null"], readOnly: true, description: "The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it, and so does an update with sonar_key_declared null while the service has no key. Given by the service endpoints (list, get, create, update) only." }
         sonar_key_declared_at: { type: [string, "null"], format: date-time, readOnly: true, description: "When the waiting sonar_key_declared was declared; null when none waits. Given by the service endpoints only." }
     ServicePage:
       type: object
@@ -1521,6 +1521,7 @@ components:
         sonar_project_key: { type: [string, "null"], maxLength: 400, description: "null unlinks. Setting or clearing the key also clears a key the service's pipeline declared that waits for confirmation (sonar_key_declared)." }
         archived: { type: boolean }
         default_ref: { type: [string, "null"], minLength: 1, maxLength: 255, description: "Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet." }
+        sonar_key_declared: { type: "null", description: "Only null, which cancels the key the service's pipeline declared that waits for confirmation (Cancel waiting key). It never unlinks: it clears the declaration only while the service has no SonarQube key. When SonarQube confirmed the key and it was linked in the meantime, nothing changes and the answer shows the linked key. Recorded only when a waiting key was cleared." }
     ScanSummary:
       type: object
       required: [id, service_id, kind, artifact_key, artifact_name, gitlab_pipeline_id, gitlab_job_id, ref, ref_protected, commit_sha, trivy_version, scanned_at, received_at, counts, fixable, secrets, suppressed]

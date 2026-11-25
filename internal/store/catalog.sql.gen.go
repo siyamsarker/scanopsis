@@ -261,11 +261,15 @@ const updateService = `-- name: UpdateService :one
 UPDATE services SET
     name = COALESCE($1, services.name),
     sonar_project_key = CASE WHEN $2::boolean THEN $3 ELSE services.sonar_project_key END,
-    sonar_key_declared = CASE WHEN $2::boolean THEN NULL ELSE services.sonar_key_declared END,
-    sonar_key_declared_at = CASE WHEN $2::boolean THEN NULL ELSE services.sonar_key_declared_at END,
-    archived = COALESCE($4, services.archived),
-    default_ref = CASE WHEN $5::boolean THEN $6 ELSE services.default_ref END
-FROM (SELECT p.id, p.default_ref, p.sonar_key_declared FROM services p WHERE p.id = $7 FOR UPDATE) old
+    sonar_key_declared = CASE
+        WHEN $2::boolean OR ($4::boolean AND services.sonar_project_key IS NULL) THEN NULL
+        ELSE services.sonar_key_declared END,
+    sonar_key_declared_at = CASE
+        WHEN $2::boolean OR ($4::boolean AND services.sonar_project_key IS NULL) THEN NULL
+        ELSE services.sonar_key_declared_at END,
+    archived = COALESCE($5, services.archived),
+    default_ref = CASE WHEN $6::boolean THEN $7 ELSE services.default_ref END
+FROM (SELECT p.id, p.default_ref, p.sonar_key_declared FROM services p WHERE p.id = $8 FOR UPDATE) old
 WHERE services.id = old.id
 RETURNING services.id, services.name, services.gitlab_project_id, services.gitlab_project_path, services.sonar_project_key, services.created_via, services.archived, services.created_at, services.default_ref, services.sonar_key_declared, services.sonar_key_declared_at, old.default_ref AS previous_default_ref,
           old.sonar_key_declared AS previous_sonar_key_declared
@@ -275,6 +279,7 @@ type UpdateServiceParams struct {
 	Name            pgtype.Text
 	SetSonarKey     bool
 	SonarProjectKey pgtype.Text
+	CancelDeclared  bool
 	Archived        pgtype.Bool
 	SetDefaultRef   bool
 	DefaultRef      pgtype.Text
@@ -291,12 +296,16 @@ type UpdateServiceRow struct {
 // default ref and declared SonarQube key, read under the same row lock, for
 // the audit event. An administrator who sets or clears the SonarQube key
 // also clears the key the service's pipeline declared: the administrator's
-// choice wins.
+// choice wins. cancel_declared clears the declared key only while the
+// service has no key: decided on the row as locked, so a key the webhook
+// linked from the declaration in the meantime is kept, with its
+// declaration.
 func (q *Queries) UpdateService(ctx context.Context, arg UpdateServiceParams) (UpdateServiceRow, error) {
 	row := q.db.QueryRow(ctx, updateService,
 		arg.Name,
 		arg.SetSonarKey,
 		arg.SonarProjectKey,
+		arg.CancelDeclared,
 		arg.Archived,
 		arg.SetDefaultRef,
 		arg.DefaultRef,

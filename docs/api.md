@@ -934,7 +934,7 @@ Responses:
 
 ### `PATCH /api/v1/services/{id}`
 
-Rename, link a SonarQube project key, choose the dashboard branch, or archive (admin only).
+Rename, link a SonarQube project key, cancel a waiting key, choose the dashboard branch, or archive (admin only).
 
 - Operation ID: `updateService`
 - Authentication: Session, admin
@@ -954,7 +954,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 200 | Updated. | `application/json` [Service](#service) |
-| 400 | Invalid request. | `application/json` [Error](#error) |
+| 400 | Invalid request (code invalid_request), or a sonar_key_declared other than null (code invalid_parameter). | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |
@@ -2058,7 +2058,7 @@ Type: object
 | `gitlab_project_path` | string | yes |  |
 | `id` | integer (int64) | yes |  |
 | `name` | string | yes |  |
-| `sonar_key_declared` | string or null | no | The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it. Given by the service endpoints (list, get, create, update) only. |
+| `sonar_key_declared` | string or null | no | The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it, and so does an update with sonar_key_declared null while the service has no key. Given by the service endpoints (list, get, create, update) only. |
 | `sonar_key_declared_at` | string or null (date-time) | no | When the waiting sonar_key_declared was declared; null when none waits. Given by the service endpoints only. |
 | `sonar_project_key` | string or null | yes |  |
 
@@ -2100,6 +2100,7 @@ Type: object
 | `archived` | boolean | no |  |
 | `default_ref` | string or null (minLength 1, maxLength 255) | no | Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet. |
 | `name` | string (minLength 1, maxLength 200) | no |  |
+| `sonar_key_declared` | null | no | Only null, which cancels the key the service's pipeline declared that waits for confirmation (Cancel waiting key). It never unlinks: it clears the declaration only while the service has no SonarQube key. When SonarQube confirmed the key and it was linked in the meantime, nothing changes and the answer shows the linked key. Recorded only when a waiting key was cleared. |
 | `sonar_project_key` | string or null (maxLength 400) | no | null unlinks. Setting or clearing the key also clears a key the service's pipeline declared that waits for confirmation (sonar_key_declared). |
 
 ### Session

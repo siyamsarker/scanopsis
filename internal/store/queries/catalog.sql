@@ -26,13 +26,20 @@ RETURNING id, name, gitlab_project_id, gitlab_project_path, sonar_project_key,
 -- default ref and declared SonarQube key, read under the same row lock, for
 -- the audit event. An administrator who sets or clears the SonarQube key
 -- also clears the key the service's pipeline declared: the administrator's
--- choice wins.
+-- choice wins. cancel_declared clears the declared key only while the
+-- service has no key: decided on the row as locked, so a key the webhook
+-- linked from the declaration in the meantime is kept, with its
+-- declaration.
 -- name: UpdateService :one
 UPDATE services SET
     name = COALESCE(sqlc.narg(name), services.name),
     sonar_project_key = CASE WHEN @set_sonar_key::boolean THEN sqlc.narg(sonar_project_key) ELSE services.sonar_project_key END,
-    sonar_key_declared = CASE WHEN @set_sonar_key::boolean THEN NULL ELSE services.sonar_key_declared END,
-    sonar_key_declared_at = CASE WHEN @set_sonar_key::boolean THEN NULL ELSE services.sonar_key_declared_at END,
+    sonar_key_declared = CASE
+        WHEN @set_sonar_key::boolean OR (@cancel_declared::boolean AND services.sonar_project_key IS NULL) THEN NULL
+        ELSE services.sonar_key_declared END,
+    sonar_key_declared_at = CASE
+        WHEN @set_sonar_key::boolean OR (@cancel_declared::boolean AND services.sonar_project_key IS NULL) THEN NULL
+        ELSE services.sonar_key_declared_at END,
     archived = COALESCE(sqlc.narg(archived), services.archived),
     default_ref = CASE WHEN @set_default_ref::boolean THEN sqlc.narg(default_ref) ELSE services.default_ref END
 FROM (SELECT p.id, p.default_ref, p.sonar_key_declared FROM services p WHERE p.id = @id FOR UPDATE) old

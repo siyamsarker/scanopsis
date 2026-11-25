@@ -46,13 +46,24 @@ export function ServiceActions({
     setProblem('');
   }
 
-  function patch(body: ServiceUpdate, title: string, description: string) {
+  /**
+   * Sends the change and confirms it with title and description, or with the
+   * notice `instead` returns for the answer when it differs from the request.
+   */
+  function patch(
+    body: ServiceUpdate,
+    title: string,
+    description: string,
+    instead?: (updated: Service) => string | null,
+  ) {
     update.mutate(
       { id: service.id, body },
       {
-        onSuccess: () => {
+        onSuccess: (updated) => {
           close();
-          toast.success(title, { description });
+          const notice = instead?.(updated);
+          if (notice) toast.info(notice);
+          else toast.success(title, { description });
         },
         onError: (error) => {
           if (mode) setProblem(describeError(error));
@@ -136,10 +147,16 @@ export function ServiceActions({
             patch(body, 'Changes saved', `${body.name ?? service.name} is up to date.`)
           }
           onCancelWaiting={() =>
+            // Never unlinks: when SonarQube confirmed the key first, the
+            // answer shows it linked and nothing was cancelled.
             patch(
-              { sonar_project_key: null },
+              { sonar_key_declared: null },
               'Waiting key cancelled',
               `${service.name} no longer waits for ${service.sonar_key_declared ?? 'a SonarQube key'}.`,
+              (updated) =>
+                updated.sonar_project_key
+                  ? `SonarQube already confirmed ${updated.sonar_project_key}.`
+                  : null,
             )
           }
         />

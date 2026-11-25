@@ -93,7 +93,7 @@ func TestValidateUpdate(t *testing.T) {
 		{"empty key", nil, true, ptr(""), nil, false},
 		{"archive", nil, false, nil, ptr(true), true},
 	} {
-		if err := validateUpdate(tc.n, tc.keySet, tc.key, tc.archived, false, nil); (err == nil) != tc.ok {
+		if err := validateUpdate(tc.n, tc.keySet, tc.key, tc.archived, false, nil, false); (err == nil) != tc.ok {
 			t.Errorf("%s: err = %v, want ok=%v", tc.name, err, tc.ok)
 		}
 	}
@@ -231,11 +231,11 @@ func TestValidateDefaultRef(t *testing.T) {
 			t.Errorf("validateRef(%q) = %q, %v; want %q ok=%v", tc.in, got, err, tc.want, tc.ok)
 		}
 	}
-	if err := validateUpdate(nil, false, nil, nil, true, nil); err != nil {
+	if err := validateUpdate(nil, false, nil, nil, true, nil, false); err != nil {
 		t.Errorf("clearing the default ref alone: %v", err)
 	}
 	bad := "  "
-	if err := validateUpdate(nil, false, nil, nil, true, &bad); err == nil {
+	if err := validateUpdate(nil, false, nil, nil, true, &bad, false); err == nil {
 		t.Error("a blank default ref was accepted")
 	}
 }

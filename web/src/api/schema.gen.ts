@@ -539,7 +539,7 @@ export interface paths {
         delete: operations["deleteService"];
         options?: never;
         head?: never;
-        /** Rename, link a SonarQube project key, choose the dashboard branch, or archive (admin only). */
+        /** Rename, link a SonarQube project key, cancel a waiting key, choose the dashboard branch, or archive (admin only). */
         patch: operations["updateService"];
         trace?: never;
     };
@@ -1280,7 +1280,7 @@ export interface components {
             created_at: string;
             /** @description The branch (ref) an administrator chose for the dashboards of this service. null when none was chosen; the dashboards then show the ref with the most recent scan. The ref need not have scans yet. */
             default_ref: string | null;
-            /** @description The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it. Given by the service endpoints (list, get, create, update) only. */
+            /** @description The SonarQube key the service's pipeline declared in an upload (sonar_key) that waits for a SonarQube analysis of the key naming the service's GitLab project; until then no analysis of another key is linked to the service by the scanner properties. null when none waits. Setting or clearing sonar_project_key clears it, and so does an update with sonar_key_declared null while the service has no key. Given by the service endpoints (list, get, create, update) only. */
             readonly sonar_key_declared?: string | null;
             /**
              * Format: date-time
@@ -1307,6 +1307,8 @@ export interface components {
             archived?: boolean;
             /** @description Chooses the dashboard branch; null clears the choice. Trimmed; no control characters. It need not have scans yet. */
             default_ref?: string | null;
+            /** @description Only null, which cancels the key the service's pipeline declared that waits for confirmation (Cancel waiting key). It never unlinks: it clears the declaration only while the service has no SonarQube key. When SonarQube confirmed the key and it was linked in the meantime, nothing changes and the answer shows the linked key. Recorded only when a waiting key was cleared. */
+            sonar_key_declared?: null;
         };
         ScanSummary: {
             /** Format: int64 */
@@ -3519,7 +3521,7 @@ export interface operations {
                     "application/json": components["schemas"]["Service"];
                 };
             };
-            /** @description Invalid request. */
+            /** @description Invalid request (code invalid_request), or a sonar_key_declared other than null (code invalid_parameter). */
             400: {
                 headers: {
                     [name: string]: unknown;

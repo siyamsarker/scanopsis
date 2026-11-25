@@ -57,7 +57,15 @@ export function useUpdateService() {
   const queryClient = useQueryClient();
   return useMutation<Service, ApiError, { id: number; body: ServiceUpdate }>({
     mutationFn: async ({ id, body }) =>
-      unwrap(await api.PATCH('/api/v1/services/{id}', { params: { path: { id } }, body })),
+      unwrap(
+        await api.PATCH('/api/v1/services/{id}', {
+          params: { path: { id } },
+          // openapi-fetch leaves a property whose only value is null, such as
+          // sonar_key_declared, out of the body type (it takes it for a
+          // read-only one); the body is sent whole, as ServiceUpdate says.
+          body: body as Omit<ServiceUpdate, 'sonar_key_declared'>,
+        }),
+      ),
     // A changed dashboard branch changes what every dashboard of the service shows.
     // Only the services list is awaited: when a row leaves the list its actions
     // unmount, and the notice they report must come first.
