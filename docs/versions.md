@@ -311,7 +311,8 @@ network, and the database is still there after `docker compose up -d`.
   `409` and the code `service_archived`, and nothing is stored. An upload for
   a service that an administrator deleted meanwhile creates the service again
   and stores the scan with `201`, as the next upload would; it failed with a
-  server error before. Pipelines wait no longer than before.
+  server error before. An upload can wait a moment while an administrator
+  archives, deletes or renames that same service.
 - **Cancel waiting key** on the Services page never removes a SonarQube key
   any more. If SonarQube confirmed the waiting key just before you selected
   it, the key stays linked and the page says "SonarQube already confirmed

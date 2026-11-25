@@ -53,6 +53,8 @@ version branch, never `main`: `main` is development code.
    ```
 
    Docker Desktop adds a last line that starts with `View build details:`.
+   Docker Engine on Linux with the classic image store prints no
+   `unpacking` line.
 
 3. Check that the image exists:
 
@@ -66,6 +68,9 @@ version branch, never `main`: `main` is development code.
    IMAGE              ID             DISK USAGE   CONTENT SIZE   EXTRA
    scanopsis:v0.4.3   75fce01a01fb       28.6MB         6.84MB
    ```
+
+   With the classic image store, the columns are `REPOSITORY`, `TAG`,
+   `IMAGE ID`, `CREATED` and `SIZE`.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, the version
 string has unusual characters. Pass a plain one, for example
