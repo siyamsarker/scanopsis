@@ -984,63 +984,113 @@ everywhere:
   with `docker inspect` can read. Setting both forms of one variable stops the
   server: `SCANOPSIS_SECRET_KEY and SCANOPSIS_SECRET_KEY_FILE are both set; set only one`.
 - **Keep it locked down.** The image runs as user 65532. Add a read-only root
-  file system and drop all capabilities; Scanopsis writes nothing to disk.
+  file system and drop all capabilities; Scanopsis writes only to its backup
+  folder (`/var/lib/scanopsis/backups`).
 - **No migration step.** Scanopsis applies schema changes before it listens.
 
 ### Use plain `docker run`
 
-These commands start a database and Scanopsis on one network, with the same
-limits as the Compose file. Create the three secret files first, like in
-[step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets), but use the host name `scanopsis-db` instead of `db`
-in `secrets/database_url`. The names are examples.
+These commands give the two containers the same settings as the Compose file:
+the database on an internal network with no route out, health checks, limits,
+log rotation, and a restart after a reboot. They were run on macOS with Docker
+Desktop (Docker 29.9.3) and on Linux (Docker 29.10.1). Run them in an empty
+folder. The container and network names are examples.
 
-```sh
-# 70 is the user the PostgreSQL image runs as; only it may open the database files.
-docker network create scanopsis-net
-sudo install -d -m 700 -o 70 -g 70 data/postgres
-sudo install -d -m 700 -o 65532 -g 65532 backups
+1. Create the three secret files. These are the commands of
+   [step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets),
+   with the host name `scanopsis-db` instead of `db` in the database URL:
 
-docker run -d --name scanopsis-db --network scanopsis-net \
-  -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \
-  -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
-  -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro" \
-  --stop-timeout 120 --shm-size 256m \
-  -v "$PWD/data/postgres:/var/lib/postgresql" \
-  postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
+   ```sh
+   mkdir secrets
+   chmod 700 secrets
+   openssl rand -base64 32 > secrets/secret_key
+   openssl rand -hex 24 > secrets/postgres_password
+   printf 'postgres://scanopsis:%s@scanopsis-db:5432/scanopsis?sslmode=disable' \
+     "$(cat secrets/postgres_password)" > secrets/database_url
+   chmod 644 secrets/*
+   ```
 
-docker run -d --name scanopsis --network scanopsis-net \
-  --restart unless-stopped \
-  --read-only --cap-drop ALL --security-opt no-new-privileges:true \
-  --pids-limit 100 --memory 512m --stop-timeout 30 \
-  --log-opt max-size=10m --log-opt max-file=5 \
-  -p 127.0.0.1:8080:8080 \
-  -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
-  -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
-  -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
-  -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
-  -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
-  -v "$PWD/backups:/var/lib/scanopsis/backups" \
-  scanopsis:v0.4.3
-```
+2. Create the data folders. On Linux, they must belong to the users the
+   containers run as (70 for PostgreSQL, 65532 for Scanopsis):
 
-The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`. Wait
-about 30 seconds, then check:
+   ```sh
+   sudo install -d -m 700 -o 70 -g 70 data/postgres
+   sudo install -d -m 700 -o 65532 -g 65532 backups
+   ```
 
-```sh
-docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
-curl -s http://127.0.0.1:8080/readyz
-```
+   On macOS with Docker Desktop:
 
-```text
-NAMES          STATUS                    PORTS
-scanopsis      Up 29 seconds (healthy)   127.0.0.1:8080->8080/tcp
-scanopsis-db   Up 30 seconds             5432/tcp
-{"status":"ready"}
-```
+   ```sh
+   mkdir -p data/postgres backups
+   ```
+
+3. Create the networks and start the containers:
+
+   ```sh
+   docker network create --internal scanopsis-backend
+   docker network create scanopsis-frontend
+
+   docker run -d --name scanopsis-db --network scanopsis-backend \
+     --restart unless-stopped \
+     --read-only --tmpfs /var/run/postgresql --tmpfs /tmp \
+     --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+     --cap-add SETGID --cap-add SETUID --security-opt no-new-privileges:true \
+     --pids-limit 200 --shm-size 256m --stop-timeout 120 \
+     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     --health-cmd 'pg_isready -U scanopsis -d scanopsis' \
+     --health-interval 5s --health-timeout 5s --health-retries 10 \
+     --health-start-period 10s \
+     -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \
+     -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
+     -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro" \
+     -v "$PWD/data/postgres:/var/lib/postgresql" \
+     postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
+
+   docker run -d --name scanopsis \
+     --network scanopsis-backend --network scanopsis-frontend \
+     --restart unless-stopped \
+     --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+     --pids-limit 100 --memory 512m --stop-timeout 30 \
+     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     -p 127.0.0.1:8080:8080 \
+     -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
+     -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
+     -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
+     -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
+     -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
+     -v "$PWD/backups:/var/lib/scanopsis/backups" \
+     scanopsis:v0.4.3
+   ```
+
+   Set `SCANOPSIS_PUBLIC_URL` to your address, as in
+   [step 4 of the getting started guide](getting-started.md#step-4-create-the-configuration-file).
+   The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`.
+
+4. Wait about 30 seconds, then check:
+
+   ```sh
+   docker ps --filter name=scanopsis --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+   curl -s http://127.0.0.1:8080/readyz
+   ```
+
+   Both containers are `(healthy)`:
+
+   ```text
+   NAMES          STATUS                    PORTS
+   scanopsis      Up 31 seconds (healthy)   127.0.0.1:8080->8080/tcp
+   scanopsis-db   Up 35 seconds (healthy)   5432/tcp
+   {"status":"ready"}
+   ```
+
+5. Read the setup token with `docker logs scanopsis 2>&1 | grep setup_token`
+   and go on with
+   [step 8 of the getting started guide](getting-started.md#step-8-complete-the-setup-in-the-browser).
 
 Unlike Compose, `docker run` does not wait for the database. If Scanopsis
 starts first, it exits, and `--restart unless-stopped` starts it again until
-the database answers.
+the database answers. After a reboot, Docker starts both containers again, as
+long as Docker itself starts at boot (see
+[start Scanopsis after a reboot](#start-scanopsis-after-a-reboot)).
 
 The container has no shell. Run the
 [administration commands](operations.md#administration-commands) with
