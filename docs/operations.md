@@ -532,8 +532,9 @@ example). The kinds are:
 | Uploaded | **Upload a backup**, or a restore on the setup screen |
 | Before restore | Scanopsis saved the current data before a restore |
 
-The folder has mode 700 and belongs to user 65532, the user that runs
-Scanopsis; the files in it have mode 600. The Backups page checks every few
+On Linux the folder has mode 700 and belongs to user 65532, the user that
+runs Scanopsis (see [getting started](getting-started.md#step-3-create-the-data-folders));
+the files in it have mode 600. The Backups page checks every few
 seconds that Scanopsis can still write to the folder. If it cannot, the page
 says why and **Back up now** and **Upload a backup** are disabled until it is
 fixed; the page notices the fix within a few seconds. Only a folder that could
@@ -743,7 +744,8 @@ Filesystem                Size      Used Available Use% Mounted on
 
 Read the `Use%` column; the mount name differs on your host.
 `du -sh data/postgres backups` in `deploy/compose` shows the size of the two
-folders (use `sudo`, because the database files belong to another user).
+folders (on Linux, run it with `sudo`, because the database files belong to
+user 70).
 
 Why these levels: a full disk stops PostgreSQL from writing, so uploads and
 sign-ins fail, and a full database needs free space to recover. Vacuum, the
@@ -812,7 +814,9 @@ Then move `backup-key.txt` off the host, into your password manager or vault.
 The backup job needs only the public key, which `age-keygen` also prints.
 
 To restore, decrypt on a machine that has the key and pipe the result into
-`pg_restore`, as in the restore steps below:
+`pg_restore`. Run this in place of step 2 of
+[restore into the running installation](#restore-into-the-running-installation),
+with Scanopsis stopped:
 
 ```sh
 age -d -i backup-key.txt scanopsis-2026-11-22.dump.age | docker compose exec -T db \
@@ -923,9 +927,10 @@ every time.
    ```
 
    ```text
-    id | source | username | role  | disabled | mfa | last_login_at
-   ----+--------+----------+-------+----------+-----+---------------
-     1 | local  | root     | admin | f        | f   |
+    id | source | username | role  | disabled | mfa |         last_login_at
+   ----+--------+----------+-------+----------+-----+-------------------------------
+     1 | local  | root     | admin | f        | t   | 2026-11-25 04:08:45.321088+00
+   (1 row)
    ```
 
    A user who changed the password or reset two-factor authentication after

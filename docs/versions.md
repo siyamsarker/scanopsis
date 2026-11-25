@@ -131,9 +131,12 @@ change it finds missing.
    The diff shows what changes in `compose.yaml` and `.env.example`: lines
    with `+` are new. Note each new setting for your `.env`. Your `.env`,
    secrets and data are not tracked by git, so the switch leaves them alone.
-   `git status` lists the tracked files you changed yourself, marked `M`. If
-   it lists `compose.yaml`, keep your copy and undo the change, or the switch
-   refuses with `Your local changes ... would be overwritten`:
+   `git status` lists the tracked files you changed yourself, marked `M`, and
+   files git does not track, marked `??` (such as `compose.override.yaml`, a
+   `Caddyfile` or a dump); the switch leaves the `??` files alone. If it lists
+   `compose.yaml` or `compose.external-db.yaml` with `M`, keep your copy and
+   undo the change, or the switch refuses with
+   `Your local changes ... would be overwritten`:
 
    ```sh
    cp deploy/compose/compose.yaml ../compose.yaml.mine
