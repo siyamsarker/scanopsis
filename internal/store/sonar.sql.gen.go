@@ -501,6 +501,26 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 	return items, nil
 }
 
+const lockSonarService = `-- name: LockSonarService :one
+SELECT sonar_project_key, sonar_key_declared FROM services WHERE id = $1 AND NOT archived FOR NO KEY UPDATE
+`
+
+type LockSonarServiceRow struct {
+	SonarProjectKey  pgtype.Text
+	SonarKeyDeclared pgtype.Text
+}
+
+// LockSonarService locks the row of a service that is not archived until
+// the transaction ends and returns its SonarQube key and declared key as
+// they are now; no row when it is archived or gone. FOR NO KEY UPDATE, as a
+// link or an administrator's change of the key takes the same lock.
+func (q *Queries) LockSonarService(ctx context.Context, id int64) (LockSonarServiceRow, error) {
+	row := q.db.QueryRow(ctx, lockSonarService, id)
+	var i LockSonarServiceRow
+	err := row.Scan(&i.SonarProjectKey, &i.SonarKeyDeclared)
+	return i, err
+}
+
 const pinSonarKey = `-- name: PinSonarKey :one
 UPDATE services SET sonar_project_key = $2
 WHERE id = $1 AND sonar_project_key IS NULL AND NOT archived

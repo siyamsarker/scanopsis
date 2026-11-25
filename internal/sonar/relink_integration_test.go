@@ -352,18 +352,47 @@ func (e *env) scan(t *testing.T, serviceID, pipeline int64) {
 	}
 }
 
+// lockWaits counts the statements of this test's database that wait for a
+// lock, among those whose text contains like.
+func (e *env) lockWaits(t *testing.T, like string) int {
+	t.Helper()
+	var n int
+	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%' || $1 || '%'`, like).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 // The first upload of the pipeline links the waiting analysis while another
 // link of the service, by a webhook delivery, commits first. LinkWaiting then
-// finds the service linked: to the waiting analysis's own key, the waiting
-// delivery is linked to it as the winner's would be; to another key, it stays
-// unlinked.
+// finds the service linked. To the waiting analysis's own key, the waiting
+// delivery is linked to it as the winner's would be, and the other deliveries
+// naming the GitLab project say why they were not linked, in the words of the
+// declared-key path when the key is the one the pipeline declared. To another
+// key, or when the other link already linked the deliveries, nothing changes.
+// The key is read under the service's row lock, so a key an administrator
+// changes meanwhile is the one followed.
 func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
+	const (
+		generic  = `Not linked: the service of GitLab project 7 is linked to SonarQube project "demo:orders-api". An administrator can change the SonarQube key on the service.`
+		declared = `Not linked: the service of GitLab project 7 is linked to SonarQube project "demo:orders-api", the key its pipeline declared in its upload. An administrator can change the SonarQube key on the service.`
+	)
 	tests := []struct {
-		name, winnerKey string
-		linked          bool
+		name, winnerKey, declared string
+		// winnerLinks: the other link also linked the waiting delivery and
+		// explained the others, as LinkDeclared does.
+		winnerLinks bool
+		// adminKey: an administrator sets this key after the other link.
+		adminKey      string
+		linked        bool
+		plantedDetail string // "" keeps the detail it had
 	}{
-		{"same key", "demo:orders-api", true},
-		{"other key", "demo:other", false},
+		{name: "same key", winnerKey: "demo:orders-api", linked: true, plantedDetail: generic},
+		{name: "other key", winnerKey: "demo:other"},
+		{name: "declared key", winnerKey: "demo:orders-api", declared: "demo:orders-api", linked: true, plantedDetail: declared},
+		{name: "deliveries linked by the other", winnerKey: "demo:orders-api", winnerLinks: true},
+		{name: "key changed meanwhile", winnerKey: "demo:orders-api", adminKey: "demo:other"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -374,8 +403,13 @@ func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
 			wantStatus(t, e, hook("task-w1", "demo:orders-api", claims("7", "1001")), 202)
 			wantStatus(t, e, hook("task-planted", "evil:project", claims("7", "999")), 202)
 			e.drain(t, 2)
-			plantedHint := e.delivery(t, "task-planted").Detail
+			waitingDetail, plantedDetail := waitingHint, e.delivery(t, "task-planted").Detail
 			sid := e.service(t, "demo/orders-api", 7, "")
+			if tt.declared != "" {
+				if _, err := e.pool.Exec(ctx, `UPDATE services SET sonar_key_declared = $2, sonar_key_declared_at = now() WHERE id = $1`, sid, tt.declared); err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			// The other link holds the service's row while LinkWaiting runs,
 			// and commits once LinkWaiting waits for that row.
@@ -389,19 +423,47 @@ func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-			done := make(chan error, 1)
-			go func() { done <- e.s.LinkWaiting(ctx, sid, 7, 1001) }()
-			waitFor(t, func() bool {
-				var n int
-				if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-					WHERE datname = current_database() AND wait_event_type = 'Lock'
-					  AND query LIKE '%UPDATE services SET sonar_project_key%'`).Scan(&n); err != nil {
+			if tt.winnerLinks {
+				waitingDetail, plantedDetail = "linked by the other", "explained by the other"
+				if _, err := tx.Exec(ctx, `UPDATE sonar_deliveries SET outcome = 'linked', service_id = $1, detail = $2 WHERE task_id = 'task-w1'`, sid, waitingDetail); err != nil {
 					t.Fatal(err)
 				}
-				return n == 1
-			})
+				if _, err := tx.Exec(ctx, `UPDATE sonar_deliveries SET detail = $1 WHERE task_id = 'task-planted'`, plantedDetail); err != nil {
+					t.Fatal(err)
+				}
+			}
+			done := make(chan error, 1)
+			adminDone := make(chan error, 1)
+			if tt.adminKey != "" {
+				// The administrator changes the key just as LinkWaiting looks
+				// at it again, and commits once LinkWaiting waits for a lock
+				// of that change, or once it is done without waiting.
+				e.s.beforeLinkTaken = func() {
+					admin, err := e.pool.Begin(ctx)
+					if err != nil {
+						adminDone <- err
+						return
+					}
+					if _, err := admin.Exec(ctx, `UPDATE services SET sonar_project_key = $2 WHERE id = $1`, sid, tt.adminKey); err != nil {
+						_ = admin.Rollback(ctx)
+						adminDone <- err
+						return
+					}
+					go func() {
+						waitFor(t, func() bool { return len(done) == 1 || e.lockWaits(t, "") == 1 })
+						adminDone <- admin.Commit(ctx)
+					}()
+				}
+			}
+			go func() { done <- e.s.LinkWaiting(ctx, sid, 7, 1001) }()
+			waitFor(t, func() bool { return e.lockWaits(t, "UPDATE services SET sonar_project_key") == 1 })
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
+			}
+			if tt.adminKey != "" {
+				if err := <-adminDone; err != nil {
+					t.Fatal(err)
+				}
 			}
 			if err := <-done; err != nil {
 				t.Fatal(err)
@@ -420,18 +482,9 @@ func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
 				default:
 					t.Error("no sync queued")
 				}
-				// Every other delivery naming the GitLab project says why it
-				// was not linked, as after a link of LinkWaiting's own.
-				want := `Not linked: the service of GitLab project 7 is linked to SonarQube project "demo:orders-api". An administrator can change the SonarQube key on the service.`
-				if d := e.delivery(t, "task-planted"); d.Outcome != "unlinked" || d.Detail != want {
-					t.Errorf("planted: %+v", d)
-				}
 			} else {
-				if d.Outcome != "unlinked" || d.Detail != waitingHint {
-					t.Errorf("delivery: %+v", d)
-				}
-				if d := e.delivery(t, "task-planted"); d.Detail != plantedHint {
-					t.Errorf("planted: %+v, want the detail kept", d)
+				if d.Detail != waitingDetail || (d.Outcome == "linked") != tt.winnerLinks {
+					t.Errorf("delivery: %+v, want it as the other left it", d)
 				}
 				select {
 				case l := <-e.s.linked:
@@ -439,8 +492,19 @@ func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
 				default:
 				}
 			}
-			if k, _ := e.serviceKey(t, sid); k != tt.winnerKey {
-				t.Errorf("key %q, want %q", k, tt.winnerKey)
+			want := plantedDetail
+			if tt.plantedDetail != "" {
+				want = tt.plantedDetail
+			}
+			if d := e.delivery(t, "task-planted"); d.Outcome != "unlinked" || d.Detail != want {
+				t.Errorf("planted: %+v\nwant detail %q", d, want)
+			}
+			wantKey := tt.winnerKey
+			if tt.adminKey != "" {
+				wantKey = tt.adminKey
+			}
+			if k, _ := e.serviceKey(t, sid); k != wantKey {
+				t.Errorf("key %q, want %q", k, wantKey)
 			}
 			// The link was the other's: LinkWaiting records none.
 			if got := e.audits(t); len(got) != 0 {

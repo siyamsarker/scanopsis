@@ -120,16 +120,19 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 
 // linkWaitingTaken follows a pin that found the service already linked or
 // archived. A webhook delivery of the same project may have linked it to
-// the very key of the waiting analysis meanwhile: the waiting deliveries of
-// that key are then linked to the service, every other unlinked delivery
-// naming the GitLab project says why it was not linked, and the project is
-// synced, as after a pin of its own, in one transaction. Nothing is audited,
-// as the link was the other's. Linked to another key, or archived, the
-// service is left as it is.
+// the very key of the waiting analysis meanwhile. The service's row is then
+// locked and its key read again, so an administrator's change of the key
+// is either seen or waits for this transaction. If the key is still that
+// of the waiting analysis, its waiting deliveries are linked to the
+// service, as after a pin of its own. When that linked any, every other
+// unlinked delivery naming the GitLab project says why it was not linked,
+// in the words of LinkDeclared when the key is the one the pipeline
+// declared, and the project is synced. Nothing is audited, as the link was
+// the other's. Linked to another key, or archived, the service is left as
+// it is.
 func (s *Sonar) linkWaitingTaken(ctx context.Context, w waiting, k store.WaitingSonarKeysRow) error {
-	linked, err := s.linkedTo(ctx, w.serviceID, k.ProjectKey)
-	if err != nil || !linked {
-		return err
+	if s.beforeLinkTaken != nil {
+		s.beforeLinkTaken()
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -137,30 +140,41 @@ func (s *Sonar) linkWaitingTaken(ctx context.Context, w waiting, k store.Waiting
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := s.q.WithTx(tx)
+	cur, err := q.LockSonarService(ctx, w.serviceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !cur.SonarProjectKey.Valid || cur.SonarProjectKey.String != k.ProjectKey {
+		return nil
+	}
 	n, err := q.LinkWaitingSonarDeliveries(ctx, store.LinkWaitingSonarDeliveriesParams{
 		ServiceID: pgtype.Int8{Int64: w.serviceID, Valid: true}, Detail: waitingLinkedDetail,
 		Since: w.since, ClaimedProjectID: w.project, ClaimedPipelineID: w.pipeline, ProjectKey: k.ProjectKey,
 	})
-	if err != nil {
+	if err != nil || n == 0 {
 		return err
 	}
+	detail := fmt.Sprintf(
+		"Not linked: the service of GitLab project %d is linked to SonarQube project %q. An administrator can change the SonarQube key on the service.",
+		w.project.Int64, k.ProjectKey)
+	if cur.SonarKeyDeclared.Valid && cur.SonarKeyDeclared.String == k.ProjectKey {
+		detail = declaredClaimDetail(w.project.Int64, k.ProjectKey)
+	}
 	if _, err := q.ExplainUnlinkedSonarClaims(ctx, store.ExplainUnlinkedSonarClaimsParams{
-		ClaimedProjectID: w.project,
-		Detail: fmt.Sprintf(
-			"Not linked: the service of GitLab project %d is linked to SonarQube project %q. An administrator can change the SonarQube key on the service.",
-			w.project.Int64, k.ProjectKey),
+		ClaimedProjectID: w.project, Detail: detail,
 	}); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
-	if n > 0 {
-		s.queueSync(ctx, linkedProject{
-			SonarLinkedServicesRow: store.SonarLinkedServicesRow{ID: w.serviceID, SonarProjectKey: k.ProjectKey},
-			from:                   deliveries{{pipeline: w.pipeline.Int64, analysedAt: k.AnalysedAt.Time}},
-		})
-	}
+	s.queueSync(ctx, linkedProject{
+		SonarLinkedServicesRow: store.SonarLinkedServicesRow{ID: w.serviceID, SonarProjectKey: k.ProjectKey},
+		from:                   deliveries{{pipeline: w.pipeline.Int64, analysedAt: k.AnalysedAt.Time}},
+	})
 	return nil
 }
 

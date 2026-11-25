@@ -43,6 +43,13 @@ WHERE id = $1 AND sonar_project_key IS NULL AND NOT archived
   AND (sonar_key_declared IS NULL OR sonar_key_declared = $2)
 RETURNING gitlab_project_path;
 
+-- LockSonarService locks the row of a service that is not archived until
+-- the transaction ends and returns its SonarQube key and declared key as
+-- they are now; no row when it is archived or gone. FOR NO KEY UPDATE, as a
+-- link or an administrator's change of the key takes the same lock.
+-- name: LockSonarService :one
+SELECT sonar_project_key, sonar_key_declared FROM services WHERE id = $1 AND NOT archived FOR NO KEY UPDATE;
+
 -- name: ClearSonarKeyDeclared :exec
 UPDATE services SET sonar_key_declared = NULL, sonar_key_declared_at = NULL WHERE id = $1;
 

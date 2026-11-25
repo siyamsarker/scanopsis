@@ -51,9 +51,7 @@ func (s *Sonar) LinkDeclared(ctx context.Context, serviceID, gitlabProjectID int
 	}
 	if _, err := q.ExplainUnlinkedSonarClaims(ctx, store.ExplainUnlinkedSonarClaimsParams{
 		ClaimedProjectID: pgtype.Int8{Int64: gitlabProjectID, Valid: true},
-		Detail: fmt.Sprintf(
-			"Not linked: the service of GitLab project %d is linked to SonarQube project %q, the key its pipeline declared in its upload. An administrator can change the SonarQube key on the service.",
-			gitlabProjectID, key),
+		Detail:           declaredClaimDetail(gitlabProjectID, key),
 	}); err != nil {
 		return err
 	}
@@ -62,6 +60,15 @@ func (s *Sonar) LinkDeclared(ctx context.Context, serviceID, gitlabProjectID int
 	}
 	s.queueLinked(ctx, serviceID, key, rows)
 	return nil
+}
+
+// declaredClaimDetail says why a delivery naming gitlabProjectID was not
+// linked once the project's service is linked to key, the key its pipeline
+// declared.
+func declaredClaimDetail(gitlabProjectID int64, key string) string {
+	return fmt.Sprintf(
+		"Not linked: the service of GitLab project %d is linked to SonarQube project %q, the key its pipeline declared in its upload. An administrator can change the SonarQube key on the service.",
+		gitlabProjectID, key)
 }
 
 // linkKeyLate links a delivery that has just finished unlinked, if a service

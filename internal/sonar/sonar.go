@@ -88,6 +88,8 @@ type Sonar struct {
 	tick time.Duration
 	// minInterval is the shortest sync interval honoured.
 	minInterval time.Duration
+	// beforeLinkTaken, when set by a test, runs as linkWaitingTaken starts.
+	beforeLinkTaken func()
 
 	mu         sync.Mutex
 	version    string
