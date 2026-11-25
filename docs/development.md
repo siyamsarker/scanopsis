@@ -51,6 +51,10 @@ nvm use
 
 ## Build and run from source
 
+This runs the binary on your machine for development only. In production,
+Scanopsis runs only as a container, see the
+[getting started guide](getting-started.md).
+
 1. Build the binary:
 
    ```sh

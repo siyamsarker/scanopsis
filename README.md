@@ -68,9 +68,9 @@ installing and running a large platform.
   and commit that produced it.
 - **No shared secrets.** CI jobs prove who they are with GitLab CI/CD ID
   tokens; there is no upload key to store, leak or rotate.
-- **Small and self-hosted.** One Go binary with the web interface built in,
-  plus PostgreSQL. Nothing leaves your network except the calls to your GitLab
-  and SonarQube.
+- **Small and self-hosted.** One container image (a single Go binary with the
+  web interface built in), plus PostgreSQL. Nothing leaves your network except
+  the calls to your GitLab and SonarQube.
 - **Secure by default.** Two-factor authentication for every user, secrets
   encrypted in the database, and an audit log of sign-ins and administrative
   changes.
@@ -159,9 +159,9 @@ scanners, a full vulnerability management workflow, or SBOM-based tracking.
 
 To run Scanopsis:
 
-- A host with Docker Engine and the Compose plugin. The
-  [deployment guide](docs/deployment.md) also covers plain `docker run`,
-  Podman and Kubernetes.
+- A host with Docker Engine and the Compose plugin. Scanopsis runs only as a
+  container; the [deployment guide](docs/deployment.md) also covers plain
+  `docker run` and Podman.
 - PostgreSQL. The Compose file brings PostgreSQL 18; an existing server works
   too.
 - About 512 MiB of memory for the Scanopsis container (the Compose default).
