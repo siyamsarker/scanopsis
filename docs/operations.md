@@ -446,8 +446,8 @@ it to start early on the two large tables.
 
 Open **Settings**, find **Retention**, enter a whole number of days from 7 to
 3650, and select **Save changes**. You can also seed the value with
-`SCANOPSIS_RETENTION_DAYS` before the first start; after that, the Settings
-page wins. The new value applies from the next run. After a big cut, the first
+`SCANOPSIS_RETENTION_DAYS`; it is saved at every start while the setting has
+no saved value, and once a value is saved, the Settings page wins. The new value applies from the next run. After a big cut, the first
 run takes longer than usual.
 
 Deleted data can only come back from a [backup](#backup-and-restore).

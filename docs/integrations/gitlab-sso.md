@@ -75,10 +75,11 @@ If saving fails, the page names the field:
   not contain spaces." A group needs its plain full path, such as
   `security/appsec`.
 
-Instead of the Settings page, you can seed these values at the first start with
+Instead of the Settings page, you can seed these values with
 `SCANOPSIS_GITLAB_URL`, `SCANOPSIS_GITLAB_CLIENT_ID`,
 `SCANOPSIS_GITLAB_CLIENT_SECRET` and `SCANOPSIS_GITLAB_ALLOWED_GROUPS`
-(comma-separated). They apply only while the setting was never saved on the
+(comma-separated). A seed is saved at every start for a setting that has no
+saved value, so it applies only while the setting was never saved on the
 Settings page. See [configuration](../configuration.md).
 
 ## Step 3. Check that it works

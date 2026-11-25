@@ -215,12 +215,6 @@ UPDATE sonar_deliveries
 SET detail = @detail::text
 WHERE outcome = 'unlinked' AND claimed_project_id = @claimed_project_id;
 
--- LockSonarAnalysesOf takes, until the transaction ends, the lock every
--- store of an analysis of a service holds while it checks whether the
--- analysis is known and inserts it, so two stores of the same analysis (a
--- delivery and a sync, or two deliveries) cannot both find it unknown. A
--- transaction-level advisory lock, so it waits for no upload or edit of the
--- service's row.
 -- KeyShareSonarService takes the weakest row lock on a service, the one an
 -- insert referencing it takes anyway, so a store of an analysis holds it
 -- before the analyses lock: every path then locks the service row first and
@@ -228,6 +222,14 @@ WHERE outcome = 'unlinked' AND claimed_project_id = @claimed_project_id;
 -- name: KeyShareSonarService :one
 SELECT id FROM services WHERE id = $1 FOR KEY SHARE;
 
+-- LockSonarAnalysesOf takes, until the transaction ends, the lock every
+-- store of an analysis of a service holds while it checks whether the
+-- analysis is known and inserts it, so two stores of the same analysis (a
+-- delivery and a sync, or two deliveries) cannot both find it unknown. A
+-- transaction-level advisory lock, so it alone waits for no upload or edit of
+-- the service's row. Every store first takes FOR KEY SHARE on that row
+-- (KeyShareSonarService), which waits for a delete of the service or for an
+-- UPDATE that changes sonar_project_key.
 -- name: LockSonarAnalysesOf :exec
 SELECT pg_advisory_xact_lock(hashtextextended('scanopsis:sonar_analyses:' || @service_id::bigint, 0));
 

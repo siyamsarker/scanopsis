@@ -271,12 +271,6 @@ const keyShareSonarService = `-- name: KeyShareSonarService :one
 SELECT id FROM services WHERE id = $1 FOR KEY SHARE
 `
 
-// LockSonarAnalysesOf takes, until the transaction ends, the lock every
-// store of an analysis of a service holds while it checks whether the
-// analysis is known and inserts it, so two stores of the same analysis (a
-// delivery and a sync, or two deliveries) cannot both find it unknown. A
-// transaction-level advisory lock, so it waits for no upload or edit of the
-// service's row.
 // KeyShareSonarService takes the weakest row lock on a service, the one an
 // insert referencing it takes anyway, so a store of an analysis holds it
 // before the analyses lock: every path then locks the service row first and
@@ -526,6 +520,14 @@ const lockSonarAnalysesOf = `-- name: LockSonarAnalysesOf :exec
 SELECT pg_advisory_xact_lock(hashtextextended('scanopsis:sonar_analyses:' || $1::bigint, 0))
 `
 
+// LockSonarAnalysesOf takes, until the transaction ends, the lock every
+// store of an analysis of a service holds while it checks whether the
+// analysis is known and inserts it, so two stores of the same analysis (a
+// delivery and a sync, or two deliveries) cannot both find it unknown. A
+// transaction-level advisory lock, so it alone waits for no upload or edit of
+// the service's row. Every store first takes FOR KEY SHARE on that row
+// (KeyShareSonarService), which waits for a delete of the service or for an
+// UPDATE that changes sonar_project_key.
 func (q *Queries) LockSonarAnalysesOf(ctx context.Context, serviceID int64) error {
 	_, err := q.db.Exec(ctx, lockSonarAnalysesOf, serviceID)
 	return err

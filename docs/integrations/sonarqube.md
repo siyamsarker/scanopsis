@@ -70,7 +70,8 @@ openssl rand -hex 32
 ```
 
 As an administrator, open **Settings** and fill in the group **SonarQube**. You
-can also seed these values at the first start with the environment variables:
+can also seed these values with the environment variables below. A seed is
+saved at every start for a setting that has no saved value:
 
 | Setting | Environment variable | Value |
 | --- | --- | --- |

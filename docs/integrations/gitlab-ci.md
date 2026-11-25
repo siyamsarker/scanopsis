@@ -52,8 +52,9 @@ tool in the job image.
 
 Scanopsis needs the base URL of your GitLab to check the tokens. As an
 administrator, open **Settings**, find the section **GitLab** and set
-**GitLab URL** (`gitlab.url`), for example `https://gitlab.example.com`. You can also seed it at
-the first start with the environment variable `SCANOPSIS_GITLAB_URL`.
+**GitLab URL** (`gitlab.url`), for example `https://gitlab.example.com`. You can also seed it with
+the environment variable `SCANOPSIS_GITLAB_URL`, which is saved at every start
+while the setting has no saved value.
 
 Until it is set, every upload gets `503 ingest_not_configured`.
 
