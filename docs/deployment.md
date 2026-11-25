@@ -1226,147 +1226,209 @@ Scanopsis needs no operator and no custom resources. Run it as one pod:
 - A `Deployment` with `replicas: 1` and `strategy: Recreate`, which stops the
   old pod before the new one starts. A rolling update would run two versions
   on one database while the new one migrates it.
-- A `Secret` with `database_url` and `secret_key`, mounted as files. Create it
-  from the same files as for Compose (example). Do not commit its YAML: the
-  values are only base64 encoded.
-
-  ```sh
-  kubectl create secret generic scanopsis \
-    --from-file=database_url=secrets/database_url \
-    --from-file=secret_key=secrets/secret_key
-  ```
-
+- PostgreSQL outside the pod, set up as in
+  [use an existing PostgreSQL](#use-an-existing-postgresql) (steps 1 and 2).
+- A `Secret` with `database_url` and `secret_key`, mounted as files. Do not
+  commit its YAML: the values are only base64 encoded.
 - Probes: `/healthz` for liveness (the process runs) and `/readyz` for
-  readiness (the database answers). A startup probe gives the first start of a
-  new version, with its migrations, time.
+  readiness (the database answers). Scanopsis answers `/healthz` only after
+  it has applied its migrations, so a startup probe gives the first start of
+  a new version time.
 - A `terminationGracePeriodSeconds` of 30, above the 15 seconds Scanopsis
   needs to finish its requests and the time a running backup needs to close
   its file.
-- A second `PersistentVolumeClaim` for the backups, mounted at
+- A `PersistentVolumeClaim` for the backups, mounted at
   `/var/lib/scanopsis/backups`. `fsGroup: 65532` makes the volume writable for
   the user that runs Scanopsis. Keep the backups on storage that is not the
   database's own, and copy them off the cluster.
 - An Ingress or Gateway that follows the [proxy rules](#reverse-proxy-and-tls):
   `Host` unchanged, `X-Forwarded-For` set, a body of up to 100 MB, Scanopsis at
   the root of its own host name. Set `SCANOPSIS_TRUSTED_PROXIES` to the
-  addresses of the ingress controller pods.
-- PostgreSQL outside the pod, see
-  [use an existing PostgreSQL](#use-an-existing-postgresql).
+  addresses of the ingress controller pods, or the range they get their
+  addresses from.
 
-The manifest below follows this model. Replace the image with one you built
-and pushed to a registry the cluster can pull from, and the public URL. It
-passes `kubectl apply --dry-run=client` with kubectl 1.37.2, but it was not
-run on a cluster, so check the probes and the first start in yours.
+These steps were run on a kind cluster (Kubernetes 1.37.0, kubectl 1.37.2,
+the image loaded with `kind load docker-image`) with an external PostgreSQL
+18.7 server that uses TLS and a certificate from a private CA.
 
-```yaml
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: scanopsis-backups
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 20Gi
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: scanopsis
-spec:
-  replicas: 1
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: scanopsis
-  template:
-    metadata:
-      labels:
-        app: scanopsis
-    spec:
-      terminationGracePeriodSeconds: 30
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        runAsGroup: 65532
-        fsGroup: 65532
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - name: scanopsis
-          image: registry.example.com/platform/scanopsis:v0.4.3
-          ports:
-            - name: http
-              containerPort: 8080
-          env:
-            - name: SCANOPSIS_PUBLIC_URL
-              value: https://scanopsis.example.com
-            - name: SCANOPSIS_DATABASE_URL_FILE
-              value: /run/secrets/scanopsis/database_url
-            - name: SCANOPSIS_SECRET_KEY_FILE
-              value: /run/secrets/scanopsis/secret_key
-            - name: GOMEMLIMIT
-              value: 400MiB
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            periodSeconds: 10
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /readyz
-              port: http
-            periodSeconds: 5
-          startupProbe:
-            httpGet:
-              path: /healthz
-              port: http
-            periodSeconds: 2
-            failureThreshold: 30
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          volumeMounts:
-            - name: secrets
-              mountPath: /run/secrets/scanopsis
-              readOnly: true
-            - name: backups
-              mountPath: /var/lib/scanopsis/backups
-      volumes:
-        - name: secrets
-          secret:
-            secretName: scanopsis
-            defaultMode: 0440
-        - name: backups
-          persistentVolumeClaim:
-            claimName: scanopsis-backups
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: scanopsis
-spec:
-  selector:
-    app: scanopsis
-  ports:
-    - name: http
-      port: 80
-      targetPort: http
-```
+1. Write `secrets/database_url` with the URL of your PostgreSQL server, as in
+   [step 2 of use an existing PostgreSQL](#step-2-write-the-database-url), and
+   create `secrets/secret_key` as in
+   [step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets).
+   With `verify-full` and a certificate from your own CA, save the CA file as
+   `db-ca.pem` in this folder. It goes into the Secret too, so set
+   `sslrootcert=/run/secrets/scanopsis/db-ca.pem` in the URL. For example:
 
-A CPU limit can slow uploads down, so set one only if your cluster requires
-it. After `kubectl apply`, `kubectl rollout status deployment/scanopsis`
-should end with the pod `1/1` ready (example).
+   ```sh
+   printf 'postgres://scanopsis:%s@db.example.com:5432/scanopsis?sslmode=verify-full&sslrootcert=/run/secrets/scanopsis/db-ca.pem' \
+     'p%40ss%2Fw%3Ard%231%3Fx%25' > secrets/database_url
+   ```
+
+2. Create the Secret. Leave out the `db-ca.pem` line if the URL has no
+   `sslrootcert`:
+
+   ```sh
+   kubectl create secret generic scanopsis \
+     --from-file=db-ca.pem=db-ca.pem \
+     --from-file=database_url=secrets/database_url \
+     --from-file=secret_key=secrets/secret_key
+   ```
+
+3. Save the manifest below as `scanopsis.yaml`. Replace the image with one you
+   built and pushed to a registry the cluster can pull from, the public URL,
+   and the range in `SCANOPSIS_TRUSTED_PROXIES` (`10.244.0.0/16` is the pod
+   range of a kind cluster).
+
+   ```yaml
+   apiVersion: v1
+   kind: PersistentVolumeClaim
+   metadata:
+     name: scanopsis-backups
+   spec:
+     accessModes: ["ReadWriteOnce"]
+     resources:
+       requests:
+         storage: 20Gi
+   ---
+   apiVersion: apps/v1
+   kind: Deployment
+   metadata:
+     name: scanopsis
+   spec:
+     replicas: 1
+     strategy:
+       type: Recreate
+     selector:
+       matchLabels:
+         app: scanopsis
+     template:
+       metadata:
+         labels:
+           app: scanopsis
+       spec:
+         terminationGracePeriodSeconds: 30
+         securityContext:
+           runAsNonRoot: true
+           runAsUser: 65532
+           runAsGroup: 65532
+           fsGroup: 65532
+           seccompProfile:
+             type: RuntimeDefault
+         containers:
+           - name: scanopsis
+             image: registry.example.com/platform/scanopsis:v0.4.3
+             ports:
+               - name: http
+                 containerPort: 8080
+             env:
+               - name: SCANOPSIS_PUBLIC_URL
+                 value: https://scanopsis.example.com
+               - name: SCANOPSIS_TRUSTED_PROXIES
+                 value: 10.244.0.0/16
+               - name: SCANOPSIS_DATABASE_URL_FILE
+                 value: /run/secrets/scanopsis/database_url
+               - name: SCANOPSIS_SECRET_KEY_FILE
+                 value: /run/secrets/scanopsis/secret_key
+               - name: GOMEMLIMIT
+                 value: 400MiB
+             startupProbe:
+               httpGet:
+                 path: /healthz
+                 port: http
+               periodSeconds: 10
+               failureThreshold: 60
+             livenessProbe:
+               httpGet:
+                 path: /healthz
+                 port: http
+               periodSeconds: 10
+               failureThreshold: 3
+             readinessProbe:
+               httpGet:
+                 path: /readyz
+                 port: http
+               periodSeconds: 5
+             resources:
+               requests:
+                 cpu: 100m
+                 memory: 128Mi
+               limits:
+                 memory: 512Mi
+             securityContext:
+               allowPrivilegeEscalation: false
+               readOnlyRootFilesystem: true
+               capabilities:
+                 drop: ["ALL"]
+             volumeMounts:
+               - name: secrets
+                 mountPath: /run/secrets/scanopsis
+                 readOnly: true
+               - name: backups
+                 mountPath: /var/lib/scanopsis/backups
+         volumes:
+           - name: secrets
+             secret:
+               secretName: scanopsis
+               defaultMode: 0440
+           - name: backups
+             persistentVolumeClaim:
+               claimName: scanopsis-backups
+   ---
+   apiVersion: v1
+   kind: Service
+   metadata:
+     name: scanopsis
+   spec:
+     selector:
+       app: scanopsis
+     ports:
+       - name: http
+         port: 80
+         targetPort: http
+   ```
+
+   The startup probe waits up to 10 minutes (60 checks, 10 seconds apart)
+   for the migrations. They take a moment on a new or small database; the
+   longest so far took about 25 seconds on a laptop with 540,000 scans (see
+   [the upgrade notes](versions.md#from-041)), and a larger database or a
+   slower disk takes longer. A probe that gives up restarts the container in
+   the middle of the migrations: when a test held the start up for 90
+   seconds, a probe that allowed 60 seconds stopped the container after 60
+   seconds and it started over; with this probe the pod became ready without
+   a restart.
+
+   A CPU limit can slow uploads down, so set one only if your cluster
+   requires it.
+
+4. Apply it and wait for the pod:
+
+   ```sh
+   kubectl apply -f scanopsis.yaml
+   kubectl rollout status deployment/scanopsis
+   ```
+
+   ```text
+   persistentvolumeclaim/scanopsis-backups created
+   deployment.apps/scanopsis created
+   service/scanopsis created
+   Waiting for deployment "scanopsis" rollout to finish: 0 of 1 updated replicas are available...
+   deployment "scanopsis" successfully rolled out
+   ```
+
+5. Read the setup token:
+
+   ```sh
+   kubectl logs deployment/scanopsis | grep setup_token
+   ```
+
+   To reach Scanopsis before the Ingress is in place, forward a local port
+   with `kubectl port-forward service/scanopsis 8080:80` and open
+   `http://127.0.0.1:8080/readyz` (`{"status":"ready"}`). The setup itself
+   needs the public URL, so finish it through the Ingress, as in
+   [step 8 of the getting started guide](getting-started.md#step-8-complete-the-setup-in-the-browser).
+
+Run the [administration commands](operations.md#administration-commands) with
+`kubectl exec deployment/scanopsis -- /scanopsis admin ...`.
 
 ## Sizing
 
