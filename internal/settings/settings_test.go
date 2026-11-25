@@ -36,6 +36,7 @@ type fakeStore struct {
 	failOn  string // "upsert", "delete", "seed", "list" or ""
 	listErr int    // fail the n-th ListSettings call (1-based) when > 0
 	calls   int
+	admins  int64 // administrators, as CountAdmins reports them
 }
 
 func newFakeStore() *fakeStore { return &fakeStore{rows: map[string]store.Setting{}} }
@@ -52,6 +53,12 @@ func (f *fakeStore) ListSettings(context.Context) ([]store.Setting, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+func (f *fakeStore) CountAdmins(context.Context) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.admins, nil
 }
 
 func (f *fakeStore) SeedSetting(_ context.Context, a store.SeedSettingParams) error {
@@ -741,6 +748,7 @@ func TestSyncIntervalSeedBelowMinimum(t *testing.T) {
 	}
 
 	st := newFakeStore()
+	st.admins = 1 // an installation that exists
 	st.rows[KeySonarSyncInterval] = store.Setting{Key: KeySonarSyncInterval, Value: []byte(`"5m"`), Source: SourceUI, UpdatedBy: "local:root"}
 	var logs bytes.Buffer
 	log := slog.New(slog.NewTextHandler(&logs, nil))
@@ -771,6 +779,61 @@ func TestSyncIntervalSeedBelowMinimum(t *testing.T) {
 	// At the minimum the seed is saved as usual.
 	if got := newEnv(t, map[string]any{KeySonarSyncInterval: time.Minute}).svc.Current().SonarSyncInterval; got != time.Minute {
 		t.Errorf("1m seed: interval = %v", got)
+	}
+}
+
+// An installation upgraded from a version that saved a short sync interval
+// keeps starting after an administrator resets the interval, which deletes
+// the saved row: with an administrator, the installation exists, so the
+// short variable is only warned about and ignored. Only a new installation,
+// one without an administrator, refuses to start with it.
+func TestSyncIntervalSeedAfterReset(t *testing.T) {
+	short := map[string]any{KeySonarSyncInterval: 30 * time.Second}
+	st := newFakeStore()
+	st.admins = 1
+	st.rows[KeySonarSyncInterval] = store.Setting{Key: KeySonarSyncInterval, Value: []byte(`"30s"`), Source: SourceEnv, UpdatedBy: "system"}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	start := func() *Service {
+		t.Helper()
+		svc, err := New(context.Background(), st, st.tx, testBox(t, 1), short, &fakeAudit{}, log)
+		if err != nil {
+			t.Fatalf("start: %v", err)
+		}
+		return svc
+	}
+	svc := start()
+	if got := svc.Current().SonarSyncInterval; got != 30*time.Second {
+		t.Errorf("interval = %v, want the saved 30s", got)
+	}
+	e := &env{st, &fakeAudit{}, svc}
+	if code, body := e.patch(t, `{"sonar.sync_interval":null}`); code != 200 {
+		t.Fatalf("reset: %d %v", code, body)
+	}
+	if _, ok := st.rows[KeySonarSyncInterval]; ok {
+		t.Fatal("row not deleted by the reset")
+	}
+	if got := svc.Current().SonarSyncInterval; got != 15*time.Minute {
+		t.Errorf("after reset: interval = %v, want the default 15m", got)
+	}
+
+	logs.Reset()
+	svc = start() // the next start, with the same environment
+	if got := svc.Current().SonarSyncInterval; got != 15*time.Minute {
+		t.Errorf("after restart: interval = %v, want the default 15m", got)
+	}
+	if _, ok := st.rows[KeySonarSyncInterval]; ok {
+		t.Error("the short value was saved")
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "SCANOPSIS_SONAR_SYNC_INTERVAL is ignored") {
+		t.Errorf("no warning logged: %s", logs.String())
+	}
+
+	// A new installation, without an administrator, refuses it.
+	fresh := newFakeStore()
+	if _, err := New(context.Background(), fresh, fresh.tx, testBox(t, 1), short, &fakeAudit{}, discard); err == nil ||
+		err.Error() != "SCANOPSIS_SONAR_SYNC_INTERVAL must be at least 1m" {
+		t.Fatalf("new installation: err = %v", err)
 	}
 }
 

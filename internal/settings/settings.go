@@ -72,6 +72,9 @@ func (s Snapshot) GitLabEnabled() bool {
 // Store is the persistence the service needs; *store.Queries satisfies it.
 type Store interface {
 	ListSettings(ctx context.Context) ([]store.Setting, error)
+	// CountAdmins counts the administrators: none means a new installation,
+	// as for the setup page.
+	CountAdmins(ctx context.Context) (int64, error)
 	SeedSetting(ctx context.Context, arg store.SeedSettingParams) error
 	UpsertSetting(ctx context.Context, arg store.UpsertSettingParams) error
 	DeleteSetting(ctx context.Context, key string) error
@@ -173,13 +176,14 @@ func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Sto
 }
 
 // checkSyncSeed applies the minimum sync interval of the Settings page to
-// SCANOPSIS_SONAR_SYNC_INTERVAL. A shorter value that would be saved, as the
-// interval has no row yet, refuses the start: saved, it would make every
-// later save on the Settings page fail. When the interval is saved already,
-// the variable is ignored like any seed of a saved setting, so an
-// installation that once started with a shorter value still starts; it is
-// dropped, so that a reload without the row does not take it up either, and
-// a warning says so.
+// SCANOPSIS_SONAR_SYNC_INTERVAL. A new installation, one without an
+// administrator yet as for the setup page, refuses to start with a shorter
+// value: saved, it would make every later save on the Settings page fail.
+// An installation that exists starts whatever the variable says, so one
+// that ran with a shorter value before keeps starting, even after the saved
+// interval was reset or a backup without it was restored: the variable is
+// ignored and dropped, so neither a reset nor a reload takes it up, the
+// saved interval or the default applies, and a warning says so.
 func (s *Service) checkSyncSeed(ctx context.Context, stored map[string]entry) error {
 	v, ok := s.seeds[KeySonarSyncInterval]
 	if !ok {
@@ -188,14 +192,21 @@ func (s *Service) checkSyncSeed(ctx context.Context, stored map[string]entry) er
 	if d, _ := time.ParseDuration(v.(string)); d >= MinSonarSyncInterval { // canonical
 		return nil
 	}
-	saved, have := stored[KeySonarSyncInterval]
-	if !have {
-		return fmt.Errorf("%sSONAR_SYNC_INTERVAL must be at least %s", config.Prefix, formatDuration(MinSonarSyncInterval))
+	admins, err := s.st.CountAdmins(ctx)
+	if err != nil {
+		return fmt.Errorf("count administrators: %w", err)
+	}
+	minimum := formatDuration(MinSonarSyncInterval)
+	if admins == 0 {
+		return fmt.Errorf("%sSONAR_SYNC_INTERVAL must be at least %s", config.Prefix, minimum)
 	}
 	delete(s.seeds, KeySonarSyncInterval)
-	minimum := formatDuration(MinSonarSyncInterval)
-	s.log.WarnContext(ctx, config.Prefix+"SONAR_SYNC_INTERVAL is ignored: the sync interval is saved in the settings, and the variable is below the minimum of "+
-		minimum+"; remove it or set it to "+minimum+" or more", "value", v, "saved", saved.value)
+	applies := fmt.Sprintf("the default of %v", definitionByKey[KeySonarSyncInterval].Default)
+	if saved, have := stored[KeySonarSyncInterval]; have {
+		applies = "the saved interval of " + saved.value.(string)
+	}
+	s.log.WarnContext(ctx, config.Prefix+"SONAR_SYNC_INTERVAL is ignored: it is below the minimum of "+minimum+
+		", and "+applies+" applies; remove the variable or set it to "+minimum+" or more", "value", v)
 	return nil
 }
 
