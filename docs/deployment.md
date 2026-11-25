@@ -1241,7 +1241,8 @@ Scanopsis needs no operator and no custom resources. Run it as one pod:
   on one database while the new one migrates it.
 - PostgreSQL outside the pod, set up as in
   [use an existing PostgreSQL](#use-an-existing-postgresql) (steps 1 and 2).
-- A `Secret` with `database_url` and `secret_key`, mounted as files. Do not
+- A `Secret` with `database_url`, `secret_key` and, if your PostgreSQL
+  certificate comes from your own CA, `db-ca.pem`, mounted as files. Do not
   commit its YAML: the values are only base64 encoded.
 - Probes: `/healthz` for liveness (the process runs) and `/readyz` for
   readiness (the database answers). Scanopsis answers `/healthz` only after
@@ -1254,43 +1255,110 @@ Scanopsis needs no operator and no custom resources. Run it as one pod:
   `/var/lib/scanopsis/backups`. `fsGroup: 65532` makes the volume writable for
   the user that runs Scanopsis. Keep the backups on storage that is not the
   database's own, and copy them off the cluster.
-- An Ingress or Gateway that follows the [proxy rules](#reverse-proxy-and-tls):
-  `Host` unchanged, `X-Forwarded-For` set, a body of up to 100 MB, Scanopsis at
-  the root of its own host name. Set `SCANOPSIS_TRUSTED_PROXIES` to the
-  addresses of the ingress controller pods, or the range they get their
-  addresses from.
+- An Ingress that follows the [proxy rules](#reverse-proxy-and-tls): `Host`
+  unchanged, `X-Forwarded-For` set, a body of up to 100 MB, no short answer
+  timeout, Scanopsis at the root of its own host name.
+- A `NetworkPolicy` that lets only the ingress controller reach Scanopsis.
+  Only with it is it safe to trust the controller's addresses in
+  `SCANOPSIS_TRUSTED_PROXIES`, see step 4.
+- No token for the Kubernetes API (`automountServiceAccountToken: false`):
+  Scanopsis never calls it.
 
-These steps were run on a kind cluster (Kubernetes 1.37.0, kubectl 1.37.2,
-the image loaded with `kind load docker-image`) with an external PostgreSQL
-18.7 server that uses TLS and a certificate from a private CA.
+These steps were run on a kind cluster with two nodes (kind 0.33.0,
+Kubernetes 1.37.0, kubectl 1.37.2, its own network plugin kindnet), Contour
+1.33.8 as the ingress controller, and an external PostgreSQL 18.7 server that
+uses TLS with a certificate from a private CA. Run steps 2 to 8 in an empty
+folder.
 
-1. Write `secrets/database_url` with the URL of your PostgreSQL server, as in
-   [step 2 of use an existing PostgreSQL](#step-2-write-the-database-url), and
-   create `secrets/secret_key` as in
-   [step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets).
-   With `verify-full` and a certificate from your own CA, save the CA file as
-   `db-ca.pem` in this folder. It goes into the Secret too, so set
-   `sslrootcert=/run/secrets/scanopsis/db-ca.pem` in the URL. For example:
+1. Build the image for the CPU of your nodes and push it to a registry the
+   cluster can pull from. Run this in the clone of the version branch from
+   [step 1 of the getting started guide](getting-started.md#step-1-build-the-image).
+   It builds what `make image` builds; `--platform` picks the CPU, because an
+   image built on a Mac with Apple Silicon is otherwise `linux/arm64`:
 
    ```sh
+   docker build --platform linux/amd64 --build-arg VERSION=v0.4.3 \
+     --build-arg COMMIT="$(git rev-parse --short HEAD)" \
+     -t registry.example.com/platform/scanopsis:v0.4.3 .
+   docker push registry.example.com/platform/scanopsis:v0.4.3
+   ```
+
+   For a kind cluster on your own machine, build with `make image` and copy
+   the image into the cluster instead (add `--name` if your cluster is not
+   called `kind`), then use `scanopsis:v0.4.3` as the image in step 5:
+
+   ```sh
+   kind load docker-image scanopsis:v0.4.3
+   ```
+
+2. Create the secret files. Write the URL of your PostgreSQL server as in
+   [step 2 of use an existing PostgreSQL](#step-2-write-the-database-url),
+   with the password percent-encoded and a host name that is in the server's
+   certificate:
+
+   ```sh
+   mkdir secrets
+   chmod 700 secrets
+   openssl rand -base64 32 > secrets/secret_key
    printf 'postgres://scanopsis:%s@db.example.com:5432/scanopsis?sslmode=verify-full&sslrootcert=/run/secrets/scanopsis/db-ca.pem' \
      'p%40ss%2Fw%3Ard%231%3Fx%25' > secrets/database_url
    ```
 
-2. Create the Secret. Leave out the `db-ca.pem` line if the URL has no
-   `sslrootcert`:
+   If the server's certificate comes from your own CA, save the CA
+   certificate as `secrets/db-ca.pem`. The pod finds it at
+   `/run/secrets/scanopsis/db-ca.pem`, the path in `sslrootcert`. With a
+   certificate from a public CA, leave out `&sslrootcert=...`.
+
+3. Create the Secret of Scanopsis and the TLS Secret of the Ingress. Leave out
+   the `db-ca.pem` line if you have no such file. `tls/cert.pem` and
+   `tls/key.pem` are the certificate for `scanopsis.example.com` and its key;
+   for a test, make them as in [make a test certificate](#make-a-test-certificate).
 
    ```sh
    kubectl create secret generic scanopsis \
-     --from-file=db-ca.pem=db-ca.pem \
+     --from-file=db-ca.pem=secrets/db-ca.pem \
      --from-file=database_url=secrets/database_url \
      --from-file=secret_key=secrets/secret_key
+   kubectl create secret tls scanopsis-tls --cert=tls/cert.pem --key=tls/key.pem
    ```
 
-3. Save the manifest below as `scanopsis.yaml`. Replace the image with one you
-   built and pushed to a registry the cluster can pull from, the public URL,
-   and the range in `SCANOPSIS_TRUSTED_PROXIES` (`10.244.0.0/16` is the pod
-   range of a kind cluster).
+4. Find the addresses the ingress controller connects from. Scanopsis
+   believes `X-Forwarded-For` only from the addresses in
+   `SCANOPSIS_TRUSTED_PROXIES`; empty, it trusts no one and every user shares
+   the controller's address and rate limit. A controller whose pods run on the
+   pod network, as Contour's Envoy does, connects from the pod ranges of the
+   nodes:
+
+   ```sh
+   kubectl get nodes -o jsonpath='{range .items[*]}{.spec.podCIDR}{"\n"}{end}'
+   ```
+
+   ```text
+   10.244.0.0/24
+   10.244.1.0/24
+   ```
+
+   Every other pod in these ranges could then choose its client address, so
+   trust them only together with the `NetworkPolicy` below. It admits port
+   8080 of Scanopsis only from the controller's namespace (`projectcontour`
+   for Contour; change it to yours). A `NetworkPolicy` works only if your
+   network plugin enforces it; kindnet does, and step 7 checks yours. Without an Ingress, leave `SCANOPSIS_TRUSTED_PROXIES` out.
+
+   A controller that runs with `hostNetwork: true` is not covered by these
+   steps: the namespace rule does not match it (on kind its requests timed
+   out), and it connects from an address of its node that depends on the
+   network plugin. With kindnet that was `10.244.1.1`, the first address of
+   the node's pod range, not the node's `INTERNAL-IP`.
+
+5. Save the manifest below as `scanopsis.yaml`. Replace the image, the
+   public URL with the address of your Ingress, the ranges in
+   `SCANOPSIS_TRUSTED_PROXIES` with the ones from step 4, the controller's
+   namespace and the Ingress class. The Ingress is written for Contour: its
+   annotation lifts Envoy's answer timeout of 15 seconds, which cut a backup
+   download of 200 MiB at 5 MB/s after 16 seconds (with it, the download
+   finished in 40 seconds). Contour needs no body setting: the 3 MB upload of
+   step 7 and backup parts of 8 MiB passed. With another controller, set the
+   same through its own annotations.
 
    ```yaml
    apiVersion: v1
@@ -1319,6 +1387,7 @@ the image loaded with `kind load docker-image`) with an external PostgreSQL
          labels:
            app: scanopsis
        spec:
+         automountServiceAccountToken: false
          terminationGracePeriodSeconds: 30
          securityContext:
            runAsNonRoot: true
@@ -1337,7 +1406,7 @@ the image loaded with `kind load docker-image`) with an external PostgreSQL
                - name: SCANOPSIS_PUBLIC_URL
                  value: https://scanopsis.example.com
                - name: SCANOPSIS_TRUSTED_PROXIES
-                 value: 10.244.0.0/16
+                 value: 10.244.0.0/24,10.244.1.0/24
                - name: SCANOPSIS_DATABASE_URL_FILE
                  value: /run/secrets/scanopsis/database_url
                - name: SCANOPSIS_SECRET_KEY_FILE
@@ -1398,22 +1467,61 @@ the image loaded with `kind load docker-image`) with an external PostgreSQL
        - name: http
          port: 80
          targetPort: http
+   ---
+   apiVersion: networking.k8s.io/v1
+   kind: NetworkPolicy
+   metadata:
+     name: scanopsis
+   spec:
+     podSelector:
+       matchLabels:
+         app: scanopsis
+     policyTypes: ["Ingress"]
+     ingress:
+       - from:
+           - namespaceSelector:
+               matchLabels:
+                 kubernetes.io/metadata.name: projectcontour
+         ports:
+           - port: 8080
+   ---
+   apiVersion: networking.k8s.io/v1
+   kind: Ingress
+   metadata:
+     name: scanopsis
+     annotations:
+       projectcontour.io/response-timeout: infinity
+   spec:
+     ingressClassName: contour
+     tls:
+       - hosts: ["scanopsis.example.com"]
+         secretName: scanopsis-tls
+     rules:
+       - host: scanopsis.example.com
+         http:
+           paths:
+             - path: /
+               pathType: Prefix
+               backend:
+                 service:
+                   name: scanopsis
+                   port:
+                     name: http
    ```
 
    The startup probe waits up to 10 minutes (60 checks, 10 seconds apart)
    for the migrations. They take a moment on a new or small database; the
-   longest so far took about 25 seconds on a laptop with 540,000 scans (see
-   [the upgrade notes](versions.md#from-041)), and a larger database or a
-   slower disk takes longer. A probe that gives up restarts the container in
-   the middle of the migrations: when a test held the start up for 90
-   seconds, a probe that allowed 60 seconds stopped the container after 60
-   seconds and it started over; with this probe the pod became ready without
-   a restart.
+   longest single migration so far took about 25 seconds on a laptop with
+   540,000 scans (see [the upgrade notes](versions.md#from-041)), and an
+   upgrade across several versions runs several of them. A larger database or
+   a slower disk takes longer. A probe that gives up stops the container in
+   the middle of the migrations and it starts over: a probe that allows 60
+   seconds stops a start that needs 90 seconds after 60 seconds.
 
    A CPU limit can slow uploads down, so set one only if your cluster
    requires it.
 
-4. Apply it and wait for the pod:
+6. Apply it and wait for the pod:
 
    ```sh
    kubectl apply -f scanopsis.yaml
@@ -1424,21 +1532,72 @@ the image loaded with `kind load docker-image`) with an external PostgreSQL
    persistentvolumeclaim/scanopsis-backups created
    deployment.apps/scanopsis created
    service/scanopsis created
+   networkpolicy.networking.k8s.io/scanopsis created
+   ingress.networking.k8s.io/scanopsis created
    Waiting for deployment "scanopsis" rollout to finish: 0 of 1 updated replicas are available...
    deployment "scanopsis" successfully rolled out
    ```
 
-5. Read the setup token:
+7. Check the Ingress and the `NetworkPolicy`. The commands follow
+   [check the proxy](#check-the-proxy). Here the Ingress is a kind node whose
+   port 443 is published on `127.0.0.1:8443` (an `extraPortMappings` entry in
+   the kind configuration), so the public URL was
+   `https://scanopsis.example.com:8443`; with yours, use its address and port. `--resolve` sends the request for `scanopsis.example.com` there
+   without a DNS entry, and `--cacert` trusts the test certificate:
+
+   ```sh
+   curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
+     https://scanopsis.example.com:8443/readyz
+   curl -sSI --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
+     https://scanopsis.example.com:8443/healthz | grep -i -E '^(HTTP|strict)'
+   curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 --cacert tls/cert.pem \
+     -H 'X-Forwarded-For: 203.0.113.9' https://scanopsis.example.com:8443/api/v1/setup
+   kubectl logs deployment/scanopsis | grep '"path":"/api/v1/setup"' | tail -1
+   head -c 3000000 /dev/zero | curl -sS --resolve scanopsis.example.com:8443:127.0.0.1 \
+     --cacert tls/cert.pem -H 'Content-Type: application/json' --data-binary @- \
+     -w '\nHTTP %{http_code}\n' https://scanopsis.example.com:8443/api/v1/ingest/trivy
+   ```
+
+   ```text
+   {"status":"ready"}
+   HTTP/2 200
+   strict-transport-security: max-age=63072000; includeSubDomains
+   {"required":true}
+   {"time":"2026-11-25T07:22:17.056509293Z","level":"INFO","msg":"request","method":"GET","path":"/api/v1/setup","status":200,"duration_ms":0,"client_ip":"172.18.0.1"}
+   {"error":{"code":"ingest_not_configured","message":"Uploads are not enabled: the GitLab URL is not configured in Scanopsis."}}
+
+   HTTP 503
+   ```
+
+   `client_ip` is the address Envoy saw (`172.18.0.1`, the gateway of the
+   kind network), not the fake `203.0.113.9` and not Envoy's own pod address.
+   With `SCANOPSIS_TRUSTED_PROXIES` empty, it is Envoy's pod address
+   (`10.244.1.3`) for every user. The 3 MB upload reaches Scanopsis, which
+   answers that uploads are not enabled until the GitLab URL is set.
+
+   Then check that a pod outside the controller's namespace cannot reach
+   Scanopsis, and one inside can:
+
+   ```sh
+   kubectl run np-check --rm -i --restart=Never --image=busybox:1.37 -- \
+     wget -qO- -T 5 http://scanopsis/readyz
+   kubectl run np-check -n projectcontour --rm -i --restart=Never --image=busybox:1.37 -- \
+     wget -qO- -T 5 http://scanopsis.default/readyz
+   ```
+
+   The first ends with `wget: download timed out` and
+   `pod default/np-check terminated (Error)`, the second prints
+   `{"status":"ready"}`. If the first prints `{"status":"ready"}` too, your
+   network plugin does not enforce `NetworkPolicy`: then any pod could set
+   its own client address, so leave `SCANOPSIS_TRUSTED_PROXIES` empty.
+
+8. Read the setup token and finish the setup in the browser at the public
+   URL, as in
+   [step 8 of the getting started guide](getting-started.md#step-8-complete-the-setup-in-the-browser):
 
    ```sh
    kubectl logs deployment/scanopsis | grep setup_token
    ```
-
-   To reach Scanopsis before the Ingress is in place, forward a local port
-   with `kubectl port-forward service/scanopsis 8080:80` and open
-   `http://127.0.0.1:8080/readyz` (`{"status":"ready"}`). The setup itself
-   needs the public URL, so finish it through the Ingress, as in
-   [step 8 of the getting started guide](getting-started.md#step-8-complete-the-setup-in-the-browser).
 
 Run the [administration commands](operations.md#administration-commands) with
 `kubectl exec deployment/scanopsis -- /scanopsis admin ...`.
