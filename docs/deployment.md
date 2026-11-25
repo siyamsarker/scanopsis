@@ -1098,16 +1098,126 @@ The container has no shell. Run the
 
 ### Use Podman
 
-Podman runs the same image and accepts the same `run` options. This was not
-tested, so treat these notes as a starting point:
+Podman runs the same image without a daemon and, by default, rootless: the
+containers run under your own user. These steps were run with Podman 6.2.1,
+rootless, on macOS (in the Podman machine) and on Linux (Fedora 45 with
+SELinux enforcing). They are the [`docker run` steps](#use-plain-docker-run)
+with four differences: the build, the data folders, an SELinux label on each
+mount, and the restart after a reboot.
 
-- Instead of bind-mounted files you can use Podman secrets, for example
-  `podman secret create scanopsis_secret_key secrets/secret_key` and
-  `--secret scanopsis_secret_key,target=/run/secrets/secret_key,mode=0444`.
-  User 65532 must be able to read them.
-- Rootless Podman maps container users to your sub-user IDs, so bind-mounted
-  files need the `U` option (`:ro,U`).
-- To start at boot, use a Quadlet unit (systemd) instead of `--restart`.
+1. Build the image with Podman, in the clone of the version branch from
+   [step 1 of the getting started guide](getting-started.md#step-1-build-the-image)
+   (instead of `make image`, which calls Docker):
+
+   ```sh
+   podman build --format docker --build-arg VERSION=v0.4.3 \
+     --build-arg COMMIT="$(git rev-parse --short HEAD)" -t scanopsis:v0.4.3 .
+   ```
+
+   `--format docker` keeps the health check of the image. Without it, Podman
+   prints `HEALTHCHECK is not supported for OCI image format and will be
+   ignored` and builds the image without a health check.
+
+2. In an empty folder, create the three secret files as in
+   [step 1 of the `docker run` steps](#use-plain-docker-run).
+
+3. Create the data folders. On Linux, the users 70 and 65532 in the containers
+   are sub-user IDs of your user, so set the owners with `podman unshare`:
+
+   ```sh
+   mkdir -p data/postgres backups
+   chmod 700 data/postgres backups
+   podman unshare chown 70:70 data/postgres
+   podman unshare chown 65532:65532 backups
+   ```
+
+   Do not create them with `sudo install -o 70` as for Docker: rootless Podman
+   cannot open them and stops with `Error: open .../data/postgres: permission
+   denied`. On macOS, `mkdir -p data/postgres backups` is enough.
+
+4. Create the networks and start the containers. The `Z` at the end of each
+   mount labels the files for SELinux, so that the container may read them;
+   without it, on a host with SELinux enforcing such as Fedora, both
+   containers stop because they may not read their secret files. On macOS it
+   does no harm.
+
+   ```sh
+   podman network create --internal scanopsis-backend
+   podman network create scanopsis-frontend
+
+   podman run -d --name scanopsis-db --network scanopsis-backend \
+     --restart unless-stopped \
+     --read-only --tmpfs /var/run/postgresql --tmpfs /tmp \
+     --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+     --cap-add SETGID --cap-add SETUID --security-opt no-new-privileges:true \
+     --pids-limit 200 --shm-size 256m --stop-timeout 120 \
+     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     --health-cmd 'pg_isready -U scanopsis -d scanopsis' \
+     --health-interval 5s --health-timeout 5s --health-retries 10 \
+     --health-start-period 10s \
+     -e POSTGRES_USER=scanopsis -e POSTGRES_DB=scanopsis \
+     -e POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password \
+     -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro,Z" \
+     -v "$PWD/data/postgres:/var/lib/postgresql:Z" \
+     postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
+
+   podman run -d --name scanopsis \
+     --network scanopsis-backend --network scanopsis-frontend \
+     --restart unless-stopped \
+     --read-only --cap-drop ALL --security-opt no-new-privileges:true \
+     --pids-limit 100 --memory 512m --stop-timeout 30 \
+     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     -p 127.0.0.1:8080:8080 \
+     -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
+     -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
+     -e SCANOPSIS_SECRET_KEY_FILE=/run/secrets/secret_key \
+     -v "$PWD/secrets/database_url:/run/secrets/database_url:ro,Z" \
+     -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro,Z" \
+     -v "$PWD/backups:/var/lib/scanopsis/backups:Z" \
+     scanopsis:v0.4.3
+   ```
+
+5. Wait about a minute (Podman runs the first health check of Scanopsis 30
+   seconds after its start), then check:
+
+   ```sh
+   podman ps --filter name=scanopsis --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+   curl -s http://127.0.0.1:8080/readyz
+   ```
+
+   ```text
+   NAMES         STATUS                       PORTS
+   scanopsis-db  Up About a minute (healthy)  5432/tcp
+   scanopsis     Up 56 seconds (healthy)      127.0.0.1:8080->8080/tcp
+   {"status":"ready"}
+   ```
+
+   Read the setup token with `podman logs scanopsis 2>&1 | grep setup_token`.
+
+6. Let the containers start after a reboot. Podman has no daemon that starts
+   them, so `--restart unless-stopped` alone does not bring them back. Its
+   `podman-restart` service does. On Linux:
+
+   ```sh
+   systemctl --user enable podman-restart.service
+   loginctl enable-linger
+   ```
+
+   `enable-linger` starts your user services at boot, without a login. On
+   macOS, enable the service inside the Podman machine, which has linger on
+   already, and start the machine after each login with `podman machine start`
+   (Podman does not start it on its own):
+
+   ```sh
+   podman machine ssh systemctl --user enable podman-restart.service
+   ```
+
+On Linux, the backup files belong to a sub-user ID, so your user cannot read
+them directly. Use `podman unshare`, for example
+`podman unshare ls -l backups` and
+`podman unshare cp backups/<name> ~/` (the copy belongs to you). Run the
+[administration commands](operations.md#administration-commands) with
+`podman exec scanopsis /scanopsis admin ...`.
 
 ### Use Kubernetes
 
