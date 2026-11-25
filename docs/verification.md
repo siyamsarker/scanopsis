@@ -186,7 +186,8 @@ Keep in mind how Scanopsis counts, because the comparison depends on it:
   of the most recent scan. The page names it.
 - **Severity counts** are the **unsuppressed** vulnerabilities. Suppressed
   ones (in `ExperimentalModifiedFindings`) are counted apart.
-- **Fixable** counts unsuppressed vulnerabilities that have a fixed version.
+- **Fixable** counts unsuppressed vulnerabilities that have a fixed version
+  (a `FixedVersion` of only spaces counts as none).
 - **Secrets** are the unsuppressed secret findings: those of `secret-fs`
   scans and those Trivy found in image layers (an image report made with
   `--scanners vuln,secret`). They are never part of the severity counts.

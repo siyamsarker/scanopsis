@@ -235,12 +235,13 @@ main in the last 90 days: 34 new and 46 fixed."
 ### Fix first
 
 The package upgrades that clear the most risk, up to ten. Each line shows the
-package, the installed version, the version to upgrade to (the highest fixed
-version among its findings), the risk points the upgrade clears, and the
-package's open findings by severity. Findings without a fixed version stay
-after the upgrade, so the points can be fewer than the findings suggest.
-**See every upgrade** opens the full plan, see
-[fix by upgrading](#fix-by-upgrading).
+package, the installed version, the version to upgrade to, the risk points the
+upgrade clears, and the findings the upgrade fixes, by severity: the same
+counts and the same order as in [fix by upgrading](#fix-by-upgrading).
+Findings without a fixed version stay after the upgrade and are not counted. A
+package none of whose findings has a fixed version says "No fixed version yet"
+and shows all its open findings; such packages come after every package with
+an upgrade. **See every upgrade** opens the full plan.
 
 ### Open findings
 
@@ -317,12 +318,26 @@ Select a finding to open its detail panel:
 
 ### Fix by upgrading
 
-An upgrade plan: the packages to upgrade, ordered by the risk each upgrade
-clears, each with the version to move to, the upgrade command and the
-vulnerabilities it clears. Point at a package to see how much the plan clears
-up to it. Each package goes to the highest fixed version among its findings,
-so check the rules of its ecosystem, such as Debian epochs, before you
-upgrade. Suppressed findings are left out.
+An upgrade plan: the packages to upgrade, each with the version to move to,
+the upgrade command and the vulnerabilities it clears. Point at a package to
+see how much the plan clears up to it. Suppressed findings are left out.
+
+The packages come in the same order as in **Fix first**: the most risk points
+cleared first, then the most findings fixed, then the most severe finding
+fixed, then by package name and installed version, compared character by
+character (so `lib10` comes before `lib9`).
+
+Each package goes to the highest fixed version among its findings. Versions
+are compared by one rule for every ecosystem: numbers by their value
+(`1.2.10` is above `1.2.9`), a pre-release such as `1.0.0-rc1` below
+`1.0.0`, an epoch such as `1:` before everything else, and Debian's `~` and
+`+` as dpkg orders them (`1.0-1~deb12u1` is below `1.0-1`, which is below
+`1.0-1+deb12u1`). A few forms of single distributions may not be ordered as
+the distribution does, for example Ubuntu revisions such as `4ubuntu1` or a
+`+dfsg` in the middle of a version, so check the version with your package
+manager before you upgrade. Versions that are equal but written differently,
+such as `1.0` and `1.0.0`, always give the same one of them, whatever order the
+findings come in.
 
 ### Secrets
 
