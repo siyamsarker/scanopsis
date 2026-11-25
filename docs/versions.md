@@ -318,6 +318,14 @@ network, and the database is still there after `docker compose up -d`.
   it, the key stays linked and the page says "SonarQube already confirmed
   <key>.". Scripts can do the same with
   `PATCH /api/v1/services/{id}` and the body `{"sonar_key_declared": null}`.
+  If another key was set on the service just before, the page says
+  "<service> is already linked to <key>." instead.
+- If 0.4.2 ran with `SCANOPSIS_SONAR_SYNC_INTERVAL` below `1m`, which it
+  accepted, nothing is needed: it saved the interval, so 0.4.3 starts, and the
+  log warns that the variable is ignored and below the minimum. Remove the
+  variable or set `1m` or more. The saved interval, if below `1m`, still runs
+  at most once a minute, and the Settings page asks for `1m` or more at the
+  next save. A new installation with such a value does not start.
 
 #### From 0.4.1
 

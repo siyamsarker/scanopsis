@@ -430,7 +430,8 @@ the key cancels a key that waits, and so does **Cancel waiting key** in the
 service's **Edit** dialog on the Services page, which changes nothing else.
 Saving only a new name keeps the waiting key. **Cancel waiting key** never
 unlinks: if SonarQube confirmed the key just before, the page says
-"SonarQube already confirmed ..." and the key stays.
+"SonarQube already confirmed ..." and the key stays; if another key was set
+just before, it says "<service> is already linked to ..." and that key stays.
 
 ## A central scan script with separate jobs
 
