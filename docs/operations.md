@@ -374,7 +374,9 @@ image name whatever its tag, or a folder) on a branch. A switch picks which bran
 The choice is part of the address (`/search?id=CVE-2024-3094&scope=all`), and
 the API takes `scope=dashboard` or `scope=all`. Suppressed findings and
 archived services are left out. At most 1,000 findings are listed, the most
-severe first; the totals count every match.
+severe first; the totals count every match. The
+[user guide](user-guide.md#search) explains the search page to the people
+who use it.
 
 ## Data retention
 
