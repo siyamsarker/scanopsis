@@ -3,7 +3,10 @@
 
 package domain
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // Severities in descending order of importance.
 var severities = [...]string{"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}
@@ -91,7 +94,7 @@ type PackageImpact struct {
 	InstalledVersion string
 	// FixVersion is the highest fixed version among the findings; upgrading
 	// to it clears the fixable ones. Empty when none is fixable. See
-	// CompareVersions for the ordering's limits.
+	// CompareVersions for the ordering's limits and Highest for the choice.
 	FixVersion string
 	// Findings and BySeverity count all the package's findings.
 	Findings   int
@@ -115,6 +118,7 @@ func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 	type pkgKey struct{ name, version string }
 	idx := make(map[pkgKey]int)
 	var out []PackageImpact
+	var fixed [][]string // per package, every fixed version reported
 	for _, g := range groups {
 		k := pkgKey{g.PkgName, g.InstalledVersion}
 		i, ok := idx[k]
@@ -122,6 +126,7 @@ func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 			i = len(out)
 			idx[k] = i
 			out = append(out, PackageImpact{PkgName: g.PkgName, InstalledVersion: g.InstalledVersion})
+			fixed = append(fixed, nil)
 		}
 		p := &out[i]
 		p.Findings += g.Count
@@ -130,12 +135,11 @@ func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 		p.Fixable += fixable
 		p.FixableBySeverity.Add(g.Severity, fixable)
 		for _, list := range g.FixedVersions {
-			if v := HighestVersion(list); v != "" && (p.FixVersion == "" || Higher(v, p.FixVersion)) {
-				p.FixVersion = v
-			}
+			fixed[i] = append(fixed[i], strings.Split(list, ",")...)
 		}
 	}
 	for i := range out {
+		out[i].FixVersion = Highest(fixed[i])
 		out[i].Risk = out[i].BySeverity.Risk()
 		out[i].RiskCleared = out[i].FixableBySeverity.Risk()
 	}

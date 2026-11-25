@@ -3,7 +3,10 @@
 
 package domain
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // CompareVersions orders two version strings naturally: it returns a negative
 // number when a < b, zero when they are equal and a positive number when a > b.
@@ -59,11 +62,28 @@ func CompareVersions(a, b string) int {
 // HighestVersion returns the greatest version in list, which may hold several
 // versions separated by commas (Trivy joins the fixed versions of different
 // release branches as "1.2.3, 1.3.1"). It returns "" when list holds no
-// version. See Higher for versions that compare equal.
+// version. See Highest for the order of the versions.
 func HighestVersion(list string) string {
+	return Highest(strings.Split(list, ","))
+}
+
+// Highest returns the greatest of versions ("" when there is none, blanks
+// ignored). The comparison is not transitive in every case ("1.0+b" is above
+// "1.0", which equals "1.0.0", which is above "1.0+b"), so the result could
+// depend on the order the versions come in. It never does: the distinct
+// versions are sorted byte by byte first and then kept while Higher says so.
+func Highest(versions []string) string {
+	vs := make([]string, 0, len(versions))
+	for _, v := range versions {
+		if v = strings.TrimSpace(v); v != "" {
+			vs = append(vs, v)
+		}
+	}
+	slices.Sort(vs)
+	vs = slices.Compact(vs)
 	best := ""
-	for _, v := range strings.Split(list, ",") {
-		if v = strings.TrimSpace(v); v != "" && (best == "" || Higher(v, best)) {
+	for _, v := range vs {
+		if best == "" || Higher(v, best) {
 			best = v
 		}
 	}
@@ -72,8 +92,7 @@ func HighestVersion(list string) string {
 
 // Higher reports whether v should replace best as the highest version: v is
 // greater, or it compares equal but is written differently and sorts first
-// byte by byte ("1.0" before "1.0.0", "1.2" before "v1.2"). The highest of
-// several versions is then the same whatever order they come in.
+// byte by byte ("1.0" before "1.0.0", "1.2" before "v1.2").
 func Higher(v, best string) bool {
 	c := CompareVersions(v, best)
 	return c > 0 || c == 0 && v < best

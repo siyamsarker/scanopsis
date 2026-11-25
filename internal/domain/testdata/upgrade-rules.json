@@ -1,5 +1,5 @@
 {
-  "comment": "Versions that compare equal but are written differently resolve to the byte-smallest spelling, whatever the order they come in. Shared by internal/domain (Go) and web/src/routes/findings/model.test.ts, so the service page's Fix first and the findings' upgrade plan apply the same rules: version order, upgrade target, counts and package order.",
+  "comment": "The highest version is found by sorting the distinct versions byte by byte and keeping each one that is higher (Higher), so the result never depends on the order they come in, not even where the comparison is not transitive (1.0, 1.0.0, 1.0+b). Shared by internal/domain (Go) and web/src/routes/findings/model.test.ts, so the service page's Fix first and the findings' upgrade plan apply the same rules: version order, upgrade target, counts and package order.",
   "compare": [
     ["1.2.10", "1.2.9", 1],
     ["1.2.9", "1.2.10", -1],
@@ -63,7 +63,13 @@
     ["0:1.0, 1.0", "0:1.0"],
     ["2.36-9, 2.36-9+deb12u4", "2.36-9+deb12u4"],
     ["2.36-9+deb12u4, 2.36-9", "2.36-9+deb12u4"],
-    ["1.0-1+deb12u1, 1.0-1~deb12u1", "1.0-1+deb12u1"]
+    ["1.0-1+deb12u1, 1.0-1~deb12u1", "1.0-1+deb12u1"],
+    ["1.0, 1.0.0, 1.0+b", "1.0.0"],
+    ["1.0, 1.0+b, 1.0.0", "1.0.0"],
+    ["1.0.0, 1.0, 1.0+b", "1.0.0"],
+    ["1.0.0, 1.0+b, 1.0", "1.0.0"],
+    ["1.0+b, 1.0, 1.0.0", "1.0.0"],
+    ["1.0+b, 1.0.0, 1.0", "1.0.0"]
   ],
   "findings": [
     {"pkg": "libssl3", "installed": "3.0.9-1", "severity": "HIGH", "fixed": "1:3.0.11-1~deb12u2"},
@@ -88,6 +94,12 @@
     {"pkg": "f", "installed": "0.9", "severity": "MEDIUM", "fixed": "1.0"},
     {"pkg": "g", "installed": "0.9", "severity": "LOW", "fixed": "1.0"},
     {"pkg": "g", "installed": "0.9", "severity": "LOW", "fixed": "1.0.0"},
+    {"pkg": "h", "installed": "0.9", "severity": "LOW", "fixed": "1.0+b"},
+    {"pkg": "h", "installed": "0.9", "severity": "LOW", "fixed": "1.0"},
+    {"pkg": "h", "installed": "0.9", "severity": "UNKNOWN", "fixed": "1.0.0"},
+    {"pkg": "i", "installed": "0.9", "severity": "UNKNOWN", "fixed": "1.0.0"},
+    {"pkg": "i", "installed": "0.9", "severity": "LOW", "fixed": "1.0"},
+    {"pkg": "i", "installed": "0.9", "severity": "LOW", "fixed": "1.0+b"},
     {"pkg": "libc6", "installed": "2.36-8", "severity": "HIGH", "fixed": "2.36-9"},
     {"pkg": "libc6", "installed": "2.36-8", "severity": "MEDIUM", "fixed": "2.36-9+deb12u4"}
   ],
@@ -96,6 +108,10 @@
      "counts": {"critical": 0, "high": 1, "medium": 1, "low": 0, "unknown": 0}},
     {"pkg": "libssl3", "installed": "3.0.9-1", "upgrade_to": "1:3.0.11-1~deb12u2", "cleared": 2, "risk": 8,
      "counts": {"critical": 0, "high": 1, "medium": 1, "low": 0, "unknown": 0}},
+    {"pkg": "h", "installed": "0.9", "upgrade_to": "1.0.0", "cleared": 3, "risk": 7,
+     "counts": {"critical": 0, "high": 0, "medium": 0, "low": 2, "unknown": 1}},
+    {"pkg": "i", "installed": "0.9", "upgrade_to": "1.0.0", "cleared": 3, "risk": 7,
+     "counts": {"critical": 0, "high": 0, "medium": 0, "low": 2, "unknown": 1}},
     {"pkg": "a", "installed": "1.0", "upgrade_to": "2.0", "cleared": 5, "risk": 5,
      "counts": {"critical": 0, "high": 0, "medium": 0, "low": 5, "unknown": 0}},
     {"pkg": "b", "installed": "1.0", "upgrade_to": "1.1", "cleared": 1, "risk": 5,

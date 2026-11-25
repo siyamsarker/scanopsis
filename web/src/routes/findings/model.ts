@@ -272,6 +272,9 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/** Plain code-unit order, as the server orders names (byte order for ASCII). */
+const byCodeUnits = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
+
 /**
  * Whether v should replace best as the highest version: v is greater, or it
  * compares equal but is written differently and sorts first ("1.0" before
@@ -283,9 +286,17 @@ function higher(v: string, best: string): boolean {
   return c > 0 || (c === 0 && v < best);
 }
 
-/** The highest version in FixedVersion values, each of which may be a comma-separated list. */
+/**
+ * The highest version in FixedVersion values, each of which may be a
+ * comma-separated list, as on the server (Highest): the comparison is not
+ * transitive in every case (1.0+b > 1.0 = 1.0.0 > 1.0+b), so the distinct
+ * versions are sorted by code unit first and then kept while higher says so,
+ * and the result never depends on the order they come in.
+ */
 export function highestFixed(values: string[]): string {
-  const all = values.flatMap((v) => v.split(',').map((part) => part.trim())).filter(Boolean);
+  const all = [
+    ...new Set(values.flatMap((v) => v.split(',').map((part) => part.trim())).filter(Boolean)),
+  ].sort(byCodeUnits);
   return all.reduce((best, v) => (higher(v, best) ? v : best), all[0] ?? '');
 }
 
@@ -332,9 +343,6 @@ function topRank(c: SeverityCountValues): number {
   if (c.low > 0) return 3;
   return 4;
 }
-
-/** Plain code-unit order, as the server orders names (byte order for ASCII). */
-const byCodeUnits = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
 
 /**
  * Fixable, unsuppressed findings grouped by package and installed version,
