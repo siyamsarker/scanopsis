@@ -53,9 +53,10 @@ At every later sign-in, **Enter your code** asks for the current code from the
 app. Without your phone, select **Use a recovery code** and type one of your
 codes.
 
-After too many wrong codes, Scanopsis says "Too many wrong codes. Ask an
-administrator to reset two-factor authentication." An administrator then
-resets your two-factor setup, and you set it up again at the next sign-in.
+After ten wrong codes in a row, Scanopsis signs you out everywhere and says
+"Too many wrong codes. Ask an administrator to reset two-factor
+authentication." Even the right code is refused until an administrator resets
+your two-factor setup; you then set it up again at the next sign-in.
 
 If an administrator gave you a temporary password, Scanopsis asks you to
 **Choose a new password** right after the code. The new password needs at
@@ -401,8 +402,10 @@ The account page cannot change your password or your two-factor setup:
 - **Lost phone, no recovery code left, or new recovery codes wanted:** ask an
   admin to reset your two-factor setup. You set it up again at the next
   sign-in and get 10 new codes.
-- **Forgotten local password:** an admin gives you a temporary password,
-  which you replace at the next sign-in.
+- **Forgotten local password:** whoever runs the server gives you a
+  temporary password with the
+  [`reset-password` command](operations.md#reset-a-password). You replace it
+  at the next sign-in.
 
 ## What admins also see
 
