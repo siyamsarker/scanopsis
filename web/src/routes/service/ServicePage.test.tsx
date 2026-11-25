@@ -94,6 +94,7 @@ const overview = {
       findings: 12,
       by_severity: counts(1, 8, 3, 0, 0),
       fixable: 12,
+      fixable_by_severity: counts(1, 8, 3, 0, 0),
       risk: 59,
       risk_cleared: 59,
     },
@@ -104,6 +105,7 @@ const overview = {
       findings: 3,
       by_severity: counts(0, 1, 2, 0, 0),
       fixable: 0,
+      fixable_by_severity: counts(0, 0, 0, 0, 0),
       risk: 11,
       risk_cleared: 0,
     },
@@ -339,6 +341,36 @@ describe('service dashboard', () => {
       'href',
       '/services/7/findings?ref=main&tab=fix',
     );
+  });
+
+  it('counts only the findings the upgrade fixes, as the upgrade plan does', async () => {
+    // libc-bin: 3 high, 3 medium and 2 low open; the upgrade to the highest
+    // fixed version fixes the 2 high, 1 medium and 2 low that report a fix.
+    const libc = {
+      pkg_name: 'libc-bin',
+      installed_version: '2.36-9+deb12u3',
+      fix_version: '2.36-9+deb12u10',
+      findings: 8,
+      by_severity: counts(0, 3, 3, 2, 0),
+      fixable: 5,
+      fixable_by_severity: counts(0, 2, 1, 2, 0),
+      risk: 26,
+      risk_cleared: 15,
+    };
+    setup('/services/7', {
+      overrides: (call) =>
+        call.path.startsWith('/api/v1/services/7/overview')
+          ? json(200, { ...overview, top_packages: [libc, overview.top_packages[1]] })
+          : undefined,
+    });
+    const list = await screen.findByRole('list', { name: 'Packages to upgrade' });
+    const rows = within(list).getAllByRole('link');
+    expect(rows[0]).toHaveTextContent('−15 risk');
+    expect(rows[0]).toHaveTextContent('5 findings fixed: 2 high1 medium2 low');
+    expect(rows[0]).not.toHaveTextContent('3 high');
+    // A package without a fix shows its open findings.
+    expect(rows[1]).toHaveTextContent('No fixed version yet');
+    expect(rows[1]).toHaveTextContent('3 findings: 1 high2 medium');
   });
 
   it('breaks the open findings down once, with links', async () => {

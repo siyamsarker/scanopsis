@@ -173,11 +173,14 @@ func TestTopPackages(t *testing.T) {
 	got := TopPackages(groups, 10)
 	want := []PackageImpact{
 		{PkgName: "openssl", InstalledVersion: "3.0.1", FixVersion: "3.1.2", Findings: 3,
-			BySeverity: SeverityCounts{Critical: 1, High: 2}, Fixable: 3, Risk: 20, RiskCleared: 20},
+			BySeverity: SeverityCounts{Critical: 1, High: 2}, Fixable: 3,
+			FixableBySeverity: SeverityCounts{Critical: 1, High: 2}, Risk: 20, RiskCleared: 20},
 		{PkgName: "zlib", InstalledVersion: "1.2.11", FixVersion: "1.2.12", Findings: 3,
-			BySeverity: SeverityCounts{Critical: 3}, Fixable: 1, Risk: 30, RiskCleared: 10},
+			BySeverity: SeverityCounts{Critical: 3}, Fixable: 1,
+			FixableBySeverity: SeverityCounts{Critical: 1}, Risk: 30, RiskCleared: 10},
 		{PkgName: "alpha", InstalledVersion: "0.1", FixVersion: "0.2", Findings: 1,
-			BySeverity: SeverityCounts{High: 1}, Fixable: 1, Risk: 5, RiskCleared: 5},
+			BySeverity: SeverityCounts{High: 1}, Fixable: 1,
+			FixableBySeverity: SeverityCounts{High: 1}, Risk: 5, RiskCleared: 5},
 		{PkgName: "openssl", InstalledVersion: "1.1.1", Findings: 3,
 			BySeverity: SeverityCounts{Medium: 2, Low: 1}, Risk: 7},
 		{PkgName: "busybox", InstalledVersion: "1.35", Findings: 1,
@@ -194,6 +197,27 @@ func TestTopPackages(t *testing.T) {
 	}
 	if none := TopPackages(nil, 10); len(none) != 0 {
 		t.Errorf("no groups = %+v, want none", none)
+	}
+}
+
+// The upgrade to the highest fixed version fixes exactly the findings that
+// report a fixed version, whichever version each reports; the others stay.
+// The counts of what it fixes are those the upgrade plan shows.
+func TestTopPackagesCountsWhatTheUpgradeFixes(t *testing.T) {
+	groups := []PackageGroup{
+		group("libc-bin", "2.36-9+deb12u3", "HIGH", 3, 2, "2.36-9+deb12u7", "2.36-9+deb12u10"),
+		group("libc-bin", "2.36-9+deb12u3", "MEDIUM", 3, 1, "2.36-9+deb12u4"),
+		group("libc-bin", "2.36-9+deb12u3", "LOW", 2, 2, "2.36-9+deb12u4", "2.36-9+deb12u9"),
+	}
+	got := TopPackages(groups, 10)
+	want := []PackageImpact{{
+		PkgName: "libc-bin", InstalledVersion: "2.36-9+deb12u3", FixVersion: "2.36-9+deb12u10",
+		Findings: 8, BySeverity: SeverityCounts{High: 3, Medium: 3, Low: 2},
+		Fixable: 5, FixableBySeverity: SeverityCounts{High: 2, Medium: 1, Low: 2},
+		Risk: 3*5 + 3*3 + 2, RiskCleared: 2*5 + 1*3 + 2,
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("TopPackages =\n%+v\nwant\n%+v", got, want)
 	}
 }
 

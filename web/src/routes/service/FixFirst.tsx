@@ -37,6 +37,12 @@ function Row({
   href: string;
 }) {
   const fixable = pkg.fix_version !== '' && pkg.risk_cleared > 0;
+  // With a fix, the counts are those of the findings the upgrade fixes, as in
+  // the upgrade plan; without one, those of the findings that stay open.
+  const shown = fixable ? pkg.fixable_by_severity : pkg.by_severity;
+  const summary = fixable
+    ? `${countOf(pkg.fixable, 'finding')} fixed`
+    : countOf(pkg.findings, 'finding');
   return (
     <li>
       <Link
@@ -77,13 +83,13 @@ function Row({
           )}
           <span
             className="flex flex-wrap justify-end gap-x-2 text-caption text-text-muted tabular-nums"
-            title={countOf(pkg.findings, 'finding')}
+            title={summary}
           >
-            <span className="sr-only">{countOf(pkg.findings, 'finding')}: </span>
-            {SEVERITIES.filter((s) => pkg.by_severity[s] > 0).map((s) => (
+            <span className="sr-only">{summary}: </span>
+            {SEVERITIES.filter((s) => shown[s] > 0).map((s) => (
               <span key={s} className="inline-flex items-center gap-1">
                 <SeverityGlyph severity={s} size={9} />
-                {pkg.by_severity[s]}
+                {shown[s]}
                 <span className="sr-only"> {SEVERITY_NAME[s].toLowerCase()}</span>
               </span>
             ))}

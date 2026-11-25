@@ -19,14 +19,15 @@ import (
 const topPackages = 10
 
 type packageImpactJSON struct {
-	PkgName          string     `json:"pkg_name"`
-	InstalledVersion string     `json:"installed_version"`
-	FixVersion       string     `json:"fix_version"`
-	Findings         int        `json:"findings"`
-	BySeverity       countsJSON `json:"by_severity"`
-	Fixable          int        `json:"fixable"`
-	Risk             int        `json:"risk"`
-	RiskCleared      int        `json:"risk_cleared"`
+	PkgName           string     `json:"pkg_name"`
+	InstalledVersion  string     `json:"installed_version"`
+	FixVersion        string     `json:"fix_version"`
+	Findings          int        `json:"findings"`
+	BySeverity        countsJSON `json:"by_severity"`
+	Fixable           int        `json:"fixable"`
+	FixableBySeverity countsJSON `json:"fixable_by_severity"`
+	Risk              int        `json:"risk"`
+	RiskCleared       int        `json:"risk_cleared"`
 }
 
 type overviewJSON struct {
@@ -193,7 +194,8 @@ func topPackageJSON(rows []store.FindingsPackageGroupsRow) []packageImpactJSON {
 		out[i] = packageImpactJSON{
 			PkgName: p.PkgName, InstalledVersion: p.InstalledVersion, FixVersion: p.FixVersion,
 			Findings: p.Findings, BySeverity: fromDomain(p.BySeverity),
-			Fixable: p.Fixable, Risk: p.Risk, RiskCleared: p.RiskCleared,
+			Fixable: p.Fixable, FixableBySeverity: fromDomain(p.FixableBySeverity),
+			Risk: p.Risk, RiskCleared: p.RiskCleared,
 		}
 	}
 	return out

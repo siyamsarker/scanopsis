@@ -150,11 +150,11 @@ func TestOverview(t *testing.T) {
 	// The upgrade that clears the most risk points comes first: curl has two
 	// findings but they are low (2 points); busybox has no fix.
 	eq(t, "top_packages", ov.TopPackages, []packageImpactJSON{
-		{"openssl", "3.0.1", "3.0.12", 3, countsJSON{Critical: 1, High: 2}, 3, 20, 20},
-		{"libx", "1.0.0", "1.1.2", 1, countsJSON{High: 1}, 1, 5, 5},
-		{"left-pad", "1.0.0", "1.3.0", 1, countsJSON{Medium: 1}, 1, 3, 3},
-		{"curl", "7.8", "7.9", 2, countsJSON{Low: 2}, 2, 2, 2},
-		{"busybox", "1.35", "", 1, countsJSON{Unknown: 1}, 0, 5, 0},
+		{"openssl", "3.0.1", "3.0.12", 3, countsJSON{Critical: 1, High: 2}, 3, countsJSON{Critical: 1, High: 2}, 20, 20},
+		{"libx", "1.0.0", "1.1.2", 1, countsJSON{High: 1}, 1, countsJSON{High: 1}, 5, 5},
+		{"left-pad", "1.0.0", "1.3.0", 1, countsJSON{Medium: 1}, 1, countsJSON{Medium: 1}, 3, 3},
+		{"curl", "7.8", "7.9", 2, countsJSON{Low: 2}, 2, countsJSON{Low: 2}, 2, 2},
+		{"busybox", "1.35", "", 1, countsJSON{Unknown: 1}, 0, countsJSON{}, 5, 0},
 	})
 	if ov.DataAt == nil || unix(*ov.DataAt) != unix(at(f.base, 12*time.Hour)) {
 		t.Errorf("data_at = %v, want %v", ov.DataAt, at(f.base, 12*time.Hour))
@@ -197,6 +197,36 @@ func TestOverviewEmptyService(t *testing.T) {
 			t.Errorf("%s = %s, want %s", k, raw[k], want)
 		}
 	}
+}
+
+// A package whose findings report different fixed versions, some none: the
+// upgrade to the highest fixed version fixes those that report one, and
+// fixable_by_severity counts exactly those, as the upgrade plan of the
+// findings does.
+func TestOverviewTopPackageCountsWhatTheUpgradeFixes(t *testing.T) {
+	f := seed(t)
+	scan := newScan(t, f.pool, f.beta, "image", "web", "dev", f.base)
+	v := func(id, severity, fixed string) vuln {
+		return vuln{id: id, pkg: "libc-bin", version: "2.36-9+deb12u3", target: "debian 12", class: "os-pkgs", severity: severity, fixed: fixed}
+	}
+	addVulns(t, f.pool, scan,
+		v("CVE-2026-0001", "HIGH", "2.36-9+deb12u7"),
+		v("CVE-2026-0002", "HIGH", "2.36-9+deb12u10"),
+		v("CVE-2026-0003", "HIGH", ""),
+		v("CVE-2026-0004", "MEDIUM", "2.36-9+deb12u4"),
+		v("CVE-2026-0005", "MEDIUM", ""),
+		v("CVE-2026-0006", "MEDIUM", ""),
+		v("CVE-2026-0007", "LOW", "2.36-9+deb12u4"),
+		v("CVE-2026-0008", "LOW", "2.36-9+deb12u9"),
+	)
+	var ov overviewJSON
+	getJSON(t, newMux(f.pool, ""), fmt.Sprintf("/api/v1/services/%d/overview?ref=dev", f.beta), &ov)
+	eq(t, "top_packages", ov.TopPackages, []packageImpactJSON{{
+		PkgName: "libc-bin", InstalledVersion: "2.36-9+deb12u3", FixVersion: "2.36-9+deb12u10",
+		Findings: 8, BySeverity: countsJSON{High: 3, Medium: 3, Low: 2},
+		Fixable: 5, FixableBySeverity: countsJSON{High: 2, Medium: 1, Low: 2},
+		Risk: 3*5 + 3*3 + 2, RiskCleared: 2*5 + 3 + 2,
+	}})
 }
 
 func TestOverviewTopPackagesLimit(t *testing.T) {

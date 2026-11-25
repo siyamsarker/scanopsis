@@ -93,12 +93,17 @@ type PackageImpact struct {
 	// to it clears the fixable ones. Empty when none is fixable. See
 	// CompareVersions for the ordering's limits.
 	FixVersion string
+	// Findings and BySeverity count all the package's findings.
 	Findings   int
 	BySeverity SeverityCounts
-	// Fixable counts the findings that report a fixed version.
-	Fixable int
-	// Risk is the risk points of all findings; RiskCleared those of the
-	// fixable ones, which the upgrade to FixVersion removes.
+	// Fixable counts the findings the upgrade to FixVersion fixes: those
+	// that report a fixed version, as FixVersion is the highest of them.
+	// FixableBySeverity counts them per severity. The upgrade plan of the
+	// findings page counts the findings it loads by the same rule.
+	Fixable           int
+	FixableBySeverity SeverityCounts
+	// Risk is the risk points of BySeverity; RiskCleared those of
+	// FixableBySeverity, which the upgrade to FixVersion removes.
 	Risk        int
 	RiskCleared int
 }
@@ -125,13 +130,16 @@ func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 		p.BySeverity.Add(g.Severity, g.Count)
 		fixable := min(max(g.Fixable, 0), g.Count)
 		p.Fixable += fixable
-		p.Risk += g.Count * RiskWeight(g.Severity)
-		p.RiskCleared += fixable * RiskWeight(g.Severity)
+		p.FixableBySeverity.Add(g.Severity, fixable)
 		for _, list := range g.FixedVersions {
 			if v := HighestVersion(list); v != "" && (p.FixVersion == "" || CompareVersions(v, p.FixVersion) > 0) {
 				p.FixVersion = v
 			}
 		}
+	}
+	for i := range out {
+		out[i].Risk = out[i].BySeverity.Risk()
+		out[i].RiskCleared = out[i].FixableBySeverity.Risk()
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]

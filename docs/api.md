@@ -1798,10 +1798,11 @@ Type: object
 
 | Property | Type | Required | Description |
 |---|---|---|---|
-| `by_severity` | [SeverityCounts](#severitycounts) | yes |  |
-| `findings` | integer | yes |  |
+| `by_severity` | [SeverityCounts](#severitycounts) | yes | All the package's open findings per severity. |
+| `findings` | integer | yes | All the package's open findings. |
 | `fix_version` | string | yes | Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable. |
-| `fixable` | integer | yes | Findings that report a fixed version. |
+| `fixable` | integer | yes | Findings that report a fixed version: those the upgrade to fix_version fixes. |
+| `fixable_by_severity` | [SeverityCounts](#severitycounts) | yes | The fixable findings per severity, which the service page's Fix first shows for a package with a fix. |
 | `installed_version` | string | yes |  |
 | `pkg_name` | string | yes |  |
 | `risk` | integer | yes | Risk points of all the findings. |

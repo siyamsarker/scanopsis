@@ -1417,10 +1417,14 @@ export interface components {
             installed_version: string;
             /** @description Highest fixed version among the findings; upgrading to it clears the fixable ones. Empty when none is fixable. */
             fix_version: string;
+            /** @description All the package's open findings. */
             findings: number;
+            /** @description All the package's open findings per severity. */
             by_severity: components["schemas"]["SeverityCounts"];
-            /** @description Findings that report a fixed version. */
+            /** @description Findings that report a fixed version: those the upgrade to fix_version fixes. */
             fixable: number;
+            /** @description The fixable findings per severity, which the service page's Fix first shows for a package with a fix. */
+            fixable_by_severity: components["schemas"]["SeverityCounts"];
             /** @description Risk points of all the findings. */
             risk: number;
             /** @description Risk points of the fixable findings, which the upgrade to fix_version clears. */

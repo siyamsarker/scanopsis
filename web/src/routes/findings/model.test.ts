@@ -170,6 +170,31 @@ describe('grouping', () => {
       ['bash', 3, 1, ['CVE-6']],
     ]);
   });
+
+  it('counts what the upgrade to the highest fixed version fixes, as Fix first does', () => {
+    // libc-bin: 3 high, 3 medium and 2 low open, with different fixed
+    // versions; the server's fixable_by_severity is 2 high, 1 medium, 2 low.
+    const libc = (id: number, severity: Vulnerability['severity'], fixed: string) =>
+      v(id, {
+        pkg_name: 'libc-bin',
+        installed_version: '2.36-9+deb12u3',
+        severity,
+        fixed_version: fixed,
+      });
+    const [plan] = upgradeGroups([
+      libc(1, 'HIGH', '2.36-9+deb12u7'),
+      libc(2, 'HIGH', '2.36-9+deb12u10'),
+      libc(3, 'HIGH', ''),
+      libc(4, 'MEDIUM', '2.36-9+deb12u4'),
+      libc(5, 'MEDIUM', ''),
+      libc(6, 'MEDIUM', ''),
+      libc(7, 'LOW', '2.36-9+deb12u4'),
+      libc(8, 'LOW', '2.36-9+deb12u9'),
+    ]);
+    expect(plan.upgradeTo).toBe('2.36-9+deb12u10');
+    expect(plan.counts).toEqual({ critical: 0, high: 2, medium: 1, low: 2, unknown: 0 });
+    expect([plan.cleared, plan.risk]).toEqual([5, 15]);
+  });
 });
 
 describe('targetLabel', () => {
