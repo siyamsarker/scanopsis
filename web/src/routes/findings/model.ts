@@ -199,10 +199,21 @@ function splitEpoch(v: string): [string, string] {
   return ['0', s];
 }
 
+/** A run of digits or letters; tilde and plus: a "~" or "+" separates it from the run before. */
+interface Token {
+  text: string;
+  tilde: boolean;
+  plus: boolean;
+}
+
 /** Runs of digits and runs of letters; a leading "v" before a digit is dropped. */
-function tokens(v: string): string[] {
+function tokens(v: string): Token[] {
   const s = v.length > 1 && (v[0] === 'v' || v[0] === 'V') && isDigit(v[1]) ? v.slice(1) : v;
-  return s.match(/[0-9]+|[A-Za-z]+/g) ?? [];
+  const out: Token[] = [];
+  for (const m of s.matchAll(/([^0-9A-Za-z]*)([0-9]+|[A-Za-z]+)/g)) {
+    out.push({ text: m[2], tilde: m[1].includes('~'), plus: m[1].includes('+') });
+  }
+  return out;
 }
 
 /** Compares two digit strings by value, without overflow. */
@@ -224,9 +235,11 @@ function compareToken(a: string, b: string): number {
 }
 
 /** How a version with token t left compares with one that has ended. */
-function remainder(t: string): number {
-  if (isLetter(t[0])) return -1; // a pre-release such as "rc1"
-  return /^0+$/.test(t) ? 0 : 1;
+function remainder(t: Token): number {
+  if (t.tilde) return -1;
+  if (t.plus) return 1;
+  if (isLetter(t.text[0])) return -1; // a pre-release such as "rc1"
+  return /^0+$/.test(t.text) ? 0 : 1;
 }
 
 /**
@@ -235,11 +248,10 @@ function remainder(t: string): number {
  * same upgrade: a leading "N:" epoch dominates; a leading "v" before a digit
  * is ignored; the rest is split into runs of digits, compared by value, and
  * runs of letters, compared case-insensitively, a digit run being greater;
- * when one side runs out, the other is greater unless its remainder starts
- * with letters (a pre-release, 1.0.0-rc1 < 1.0.0) or is only zeros
- * (1.0 = 1.0.0). Ecosystem rules beyond that are not modelled: Debian tilde
- * ordering ("1.0~rc1"), RPM carets and semver build metadata are compared as
- * plain tokens.
+ * a run after "~" sorts before anything and one after "+" after the end, as
+ * dpkg orders them (1.0-1~deb12u1 < 1.0-1 < 1.0-1+deb12u1); when one side
+ * runs out, the other is greater unless its remainder starts with letters (a
+ * pre-release, 1.0.0-rc1 < 1.0.0) or is only zeros (1.0 = 1.0.0).
  */
 export function compareVersions(a: string, b: string): number {
   const [ea, ra] = splitEpoch(a);
@@ -249,17 +261,31 @@ export function compareVersions(a: string, b: string): number {
   const x = tokens(ra);
   const y = tokens(rb);
   for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const c =
-      i >= y.length ? remainder(x[i]) : i >= x.length ? -remainder(y[i]) : compareToken(x[i], y[i]);
+    let c: number;
+    if (i >= y.length) c = remainder(x[i]);
+    else if (i >= x.length) c = -remainder(y[i]);
+    else if (x[i].tilde !== y[i].tilde) c = x[i].tilde ? -1 : 1;
+    else c = compareToken(x[i].text, y[i].text);
     if (c !== 0) return c;
   }
   return 0;
 }
 
+/**
+ * Whether v should replace best as the highest version: v is greater, or it
+ * compares equal but is written differently and sorts first ("1.0" before
+ * "1.0.0"), as on the server (Higher), so the result does not depend on the
+ * order the versions come in.
+ */
+function higher(v: string, best: string): boolean {
+  const c = compareVersions(v, best);
+  return c > 0 || (c === 0 && v < best);
+}
+
 /** The highest version in FixedVersion values, each of which may be a comma-separated list. */
 export function highestFixed(values: string[]): string {
   const all = values.flatMap((v) => v.split(',').map((part) => part.trim())).filter(Boolean);
-  return all.reduce((best, v) => (compareVersions(v, best) > 0 ? v : best), all[0] ?? '');
+  return all.reduce((best, v) => (higher(v, best) ? v : best), all[0] ?? '');
 }
 
 /** Zero counts, a fresh object each time. */

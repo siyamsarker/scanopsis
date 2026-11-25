@@ -1,5 +1,5 @@
 {
-  "comment": "Shared by internal/domain (Go) and web/src/routes/findings/model.test.ts, so the service page's Fix first and the findings' upgrade plan apply the same rules: version order, upgrade target, counts and package order.",
+  "comment": "Versions that compare equal but are written differently resolve to the byte-smallest spelling, whatever the order they come in. Shared by internal/domain (Go) and web/src/routes/findings/model.test.ts, so the service page's Fix first and the findings' upgrade plan apply the same rules: version order, upgrade target, counts and package order.",
   "compare": [
     ["1.2.10", "1.2.9", 1],
     ["1.2.9", "1.2.10", -1],
@@ -31,7 +31,17 @@
     ["", "", 0],
     ["", "0", 0],
     ["", "1", -1],
-    [" 1.2 ", "1.2", 0]
+    [" 1.2 ", "1.2", 0],
+    ["1.0-1~deb12u1", "1.0-1", -1],
+    ["1.0-1", "1.0-1+deb12u1", -1],
+    ["1.0-1~deb12u1", "1.0-1+deb12u1", -1],
+    ["2.36-9+deb12u4", "2.36-9", 1],
+    ["2.36-9+deb12u4", "2.36-9+deb12u10", -1],
+    ["1.0~1", "1.0", -1],
+    ["1.0~1", "1.0.1", -1],
+    ["1.0~rc1", "1.0~rc2", -1],
+    ["1.0~rc1", "1.0-rc1", -1],
+    ["1.0+build1", "1.0", 1]
   ],
   "highest": [
     ["", ""],
@@ -43,7 +53,17 @@
     ["2.0.0-rc1, 1.9.9", "2.0.0-rc1"],
     ["2.0.0-rc1, 2.0.0", "2.0.0"],
     ["2:1.0, 1:5.0, 3.0", "2:1.0"],
-    ["1.0, 1.0.0", "1.0"]
+    ["1.0, 1.0.0", "1.0"],
+    ["1.0.0, 1.0", "1.0"],
+    ["v1.2, 1.2", "1.2"],
+    ["1.2, v1.2", "1.2"],
+    ["1.0.0-rc1, 1.0.0-RC1", "1.0.0-RC1"],
+    ["1.0.0-RC1, 1.0.0-rc1", "1.0.0-RC1"],
+    ["1.0, 0:1.0", "0:1.0"],
+    ["0:1.0, 1.0", "0:1.0"],
+    ["2.36-9, 2.36-9+deb12u4", "2.36-9+deb12u4"],
+    ["2.36-9+deb12u4, 2.36-9", "2.36-9+deb12u4"],
+    ["1.0-1+deb12u1, 1.0-1~deb12u1", "1.0-1+deb12u1"]
   ],
   "findings": [
     {"pkg": "libssl3", "installed": "3.0.9-1", "severity": "HIGH", "fixed": "1:3.0.11-1~deb12u2"},
@@ -63,9 +83,17 @@
     {"pkg": "lib10", "installed": "1", "severity": "LOW", "fixed": "2"},
     {"pkg": "e", "installed": "1.0", "severity": "HIGH", "fixed": "1.1"},
     {"pkg": "e", "installed": "1.0", "severity": "CRITICAL", "fixed": ""},
-    {"pkg": "zlib", "installed": "1.2", "severity": "CRITICAL", "fixed": ""}
+    {"pkg": "zlib", "installed": "1.2", "severity": "CRITICAL", "fixed": ""},
+    {"pkg": "f", "installed": "0.9", "severity": "LOW", "fixed": "1.0.0"},
+    {"pkg": "f", "installed": "0.9", "severity": "MEDIUM", "fixed": "1.0"},
+    {"pkg": "g", "installed": "0.9", "severity": "LOW", "fixed": "1.0"},
+    {"pkg": "g", "installed": "0.9", "severity": "LOW", "fixed": "1.0.0"},
+    {"pkg": "libc6", "installed": "2.36-8", "severity": "HIGH", "fixed": "2.36-9"},
+    {"pkg": "libc6", "installed": "2.36-8", "severity": "MEDIUM", "fixed": "2.36-9+deb12u4"}
   ],
   "plan": [
+    {"pkg": "libc6", "installed": "2.36-8", "upgrade_to": "2.36-9+deb12u4", "cleared": 2, "risk": 8,
+     "counts": {"critical": 0, "high": 1, "medium": 1, "low": 0, "unknown": 0}},
     {"pkg": "libssl3", "installed": "3.0.9-1", "upgrade_to": "1:3.0.11-1~deb12u2", "cleared": 2, "risk": 8,
      "counts": {"critical": 0, "high": 1, "medium": 1, "low": 0, "unknown": 0}},
     {"pkg": "a", "installed": "1.0", "upgrade_to": "2.0", "cleared": 5, "risk": 5,
@@ -80,6 +108,10 @@
      "counts": {"critical": 0, "high": 1, "medium": 0, "low": 0, "unknown": 0}},
     {"pkg": "c", "installed": "1.0", "upgrade_to": "1.1", "cleared": 1, "risk": 5,
      "counts": {"critical": 0, "high": 0, "medium": 0, "low": 0, "unknown": 1}},
+    {"pkg": "f", "installed": "0.9", "upgrade_to": "1.0", "cleared": 2, "risk": 4,
+     "counts": {"critical": 0, "high": 0, "medium": 1, "low": 1, "unknown": 0}},
+    {"pkg": "g", "installed": "0.9", "upgrade_to": "1.0", "cleared": 2, "risk": 2,
+     "counts": {"critical": 0, "high": 0, "medium": 0, "low": 2, "unknown": 0}},
     {"pkg": "lib10", "installed": "1", "upgrade_to": "2", "cleared": 1, "risk": 1,
      "counts": {"critical": 0, "high": 0, "medium": 0, "low": 1, "unknown": 0}},
     {"pkg": "lib9", "installed": "1", "upgrade_to": "2", "cleared": 1, "risk": 1,

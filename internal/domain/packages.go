@@ -130,7 +130,7 @@ func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 		p.Fixable += fixable
 		p.FixableBySeverity.Add(g.Severity, fixable)
 		for _, list := range g.FixedVersions {
-			if v := HighestVersion(list); v != "" && (p.FixVersion == "" || CompareVersions(v, p.FixVersion) > 0) {
+			if v := HighestVersion(list); v != "" && (p.FixVersion == "" || Higher(v, p.FixVersion)) {
 				p.FixVersion = v
 			}
 		}
