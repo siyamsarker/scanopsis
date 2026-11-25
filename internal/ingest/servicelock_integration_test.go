@@ -243,3 +243,80 @@ func TestIntegrationArchiveWaitsForUpload(t *testing.T) {
 		t.Errorf("archived %v with %d scans, want archived with 1", isArchived, scans)
 	}
 }
+
+// An administrator's delete of a service while an upload of it runs waits
+// for the upload, then removes the service with the scan the upload stored:
+// the upload is answered 201 and the delete succeeds, without a reference
+// error on either side.
+func TestIntegrationDeleteWaitsForUpload(t *testing.T) {
+	ctx := context.Background()
+	e := newIEnv(t, nil)
+	first := e.mustUpload(upload{body: sonarKeyBody})
+	sid := first.ServiceID
+
+	// Hold the scan the next upload replaces, so the upload stops after it
+	// locked its service and before it stores anything.
+	hold, err := e.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = hold.Rollback(ctx) }()
+	if _, err := hold.Exec(ctx, `SELECT 1 FROM scans WHERE id = $1 FOR UPDATE`, first.ScanID); err != nil {
+		t.Fatal(err)
+	}
+	done := e.startUpload(upload{body: sonarKeyBody})
+	uploader := e.waitBlockedBy(e.backendPID(hold), done, "the upload")
+
+	// The administrator deletes the service, as the service API does.
+	conn, err := e.pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+	var deleter int
+	if err := conn.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&deleter); err != nil {
+		t.Fatal(err)
+	}
+	deleted := make(chan error, 1)
+	go func() {
+		_, err := store.New(conn).DeleteService(ctx, sid)
+		deleted <- err
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		select {
+		case err := <-deleted:
+			t.Fatalf("the delete did not wait for the upload (%v)", err)
+		default:
+		}
+		var waits bool
+		if err := e.pool.QueryRow(ctx, `SELECT $1 = ANY(pg_blocking_pids($2))`, uploader, deleter).Scan(&waits); err != nil {
+			t.Fatal(err)
+		}
+		if waits {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the delete never waited for the upload")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := hold.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a := <-done; a.code != http.StatusCreated {
+		t.Fatalf("upload = %d %v", a.code, a.res)
+	}
+	if err := <-deleted; err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	var services, scans int
+	if err := e.pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM services WHERE id = $1),
+		(SELECT count(*) FROM scans WHERE service_id = $1)`, sid).Scan(&services, &scans); err != nil {
+		t.Fatal(err)
+	}
+	if services != 0 || scans != 0 {
+		t.Errorf("%d services and %d scans left, want none", services, scans)
+	}
+}
