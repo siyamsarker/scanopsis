@@ -371,7 +371,8 @@ the most recent scan, so a scan of a feature branch changes what everyone sees.
 Right after the first upload, an administrator opens **Services**, finds the new
 service and selects its branch tag to choose the dashboard branch, usually your
 default branch.
-[Operations](../operations.md) describes the Services page.
+[Operations](../operations.md#choose-the-dashboard-branch-of-a-service)
+describes the steps.
 
 If your pipelines scan only on a deployment branch, for example `production`
 or `release`, choose that branch. A dashboard that follows the most recent scan
@@ -424,9 +425,9 @@ The upload is stored in every case. Its answer says what became of the key:
 The last two are written to the server log as a warning on every upload, and
 to the audit log as `ingest.sonar_key_ignored`, with the declared key: not
 again while the service is unchanged, but again for a new reason or key, or
-after any change of the service. An administrator who sets or clears the key
-on the Services page always wins, and cancels a key that waits: in the
-service's **Edit** dialog, enter a key or select **Cancel waiting key**.
+after any change of the service. An administrator always wins: setting or clearing
+the key cancels a key that waits, and so does **Cancel waiting key** in the
+service's **Edit** dialog on the Services page, which changes nothing else.
 Saving only a new name keeps the waiting key. **Cancel waiting key** never
 unlinks: if SonarQube confirmed the key just before, the page says
 "SonarQube already confirmed ..." and the key stays.
