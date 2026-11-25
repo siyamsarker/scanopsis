@@ -501,6 +501,21 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 	return items, nil
 }
 
+const lockSonarAnalysesOf = `-- name: LockSonarAnalysesOf :exec
+SELECT pg_advisory_xact_lock(hashtextextended('scanopsis:sonar_analyses:' || $1::bigint, 0))
+`
+
+// LockSonarAnalysesOf takes, until the transaction ends, the lock every
+// store of an analysis of a service holds while it checks whether the
+// analysis is known and inserts it, so two stores of the same analysis (a
+// delivery and a sync, or two deliveries) cannot both find it unknown. A
+// transaction-level advisory lock, so it waits for no upload or edit of the
+// service's row.
+func (q *Queries) LockSonarAnalysesOf(ctx context.Context, serviceID int64) error {
+	_, err := q.db.Exec(ctx, lockSonarAnalysesOf, serviceID)
+	return err
+}
+
 const lockSonarService = `-- name: LockSonarService :one
 SELECT sonar_project_key, sonar_key_declared FROM services WHERE id = $1 AND NOT archived FOR NO KEY UPDATE
 `

@@ -228,11 +228,12 @@ func (s *Sonar) syncProject(ctx context.Context, cl *client, svc store.SonarLink
 	if err != nil {
 		return err
 	}
-	return s.save(ctx, snapshot{
+	_, err = s.save(ctx, snapshot{
 		ServiceID: svc.ID, TaskID: "sync:" + latest.Key, AnalysisKey: latest.Key,
 		AnalysedAt: latest.Date, Revision: latest.Revision, Gate: gate,
 		Conditions: conds, Measures: measures, Pipeline: from.pipelineOf(latest.Date),
 	}, "")
+	return err
 }
 
 // warn logs a failure with the SonarQube status code when there is one.

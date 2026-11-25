@@ -215,6 +215,15 @@ UPDATE sonar_deliveries
 SET detail = @detail::text
 WHERE outcome = 'unlinked' AND claimed_project_id = @claimed_project_id;
 
+-- LockSonarAnalysesOf takes, until the transaction ends, the lock every
+-- store of an analysis of a service holds while it checks whether the
+-- analysis is known and inserts it, so two stores of the same analysis (a
+-- delivery and a sync, or two deliveries) cannot both find it unknown. A
+-- transaction-level advisory lock, so it waits for no upload or edit of the
+-- service's row.
+-- name: LockSonarAnalysesOf :exec
+SELECT pg_advisory_xact_lock(hashtextextended('scanopsis:sonar_analyses:' || @service_id::bigint, 0));
+
 -- name: InsertSonarAnalysis :exec
 INSERT INTO sonar_analyses (
     service_id, task_id, analysis_key, analysed_at, revision, quality_gate_status,

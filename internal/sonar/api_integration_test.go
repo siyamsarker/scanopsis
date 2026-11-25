@@ -111,7 +111,7 @@ func TestServiceSonarUnreportedAndEmpty(t *testing.T) {
 	delete(m, "sqale_rating")
 	delete(m, "security_review_rating")
 	delete(m, "duplicated_lines_density")
-	if err := e.s.save(t.Context(), snapshot{
+	if _, err := e.s.save(t.Context(), snapshot{
 		ServiceID: sid, TaskID: "sync:X1", AnalysedAt: analysisTime,
 		Measures: m, Conditions: nil,
 	}, ""); err != nil {
@@ -142,7 +142,7 @@ func TestServiceSonarHistoryAndErrors(t *testing.T) {
 	e := newEnv(t)
 	sid := e.service(t, "platform/payments-api", 0, "platform:payments-api")
 	for i := range 3 {
-		err := e.s.save(t.Context(), snapshot{
+		_, err := e.s.save(t.Context(), snapshot{
 			ServiceID: sid, TaskID: "sync:H" + strconv.Itoa(i), AnalysedAt: analysisTime.Add(time.Duration(i) * time.Hour),
 			Measures: map[string]string{}, Revision: "r" + strconv.Itoa(i),
 		}, "")

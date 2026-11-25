@@ -8,7 +8,9 @@ package sonar
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -266,4 +268,41 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not reached")
+}
+
+// A sync and a webhook delivery store the same analysis of a linked project
+// at the same time. The sync finds the analysis unknown and waits for
+// SonarQube while the delivery stores it; the sync then must not store it a
+// second time. Before, both passed the "already known" check before either
+// stored, and the service got the analysis twice.
+func TestSyncAndWebhookStoreAnAnalysisOnce(t *testing.T) {
+	e := newEnv(t)
+	sid := e.service(t, "platform/payments-api", 0, "platform:payments-api")
+	e.project("platform:payments-api")
+	// Only the sync reads the quality gate status: it waits there, after it
+	// found the analysis unknown, until the delivery is done.
+	atGate := make(chan struct{})
+	release := make(chan struct{})
+	e.intercept(func(r *http.Request, next http.RoundTripper) (*http.Response, error) {
+		if strings.Contains(r.URL.Path, "api/qualitygates/project_status") {
+			close(atGate)
+			<-release
+		}
+		return next.RoundTrip(r)
+	})
+	synced := make(chan struct{})
+	go func() { e.runSync(t); close(synced) }()
+	<-atGate
+
+	wantStatus(t, e, hook("task-s1", "platform:payments-api", nil), 202)
+	e.drain(t, 1)
+	if d := e.delivery(t, "task-s1"); d.Outcome != "linked" {
+		t.Fatalf("delivery: %+v", d)
+	}
+	close(release)
+	<-synced
+
+	if got := e.analyses(t, sid); len(got) != 1 || got[0].TaskID != "task-s1" {
+		t.Errorf("analyses: %d, want only the delivery's", len(got))
+	}
 }

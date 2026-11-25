@@ -277,7 +277,7 @@ func TestWebhookAlreadyStoredBySync(t *testing.T) {
 	e := newEnv(t)
 	sid := e.service(t, "platform/payments-api", 0, "platform:payments-api")
 	e.project("platform:payments-api")
-	if err := e.s.save(context.Background(), snapshot{
+	if _, err := e.s.save(context.Background(), snapshot{
 		ServiceID: sid, TaskID: "sync:AY1", AnalysisKey: "AY1", AnalysedAt: analysisTime,
 		Measures: map[string]string{}, Conditions: []Condition{},
 	}, ""); err != nil {

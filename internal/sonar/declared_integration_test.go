@@ -269,7 +269,7 @@ func TestDeclarationWinsRaceWithWebhookPin(t *testing.T) {
 		t.Fatalf("link %+v %v", l, err)
 	}
 	e.declare(t, sid, "demo:orders-api") // the upload commits now
-	err = e.s.save(context.Background(), snapshot{ServiceID: sid, TaskID: "task-x", AnalysedAt: analysisTime, Conditions: []Condition{}}, "evil:project")
+	_, err = e.s.save(context.Background(), snapshot{ServiceID: sid, TaskID: "task-x", AnalysedAt: analysisTime, Conditions: []Condition{}}, "evil:project")
 	if !errors.Is(err, errPinConflict) {
 		t.Fatalf("save = %v, want the pin conflict", err)
 	}

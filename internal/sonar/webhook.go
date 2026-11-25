@@ -410,15 +410,13 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 	if l.Pin {
 		pin, a.PinReason = p.Project.Key, l.PinReason
 	}
-	known, err := s.storeAnalysis(ctx, a, pin)
-	knownDetail := "The analysis was already stored by a sync."
+	res, err := s.storeAnalysis(ctx, a, pin)
 	if errors.Is(err, errPinConflict) {
 		// Another delivery of the same project, or the first upload of the
 		// pipeline, may have linked the service to this very key while this
 		// delivery was processed. The analysis is then stored as for a
 		// delivery that arrived after the link.
-		known, err = s.storeLinked(ctx, a, pin)
-		knownDetail = storedMeanwhileDetail
+		res, err = s.storeLinked(ctx, a, pin)
 	}
 	switch {
 	case errors.Is(err, errPinConflict):
@@ -428,31 +426,45 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 		fail(&sid, "Checking stored analyses failed; see the server log.", err)
 	case err != nil:
 		fail(&sid, "Storing the analysis failed; see the server log.", err)
-	case known:
-		s.finish(ctx, p.TaskID, outcomeLinked, &sid, knownDetail)
+	case res == alreadyKnown:
+		s.finish(ctx, p.TaskID, outcomeLinked, &sid, "The analysis was already stored by a sync.")
+	case res == storedMeanwhile:
+		s.finish(ctx, p.TaskID, outcomeLinked, &sid, storedMeanwhileDetail)
 	default:
 		s.finish(ctx, p.TaskID, outcomeLinked, &sid, detail)
 	}
 }
 
 // storedMeanwhileDetail is the detail of a delivery whose analysis was
-// stored by another delivery of the same project, or by the sync that
-// followed a link, while it was processed.
+// stored by another delivery of the same project, or by a sync, while it
+// was processed.
 const storedMeanwhileDetail = "The analysis was already stored while this delivery was processed."
 
 // errKnownCheck wraps a failure to check whether an analysis is stored.
 var errKnownCheck = errors.New("checking stored analyses")
 
-// storeAnalysis stores an analysis unless the service already has it (known
-// is then true), linking the service to pinKey first when it is set (see
-// save).
-func (s *Sonar) storeAnalysis(ctx context.Context, a snapshot, pinKey string) (known bool, err error) {
+// storeResult says what became of an analysis to store.
+type storeResult int
+
+const (
+	// stored: this call stored it.
+	stored storeResult = iota
+	// alreadyKnown: the service had it before this call began to store it.
+	alreadyKnown
+	// storedMeanwhile: another store of the same analysis committed while
+	// this one was under way.
+	storedMeanwhile
+)
+
+// storeAnalysis stores an analysis unless the service already has it,
+// linking the service to pinKey first when it is set (see save).
+func (s *Sonar) storeAnalysis(ctx context.Context, a snapshot, pinKey string) (storeResult, error) {
 	if a.AnalysisKey != "" {
-		if known, err = s.analysisKnown(ctx, s.q, a); known || err != nil {
-			return known, err
+		if known, err := s.analysisKnown(ctx, s.q, a); known || err != nil {
+			return alreadyKnown, err
 		}
 	}
-	return false, s.save(ctx, a, pinKey)
+	return s.save(ctx, a, pinKey)
 }
 
 // storeLinked stores an analysis, unless the service already has it, only
@@ -460,38 +472,55 @@ func (s *Sonar) storeAnalysis(ctx context.Context, a snapshot, pinKey string) (k
 // the transaction that stores, so a change of the key either comes first
 // and is seen, or waits. errPinConflict when the service is linked to
 // another key, archived or gone.
-func (s *Sonar) storeLinked(ctx context.Context, a snapshot, key string) (known bool, err error) {
+func (s *Sonar) storeLinked(ctx context.Context, a snapshot, key string) (storeResult, error) {
 	if s.beforeStoreLinked != nil {
 		s.beforeStoreLinked()
 	}
 	arg, err := s.analysisParams(a)
 	if err != nil {
-		return false, err
+		return stored, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return stored, err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := s.q.WithTx(tx)
 	cur, err := q.LockSonarService(ctx, a.ServiceID)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
-		return false, errPinConflict
+		return stored, errPinConflict
 	case err != nil:
-		return false, err
+		return stored, err
 	case !cur.SonarProjectKey.Valid || cur.SonarProjectKey.String != key:
-		return false, errPinConflict
+		return stored, errPinConflict
 	}
-	if a.AnalysisKey != "" {
-		if known, err = s.analysisKnown(ctx, q, a); known || err != nil {
-			return known, err
+	res, err := s.insertAnalysis(ctx, q, arg)
+	if err != nil {
+		return res, err
+	}
+	return res, tx.Commit(ctx)
+}
+
+// insertAnalysis inserts an analysis in the transaction of q unless the
+// service has it. Every store of an analysis goes through here: under the
+// service's analysis lock (LockSonarAnalysesOf) the check sees whatever
+// another store committed before, so the same analysis is never stored
+// twice. The lock is held until the transaction ends.
+func (s *Sonar) insertAnalysis(ctx context.Context, q *store.Queries, arg store.InsertSonarAnalysisParams) (storeResult, error) {
+	if err := q.LockSonarAnalysesOf(ctx, arg.ServiceID); err != nil {
+		return stored, err
+	}
+	if arg.AnalysisKey != "" {
+		known, err := q.SonarAnalysisKnown(ctx, store.SonarAnalysisKnownParams{ServiceID: arg.ServiceID, AnalysisKey: arg.AnalysisKey})
+		if err != nil {
+			return stored, fmt.Errorf("%w: %w", errKnownCheck, err)
+		}
+		if known {
+			return storedMeanwhile, nil
 		}
 	}
-	if err := q.InsertSonarAnalysis(ctx, arg); err != nil {
-		return false, err
-	}
-	return false, tx.Commit(ctx)
+	return stored, q.InsertSonarAnalysis(ctx, arg)
 }
 
 // analysisKnown reports whether the service already has the analysis.
@@ -525,37 +554,38 @@ type snapshot struct {
 // errPinConflict is returned when a service cannot be linked to a project.
 var errPinConflict = errors.New("service or SonarQube key already linked")
 
-// save stores an analysis. With a pin key it first links the service to that
+// save stores an analysis unless the service has it by now (see
+// insertAnalysis). With a pin key it first links the service to that
 // SonarQube project, in the same transaction.
-func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) error {
+func (s *Sonar) save(ctx context.Context, a snapshot, pinKey string) (storeResult, error) {
 	arg, err := s.analysisParams(a)
 	if err != nil {
-		return err
-	}
-	if pinKey == "" {
-		return s.q.InsertSonarAnalysis(ctx, arg)
+		return stored, err
 	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return stored, err
 	}
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	q := s.q.WithTx(tx)
-	path, err := q.PinSonarKey(ctx, store.PinSonarKeyParams{ID: a.ServiceID, SonarProjectKey: pgtype.Text{String: pinKey, Valid: true}})
-	var pgErr *pgconn.PgError
-	if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "23505") { // unique_violation
-		return errPinConflict
+	if pinKey != "" {
+		path, err := q.PinSonarKey(ctx, store.PinSonarKeyParams{ID: a.ServiceID, SonarProjectKey: pgtype.Text{String: pinKey, Valid: true}})
+		var pgErr *pgconn.PgError
+		if errors.Is(err, pgx.ErrNoRows) || (errors.As(err, &pgErr) && pgErr.Code == "23505") { // unique_violation
+			return stored, errPinConflict
+		}
+		if err != nil {
+			return stored, err
+		}
+		if err := auditPin(ctx, q, a.ServiceID, path, pinKey, a.TaskID, a.ClaimedProjectID, a.Pipeline, a.PinReason); err != nil {
+			return stored, err
+		}
 	}
+	res, err := s.insertAnalysis(ctx, q, arg)
 	if err != nil {
-		return err
+		return res, err
 	}
-	if err := auditPin(ctx, q, a.ServiceID, path, pinKey, a.TaskID, a.ClaimedProjectID, a.Pipeline, a.PinReason); err != nil {
-		return err
-	}
-	if err := q.InsertSonarAnalysis(ctx, arg); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return res, tx.Commit(ctx)
 }
 
 // analysisParams are the values of a stored analysis.
