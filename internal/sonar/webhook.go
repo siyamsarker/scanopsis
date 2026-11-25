@@ -406,31 +406,71 @@ func (s *Sonar) process(ctx context.Context, d delivery) {
 		detail = "The latest analysis in SonarQube is older than the one in the webhook; the measures may not belong to it."
 	}
 
-	if a.AnalysisKey != "" {
-		known, err := s.q.SonarAnalysisKnown(ctx, store.SonarAnalysisKnownParams{ServiceID: sid, AnalysisKey: a.AnalysisKey})
-		if err != nil {
-			fail(&sid, "Checking stored analyses failed; see the server log.", err)
-			return
-		}
-		if known {
-			s.finish(ctx, p.TaskID, outcomeLinked, &sid, "The analysis was already stored by a sync.")
-			return
-		}
-	}
 	pin := ""
 	if l.Pin {
 		pin, a.PinReason = p.Project.Key, l.PinReason
 	}
-	switch err := s.save(ctx, a, pin); {
+	known, err := s.storeAnalysis(ctx, a, pin)
+	knownDetail := "The analysis was already stored by a sync."
+	if errors.Is(err, errPinConflict) {
+		// Another delivery of the same project, or the first upload of the
+		// pipeline, may have linked the service to this very key while this
+		// delivery was processed. The analysis is then stored as for a
+		// delivery that arrived after the link.
+		switch linked, lerr := s.linkedTo(ctx, sid, pin); {
+		case lerr != nil:
+			err = lerr
+		case linked:
+			known, err = s.storeAnalysis(ctx, a, "")
+			knownDetail = storedMeanwhileDetail
+		}
+	}
+	switch {
 	case errors.Is(err, errPinConflict):
 		s.finish(ctx, p.TaskID, outcomeUnlinked, nil, fmt.Sprintf(
 			"The service named by sonar.analysis.gitlabProjectId cannot be linked to SonarQube project %q because the service or the key is already linked, or the service's pipeline declared another key in an upload.", p.Project.Key))
-		return
+	case errors.Is(err, errKnownCheck):
+		fail(&sid, "Checking stored analyses failed; see the server log.", err)
 	case err != nil:
 		fail(&sid, "Storing the analysis failed; see the server log.", err)
-		return
+	case known:
+		s.finish(ctx, p.TaskID, outcomeLinked, &sid, knownDetail)
+	default:
+		s.finish(ctx, p.TaskID, outcomeLinked, &sid, detail)
 	}
-	s.finish(ctx, p.TaskID, outcomeLinked, &sid, detail)
+}
+
+// storedMeanwhileDetail is the detail of a delivery whose analysis was
+// stored by another delivery of the same project, or by the sync that
+// followed a link, while it was processed.
+const storedMeanwhileDetail = "The analysis was already stored while this delivery was processed."
+
+// errKnownCheck wraps a failure to check whether an analysis is stored.
+var errKnownCheck = errors.New("checking stored analyses")
+
+// storeAnalysis stores an analysis unless the service already has it (known
+// is then true), linking the service to pinKey first when it is set (see
+// save).
+func (s *Sonar) storeAnalysis(ctx context.Context, a snapshot, pinKey string) (known bool, err error) {
+	if a.AnalysisKey != "" {
+		known, err := s.q.SonarAnalysisKnown(ctx, store.SonarAnalysisKnownParams{ServiceID: a.ServiceID, AnalysisKey: a.AnalysisKey})
+		if err != nil {
+			return false, fmt.Errorf("%w: %w", errKnownCheck, err)
+		}
+		if known {
+			return true, nil
+		}
+	}
+	return false, s.save(ctx, a, pinKey)
+}
+
+// linkedTo reports whether the service, not archived, is linked to key now.
+func (s *Sonar) linkedTo(ctx context.Context, serviceID int64, key string) (bool, error) {
+	id, err := s.q.SonarServiceByKey(ctx, pgtype.Text{String: key, Valid: true})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil && id == serviceID, err
 }
 
 // snapshot is an analysis ready to be stored.

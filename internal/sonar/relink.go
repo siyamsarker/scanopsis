@@ -29,7 +29,8 @@ const waitingLinkedDetail = "Linked when the first scan of the same pipeline cre
 var (
 	// errKeyTaken: another service, maybe an archived one, has the key.
 	errKeyTaken = errors.New("SonarQube key already linked to another service")
-	// errServiceTaken: the service was linked or archived in the meantime.
+	// errServiceTaken: the service was linked or archived in the meantime,
+	// or its pipeline declared another key.
 	errServiceTaken = errors.New("service already linked")
 )
 
@@ -105,7 +106,7 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 			"SonarQube project %q is already linked to another service, so it was not linked to the service of GitLab project %d.",
 			k.ProjectKey, gitlabProjectID))
 	case errors.Is(err, errServiceTaken):
-		return nil
+		return s.linkWaitingTaken(ctx, w, k)
 	case err != nil:
 		return err
 	}
@@ -114,6 +115,31 @@ func (s *Sonar) LinkWaiting(ctx context.Context, serviceID, gitlabProjectID, pip
 		from:                   deliveries{{pipeline: pipelineID, analysedAt: k.AnalysedAt.Time}},
 	}
 	s.queueSync(ctx, l)
+	return nil
+}
+
+// linkWaitingTaken follows a pin that found the service already linked or
+// archived. A webhook delivery of the same project may have linked it to
+// the very key of the waiting analysis meanwhile: the waiting deliveries of
+// that key are then linked to the service, and the project is synced, as
+// after a pin of its own. Nothing is audited, as the link was the other's.
+// Linked to another key, or archived, the service is left as it is.
+func (s *Sonar) linkWaitingTaken(ctx context.Context, w waiting, k store.WaitingSonarKeysRow) error {
+	linked, err := s.linkedTo(ctx, w.serviceID, k.ProjectKey)
+	if err != nil || !linked {
+		return err
+	}
+	n, err := s.q.LinkWaitingSonarDeliveries(ctx, store.LinkWaitingSonarDeliveriesParams{
+		ServiceID: pgtype.Int8{Int64: w.serviceID, Valid: true}, Detail: waitingLinkedDetail,
+		Since: w.since, ClaimedProjectID: w.project, ClaimedPipelineID: w.pipeline, ProjectKey: k.ProjectKey,
+	})
+	if err != nil || n == 0 {
+		return err
+	}
+	s.queueSync(ctx, linkedProject{
+		SonarLinkedServicesRow: store.SonarLinkedServicesRow{ID: w.serviceID, SonarProjectKey: k.ProjectKey},
+		from:                   deliveries{{pipeline: w.pipeline.Int64, analysedAt: k.AnalysedAt.Time}},
+	})
 	return nil
 }
 

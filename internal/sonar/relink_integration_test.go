@@ -10,6 +10,10 @@ import (
 	"reflect"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/siyamsarker/scanopsis/internal/store"
 )
 
 // claims returns the webhook fields of an analysis that names a GitLab
@@ -345,5 +349,90 @@ func (e *env) scan(t *testing.T, serviceID, pipeline int64) {
 		VALUES ($1, 'image', 'app:1', 'app', $2, $2, 'main', true, 'c0ffee', 2, now(), '\x1f8b')`, serviceID, pipeline)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The first upload of the pipeline links the waiting analysis while another
+// link of the service, by a webhook delivery, commits first. LinkWaiting then
+// finds the service linked: to the waiting analysis's own key, the waiting
+// delivery is linked to it as the winner's would be; to another key, it stays
+// unlinked.
+func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
+	tests := []struct {
+		name, winnerKey string
+		linked          bool
+	}{
+		{"same key", "demo:orders-api", true},
+		{"other key", "demo:other", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			ctx := context.Background()
+			e.project("demo:orders-api")
+			wantStatus(t, e, hook("task-w1", "demo:orders-api", claims("7", "1001")), 202)
+			e.drain(t, 1)
+			sid := e.service(t, "demo/orders-api", 7, "")
+
+			// The other link holds the service's row while LinkWaiting runs,
+			// and commits once LinkWaiting waits for that row.
+			tx, err := e.pool.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback(ctx) }()
+			if _, err := e.q.WithTx(tx).PinSonarKey(ctx, store.PinSonarKeyParams{
+				ID: sid, SonarProjectKey: pgtype.Text{String: tt.winnerKey, Valid: true},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- e.s.LinkWaiting(ctx, sid, 7, 1001) }()
+			waitFor(t, func() bool {
+				var n int
+				if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+					WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE services SET sonar_project_key%'`).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n == 1
+			})
+			if err := tx.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+
+			d := e.delivery(t, "task-w1")
+			if tt.linked {
+				if d.Outcome != "linked" || d.ServiceID.Int64 != sid || d.Detail != waitingLinkedDetail {
+					t.Errorf("delivery: %+v", d)
+				}
+				select {
+				case l := <-e.s.linked:
+					if l.ID != sid || l.SonarProjectKey != "demo:orders-api" || len(l.from) != 1 || l.from[0].pipeline != 1001 {
+						t.Errorf("sync queued for %+v", l)
+					}
+				default:
+					t.Error("no sync queued")
+				}
+			} else {
+				if d.Outcome != "unlinked" || d.Detail != waitingHint {
+					t.Errorf("delivery: %+v", d)
+				}
+				select {
+				case l := <-e.s.linked:
+					t.Errorf("sync queued for %+v", l)
+				default:
+				}
+			}
+			if k, _ := e.serviceKey(t, sid); k != tt.winnerKey {
+				t.Errorf("key %q, want %q", k, tt.winnerKey)
+			}
+			// The link was the other's: LinkWaiting records none.
+			if got := e.audits(t); len(got) != 0 {
+				t.Errorf("audit events: %v", got)
+			}
+		})
 	}
 }

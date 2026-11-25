@@ -7,7 +7,12 @@ package sonar
 
 import (
 	"context"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func (e *env) serviceKey(t *testing.T, id int64) (string, bool) {
@@ -73,6 +78,83 @@ func TestWebhookPropertyPinsUnlinkedService(t *testing.T) {
 	e.drain(t, 1)
 	if d := e.delivery(t, "task-p3"); d.Outcome != "unlinked" {
 		t.Errorf("takeover: %+v", d)
+	}
+}
+
+// Two deliveries of the same project, both naming the unlinked service of
+// their GitLab project, are processed at the same time: both find the
+// service unlinked, one links it and the other then finds it linked to the
+// very same key. Both end linked to the service, and the link is recorded
+// once.
+func TestWebhookConcurrentDeliveriesOfOneProjectBothLink(t *testing.T) {
+	tests := []struct {
+		name, secondAt string
+		analyses       int
+		secondDetail   string
+	}{
+		{"same analysis", "2026-11-19T10:00:00+0000", 1,
+			"The analysis was already stored while this delivery was processed."},
+		{"older analysis", "2026-11-19T09:00:00+0000", 2,
+			"A newer analysis (2026-11-19T10:00:00Z) already exists in SonarQube; the measures are from it. The next sync will add it."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := newEnv(t)
+			sid := e.service(t, "platform/payments-api", 5, "")
+			e.project("platform:payments-api")
+			// Both deliveries are held at their first SonarQube call until
+			// both have read the service, so both find it unlinked.
+			var arrived atomic.Int32
+			both := make(chan struct{})
+			e.intercept(func(r *http.Request, next http.RoundTripper) (*http.Response, error) {
+				if strings.Contains(r.URL.Path, "api/measures/component") && arrived.Add(1) == 2 {
+					close(both)
+				}
+				select {
+				case <-both:
+				case <-time.After(10 * time.Second):
+				}
+				return next.RoundTrip(r)
+			})
+			props := map[string]string{"sonar.analysis.gitlabProjectId": "5", "sonar.analysis.pipelineId": "77"}
+			wantStatus(t, e, hook("task-r1", "platform:payments-api", map[string]any{"properties": props}), 202)
+			wantStatus(t, e, hook("task-r2", "platform:payments-api", map[string]any{"properties": props, "analysedAt": tt.secondAt}), 202)
+			var wg sync.WaitGroup
+			for range 2 {
+				d := <-e.s.queue
+				wg.Go(func() { e.s.process(context.Background(), d) })
+			}
+			wg.Wait()
+			if arrived.Load() != 2 {
+				t.Fatalf("%d measures calls, want 2", arrived.Load())
+			}
+
+			details := map[string]bool{}
+			for _, task := range []string{"task-r1", "task-r2"} {
+				d := e.delivery(t, task)
+				if d.Outcome != "linked" || d.ServiceID.Int64 != sid {
+					t.Errorf("%s: %+v", task, d)
+				}
+				details[d.Detail] = true
+			}
+			if !details[tt.secondDetail] {
+				t.Errorf("details %v, want one to be %q", details, tt.secondDetail)
+			}
+			if k, ok := e.serviceKey(t, sid); !ok || k != "platform:payments-api" {
+				t.Errorf("key %q %v", k, ok)
+			}
+			if n := len(e.analyses(t, sid)); n != tt.analyses {
+				t.Errorf("%d analyses, want %d", n, tt.analyses)
+			}
+			var pins int
+			if err := e.pool.QueryRow(context.Background(),
+				`SELECT count(*) FROM audit_log WHERE action = 'service.updated' AND detail->>'sonar_project_key' = 'platform:payments-api'`).Scan(&pins); err != nil {
+				t.Fatal(err)
+			}
+			if pins != 1 {
+				t.Errorf("%d link records, want 1", pins)
+			}
+		})
 	}
 }
 
