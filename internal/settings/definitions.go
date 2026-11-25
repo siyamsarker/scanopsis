@@ -56,8 +56,9 @@ const (
 	KeyBackupKeepDays        = "backup.keep_days"
 )
 
-// MinSonarSyncInterval is the shortest allowed SonarQube reconciliation interval.
-const MinSonarSyncInterval = time.Minute
+// MinSonarSyncInterval is the shortest allowed SonarQube reconciliation
+// interval; the configuration refuses a shorter seed with the same bound.
+const MinSonarSyncInterval = config.MinSonarSyncInterval
 
 // Bounds of retention.days, in days.
 const (
