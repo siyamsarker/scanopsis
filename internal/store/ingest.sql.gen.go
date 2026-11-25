@@ -245,6 +245,31 @@ func (q *Queries) LockIngestProject(ctx context.Context, projectID string) error
 	return err
 }
 
+const lockIngestService = `-- name: LockIngestService :one
+SELECT sonar_project_key, sonar_key_declared, archived FROM services WHERE id = $1 FOR NO KEY UPDATE
+`
+
+type LockIngestServiceRow struct {
+	SonarProjectKey  pgtype.Text
+	SonarKeyDeclared pgtype.Text
+	Archived         bool
+}
+
+// LockIngestService locks the service row of an upload until the upload's
+// transaction ends and returns its SonarQube key, declared key and archived
+// flag as they are now. An administrator's archive or delete of the service
+// waits for the upload, and the upload sees one committed before it: no
+// row means the service was deleted. A declared key is decided on while no
+// webhook can link the service. FOR NO KEY UPDATE, as only other columns
+// change: rows that reference the service (scans) can still be inserted
+// meanwhile.
+func (q *Queries) LockIngestService(ctx context.Context, id int64) (LockIngestServiceRow, error) {
+	row := q.db.QueryRow(ctx, lockIngestService, id)
+	var i LockIngestServiceRow
+	err := row.Scan(&i.SonarProjectKey, &i.SonarKeyDeclared, &i.Archived)
+	return i, err
+}
+
 const renameServicePath = `-- name: RenameServicePath :execrows
 UPDATE services SET gitlab_project_path = $1
 WHERE services.id = $2

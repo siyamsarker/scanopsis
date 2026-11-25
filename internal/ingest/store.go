@@ -128,7 +128,8 @@ const discardConnAbove = 4 << 20
 // save runs the whole upload in one transaction. Uploads for the same GitLab
 // project are serialised by an advisory lock, so two uploads of the same job
 // and artifact end with exactly one scan and two first uploads create one
-// service.
+// service. The service row is locked too (see lockService), so an
+// administrator's archive or delete of the service waits for the upload.
 func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 	var res Result
 	conn, err := s.pool.Acquire(ctx)
@@ -152,7 +153,7 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 		if err := q.LockIngestProject(ctx, strconv.FormatInt(c.ProjectID, 10)); err != nil {
 			return fmt.Errorf("lock project: %w", err)
 		}
-		svc, created, gotID, err := s.resolveService(ctx, q, c)
+		svc, cur, created, gotID, err := s.lockService(ctx, q, c)
 		if err != nil {
 			return err
 		}
@@ -160,7 +161,7 @@ func (s *pgSaver) save(ctx context.Context, in *saveInput) (Result, error) {
 		if in.sonarKey != "" {
 			// In the transaction that may create the service, so no webhook
 			// can link another key to it before the declared one.
-			if res.sonarKeySet, res.SonarKeyIgnored, err = declareSonarKey(ctx, tx, svc, c, in.sonarKey); err != nil {
+			if res.sonarKeySet, res.SonarKeyIgnored, err = declareSonarKey(ctx, tx, svc, cur, c, in.sonarKey); err != nil {
 				return err
 			}
 		}
@@ -294,6 +295,39 @@ func (c *copier) flush() error {
 	return c.flushSecrets()
 }
 
+// lockService resolves the service for the token's project (see
+// resolveService) and locks its row until the upload's transaction ends
+// (see LockIngestService), so the scan is stored for a service that exists
+// and is not archived. cur is the row as locked.
+//
+// The service is found before it is locked, so an administrator may archive
+// or delete it in between: an archived one is refused as one archived
+// before, and a deleted one is resolved again, as for a project without a
+// service, so the upload creates it again (audited as such) and is stored.
+// Resolving again cannot find a service that is then gone: it creates the
+// service in this transaction or locks the one it adopts.
+func (s *pgSaver) lockService(ctx context.Context, q *store.Queries, c *Claims) (
+	svc store.Service, cur store.LockIngestServiceRow, created, gotID bool, err error,
+) {
+	for range 2 {
+		svc, created, gotID, err = s.resolveService(ctx, q, c)
+		if err != nil {
+			return svc, cur, false, false, err
+		}
+		cur, err = q.LockIngestService(ctx, svc.ID)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			continue
+		case err != nil:
+			return svc, cur, false, false, fmt.Errorf("lock service: %w", err)
+		case cur.Archived:
+			return svc, cur, false, false, errServiceArchived
+		}
+		return svc, cur, created, gotID, nil
+	}
+	return svc, cur, false, false, errors.New("lock service: the service was deleted again")
+}
+
 // resolveService finds the service for the token's project: by project ID;
 // else a service an administrator added by the same path (which learns the
 // ID: gotID); else a new one (created). A renamed project updates the path
@@ -377,7 +411,8 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 }
 
 // declareSonarKey handles the SonarQube key the upload declared, in the
-// transaction tx of the upload. set reports a new key; notSet says why the
+// transaction tx of the upload, for the service svc whose row the upload
+// locked as cur (see lockService). set reports a new key; notSet says why the
 // key was not set (SonarKeyPending, SonarKeyOtherService or
 // SonarKeyServiceHasOther).
 //
@@ -395,25 +430,13 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 // ignored key is audited too, so an administrator sees the conflict, but
 // not again while nothing changed (see ignore below).
 //
-// The service row is locked first, so the decision is made on its current
-// key and declaration, and a webhook that links the service waits for this
+// The service row is locked, so the decision is made on its current key and
+// declaration, and a webhook that links the service waits for this
 // transaction and then finds the declaration (see PinSonarKey).
-func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, c *Claims, key string) (set bool, notSet *string, err error) {
+func declareSonarKey(ctx context.Context, tx pgx.Tx, svc store.Service, cur store.LockIngestServiceRow, c *Claims, key string) (set bool, notSet *string, err error) {
 	q := store.New(tx)
 	wrap := func(err error) error { return fmt.Errorf("declare SonarQube key: %w", err) }
 	reason := func(r string) *string { return &r }
-	cur, err := q.LockServiceSonarKey(ctx, svc.ID)
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-		// Deleted since it was found: the key is left alone, and the rest
-		// of the upload goes on as without one.
-		return false, nil, nil
-	case err != nil:
-		return false, nil, wrap(err)
-	case cur.Archived:
-		// Archived since it was found: answered as an archived service.
-		return false, nil, errServiceArchived
-	}
 	// ignore audits an ignored key, unless the newest event of the service
 	// is the same ignored key: nothing changed since, and the log line is
 	// enough. A cleared declaration is always audited.

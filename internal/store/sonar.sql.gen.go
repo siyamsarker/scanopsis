@@ -501,28 +501,6 @@ func (q *Queries) ListSonarDeliveries(ctx context.Context) ([]ListSonarDeliverie
 	return items, nil
 }
 
-const lockServiceSonarKey = `-- name: LockServiceSonarKey :one
-SELECT sonar_project_key, sonar_key_declared, archived FROM services WHERE id = $1 FOR NO KEY UPDATE
-`
-
-type LockServiceSonarKeyRow struct {
-	SonarProjectKey  pgtype.Text
-	SonarKeyDeclared pgtype.Text
-	Archived         bool
-}
-
-// LockServiceSonarKey locks a service row and returns its SonarQube key,
-// declared key and archived flag, so an upload decides on its declaration
-// while no webhook can link the service. FOR NO KEY UPDATE, as only other
-// columns change: rows that reference the service (scans) can still be
-// inserted meanwhile.
-func (q *Queries) LockServiceSonarKey(ctx context.Context, id int64) (LockServiceSonarKeyRow, error) {
-	row := q.db.QueryRow(ctx, lockServiceSonarKey, id)
-	var i LockServiceSonarKeyRow
-	err := row.Scan(&i.SonarProjectKey, &i.SonarKeyDeclared, &i.Archived)
-	return i, err
-}
-
 const pinSonarKey = `-- name: PinSonarKey :one
 UPDATE services SET sonar_project_key = $2
 WHERE id = $1 AND sonar_project_key IS NULL AND NOT archived

@@ -398,50 +398,13 @@ func TestIntegrationSonarKeyRaceWithWebhookPin(t *testing.T) {
 	}
 }
 
-// holdRow runs sql on the service row in a transaction that stays open,
-// starts an upload that declares a key, waits until the upload waits for the
-// row, commits, and returns the upload's answer.
+// holdRowDuringDeclaration runs sql on the service row in a transaction
+// that stays open, starts an upload that declares a key, waits until the
+// upload waits for the row, commits, and returns the upload's answer.
 func (e *iEnv) holdRowDuringDeclaration(sql string, args ...any) (int, map[string]any) {
 	e.t.Helper()
-	ctx := context.Background()
-	tx, err := e.pool.Begin(ctx)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, sql, args...); err != nil {
-		e.t.Fatal(err)
-	}
-	type answer struct {
-		code int
-		res  map[string]any
-	}
-	done := make(chan answer, 1)
-	go func() {
-		code, res := e.uploadRaw(upload{body: sonarKeyBody, query: "?sonar_key=platform:payments-api",
-			claims: func(c map[string]any) { c["job_id"] = "3000" }})
-		done <- answer{code, res}
-	}()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		var waiting bool
-		if err := e.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM pg_stat_activity
-			WHERE wait_event_type = 'Lock' AND query LIKE '%FOR NO KEY UPDATE%')`).Scan(&waiting); err != nil {
-			e.t.Fatal(err)
-		}
-		if waiting {
-			break
-		}
-		if time.Now().After(deadline) {
-			e.t.Fatal("the upload never waited for the service row")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		e.t.Fatal(err)
-	}
-	a := <-done
-	return a.code, a.res
+	return e.holdRowDuringUpload(upload{body: sonarKeyBody, query: "?sonar_key=platform:payments-api",
+		claims: func(c map[string]any) { c["job_id"] = "3000" }}, sql, args...)
 }
 
 // A service archived while the upload runs, after the upload found it but
@@ -465,23 +428,6 @@ func TestIntegrationSonarKeyServiceArchivedMeanwhile(t *testing.T) {
 	}
 	if k, d := e.sonarKeyOf(sid), e.declaredOf(sid); k != "" || d != "" {
 		t.Errorf("key %q declared %q", k, d)
-	}
-}
-
-// A service that is gone when the upload locks it leaves the declared key
-// alone; the rest of the upload goes on as without one.
-func TestIntegrationSonarKeyServiceGone(t *testing.T) {
-	ctx := context.Background()
-	e := newIEnv(t, nil)
-	tx, err := e.pool.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	c := &Claims{ProjectID: 42, ProjectPath: "platform/payments-api", PipelineID: 1001, JobID: 2002}
-	set, notSet, err := declareSonarKey(ctx, tx, store.Service{ID: 999}, c, "platform:payments-api")
-	if set || notSet != nil || err != nil {
-		t.Errorf("declareSonarKey on a missing service = %v %v %v", set, notSet, err)
 	}
 }
 
@@ -535,10 +481,10 @@ func TestIntegrationSonarKeyIgnoredAuditedAgainAfterChange(t *testing.T) {
 	}
 }
 
-// The lock an upload takes on its service for the declared key does not
-// block rows that reference the service, such as the scan of a concurrent
-// upload of another job.
-func TestIntegrationSonarKeyLockAllowsScans(t *testing.T) {
+// The lock an upload takes on its service does not block rows that
+// reference the service, such as the scan of a concurrent upload of another
+// job.
+func TestIntegrationServiceLockAllowsScans(t *testing.T) {
 	ctx := context.Background()
 	e := newIEnv(t, nil)
 	e.mustUpload(upload{body: sonarKeyBody})
@@ -551,7 +497,7 @@ func TestIntegrationSonarKeyLockAllowsScans(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := store.New(tx).LockServiceSonarKey(ctx, sid); err != nil {
+	if _, err := store.New(tx).LockIngestService(ctx, sid); err != nil {
 		t.Fatal(err)
 	}
 	other, err := e.pool.Begin(ctx)
