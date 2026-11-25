@@ -358,8 +358,10 @@ new branch.
 
 ## Find a vulnerability across services
 
-**Search** in the header finds where a vulnerability ID (a CVE or GHSA number)
-appears in the current scans, meaning the latest scan of each artifact (an
+**Search** in the sidebar opens **Vulnerability search**. You can also press
+Ctrl+K (Cmd+K on a Mac), type the ID and select **Search vulnerability**. It
+finds where a vulnerability ID (a CVE or GHSA number) appears in the current
+scans, meaning the latest scan of each artifact (an
 image name whatever its tag, or a folder) on a branch. A switch picks which branches are searched:
 
 - **Dashboard branches and protected refs** (default): the dashboard branch of
