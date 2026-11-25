@@ -880,7 +880,7 @@ docker run -d --name scanopsis-db --network scanopsis-net \
   -v "$PWD/secrets/postgres_password:/run/secrets/postgres_password:ro" \
   --stop-timeout 120 --shm-size 256m \
   -v "$PWD/data/postgres:/var/lib/postgresql" \
-  postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
+  postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
 
 docker run -d --name scanopsis --network scanopsis-net \
   --restart unless-stopped \

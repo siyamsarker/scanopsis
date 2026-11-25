@@ -80,7 +80,7 @@ nvm use
    docker run -d --name scanopsis-dev-db \
      -e POSTGRES_USER=scanopsis -e POSTGRES_PASSWORD=dev -e POSTGRES_DB=scanopsis \
      -p 127.0.0.1:15432:5432 \
-     postgres:18.7-alpine@sha256:ff64c9e3bdf8e2120107d3559de8db314e8305f7e38c5105903c6295876738ff
+     postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
    ```
 
    Port 15432 keeps clear of a PostgreSQL that may already run on 5432. If 15432
