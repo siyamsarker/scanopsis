@@ -665,7 +665,7 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ServiceUpdate" } } }
       responses:
         "200": { description: Updated., content: { application/json: { schema: { $ref: "#/components/schemas/Service" } } } }
-        "400": { description: "Invalid request (code invalid_request), or a sonar_key_declared other than null (code invalid_parameter).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+        "400": { description: "Invalid request, such as a sonar_key_declared other than null (code invalid_request).", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
         "401": { $ref: "#/components/responses/Unauthenticated" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { description: Not found., content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }

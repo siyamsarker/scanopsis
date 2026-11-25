@@ -954,7 +954,7 @@ Responses:
 | Status | Description | Body |
 |---|---|---|
 | 200 | Updated. | `application/json` [Service](#service) |
-| 400 | Invalid request (code invalid_request), or a sonar_key_declared other than null (code invalid_parameter). | `application/json` [Error](#error) |
+| 400 | Invalid request, such as a sonar_key_declared other than null (code invalid_request). | `application/json` [Error](#error) |
 | 401 | No valid session. | `application/json` [Error](#error) |
 | 403 | The signed-in user lacks the required role. | `application/json` [Error](#error) |
 | 404 | Not found. | `application/json` [Error](#error) |

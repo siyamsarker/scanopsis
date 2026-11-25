@@ -3521,7 +3521,7 @@ export interface operations {
                     "application/json": components["schemas"]["Service"];
                 };
             };
-            /** @description Invalid request (code invalid_request), or a sonar_key_declared other than null (code invalid_parameter). */
+            /** @description Invalid request, such as a sonar_key_declared other than null (code invalid_request). */
             400: {
                 headers: {
                     [name: string]: unknown;

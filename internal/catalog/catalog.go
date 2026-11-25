@@ -315,8 +315,7 @@ func (c *Catalog) updateService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Declared.set && !in.Declared.null {
-		httpapi.WriteError(w, http.StatusBadRequest, "invalid_parameter",
-			"sonar_key_declared can only be null, which cancels the waiting key.")
+		badRequest(w, "sonar_key_declared can only be null, which cancels the waiting key.")
 		return
 	}
 	if err := validateUpdate(in.Name, in.Key.set, in.Key.val, in.Archived, in.Ref.set, in.Ref.val, in.Declared.set); err != nil {

@@ -36,7 +36,7 @@ func TestUpdateServiceClearsDeclaredSonarKey(t *testing.T) {
 	// A rename keeps the declaration, and only null may be written to it.
 	for _, v := range []string{`"x:y"`, `""`, `5`, `false`, `{}`} {
 		r := call(t, c, "updateService", "PATCH", "/", `{"sonar_key_declared":`+v+`}`, id)
-		if e := decode[errJSON](t, r, http.StatusBadRequest); e.Error.Code != "invalid_parameter" {
+		if e := decode[errJSON](t, r, http.StatusBadRequest); e.Error.Code != "invalid_request" {
 			t.Errorf("writing sonar_key_declared %s = %+v", v, e)
 		}
 	}
