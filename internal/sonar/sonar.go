@@ -93,6 +93,9 @@ type Sonar struct {
 	// beforeStoreLinked, when set by a test, runs before a delivery whose
 	// link found the service taken checks the service's key again.
 	beforeStoreLinked func()
+	// analysesLocked, when set by a test, runs in insertAnalysis once the
+	// service's analyses lock is held.
+	analysesLocked func()
 
 	mu         sync.Mutex
 	version    string

@@ -221,6 +221,13 @@ WHERE outcome = 'unlinked' AND claimed_project_id = @claimed_project_id;
 -- delivery and a sync, or two deliveries) cannot both find it unknown. A
 -- transaction-level advisory lock, so it waits for no upload or edit of the
 -- service's row.
+-- KeyShareSonarService takes the weakest row lock on a service, the one an
+-- insert referencing it takes anyway, so a store of an analysis holds it
+-- before the analyses lock: every path then locks the service row first and
+-- the analyses lock second. No row when the service is gone.
+-- name: KeyShareSonarService :one
+SELECT id FROM services WHERE id = $1 FOR KEY SHARE;
+
 -- name: LockSonarAnalysesOf :exec
 SELECT pg_advisory_xact_lock(hashtextextended('scanopsis:sonar_analyses:' || @service_id::bigint, 0));
 

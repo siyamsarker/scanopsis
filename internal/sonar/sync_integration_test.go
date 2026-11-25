@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/siyamsarker/scanopsis/internal/settings"
+	"github.com/siyamsarker/scanopsis/internal/store"
 	"github.com/siyamsarker/scanopsis/internal/testutil/fakesonar"
 )
 
@@ -304,5 +306,54 @@ func TestSyncAndWebhookStoreAnAnalysisOnce(t *testing.T) {
 
 	if got := e.analyses(t, sid); len(got) != 1 || got[0].TaskID != "task-s1" {
 		t.Errorf("analyses: %d, want only the delivery's", len(got))
+	}
+}
+
+// Every store of an analysis locks the service's row before the analyses
+// lock. Here a sync stores an analysis of a service and pauses while it
+// holds the analyses lock, and a delivery that links the same service by
+// the gitlabProjectId property (which locks the row for update) arrives
+// meanwhile. Had the sync locked the row only when it inserted, after the
+// analyses lock, the two would wait for each other and PostgreSQL would
+// abort one of them. Both finish, and the analysis is stored once.
+func TestStoresTakeTheServiceRowBeforeTheAnalysesLock(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	sid := e.service(t, "platform/payments-api", 5, "")
+	e.project("platform:payments-api")
+	paused := make(chan struct{})
+	release := make(chan struct{})
+	var first atomic.Bool
+	e.s.analysesLocked = func() {
+		if first.CompareAndSwap(false, true) {
+			close(paused)
+			<-release
+		}
+	}
+	// The sync listed the project as linked; its key was cleared since.
+	syncErr := make(chan error, 1)
+	go func() {
+		syncErr <- e.s.syncProject(ctx, e.s.client(e.cfg.Current()),
+			store.SonarLinkedServicesRow{ID: sid, SonarProjectKey: "platform:payments-api"}, nil)
+	}()
+	<-paused
+
+	props := map[string]string{"sonar.analysis.gitlabProjectId": "5"}
+	wantStatus(t, e, hook("task-o1", "platform:payments-api", map[string]any{"properties": props}), 202)
+	d := <-e.s.queue
+	done := make(chan struct{})
+	go func() { e.s.process(ctx, d); close(done) }()
+	waitFor(t, func() bool { return e.lockWaits(t, "") == 1 })
+	close(release)
+	if err := <-syncErr; err != nil {
+		t.Errorf("sync: %v", err)
+	}
+	<-done
+
+	if got := e.delivery(t, "task-o1"); got.Outcome != "linked" || got.ServiceID.Int64 != sid {
+		t.Errorf("delivery: %+v", got)
+	}
+	if n := len(e.analyses(t, sid)); n != 1 {
+		t.Errorf("%d analyses", n)
 	}
 }

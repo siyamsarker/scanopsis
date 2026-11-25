@@ -267,6 +267,27 @@ func (q *Queries) InterruptSonarDeliveries(ctx context.Context, arg InterruptSon
 	return result.RowsAffected(), nil
 }
 
+const keyShareSonarService = `-- name: KeyShareSonarService :one
+SELECT id FROM services WHERE id = $1 FOR KEY SHARE
+`
+
+// LockSonarAnalysesOf takes, until the transaction ends, the lock every
+// store of an analysis of a service holds while it checks whether the
+// analysis is known and inserts it, so two stores of the same analysis (a
+// delivery and a sync, or two deliveries) cannot both find it unknown. A
+// transaction-level advisory lock, so it waits for no upload or edit of the
+// service's row.
+// KeyShareSonarService takes the weakest row lock on a service, the one an
+// insert referencing it takes anyway, so a store of an analysis holds it
+// before the analyses lock: every path then locks the service row first and
+// the analyses lock second. No row when the service is gone.
+func (q *Queries) KeyShareSonarService(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, keyShareSonarService, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const lastSonarDeliveryAt = `-- name: LastSonarDeliveryAt :one
 SELECT max(received_at)::timestamptz AS last_at FROM sonar_deliveries
 `
@@ -505,12 +526,6 @@ const lockSonarAnalysesOf = `-- name: LockSonarAnalysesOf :exec
 SELECT pg_advisory_xact_lock(hashtextextended('scanopsis:sonar_analyses:' || $1::bigint, 0))
 `
 
-// LockSonarAnalysesOf takes, until the transaction ends, the lock every
-// store of an analysis of a service holds while it checks whether the
-// analysis is known and inserts it, so two stores of the same analysis (a
-// delivery and a sync, or two deliveries) cannot both find it unknown. A
-// transaction-level advisory lock, so it waits for no upload or edit of the
-// service's row.
 func (q *Queries) LockSonarAnalysesOf(ctx context.Context, serviceID int64) error {
 	_, err := q.db.Exec(ctx, lockSonarAnalysesOf, serviceID)
 	return err

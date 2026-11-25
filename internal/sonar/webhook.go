@@ -506,10 +506,19 @@ func (s *Sonar) storeLinked(ctx context.Context, a snapshot, key string) (storeR
 // service has it. Every store of an analysis goes through here: under the
 // service's analysis lock (LockSonarAnalysesOf) the check sees whatever
 // another store committed before, so the same analysis is never stored
-// twice. The lock is held until the transaction ends.
+// twice. The locks are held until the transaction ends, and always taken in
+// the same order: first the service's row (here the key-share lock the
+// insert needs anyway, unless the caller holds a stronger one), then the
+// analyses lock, so no two stores can wait for each other.
 func (s *Sonar) insertAnalysis(ctx context.Context, q *store.Queries, arg store.InsertSonarAnalysisParams) (storeResult, error) {
+	if _, err := q.KeyShareSonarService(ctx, arg.ServiceID); err != nil {
+		return stored, fmt.Errorf("lock service: %w", err)
+	}
 	if err := q.LockSonarAnalysesOf(ctx, arg.ServiceID); err != nil {
 		return stored, err
+	}
+	if s.analysesLocked != nil {
+		s.analysesLocked()
 	}
 	if arg.AnalysisKey != "" {
 		known, err := q.SonarAnalysisKnown(ctx, store.SonarAnalysisKnownParams{ServiceID: arg.ServiceID, AnalysisKey: arg.AnalysisKey})
