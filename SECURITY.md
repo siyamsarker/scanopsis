@@ -18,7 +18,7 @@ discussions. Report them privately instead:
 
 Please include:
 
-- The affected version (for example `v0.4.2`) or commit.
+- The affected version (for example `v0.4.3`) or commit.
 - The steps to reproduce the problem.
 - The impact you expect: what an attacker could see or change.
 
@@ -30,8 +30,8 @@ progress, and you are credited in the advisory if you wish.
 
 ## Supported versions
 
-Only the newest version is supported, today **0.4.2** (the branch
-`release/0.4.2`). Older versions receive no fixes. Version branches never
+Only the newest version is supported, today **0.4.3** (the branch
+`release/0.4.3`). Older versions receive no fixes. Version branches never
 change, so a security fix lands on `main` and ships as a new version. Upgrade
 to get it, as described in
 [versions and upgrades](docs/versions.md#upgrade-to-the-newest-version).

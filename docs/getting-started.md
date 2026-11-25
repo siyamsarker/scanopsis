@@ -25,41 +25,41 @@ if you use it, your SonarQube.
 ## Step 1. Build the image
 
 Scanopsis publishes no container image, so you build one from a version
-branch. This guide uses **0.4.2**, the newest version. Always deploy a
+branch. This guide uses **0.4.3**, the newest version. Always deploy a
 version branch, never `main`: `main` is development code.
 
 1. Clone the version branch:
 
    ```sh
-   git clone --branch release/0.4.2 --depth 1 https://github.com/siyamsarker/scanopsis.git
+   git clone --branch release/0.4.3 --depth 1 https://github.com/siyamsarker/scanopsis.git
    cd scanopsis
    ```
 
 2. Build the image with a tag that names the version:
 
    ```sh
-   make image IMAGE=scanopsis:v0.4.2
+   make image IMAGE=scanopsis:v0.4.3
    ```
 
    The first build downloads dependencies and takes a few minutes. The last
    lines look like this:
 
    ```text
-   #24 unpacking to docker.io/library/scanopsis:v0.4.2 0.0s done
+   #24 unpacking to docker.io/library/scanopsis:v0.4.3 0.0s done
    #24 DONE 0.3s
    ```
 
 3. Check that the image exists:
 
    ```sh
-   docker image ls scanopsis:v0.4.2
+   docker image ls scanopsis:v0.4.3
    ```
 
-   You see one line with the repository `scanopsis` and the tag `v0.4.2`.
+   You see one line with the repository `scanopsis` and the tag `v0.4.3`.
 
 If the build fails with `VERSION and COMMIT may only contain ...`, the version
 string has unusual characters. Pass a plain one, for example
-`make image IMAGE=scanopsis:v0.4.2 VERSION=v0.4.2`. If it fails while
+`make image IMAGE=scanopsis:v0.4.3 VERSION=v0.4.3`. If it fails while
 downloading, check the network access and proxy settings of Docker on the
 host.
 
@@ -159,7 +159,7 @@ host, as the [operations guide](operations.md) describes.
    this host name. Another name makes sign-in fail.
 
 3. Check that `SCANOPSIS_IMAGE` names the image from step 1:
-   `SCANOPSIS_IMAGE=scanopsis:v0.4.2`, which `.env.example` already sets.
+   `SCANOPSIS_IMAGE=scanopsis:v0.4.3`, which `.env.example` already sets.
    Compose runs exactly this image, and an
    [upgrade](versions.md#upgrade-to-the-newest-version) later changes only this
    line.

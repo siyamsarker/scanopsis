@@ -894,7 +894,7 @@ docker run -d --name scanopsis --network scanopsis-net \
   -v "$PWD/secrets/database_url:/run/secrets/database_url:ro" \
   -v "$PWD/secrets/secret_key:/run/secrets/secret_key:ro" \
   -v "$PWD/backups:/var/lib/scanopsis/backups" \
-  scanopsis:v0.4.2
+  scanopsis:v0.4.3
 ```
 
 The image already sets `GOMEMLIMIT=400MiB`, which suits `--memory 512m`. Wait
@@ -1009,7 +1009,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: scanopsis
-          image: registry.example.com/platform/scanopsis:v0.4.2
+          image: registry.example.com/platform/scanopsis:v0.4.3
           ports:
             - name: http
               containerPort: 8080
@@ -1295,11 +1295,11 @@ build steps, and [roll back to the previous version](versions.md#roll-back-to-th
 for the way back. Schema changes run when the new version starts; there is no
 separate migration step. The recorded run below
 upgraded from 0.1.0 straight to 0.3.0. 0.4.0 added no migration, 0.4.1
-added two (00011 and 00012), and 0.4.2 adds two (00013 and 00014), so an
-upgrade to 0.4.2 ends at schema version 14; the version line and the schema
-numbers in the output are the ones of that run, and yours show `v0.4.2`,
-another commit and 14. Before the upgrade the version is 12 from 0.4.1, and 10
-from 0.4.0. Before an upgrade from a version before 0.4.0, also
+added two (00011 and 00012), 0.4.2 two (00013 and 00014), and 0.4.3 none, so
+an upgrade to 0.4.3 ends at schema version 14; the version line and the
+schema numbers in the output are the ones of that run, and yours show
+`v0.4.3`, another commit and 14. Before the upgrade the version is 14 from
+0.4.2, 12 from 0.4.1 and 10 from 0.4.0. Before an upgrade from a version before 0.4.0, also
 [move the database into a folder](versions.md#move-the-database-into-a-folder).
 
 ### Upgrade
