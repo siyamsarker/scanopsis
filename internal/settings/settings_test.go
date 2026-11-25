@@ -723,6 +723,57 @@ func TestStartRefusesSettingsWithoutSignIn(t *testing.T) {
 	}
 }
 
+// SCANOPSIS_SONAR_SYNC_INTERVAL below the minimum the Settings page enforces
+// refuses the start when it would be saved, on a fresh database. Once the
+// interval is saved, the variable is ignored as any other seed is, with a
+// warning, so an installation that once started with a shorter value still
+// starts.
+func TestSyncIntervalSeedBelowMinimum(t *testing.T) {
+	short := map[string]any{KeySonarSyncInterval: 30 * time.Second}
+
+	fresh := newFakeStore()
+	_, err := New(context.Background(), fresh, fresh.tx, testBox(t, 1), short, &fakeAudit{}, discard)
+	if err == nil || err.Error() != "SCANOPSIS_SONAR_SYNC_INTERVAL must be at least 1m" {
+		t.Fatalf("fresh database: err = %v", err)
+	}
+	if len(fresh.rows) != 0 {
+		t.Fatalf("the refused value was saved: %v", fresh.rows)
+	}
+
+	st := newFakeStore()
+	st.rows[KeySonarSyncInterval] = store.Setting{Key: KeySonarSyncInterval, Value: []byte(`"5m"`), Source: SourceUI, UpdatedBy: "local:root"}
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	svc, err := New(context.Background(), st, st.tx, testBox(t, 1), short, &fakeAudit{}, log)
+	if err != nil {
+		t.Fatalf("saved 5m: err = %v", err)
+	}
+	if got := svc.Current().SonarSyncInterval; got != 5*time.Minute {
+		t.Errorf("interval = %v, want the saved 5m", got)
+	}
+	if got := string(st.rows[KeySonarSyncInterval].Value); got != `"5m"` {
+		t.Errorf("row = %s, want it unchanged", got)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") ||
+		!strings.Contains(logs.String(), "SCANOPSIS_SONAR_SYNC_INTERVAL is ignored") ||
+		!strings.Contains(logs.String(), "value=30s") {
+		t.Errorf("no warning logged: %s", logs.String())
+	}
+	// A reload, as after a restore without the row, does not take it up.
+	delete(st.rows, KeySonarSyncInterval)
+	if err := svc.Reload(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.Current().SonarSyncInterval; got != 15*time.Minute {
+		t.Errorf("after reload: interval = %v, want the default 15m", got)
+	}
+
+	// At the minimum the seed is saved as usual.
+	if got := newEnv(t, map[string]any{KeySonarSyncInterval: time.Minute}).svc.Current().SonarSyncInterval; got != time.Minute {
+		t.Errorf("1m seed: interval = %v", got)
+	}
+}
+
 func TestGitLabURLAloneIsValid(t *testing.T) {
 	// Verifying CI job tokens needs only the GitLab URL; sign-in stays off.
 	e := newEnv(t, nil)

@@ -100,10 +100,6 @@ const (
 	DefaultSessionAbsoluteTimeout = 12 * time.Hour
 )
 
-// MinSonarSyncInterval is the shortest SonarQube sync interval, here and in
-// the settings, which use this value.
-const MinSonarSyncInterval = time.Minute
-
 // ParseBaseURL checks an absolute http(s) URL without path, query, fragment
 // or credentials and returns it without a trailing slash. The Settings page
 // applies the same rules as the environment.
@@ -372,10 +368,5 @@ func (l *loader) seeds(m map[string]any) {
 	}
 	if abs < idle {
 		l.fail("SESSION_ABSOLUTE_TIMEOUT", "must not be shorter than "+Prefix+"SESSION_IDLE_TIMEOUT")
-	}
-	// Settings refuse a shorter interval on every save, so a seed below it
-	// would leave the settings page unable to save anything.
-	if d, ok := m["sonar.sync_interval"].(time.Duration); ok && d < MinSonarSyncInterval {
-		l.fail("SONAR_SYNC_INTERVAL", "must be at least 1m")
 	}
 }

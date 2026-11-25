@@ -189,12 +189,6 @@ func TestLoadErrors(t *testing.T) {
 			[]string{"SCANOPSIS_SESSION_IDLE_TIMEOUT must be at least 5m"}},
 		{"absolute shorter than idle", with(minimal(), "SCANOPSIS_SESSION_IDLE_TIMEOUT", "2h", "SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT", "1h"), nil,
 			[]string{"SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT must not be shorter"}},
-		{"sync interval too short", with(minimal(), "SCANOPSIS_SONAR_SYNC_INTERVAL", "30s"), nil,
-			[]string{"SCANOPSIS_SONAR_SYNC_INTERVAL must be at least 1m"}},
-		{"sync interval zero", with(minimal(), "SCANOPSIS_SONAR_SYNC_INTERVAL", "0s"), nil,
-			[]string{"SCANOPSIS_SONAR_SYNC_INTERVAL must be at least 1m"}},
-		{"sync interval negative", with(minimal(), "SCANOPSIS_SONAR_SYNC_INTERVAL", "-5m"), nil,
-			[]string{"SCANOPSIS_SONAR_SYNC_INTERVAL must be at least 1m"}},
 		{"retention days not a number", with(minimal(), "SCANOPSIS_RETENTION_DAYS", "ninety"), nil,
 			[]string{`SCANOPSIS_RETENTION_DAYS must be a whole number from 7 to 3650, got "ninety"`}},
 		{"retention days fraction", with(minimal(), "SCANOPSIS_RETENTION_DAYS", "90.5"), nil,
@@ -275,6 +269,18 @@ func TestSessionAbsoluteAloneUsesTheDefaultIdle(t *testing.T) {
 	}
 	if _, err := load(t, with(minimal(), "SCANOPSIS_SESSION_ABSOLUTE_TIMEOUT", "20m"), nil); err == nil || !strings.Contains(err.Error(), "SESSION_ABSOLUTE_TIMEOUT must not be shorter") {
 		t.Errorf("20m absolute: %v", err)
+	}
+}
+
+// A sync interval below the minimum is passed on: the settings refuse it only
+// when they would save it, as the saved interval wins over the variable.
+func TestShortSyncIntervalIsLeftToTheSettings(t *testing.T) {
+	c, err := load(t, with(minimal(), "SCANOPSIS_SONAR_SYNC_INTERVAL", "30s"), nil)
+	if err != nil {
+		t.Fatalf("30s: %v", err)
+	}
+	if got := c.Seeds["sonar.sync_interval"]; got != 30*time.Second {
+		t.Errorf("seed = %v, want 30s", got)
 	}
 }
 

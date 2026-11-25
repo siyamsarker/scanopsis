@@ -15,6 +15,7 @@ import (
 
 	"github.com/siyamsarker/scanopsis/internal/audit"
 	"github.com/siyamsarker/scanopsis/internal/auth"
+	"github.com/siyamsarker/scanopsis/internal/config"
 	"github.com/siyamsarker/scanopsis/internal/secretbox"
 	"github.com/siyamsarker/scanopsis/internal/store"
 )
@@ -135,6 +136,9 @@ func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Sto
 	if err != nil {
 		return nil, err
 	}
+	if err := s.checkSyncSeed(ctx, stored); err != nil {
+		return nil, err
+	}
 	stt := s.build(stored)
 	if err := signInPossible(stt); err != nil {
 		return nil, err
@@ -166,6 +170,33 @@ func New(ctx context.Context, st Store, tx func(ctx context.Context, fn func(Sto
 	}
 	s.cur.Store(stt)
 	return s, nil
+}
+
+// checkSyncSeed applies the minimum sync interval of the Settings page to
+// SCANOPSIS_SONAR_SYNC_INTERVAL. A shorter value that would be saved, as the
+// interval has no row yet, refuses the start: saved, it would make every
+// later save on the Settings page fail. When the interval is saved already,
+// the variable is ignored like any seed of a saved setting, so an
+// installation that once started with a shorter value still starts; it is
+// dropped, so that a reload without the row does not take it up either, and
+// a warning says so.
+func (s *Service) checkSyncSeed(ctx context.Context, stored map[string]entry) error {
+	v, ok := s.seeds[KeySonarSyncInterval]
+	if !ok {
+		return nil
+	}
+	if d, _ := time.ParseDuration(v.(string)); d >= MinSonarSyncInterval { // canonical
+		return nil
+	}
+	saved, have := stored[KeySonarSyncInterval]
+	if !have {
+		return fmt.Errorf("%sSONAR_SYNC_INTERVAL must be at least %s", config.Prefix, formatDuration(MinSonarSyncInterval))
+	}
+	delete(s.seeds, KeySonarSyncInterval)
+	minimum := formatDuration(MinSonarSyncInterval)
+	s.log.WarnContext(ctx, config.Prefix+"SONAR_SYNC_INTERVAL is ignored: the sync interval is saved in the settings, and the variable is below the minimum of "+
+		minimum+"; remove it or set it to "+minimum+" or more", "value", v, "saved", saved.value)
+	return nil
 }
 
 // decodeAll decodes the stored rows of known settings.

@@ -57,8 +57,8 @@ const (
 )
 
 // MinSonarSyncInterval is the shortest allowed SonarQube reconciliation
-// interval; the configuration refuses a shorter seed with the same bound.
-const MinSonarSyncInterval = config.MinSonarSyncInterval
+// interval, for a save and for an environment value that is seeded.
+const MinSonarSyncInterval = time.Minute
 
 // Bounds of retention.days, in days.
 const (
