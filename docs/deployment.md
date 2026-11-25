@@ -993,8 +993,12 @@ everywhere:
 These commands give the two containers the same settings as the Compose file:
 the database on an internal network with no route out, health checks, limits,
 log rotation, and a restart after a reboot. They were run on macOS with Docker
-Desktop (Docker 29.9.3) and on Linux (Docker 29.10.1). Run them in an empty
-folder. The container and network names are examples.
+Desktop (Docker 29.9.3) and on Linux (Docker 29.10.1), and need Docker 25 or
+newer: Docker 24 refuses the second `--network` with `Container cannot be
+connected to network endpoints`. Build the image first, as in
+[step 1 of the getting started guide](getting-started.md#step-1-build-the-image).
+Then run the commands in an empty folder. The container and network names
+are examples.
 
 1. Create the three secret files. These are the commands of
    [step 2 of the getting started guide](getting-started.md#step-2-create-the-secrets),
