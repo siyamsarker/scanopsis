@@ -132,8 +132,8 @@ too:
 **Risk** adds up points per open finding, by severity, with the weights of
 OWASP Dependency-Track shown above. For example, 1 critical, 32 high,
 34 medium, 24 low and 1 unknown finding make
-10 + 160 + 102 + 24 + 5 = **301** risk points. Secrets and suppressed findings
-add no points. Hover over or focus a risk number to see its arithmetic.
+10 + 160 + 102 + 24 + 5 = **301** risk points. Secrets add no points, and
+suppressed findings only when you include them on the findings page. Hover over or focus a risk number to see its arithmetic.
 
 The **risk ring** around a risk number has one segment per severity, sized by
 its share of the points. The thin outer ring is the quality gate, in the
