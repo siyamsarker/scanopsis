@@ -1106,8 +1106,8 @@ Podman runs the same image without a daemon and, by default, rootless: the
 containers run under your own user. These steps were run with Podman 6.2.1,
 rootless, on macOS (in the Podman machine) and on Linux (Fedora 45 with
 SELinux enforcing). They are the [`docker run` steps](#use-plain-docker-run)
-with four differences: the build, the data folders, an SELinux label on each
-mount, and the restart after a reboot.
+with five differences: the build, the data folders, an SELinux label on each
+mount, the log size, and the restart after a reboot.
 
 1. Build the image with Podman, in the clone of the version branch from
    [step 1 of the getting started guide](getting-started.md#step-1-build-the-image)
@@ -1143,7 +1143,9 @@ mount, and the restart after a reboot.
    mount labels the files for SELinux, so that the container may read them;
    without it, on a host with SELinux enforcing such as Fedora, both
    containers stop because they may not read their secret files. On macOS it
-   does no harm.
+   does no harm. Podman keeps one log file per container and starts it over
+   when it reaches `max-size`; it ignores `max-file`, so that option is left
+   out.
 
    ```sh
    podman network create --internal scanopsis-backend
@@ -1155,7 +1157,7 @@ mount, and the restart after a reboot.
      --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
      --cap-add SETGID --cap-add SETUID --security-opt no-new-privileges:true \
      --pids-limit 200 --shm-size 256m --stop-timeout 120 \
-     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     --log-driver json-file --log-opt max-size=10m \
      --health-cmd 'pg_isready -U scanopsis -d scanopsis' \
      --health-interval 5s --health-timeout 5s --health-retries 10 \
      --health-start-period 10s \
@@ -1170,7 +1172,7 @@ mount, and the restart after a reboot.
      --restart unless-stopped \
      --read-only --cap-drop ALL --security-opt no-new-privileges:true \
      --pids-limit 100 --memory 512m --stop-timeout 30 \
-     --log-driver json-file --log-opt max-size=10m --log-opt max-file=5 \
+     --log-driver json-file --log-opt max-size=10m \
      -p 127.0.0.1:8080:8080 \
      -e SCANOPSIS_PUBLIC_URL=https://scanopsis.example.com \
      -e SCANOPSIS_DATABASE_URL_FILE=/run/secrets/database_url \
@@ -1196,7 +1198,9 @@ mount, and the restart after a reboot.
    {"status":"ready"}
    ```
 
-   Read the setup token with `podman logs scanopsis 2>&1 | grep setup_token`.
+   Read the setup token with `podman logs scanopsis 2>&1 | grep setup_token`
+   and go on with
+   [step 8 of the getting started guide](getting-started.md#step-8-complete-the-setup-in-the-browser).
 
 6. Let the containers start after a reboot. Podman has no daemon that starts
    them, so `--restart unless-stopped` alone does not bring them back. Its
@@ -1215,6 +1219,11 @@ mount, and the restart after a reboot.
    ```sh
    podman machine ssh systemctl --user enable podman-restart.service
    ```
+
+   Podman before 5.8 (Debian 12 ships 4.3.1, Ubuntu 24.04 ships 4.9.3)
+   starts at boot only the containers with `--restart always`. There, use
+   `--restart always` in both commands. Unlike `unless-stopped`, it also
+   starts a container that you stopped yourself.
 
 On Linux, the backup files belong to a sub-user ID, so your user cannot read
 them directly. Use `podman unshare`, for example
