@@ -1649,7 +1649,7 @@ components:
           type: object
           additionalProperties: { $ref: "#/components/schemas/SeverityCounts" }
           description: Counts per Trivy result class (os-pkgs, lang-pkgs).
-        top_packages: { type: array, maxItems: 10, description: "Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last.", items: { $ref: "#/components/schemas/PackageImpact" } }
+        top_packages: { type: array, maxItems: 10, description: "Packages whose upgrade clears the most risk points first; then the most findings it fixes, the most severe finding it fixes, the package name and the installed version, the order of the upgrade plan in the findings. Packages without a fix come last, the most risk, the most findings and the most severe first.", items: { $ref: "#/components/schemas/PackageImpact" } }
         data_at: { type: [string, "null"], format: date-time, description: Scan time of the newest scan in this overview. }
     ScanDiff:
       type: object

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { Vulnerability } from '../../api/findings';
+import upgradeRules from '../../../../internal/domain/testdata/upgrade-rules.json';
 import { targetLabel } from './FindingsList';
 import {
   applyFilters,
@@ -43,18 +44,64 @@ function v(id: number, over: Partial<Vulnerability> = {}): Vulnerability {
   };
 }
 
+// The cases the server's tests use too (internal/domain), so Fix first on
+// the service page and the upgrade plan here follow the same rules.
+interface UpgradeRules {
+  compare: [string, string, number][];
+  highest: [string, string][];
+  findings: {
+    pkg: string;
+    installed: string;
+    severity: Vulnerability['severity'];
+    fixed: string;
+    suppressed?: boolean;
+  }[];
+  plan: {
+    pkg: string;
+    installed: string;
+    upgrade_to: string;
+    cleared: number;
+    risk: number;
+    counts: Record<string, number>;
+  }[];
+}
+const rules = upgradeRules as unknown as UpgradeRules;
+
 describe('compareVersions', () => {
-  it('compares numbers numerically', () => {
-    expect(compareVersions('1.2.10', '1.2.9')).toBeGreaterThan(0);
-    expect(compareVersions('1.2.9', '1.2.10')).toBeLessThan(0);
-    expect(compareVersions('2.0', '2.0.0')).toBeLessThan(0);
-    expect(compareVersions('3.0.1', '3.0.1')).toBe(0);
+  it.each(rules.compare)('compares %j with %j as the server does', (a, b, want) => {
+    expect(Math.sign(compareVersions(a, b))).toBe(want);
+    expect(Math.sign(compareVersions(b, a))).toBe(-want || 0);
   });
 
-  it('compares text lexically and ranks pre-releases lower', () => {
-    expect(compareVersions('1.0.0-beta', '1.0.0-alpha')).toBeGreaterThan(0);
-    expect(compareVersions('1.2.3', '1.2.3-rc1')).toBeGreaterThan(0);
-    expect(compareVersions('1.2.3-rc1', '1.2.3')).toBeLessThan(0);
+  it.each(rules.highest)('finds the highest of %j as the server does', (list, want) => {
+    expect(highestFixed([list])).toBe(want);
+  });
+});
+
+describe('the upgrade plan and Fix first', () => {
+  it('pick the same target, counts and order', () => {
+    const plan = upgradeGroups(
+      rules.findings.map((f, i) =>
+        v(i + 1, {
+          pkg_name: f.pkg,
+          installed_version: f.installed,
+          severity: f.severity,
+          fixed_version: f.fixed,
+          suppressed: f.suppressed ?? false,
+          suppression: f.suppressed ? 'accepted' : '',
+        }),
+      ),
+    );
+    expect(
+      plan.map((g) => ({
+        pkg: g.pkg,
+        installed: g.installed,
+        upgrade_to: g.upgradeTo,
+        cleared: g.cleared,
+        risk: g.risk,
+        counts: g.counts,
+      })),
+    ).toEqual(rules.plan);
   });
 });
 

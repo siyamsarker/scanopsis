@@ -4,7 +4,11 @@
 package domain
 
 import (
+	"encoding/json"
+	"fmt"
+	"os"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -48,49 +52,45 @@ func TestDiff(t *testing.T) {
 	}
 }
 
-func TestCompareVersions(t *testing.T) {
-	tests := []struct {
-		a, b string
-		want int
-	}{
-		{"1.2.10", "1.2.9", 1},
-		{"1.2.9", "1.2.10", -1},
-		{"1.2.3", "1.2.3", 0},
-		{"1.0.0-rc1", "1.0.0", -1},
-		{"1.0.0", "1.0.0-rc1", 1},
-		{"1.0.0-rc2", "1.0.0-rc10", -1},
-		{"1.0.0-alpha", "1.0.0-beta", -1},
-		{"1.0.0-RC1", "1.0.0-rc1", 0},
-		{"1.0", "1.0.0", 0},
-		{"1.0", "1.0.1", -1},
-		{"1.0.1", "1.0", 1},
-		{"1.0", "1.0.a", 1}, // letters after the numbers: pre-release of 1.0
-		{"1.0.1", "1.0.a", 1},
-		{"2:1.0", "1:9.9", 1},
-		{"1:1.0", "9.9", 1},
-		{"2:1.0", "2:1.0", 0},
-		{"2:1.0", "2:1.1", -1},
-		{"0:1.0", "1.0", 0},
-		{"a:1", "1", -1}, // not an epoch: a letter run is smaller than a digit run
-		{"v1.2.3", "1.2.3", 0},
-		{"v1.2.10", "v1.2.9", 1},
-		{"1.2.3-4ubuntu1", "1.2.3-4", -1}, // known difference: Debian ranks the suffixed revision higher
-		{"1.2.3-10", "1.2.3-9", 1},
-		{"1.0~rc1", "1.0", -1},
-		{"0001.2", "1.2", 0},
-		{"99999999999999999999999.1", "99999999999999999999998.9", 1},
-		{"", "", 0},
-		{"", "0", 0},
-		{"", "1", -1},
-		{" 1.2 ", "1.2", 0},
+// upgradeRules is testdata/upgrade-rules.json, which the web tests of the
+// upgrade plan read too, so both sides are held to the same cases.
+type upgradeRules struct {
+	Compare  [][3]any    `json:"compare"`
+	Highest  [][2]string `json:"highest"`
+	Findings []struct {
+		Pkg, Installed, Severity, Fixed string
+		Suppressed                      bool
+	} `json:"findings"`
+	Plan []struct {
+		Pkg, Installed string
+		UpgradeTo      string `json:"upgrade_to"`
+		Cleared, Risk  int
+		Counts         struct{ Critical, High, Medium, Low, Unknown int }
+	} `json:"plan"`
+}
+
+func loadUpgradeRules(t *testing.T) upgradeRules {
+	t.Helper()
+	b, err := os.ReadFile("testdata/upgrade-rules.json")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range tests {
-		got := CompareVersions(tc.a, tc.b)
-		if sign(got) != tc.want {
-			t.Errorf("CompareVersions(%q, %q) = %d, want sign %d", tc.a, tc.b, got, tc.want)
+	var r upgradeRules
+	if err := json.Unmarshal(b, &r); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestCompareVersions(t *testing.T) {
+	for _, tc := range loadUpgradeRules(t).Compare {
+		a, b, want := tc[0].(string), tc[1].(string), int(tc[2].(float64))
+		got := CompareVersions(a, b)
+		if sign(got) != want {
+			t.Errorf("CompareVersions(%q, %q) = %d, want sign %d", a, b, got, want)
 		}
-		if back := CompareVersions(tc.b, tc.a); sign(back) != -tc.want {
-			t.Errorf("CompareVersions(%q, %q) = %d is not the mirror of %d", tc.b, tc.a, back, got)
+		if back := CompareVersions(b, a); sign(back) != -want {
+			t.Errorf("CompareVersions(%q, %q) = %d is not the mirror of %d", b, a, back, got)
 		}
 	}
 }
@@ -106,21 +106,61 @@ func sign(n int) int {
 }
 
 func TestHighestVersion(t *testing.T) {
-	tests := []struct{ in, want string }{
-		{"", ""},
-		{" , ", ""},
-		{"1.2.3", "1.2.3"},
-		{"1.2.3, 1.3.1", "1.3.1"},
-		{"1.3.1, 1.2.3", "1.3.1"},
-		{"1.2.9,1.2.10", "1.2.10"},
-		{"2.0.0-rc1, 1.9.9", "2.0.0-rc1"},
-		{"2.0.0-rc1, 2.0.0", "2.0.0"},
-		{"2:1.0, 1:5.0, 3.0", "2:1.0"},
-		{"1.0, 1.0.0", "1.0"},
+	for _, tc := range loadUpgradeRules(t).Highest {
+		if got := HighestVersion(tc[0]); got != tc[1] {
+			t.Errorf("HighestVersion(%q) = %q, want %q", tc[0], got, tc[1])
+		}
 	}
-	for _, tc := range tests {
-		if got := HighestVersion(tc.in); got != tc.want {
-			t.Errorf("HighestVersion(%q) = %q, want %q", tc.in, got, tc.want)
+}
+
+// The upgrade plan of the shared cases, built as the overview builds it: the
+// unsuppressed findings grouped per package, installed version and severity
+// (FindingsPackageGroups). The packages with a fix come first, in the order
+// and with the target, counts and risk of the web upgrade plan.
+func TestTopPackagesMatchTheUpgradePlan(t *testing.T) {
+	r := loadUpgradeRules(t)
+	type key struct{ pkg, installed, severity string }
+	idx := map[key]int{}
+	var groups []PackageGroup
+	for _, f := range r.Findings {
+		if f.Suppressed {
+			continue
+		}
+		k := key{f.Pkg, f.Installed, f.Severity}
+		i, ok := idx[k]
+		if !ok {
+			i = len(groups)
+			idx[k] = i
+			groups = append(groups, PackageGroup{PkgName: f.Pkg, InstalledVersion: f.Installed, Severity: f.Severity})
+		}
+		g := &groups[i]
+		g.Count++
+		if f.Fixed != "" {
+			g.Fixable++
+			if !slices.Contains(g.FixedVersions, f.Fixed) {
+				g.FixedVersions = append(g.FixedVersions, f.Fixed)
+			}
+		}
+	}
+	top := TopPackages(groups, 100)
+	if len(top) < len(r.Plan) {
+		t.Fatalf("%d packages, want at least %d", len(top), len(r.Plan))
+	}
+	for i, want := range r.Plan {
+		p := top[i]
+		c := p.FixableBySeverity
+		got := fmt.Sprintf("%s@%s -> %s, %d cleared, %d points, %d/%d/%d/%d/%d", p.PkgName, p.InstalledVersion, p.FixVersion,
+			p.Fixable, p.RiskCleared, c.Critical, c.High, c.Medium, c.Low, c.Unknown)
+		w := want.Counts
+		exp := fmt.Sprintf("%s@%s -> %s, %d cleared, %d points, %d/%d/%d/%d/%d", want.Pkg, want.Installed, want.UpgradeTo,
+			want.Cleared, want.Risk, w.Critical, w.High, w.Medium, w.Low, w.Unknown)
+		if got != exp {
+			t.Errorf("package %d: %s\nwant %s", i+1, got, exp)
+		}
+	}
+	for _, p := range top[len(r.Plan):] {
+		if p.Fixable != 0 {
+			t.Errorf("%s@%s has a fix but is not in the plan", p.PkgName, p.InstalledVersion)
 		}
 	}
 }

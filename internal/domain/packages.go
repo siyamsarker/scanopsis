@@ -109,10 +109,8 @@ type PackageImpact struct {
 }
 
 // TopPackages merges groups by (package, installed version) and returns at
-// most n packages, the upgrade that clears the most risk points first; then
-// the most risk, the most findings and the most severe; then by name and
-// version so the order is stable. Packages without a fix come after every
-// package with one.
+// most n packages in the order of upgradeFirst. Packages without a fix come
+// after every package with one.
 func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 	type pkgKey struct{ name, version string }
 	idx := make(map[pkgKey]int)
@@ -141,11 +139,31 @@ func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 		out[i].Risk = out[i].BySeverity.Risk()
 		out[i].RiskCleared = out[i].FixableBySeverity.Risk()
 	}
-	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		if a.RiskCleared != b.RiskCleared {
-			return a.RiskCleared > b.RiskCleared
-		}
+	sort.Slice(out, func(i, j int) bool { return upgradeFirst(out[i], out[j]) })
+	if len(out) > n {
+		out = out[:n]
+	}
+	return out
+}
+
+// upgradeFirst orders packages as the upgrade plan of the findings page does
+// (upgradeGroups in web/src/routes/findings/model.ts), by what the upgrade
+// fixes: the most risk points cleared first, then the most findings fixed,
+// then the most severe finding fixed, then by name and installed version
+// (byte order). Packages without a fix, which the plan does not list, are
+// ordered among themselves by their open findings instead: the most risk,
+// the most findings and the most severe first.
+func upgradeFirst(a, b PackageImpact) bool {
+	if a.RiskCleared != b.RiskCleared {
+		return a.RiskCleared > b.RiskCleared
+	}
+	if a.Fixable != b.Fixable {
+		return a.Fixable > b.Fixable
+	}
+	if ra, rb := a.FixableBySeverity.topRank(), b.FixableBySeverity.topRank(); ra != rb {
+		return ra < rb
+	}
+	if a.Fixable == 0 { // neither has a fix
 		if a.Risk != b.Risk {
 			return a.Risk > b.Risk
 		}
@@ -155,13 +173,9 @@ func TopPackages(groups []PackageGroup, n int) []PackageImpact {
 		if ra, rb := a.BySeverity.topRank(), b.BySeverity.topRank(); ra != rb {
 			return ra < rb
 		}
-		if a.PkgName != b.PkgName {
-			return a.PkgName < b.PkgName
-		}
-		return a.InstalledVersion < b.InstalledVersion
-	})
-	if len(out) > n {
-		out = out[:n]
 	}
-	return out
+	if a.PkgName != b.PkgName {
+		return a.PkgName < b.PkgName
+	}
+	return a.InstalledVersion < b.InstalledVersion
 }

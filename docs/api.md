@@ -1788,7 +1788,7 @@ Type: object
 | `secrets` | integer | yes |  |
 | `service` | [Service](#service) | yes |  |
 | `suppressed` | integer | yes |  |
-| `top_packages` | array of [PackageImpact](#packageimpact) | yes | Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last. |
+| `top_packages` | array of [PackageImpact](#packageimpact) | yes | Packages whose upgrade clears the most risk points first; then the most findings it fixes, the most severe finding it fixes, the package name and the installed version, the order of the upgrade plan in the findings. Packages without a fix come last, the most risk, the most findings and the most severe first. |
 
 ### PackageImpact
 

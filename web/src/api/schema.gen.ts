@@ -1454,7 +1454,7 @@ export interface components {
             by_class: {
                 [key: string]: components["schemas"]["SeverityCounts"];
             };
-            /** @description Packages whose upgrade clears the most risk points first; then the most risk, the most findings and the most severe. Packages without a fix come last. */
+            /** @description Packages whose upgrade clears the most risk points first; then the most findings it fixes, the most severe finding it fixes, the package name and the installed version, the order of the upgrade plan in the findings. Packages without a fix come last, the most risk, the most findings and the most severe first. */
             top_packages: components["schemas"]["PackageImpact"][];
             /**
              * Format: date-time

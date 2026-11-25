@@ -188,33 +188,70 @@ export function countBy<T>(rows: T[], key: (row: T) => string): Map<string, numb
   return counts;
 }
 
-const TOKEN = /\d+|[A-Za-z]+/g;
-const isNumber = (token: string) => /^\d/.test(token);
+const isDigit = (c: string) => c >= '0' && c <= '9';
+const isLetter = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+
+/** An optional leading "N:" (digits) is a Debian or RPM epoch. */
+function splitEpoch(v: string): [string, string] {
+  const s = v.trim();
+  const i = s.indexOf(':');
+  if (i > 0 && /^[0-9]+$/.test(s.slice(0, i))) return [s.slice(0, i), s.slice(i + 1)];
+  return ['0', s];
+}
+
+/** Runs of digits and runs of letters; a leading "v" before a digit is dropped. */
+function tokens(v: string): string[] {
+  const s = v.length > 1 && (v[0] === 'v' || v[0] === 'V') && isDigit(v[1]) ? v.slice(1) : v;
+  return s.match(/[0-9]+|[A-Za-z]+/g) ?? [];
+}
+
+/** Compares two digit strings by value, without overflow. */
+function compareNumeric(a: string, b: string): number {
+  const x = a.replace(/^0+/, '');
+  const y = b.replace(/^0+/, '');
+  if (x.length !== y.length) return x.length < y.length ? -1 : 1;
+  return x === y ? 0 : x < y ? -1 : 1;
+}
+
+function compareToken(a: string, b: string): number {
+  const da = isDigit(a[0]);
+  const db = isDigit(b[0]);
+  if (da && db) return compareNumeric(a, b);
+  if (da !== db) return da ? 1 : -1;
+  const x = a.toLowerCase();
+  const y = b.toLowerCase();
+  return x === y ? 0 : x < y ? -1 : 1;
+}
+
+/** How a version with token t left compares with one that has ended. */
+function remainder(t: string): number {
+  if (isLetter(t[0])) return -1; // a pre-release such as "rc1"
+  return /^0+$/.test(t) ? 0 : 1;
+}
 
 /**
- * Numeric-aware version comparison: versions are split into runs of digits and
- * runs of letters (punctuation separates), numbers compare numerically
- * (1.2.10 > 1.2.9) and text lexically. A trailing text part marks a
- * pre-release (1.2.3 > 1.2.3rc1). Ecosystem rules differ and are not modelled:
- * Debian epochs ("1:2.0") and tilde ordering ("1.0~rc1"), RPM release
- * numbers and semver build metadata are all compared as plain tokens.
+ * Natural version order, the same as the server's (CompareVersions in
+ * internal/domain/version.go), so this page and the service page suggest the
+ * same upgrade: a leading "N:" epoch dominates; a leading "v" before a digit
+ * is ignored; the rest is split into runs of digits, compared by value, and
+ * runs of letters, compared case-insensitively, a digit run being greater;
+ * when one side runs out, the other is greater unless its remainder starts
+ * with letters (a pre-release, 1.0.0-rc1 < 1.0.0) or is only zeros
+ * (1.0 = 1.0.0). Ecosystem rules beyond that are not modelled: Debian tilde
+ * ordering ("1.0~rc1"), RPM carets and semver build metadata are compared as
+ * plain tokens.
  */
 export function compareVersions(a: string, b: string): number {
-  const x = a.match(TOKEN) ?? [];
-  const y = b.match(TOKEN) ?? [];
+  const [ea, ra] = splitEpoch(a);
+  const [eb, rb] = splitEpoch(b);
+  const epoch = compareNumeric(ea, eb);
+  if (epoch !== 0) return epoch;
+  const x = tokens(ra);
+  const y = tokens(rb);
   for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const p = x[i];
-    const q = y[i];
-    if (p === undefined) return isNumber(q) ? -1 : 1;
-    if (q === undefined) return isNumber(p) ? 1 : -1;
-    if (isNumber(p) && isNumber(q)) {
-      const d = Number(p) - Number(q);
-      if (d !== 0) return d < 0 ? -1 : 1;
-    } else if (isNumber(p) !== isNumber(q)) {
-      return isNumber(p) ? 1 : -1;
-    } else if (p !== q) {
-      return p < q ? -1 : 1;
-    }
+    const c =
+      i >= y.length ? remainder(x[i]) : i >= x.length ? -remainder(y[i]) : compareToken(x[i], y[i]);
+    if (c !== 0) return c;
   }
   return 0;
 }
@@ -260,10 +297,24 @@ export interface UpgradeGroup {
   artifacts: string[];
 }
 
+/** 0 for critical down to 4 for unknown or none: the most severe finding counted. */
+function topRank(c: SeverityCountValues): number {
+  if (c.critical > 0) return 0;
+  if (c.high > 0) return 1;
+  if (c.medium > 0) return 2;
+  if (c.low > 0) return 3;
+  return 4;
+}
+
+/** Plain code-unit order, as the server orders names (byte order for ASCII). */
+const byCodeUnits = (a: string, b: string) => (a === b ? 0 : a < b ? -1 : 1);
+
 /**
  * Fixable, unsuppressed findings grouped by package and installed version,
- * ranked by the risk points the upgrade clears (critical×10, high×5…), then
- * by the number of findings and the package name.
+ * in the order of Fix first on the service page (upgradeFirst in
+ * internal/domain/packages.go): the most risk points the upgrade clears
+ * (critical×10, high×5…) first, then the most findings it fixes, then the
+ * most severe one, then by package name and installed version.
  */
 export function upgradeGroups(rows: Vulnerability[]): UpgradeGroup[] {
   const groups = new Map<string, Vulnerability[]>();
@@ -297,7 +348,9 @@ export function upgradeGroups(rows: Vulnerability[]): UpgradeGroup[] {
       (a, b) =>
         b.risk - a.risk ||
         b.cleared - a.cleared ||
-        a.pkg.localeCompare(b.pkg, 'en', { numeric: true }),
+        topRank(a.counts) - topRank(b.counts) ||
+        byCodeUnits(a.pkg, b.pkg) ||
+        byCodeUnits(a.installed, b.installed),
     );
 }
 
