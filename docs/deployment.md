@@ -19,8 +19,9 @@ Run every `docker compose` command in `deploy/compose`. The host names in this
 guide (`scanopsis.example.com`, `gitlab.example.com`, `db.example.com`) are
 placeholders. Commands marked **example** need systems outside your machine,
 such as public DNS or a cluster, and were not run for this guide. Everything
-else was run on Docker Desktop with Docker 29.9.3 and Compose 5.7.0. Names,
-times and addresses in your output will differ.
+else was run on macOS with Docker Desktop (Docker 29.9.3, Compose 5.7.1),
+except the steps marked Linux. Names, times and addresses in your output
+will differ.
 
 This is what you build:
 
@@ -77,7 +78,7 @@ deny everything else.
 
 Both services restart on their own (`restart: unless-stopped`) as long as the
 Docker daemon starts at boot. On Linux with systemd, check that it does
-(example, needs `sudo`):
+(Linux, needs `sudo`, not run for this guide):
 
 ```sh
 systemctl is-enabled docker
@@ -143,8 +144,14 @@ and run `docker compose up -d`:
 TZ=Europe/Berlin
 ```
 
+Check it:
+
+```sh
+docker compose logs scanopsis | grep 'scanopsis listening' | tail -1
+```
+
 ```text
-{"time":"2026-11-22T12:14:46.852206508+01:00","level":"INFO","msg":"scanopsis listening","addr":"[::]:8080"}
+scanopsis-1  | {"time":"2026-11-25T05:10:14.290979715+01:00","level":"INFO","msg":"scanopsis listening","addr":"[::]:8080"}
 ```
 
 Only the log changes. The database stores points in time, so the data is the
@@ -313,7 +320,8 @@ compression.
        gzip_types text/css text/javascript application/javascript application/json image/svg+xml;
 
        # These apply to every location below that sets none of its own.
-       proxy_set_header Host $host;
+       # $http_host passes the Host header unchanged, with its port.
+       proxy_set_header Host $http_host;
        proxy_set_header X-Forwarded-For $remote_addr;
        proxy_read_timeout 90s;
 
@@ -327,7 +335,13 @@ compression.
    `$proxy_add_x_forwarded_for` only if you also list the proxies in front of
    nginx in `SCANOPSIS_TRUSTED_PROXIES`.
 
-2. Use this `compose.override.yaml` instead of the Caddy one:
+   Use `$http_host`, not `$host`: `$host` drops the port, and on a port other
+   than 443 (such as 9443 below) Scanopsis then refuses every sign-in and
+   every change from the browser with `403` and the code `cross_origin`,
+   because the browser's `Origin` names the port.
+
+2. Use this `compose.override.yaml` instead of the Caddy one. If you tried
+   Caddy first, see the note after step 3 to remove its container:
 
    ```yaml
    services:
@@ -360,6 +374,11 @@ compression.
    nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
    nginx: configuration file /etc/nginx/nginx.conf test is successful
    ```
+
+If you tried Caddy first, `docker compose up -d` warns
+`Found orphan containers (scanopsis-caddy-1)`. Remove the container with
+`docker compose up -d --remove-orphans`, and its volume with
+`docker volume rm scanopsis_caddy-data`.
 
 After you edit `nginx.conf`, run `docker compose restart nginx`. A reload
 (`nginx -s reload`) can miss the change when your editor replaces the file
@@ -399,6 +418,9 @@ and `--cacert` trusts the test certificate.
    x-frame-options: DENY
    ```
 
+   Through nginx, the first line is `HTTP/1.1 200 OK` and the header names
+   start with capitals (`Strict-Transport-Security`, `X-Frame-Options`).
+
    No `strict-transport-security`? Then `SCANOPSIS_PUBLIC_URL` does not start
    with `https://`.
 
@@ -416,7 +438,7 @@ and `--cacert` trusts the test certificate.
    for every user, and all users share one rate limit:
 
    ```text
-   {"time":"2026-11-22T11:13:35.975316503Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.10"}
+   scanopsis-1  | {"time":"2026-11-25T04:11:47.48065955Z","level":"INFO","msg":"request","method":"GET","path":"/healthz","status":200,"duration_ms":0,"client_ip":"172.30.0.10"}
    ```
 
    With the proxy listed, the start-up line shows `"trusted_proxies":1`, and
@@ -424,8 +446,25 @@ and `--cacert` trusts the test certificate.
    on Docker Desktop, the real client on a Linux server. The fake
    `203.0.113.9` is never used.
 
-4. **Large uploads pass.** Without `client_max_body_size`, nginx answers a
-   3 MB upload itself with `413` and an HTML page, not JSON from Scanopsis:
+4. **Large uploads pass.** Send 3 MB to the upload address (for Caddy, use
+   8443):
+
+   ```sh
+   head -c 3000000 /dev/zero | curl -sS --resolve scanopsis.example.com:9443:127.0.0.1 \
+     --cacert tls/cert.pem -H 'Content-Type: application/json' --data-binary @- \
+     -w '\nHTTP %{http_code}\n' https://scanopsis.example.com:9443/api/v1/ingest/trivy
+   ```
+
+   The request reaches Scanopsis, which answers in JSON that the token is
+   missing:
+
+   ```text
+   {"error":{"code":"invalid_token","message":"The Authorization header is missing. Send Authorization: Bearer \u003cID token\u003e."}}
+
+   HTTP 401
+   ```
+
+   Without `client_max_body_size`, nginx answers itself with an HTML page:
 
    ```text
    <html>
@@ -451,8 +490,8 @@ and `--cacert` trusts the test certificate.
    content-encoding: gzip
    ```
 
-   The script shrank from 278,866 bytes to 89,238 through Caddy and about
-   100,900 through nginx. Small JSON answers such as `/readyz` stay
+   nginx writes the header as `Content-Encoding: gzip`. The script shrank
+   from 518,340 bytes to 170,172 through Caddy and to 192,035 through nginx. Small JSON answers such as `/readyz` stay
    uncompressed, which is normal.
 
 If a check fails, see [reverse proxy problems](troubleshooting.md#reverse-proxy-and-tls).
@@ -506,8 +545,11 @@ gets `403`, and 13 wrong sign-ins in a row from one address look like this:
 401 401 401 401 401 401 401 401 401 401 429 429 429
 ```
 
-The first ten reach Scanopsis (`401`), then nginx answers `429`. The exact
-count depends on timing, because the allowance refills while you test.
+The first ten get `401` from Scanopsis. The eleventh gets `429` from
+Scanopsis itself, which allows 10 sign-in attempts per address (JSON with the
+code `too_many_attempts`). From the twelfth on, nginx answers `429` with an
+HTML page and the request never reaches Scanopsis. The exact count depends on
+timing, because both allowances refill while you test.
 
 The webhook is also protected by its HMAC signature; the address rule stops
 everyone else from even trying. If another proxy stands in front of nginx,
@@ -604,7 +646,7 @@ Scanopsis never turns certificate checks off. Give it your CA instead.
    ```
 
    ```text
-   ...,"config":{"listen_addr":":8080","public_url":"https://scanopsis.example.com","seeded_settings":3,"trusted_proxies":1,"custom_ca":true}}
+   scanopsis-1  | {"time":"2026-11-25T04:17:12.923843173Z","level":"INFO","msg":"scanopsis starting","version":"v0.4.3","commit":"76b3b67","config":{"listen_addr":":8080","public_url":"https://scanopsis.example.com","seeded_settings":0,"trusted_proxies":1,"custom_ca":true}}
    ```
 
 The CA applies to GitLab and SonarQube, not to the database (see
@@ -669,6 +711,7 @@ SELECT current_user, has_schema_privilege('public', 'CREATE') AS can_create_in_p
  current_user | can_create_in_public
 --------------+----------------------
  scanopsis    | t
+(1 row)
 ```
 
 If the role cannot create tables, Scanopsis stops at start:
@@ -755,11 +798,13 @@ does not help here):
 
 `compose.external-db.yaml` removes the `db` service and its password secret,
 and puts Scanopsis on the `frontend` network only, which can reach
-your server. It needs Docker Compose 2.24 or later.
+your server. It needs Docker Compose 2.24.4 or later, the first version that
+reads its `!override` tag (`docker compose version` shows yours).
 
 1. If you use `sslrootcert`, open `compose.external-db.yaml` and uncomment the
    two `volumes` lines, so Compose mounts `db-ca.pem` at
-   `/etc/scanopsis/db-ca.pem`.
+   `/etc/scanopsis/db-ca.pem`. The URL must name exactly this file, as in
+   step 2.
 2. Tell Compose to use both files, so every `docker compose` command picks them
    up. Add this line to `.env`:
 
@@ -780,19 +825,28 @@ your server. It needs Docker Compose 2.24 or later.
    scanopsis
    ```
 
-4. Start Scanopsis. `--remove-orphans` removes the old `db` container (not its
+   Services from `compose.override.yaml`, such as a proxy, are listed too.
+
+4. To keep your users, settings and scans, do
+   [move your data from the bundled database](#move-your-data-from-the-bundled-database)
+   now. Then start Scanopsis. `--remove-orphans` removes the old `db` container (not its
    volume); without it, Compose only warns about `orphan containers`:
 
    ```sh
    docker compose up -d --remove-orphans
    ```
 
+   The output names the old `db` container as removed, for example:
+
    ```text
-    Container scanopsis-scanopsis-1 Running
     Container scanopsis-db-1 Stopping
+    Container scanopsis-scanopsis-1 Recreate
     Container scanopsis-db-1 Stopped
     Container scanopsis-db-1 Removing
+    Container scanopsis-scanopsis-1 Recreated
     Container scanopsis-db-1 Removed
+    Container scanopsis-scanopsis-1 Starting
+    Container scanopsis-scanopsis-1 Started
    ```
 
 5. Check that it is ready:
@@ -815,6 +869,7 @@ your server. It needs Docker Compose 2.24 or later.
      usename  | ssl | version
    -----------+-----+---------
     scanopsis | t   | TLSv1.3
+   (1 row)
    ```
 
 The folder `data/postgres` with the bundled data stays on the host. Delete it
@@ -822,27 +877,42 @@ only once you are sure you moved everything you need.
 
 ### Move your data from the bundled database
 
-To keep users, settings and scans, [back up](operations.md#back-up-the-database)
-the bundled database first, then restore the file into the new server before
-step 4 above (or while Scanopsis is stopped). The restore needs a PostgreSQL
-client of the same major version or newer. This runs it from the PostgreSQL
-image, on a Docker network that can reach the server:
+Do this in step 4 of step 3, before Scanopsis starts on the new server. The
+bundled `db` service still runs at that point. Run the commands in
+`deploy/compose`.
 
-```sh
-docker run --rm -i --network scanopsis_frontend \
-  -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=require \
-  postgres:18.7-alpine pg_restore -h db.example.com -U scanopsis -d scanopsis \
-  --no-owner --exit-on-error < scanopsis-2026-11-22.dump
-echo "restore exit=$?"
-```
+1. Stop Scanopsis, so that nothing changes after the backup, and back up the
+   bundled database:
 
-```text
-restore exit=0
-```
+   ```sh
+   docker compose stop scanopsis
+   (umask 077; docker compose exec -T db pg_dump -U scanopsis -d scanopsis \
+     --format=custom > scanopsis-move.dump)
+   ```
+
+2. Restore the file into the new server. This runs `pg_restore` from the
+   PostgreSQL image that the bundled database uses, on the Docker network
+   that reaches the server, with the password of the new role (not encoded):
+
+   ```sh
+   docker run --rm -i --network scanopsis_frontend \
+     -e PGPASSWORD='p@ss/w:rd#1?x%' -e PGSSLMODE=require \
+     postgres:18.7-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71 \
+     pg_restore -h db.example.com -U scanopsis -d scanopsis \
+     --no-owner --exit-on-error < scanopsis-move.dump
+   echo "restore exit=$?"
+   ```
+
+   ```text
+   restore exit=0
+   ```
+
+3. Go on with step 4 of step 3. `docker compose up -d --remove-orphans` starts
+   Scanopsis on the new server.
 
 Keep the same `secrets/secret_key`. When Scanopsis starts on the new database,
 its log has no `setup_token` line, because the restored database already has
-an administrator.
+an administrator. Sign in as before.
 
 ## Run without Compose
 
