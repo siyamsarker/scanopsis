@@ -346,7 +346,10 @@ func (s *pgSaver) resolveService(ctx context.Context, q *store.Queries, c *Claim
 				return svc, false, false, fmt.Errorf("rename service: %w", err)
 			}
 			if n == 0 {
-				s.log.Warn("project path not updated: another service uses it",
+				// No row changed: another service has the path, or the
+				// service is gone, and the upload then creates it again with
+				// the new path when it locks it (see lockService).
+				s.log.Warn("project path not updated: another service uses it, or the service was deleted meanwhile",
 					"service_id", svc.ID, "stored_path", svc.GitlabProjectPath, "token_path", c.ProjectPath)
 			}
 		}

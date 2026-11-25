@@ -417,7 +417,9 @@ func TestIntegrationRename(t *testing.T) {
 	if got := pathOf(); got != "platform/payments-v2" {
 		t.Fatalf("path = %q, want the old path kept", got)
 	}
-	if !strings.Contains(e.logs.String(), "project path not updated") {
+	// The same answer comes when the service was deleted meanwhile, which the
+	// warning cannot tell apart, so it names both.
+	if !strings.Contains(e.logs.String(), "project path not updated: another service uses it, or the service was deleted meanwhile") {
 		t.Errorf("no warning logged: %s", e.logs)
 	}
 }
