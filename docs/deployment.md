@@ -459,14 +459,17 @@ and `--cacert` trusts the test certificate.
      -w '\nHTTP %{http_code}\n' https://scanopsis.example.com:8443/api/v1/ingest/trivy
    ```
 
-   The request reaches Scanopsis, which answers in JSON that the token is
-   missing:
+   The request reaches Scanopsis, which answers in JSON. Until the GitLab URL
+   is set on the Settings page it says that uploads are not enabled:
 
    ```text
-   {"error":{"code":"invalid_token","message":"The Authorization header is missing. Send Authorization: Bearer \u003cID token\u003e."}}
+   {"error":{"code":"ingest_not_configured","message":"Uploads are not enabled: the GitLab URL is not configured in Scanopsis."}}
 
-   HTTP 401
+   HTTP 503
    ```
+
+   Once the GitLab URL is set, it answers `HTTP 401` with the code
+   `invalid_token`, because the request has no token.
 
    Through nginx without `client_max_body_size`, nginx answers itself with an
    HTML page:
