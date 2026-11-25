@@ -11,9 +11,20 @@ import (
 // CompareVersions orders two version strings naturally: it returns a negative
 // number when a < b, zero when they are equal and a positive number when a > b.
 //
-// The comparison is ecosystem-neutral, so it can differ from the native
-// ordering of a package manager (Debian revisions such as "4ubuntu1", RPM
-// carets, Maven qualifiers, ...). The rules are:
+// The comparison is ecosystem-neutral, so some forms in some ecosystems are
+// not ordered as their package manager orders them, among them:
+//   - Ubuntu revisions: 1.2.3-4ubuntu1 is below 1.2.3-4;
+//   - "+dfsg" and the like in the middle: 1.2+dfsg-1 is below 1.2-1;
+//   - PEP 440 post-releases: 1.0.post1 is below 1.0;
+//   - Alpine patch levels: 9.3_p2-r0 is below 9.3-r0;
+//   - Go pseudo-versions of a later tag: v1.2.4-0.20230101000000-abcdef is
+//     above v1.2.4;
+//   - semver numeric pre-releases: 1.0.0-1 is above 1.0.0;
+//   - semver pre-release identifiers, where a number ranks below letters:
+//     1.0.0-alpha.1 is above 1.0.0-alpha.beta;
+//   - RPM carets and Maven qualifiers.
+//
+// The rules are:
 //   - an optional leading "N:" (digits) is an epoch and dominates the rest;
 //   - a leading "v" before a digit is ignored;
 //   - the rest is split into runs of digits and runs of letters; every other

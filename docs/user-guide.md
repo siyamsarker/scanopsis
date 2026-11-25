@@ -332,12 +332,21 @@ are compared by one rule for every ecosystem: numbers by their value
 (`1.2.10` is above `1.2.9`), a pre-release such as `1.0.0-rc1` below
 `1.0.0`, an epoch such as `1:` before everything else, and Debian's `~` and
 `+` as dpkg orders them (`1.0-1~deb12u1` is below `1.0-1`, which is below
-`1.0-1+deb12u1`). A few forms of single distributions may not be ordered as
-the distribution does, for example Ubuntu revisions such as `4ubuntu1` or a
-`+dfsg` in the middle of a version, so check the version with your package
-manager before you upgrade. Versions that are equal but written differently,
-such as `1.0` and `1.0.0`, always give the same one of them, whatever order the
-findings come in.
+`1.0-1+deb12u1`). Some forms in some ecosystems are not ordered as their
+package manager orders them:
+
+- Ubuntu revisions: `1.2.3-4ubuntu1` counts as below `1.2.3-4`.
+- A `+dfsg` or similar in the middle: `1.2+dfsg-1` counts as below `1.2-1`.
+- Python post-releases: `1.0.post1` counts as below `1.0`.
+- Alpine patch levels: `9.3_p2-r0` counts as below `9.3-r0`.
+- Go pseudo-versions of a later tag: `v1.2.4-0.20230101000000-abcdef` counts
+  as above `v1.2.4`.
+- Semantic versioning pre-releases that are numbers: `1.0.0-1` counts as
+  above `1.0.0`, and `1.0.0-alpha.1` as above `1.0.0-alpha.beta`.
+
+So check the version with your package manager before you upgrade. Versions
+that are equal but written differently, such as `1.0` and `1.0.0`, always give
+the same one of them, whatever order the findings come in.
 
 ### Secrets
 
