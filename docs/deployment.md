@@ -839,11 +839,11 @@ reads its `!override` tag (`docker compose version` shows yours).
    The output names the old `db` container as removed, for example:
 
    ```text
-    Container scanopsis-db-1 Stopping
     Container scanopsis-scanopsis-1 Recreate
+    Container scanopsis-db-1 Stopping
+    Container scanopsis-scanopsis-1 Recreated
     Container scanopsis-db-1 Stopped
     Container scanopsis-db-1 Removing
-    Container scanopsis-scanopsis-1 Recreated
     Container scanopsis-db-1 Removed
     Container scanopsis-scanopsis-1 Starting
     Container scanopsis-scanopsis-1 Started
