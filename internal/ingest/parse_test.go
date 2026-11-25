@@ -432,6 +432,16 @@ func TestParseTolerance(t *testing.T) {
 			t.Errorf("fixed = %q", rep.Vulns[0].FixedVersion)
 		}
 	})
+	t.Run("a blank fixed version is no fix, and spaces around one are dropped", func(t *testing.T) {
+		rep, err := Parse(strings.NewReader(`{"SchemaVersion":2,"Results":[{"Vulnerabilities":[
+		 {"Severity":"LOW","FixedVersion":"  "},{"Severity":"LOW","FixedVersion":" 1.2 "}]}]}`))
+		if err != nil || rep.Counts.Fixable != 1 {
+			t.Fatalf("%+v %v", rep.Counts, err)
+		}
+		if got := []string{rep.Vulns[0].FixedVersion, rep.Vulns[1].FixedVersion}; got[0] != "" || got[1] != "1.2" {
+			t.Errorf("fixed versions %q", got)
+		}
+	})
 	t.Run("duplicates are kept", func(t *testing.T) {
 		rep, err := Parse(strings.NewReader(`{"SchemaVersion":2,"Results":[
 		 {"Target":"a","Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"HIGH"}]},

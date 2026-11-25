@@ -84,11 +84,12 @@ GROUP BY class, severity;
 
 -- FindingsPackageGroups counts unsuppressed vulnerabilities per package,
 -- installed version and severity, how many of them report a fixed version,
--- and the fixed versions reported.
+-- and the fixed versions reported. A blank fixed version (only spaces, from
+-- uploads before they were trimmed) is no fix, as on the findings page.
 -- name: FindingsPackageGroups :many
 SELECT pkg_name, installed_version, severity, count(*)::bigint AS findings,
-       count(*) FILTER (WHERE fixed_version <> '')::bigint AS fixable,
-       coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
+       count(*) FILTER (WHERE btrim(fixed_version) <> '')::bigint AS fixable,
+       coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE btrim(fixed_version) <> ''), '{}')::text[] AS fixed_versions
 FROM vulnerabilities
 WHERE scan_id = ANY(@scan_ids::bigint[]) AND NOT suppressed
 GROUP BY pkg_name, installed_version, severity;
@@ -155,7 +156,7 @@ WITH hits AS MATERIALIZED (
       AND v.id > @after
       AND (@include_suppressed::boolean OR NOT v.suppressed)
       AND (cardinality(@severities::text[]) = 0 OR v.severity = ANY(@severities::text[]))
-      AND (sqlc.narg('fixable')::boolean IS NULL OR (v.fixed_version <> '') = sqlc.narg('fixable')::boolean)
+      AND (sqlc.narg('fixable')::boolean IS NULL OR (btrim(v.fixed_version) <> '') = sqlc.narg('fixable')::boolean)
       AND (@q::text = ''
            OR strpos(lower(v.pkg_name), lower(@q)) > 0
            OR strpos(lower(v.vuln_id), lower(@q)) > 0
@@ -426,7 +427,7 @@ WITH RECURSIVE all_cur AS (
            count(*) FILTER (WHERE severity = 'UNKNOWN')::bigint AS total_unknown,
            coalesce(max(title) FILTER (WHERE title <> ''), '')::text AS summary_title,
            coalesce(max(primary_url) FILTER (WHERE primary_url <> ''), '')::text AS summary_url,
-           coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
+           coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE btrim(fixed_version) <> ''), '{}')::text[] AS fixed_versions
     FROM found
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,

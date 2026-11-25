@@ -441,8 +441,8 @@ func (q *Queries) FindingsGetService(ctx context.Context, id int64) (Service, er
 
 const findingsPackageGroups = `-- name: FindingsPackageGroups :many
 SELECT pkg_name, installed_version, severity, count(*)::bigint AS findings,
-       count(*) FILTER (WHERE fixed_version <> '')::bigint AS fixable,
-       coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
+       count(*) FILTER (WHERE btrim(fixed_version) <> '')::bigint AS fixable,
+       coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE btrim(fixed_version) <> ''), '{}')::text[] AS fixed_versions
 FROM vulnerabilities
 WHERE scan_id = ANY($1::bigint[]) AND NOT suppressed
 GROUP BY pkg_name, installed_version, severity
@@ -459,7 +459,8 @@ type FindingsPackageGroupsRow struct {
 
 // FindingsPackageGroups counts unsuppressed vulnerabilities per package,
 // installed version and severity, how many of them report a fixed version,
-// and the fixed versions reported.
+// and the fixed versions reported. A blank fixed version (only spaces, from
+// uploads before they were trimmed) is no fix, as on the findings page.
 func (q *Queries) FindingsPackageGroups(ctx context.Context, scanIds []int64) ([]FindingsPackageGroupsRow, error) {
 	rows, err := q.db.Query(ctx, findingsPackageGroups, scanIds)
 	if err != nil {
@@ -706,7 +707,7 @@ WITH RECURSIVE all_cur AS (
            count(*) FILTER (WHERE severity = 'UNKNOWN')::bigint AS total_unknown,
            coalesce(max(title) FILTER (WHERE title <> ''), '')::text AS summary_title,
            coalesce(max(primary_url) FILTER (WHERE primary_url <> ''), '')::text AS summary_url,
-           coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE fixed_version <> ''), '{}')::text[] AS fixed_versions
+           coalesce(array_agg(DISTINCT fixed_version) FILTER (WHERE btrim(fixed_version) <> ''), '{}')::text[] AS fixed_versions
     FROM found
 )
 SELECT sv.id, sv.name, sv.gitlab_project_id, sv.gitlab_project_path, sv.sonar_project_key,
@@ -1080,7 +1081,7 @@ WITH hits AS MATERIALIZED (
       AND v.id > $3
       AND ($4::boolean OR NOT v.suppressed)
       AND (cardinality($5::text[]) = 0 OR v.severity = ANY($5::text[]))
-      AND ($6::boolean IS NULL OR (v.fixed_version <> '') = $6::boolean)
+      AND ($6::boolean IS NULL OR (btrim(v.fixed_version) <> '') = $6::boolean)
       AND ($7::text = ''
            OR strpos(lower(v.pkg_name), lower($7)) > 0
            OR strpos(lower(v.vuln_id), lower($7)) > 0

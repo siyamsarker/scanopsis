@@ -229,6 +229,37 @@ func TestOverviewTopPackageCountsWhatTheUpgradeFixes(t *testing.T) {
 	}})
 }
 
+// A fixed version of only spaces, stored before uploads trimmed them, is no
+// fix: not in the package's fixable count, not offered as an upgrade and not
+// matched by fixable=true, as the findings page decides too.
+func TestBlankFixedVersionIsNoFix(t *testing.T) {
+	f := seed(t)
+	scan := newScan(t, f.pool, f.beta, "image", "web", "dev", f.base)
+	addVulns(t, f.pool, scan,
+		vuln{id: "CVE-2026-0101", pkg: "zlib", version: "1.2", target: "t", class: "os-pkgs", severity: "HIGH", fixed: "  "},
+		vuln{id: "CVE-2026-0102", pkg: "zlib", version: "1.2", target: "t", class: "os-pkgs", severity: "LOW", fixed: "1.3"},
+	)
+	mux := newMux(f.pool, "")
+	var ov overviewJSON
+	getJSON(t, mux, fmt.Sprintf("/api/v1/services/%d/overview?ref=dev", f.beta), &ov)
+	eq(t, "top_packages", ov.TopPackages, []packageImpactJSON{{
+		PkgName: "zlib", InstalledVersion: "1.2", FixVersion: "1.3",
+		Findings: 2, BySeverity: countsJSON{High: 1, Low: 1},
+		Fixable: 1, FixableBySeverity: countsJSON{Low: 1}, Risk: 6, RiskCleared: 1,
+	}})
+	var list struct {
+		Items []struct {
+			VulnID string `json:"vuln_id"`
+		} `json:"items"`
+	}
+	getJSON(t, mux, fmt.Sprintf("/api/v1/services/%d/vulnerabilities?ref=dev&fixable=true", f.beta), &list)
+	var ids []string
+	for _, it := range list.Items {
+		ids = append(ids, it.VulnID)
+	}
+	eq(t, "fixable=true", ids, []string{"CVE-2026-0102"})
+}
+
 func TestOverviewTopPackagesLimit(t *testing.T) {
 	f := seed(t)
 	scan := newScan(t, f.pool, f.beta, "image", "big", "dev", f.base)

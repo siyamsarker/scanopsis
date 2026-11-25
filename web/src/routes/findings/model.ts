@@ -19,6 +19,7 @@ export const SEVERITY_RANK: Record<SeverityKey, number> = {
   unknown: 0,
 };
 
+/** A blank fixed version is no fix, as on the server (uploads trim it, queries use btrim). */
 export const isFixable = (v: Vulnerability) => v.fixed_version.trim() !== '';
 
 export type VulnClass = 'os-pkgs' | 'lang-pkgs' | 'other';

@@ -604,7 +604,7 @@ func (p *parser) addVuln(f *wireFinding, target, class, pkgType, suppressed stri
 		PkgName:          clip(f.PkgName, maxFieldLen),
 		PkgPath:          clip(f.PkgPath, maxFieldLen),
 		InstalledVersion: clip(f.InstalledVersion, maxFieldLen),
-		FixedVersion:     clip(f.FixedVersion, maxFieldLen),
+		FixedVersion:     strings.TrimSpace(clip(f.FixedVersion, maxFieldLen)), // blank: no fix
 		VulnID:           clip(f.VulnerabilityID, maxVulnIDLen),
 		Severity:         severity(f.Severity),
 		Status:           clip(f.Status, maxFieldLen),
