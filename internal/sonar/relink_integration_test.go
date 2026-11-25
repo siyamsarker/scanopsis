@@ -370,8 +370,11 @@ func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
 			e := newEnv(t)
 			ctx := context.Background()
 			e.project("demo:orders-api")
+			e.project("evil:project")
 			wantStatus(t, e, hook("task-w1", "demo:orders-api", claims("7", "1001")), 202)
-			e.drain(t, 1)
+			wantStatus(t, e, hook("task-planted", "evil:project", claims("7", "999")), 202)
+			e.drain(t, 2)
+			plantedHint := e.delivery(t, "task-planted").Detail
 			sid := e.service(t, "demo/orders-api", 7, "")
 
 			// The other link holds the service's row while LinkWaiting runs,
@@ -391,7 +394,8 @@ func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
 			waitFor(t, func() bool {
 				var n int
 				if err := e.pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-					WHERE wait_event_type = 'Lock' AND query LIKE '%UPDATE services SET sonar_project_key%'`).Scan(&n); err != nil {
+					WHERE datname = current_database() AND wait_event_type = 'Lock'
+					  AND query LIKE '%UPDATE services SET sonar_project_key%'`).Scan(&n); err != nil {
 					t.Fatal(err)
 				}
 				return n == 1
@@ -416,9 +420,18 @@ func TestLinkWaitingAfterAConcurrentLink(t *testing.T) {
 				default:
 					t.Error("no sync queued")
 				}
+				// Every other delivery naming the GitLab project says why it
+				// was not linked, as after a link of LinkWaiting's own.
+				want := `Not linked: the service of GitLab project 7 is linked to SonarQube project "demo:orders-api". An administrator can change the SonarQube key on the service.`
+				if d := e.delivery(t, "task-planted"); d.Outcome != "unlinked" || d.Detail != want {
+					t.Errorf("planted: %+v", d)
+				}
 			} else {
 				if d.Outcome != "unlinked" || d.Detail != waitingHint {
 					t.Errorf("delivery: %+v", d)
+				}
+				if d := e.delivery(t, "task-planted"); d.Detail != plantedHint {
+					t.Errorf("planted: %+v, want the detail kept", d)
 				}
 				select {
 				case l := <-e.s.linked:
