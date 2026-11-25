@@ -445,9 +445,9 @@ func removeExpiredSessions(ctx context.Context, s expiredSessionRemover, log *sl
 	}
 }
 
-// newHTTPClient returns the client for outgoing calls to GitLab. It trusts
-// the system roots plus, if set, the PEM bundle in caFile. TLS verification
-// is never disabled.
+// newHTTPClient returns the client for outgoing calls to GitLab and to
+// SonarQube. It trusts the system roots plus, if set, the PEM bundle in
+// caFile. TLS verification is never disabled.
 func newHTTPClient(caFile string) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if caFile != "" {
